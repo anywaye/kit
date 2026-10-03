@@ -198,6 +198,40 @@
 
 ### Fixed
 
+- **`fresh_copy` did not copy `reports/`, so all 64 throwaway copies were trees
+  whose README documented a file they did not have.** The account-scope packet
+  added `reports/account-scope-contract-01/snapshot.sh` to the list
+  `readme_check` asserts both halves of — that `README.md` names the path and
+  that `os.path.exists` finds it — and `fresh_copy`'s entry list is explicit and
+  closed, so the new directory was not in it. Every copy then ran:
+
+      FAIL README.md  (documents every new template)
+             README.md documents reports/account-scope-contract-01/snapshot.sh,
+             which does not exist
+
+  The false red is the legible half and it is the one the control already names:
+  `expect_green 'unbroken tree'` prints "the gate is RED on an unbroken tree",
+  which is the sentence that makes every proof below it meaningless, and the
+  green-expecting proofs (23b, 31b, 59) go red with it for a reason that had
+  nothing to do with the defect under test.
+
+  **The silent half is the reason it is worth a changelog entry rather than a
+  one-line edit.** 88 of this suite's recipe invocations are `expect_red_check`,
+  which appends `--only=<label>` to every child, so the README check does not run
+  in any of them and not one of the 88 ever saw it. What is left that does is the
+  single plain `expect_red` in the file, and that helper asserts the gate's exit
+  status and nothing else — `the gate went red` is satisfied by a copy that is
+  red for any reason at all. **A gate that always exits non-zero makes one
+  proof in a hundred pass for the wrong reason, and a gate that always exits
+  non-zero is a property a reader cannot see.** `reports` is now on the list,
+  and the comment beside it says what breaks if it comes off again.
+
+  `MIGRATIONS.md`, `LICENSE`, `DECISIONS.md` and `VERSION` are on that list for
+  the same reason and each of them was a real packet; this is the third, and the
+  first in which the file, the README line and the check that names it all
+  landed in one commit — so no review of that packet's own diff could have found
+  it, and the only witness is a green `unbroken tree`.
+
 - **`adapters/README.md` listed `guard` as a Go service. It is TypeScript** — 44
   `.ts` files, 0 `.go` files, no `go.mod`. The sentence was a claim about a
   service nobody had measured, which is the defect this harness exists to

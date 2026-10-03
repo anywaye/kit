@@ -857,8 +857,65 @@ fresh_copy() {
   # the second time this repository has paid it: **when a packet adds a file the
   # gate reads by path, `fresh_copy`'s list is part of that packet.** A new
   # check is not done until a throwaway copy can see the thing the check reads.
+  #
+  # `reports` is here for that reason, and it is the THIRD KIND of thing on this
+  # list. `LICENSE`, `DECISIONS.md`, `VERSION` and `MIGRATIONS.md` are files the
+  # gate opens; `.github`, `core` and `lint` are directories the gate reads
+  # members of. `reports/` is a directory the gate reaches ONE MEMBER DEEP — and a
+  # single member is enough, because `readme_check` asserts both halves for every
+  # path it names: that README.md mentions it, and that `os.path.exists` says it
+  # is there. So an account-scope packet that documented
+  # `reports/account-scope-contract-01/snapshot.sh` turned every one of this
+  # suite's 64 throwaway copies into a tree whose README describes a file the
+  # copy does not have:
+  #
+  #     FAIL README.md  (documents every new template)
+  #            README.md documents reports/account-scope-contract-01/snapshot.sh,
+  #            which does not exist
+  #
+  # TWO DIRECTIONS, and the second is the one worth a paragraph.
+  #
+  #   1. The FALSE RED, which is the loud one and which the control already names.
+  #      `expect_green 'unbroken tree'` runs FIRST and prints "the gate is RED on
+  #      an unbroken tree" — the sentence that makes every proof below it
+  #      meaningless, and the exact symptom the `MIGRATIONS.md` paragraph above
+  #      measured. The green-expecting proofs (23b, 31b, 59) go red with it, all
+  #      three for a reason that had nothing to do with the defect under test,
+  #      which is the failure mode this whole list exists to prevent. That half
+  #      is a red suite, and it is at least legible.
+  #
+  #   2. The SILENT one, and it is the reason this is a check of the harness
+  #      rather than a chore. 88 of this file's recipe invocations are
+  #      `expect_red_check`, and `expect_red_check` appends `--only=<label>` to
+  #      every child that does not already carry one — so the README check does
+  #      not RUN in any of them and not one of the 88 ever sees this. What is
+  #      left that does is the single plain `expect_red` in the file (breakage
+  #      1), and `expect_red` asserts the gate's EXIT STATUS and nothing else:
+  #      `the gate went red` is satisfied by a copy that is red for any reason at
+  #      all. One recipe is not a number anybody would act on. It is the SHAPE
+  #      that matters, because the direction of travel is one recipe per packet
+  #      that adds an unfiltered assertion, and the day the count is large the
+  #      suite reports "every proof held" while a growing share of the proofs
+  #      proved nothing at all — the exact inverse of the false red, and the
+  #      harder of the two to notice, because a suite that always goes red is at
+  #      least reporting something true.
+  #
+  # So the rule is the one the paragraph above ends on, paid a third time — and
+  # `reports/` is the packet that shows why writing it down is not enough. The
+  # file, the README line and the `readme_check` list entry that names it ALL
+  # landed in ONE commit, `81fffa6`, together with a header that documents the
+  # coupling. So this was not a split across commits and not a case of somebody
+  # forgetting a half: the packet did three of the four things a path the gate
+  # reads by path requires, in one diff, on a tree whose own gate was green
+  # throughout. Nothing in the packet was red and nothing in it looked unfinished.
+  # The fourth thing lives in a file the packet had no reason to be reading, and
+  # the only witness to its absence is a proof one level down that had been
+  # silently passing — which is the shape no review of the packet's own diff can
+  # catch, and the reason the honest form of the rule is the one above: the
+  # receipt is a green `unbroken tree`, not a remembered step.
   for entry in .gitleaks.toml .github AGENTS.md README.md CHANGELOG.md LICENSE \
-    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint templates tests; do
+    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint reports \
+    templates tests; do
     [ -e "$ROOT/$entry" ] && cp -R "$ROOT/$entry" "$dst/"
   done
   # KIT_GITLEAKS, unlike the other two, must ALSO be resolved before the first
