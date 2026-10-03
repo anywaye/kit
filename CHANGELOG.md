@@ -198,8 +198,9 @@
 
 ### Fixed
 
-- **`fresh_copy` did not copy `reports/`, so all 64 throwaway copies were trees
-  whose README documented a file they did not have.** The account-scope packet
+- **`fresh_copy` did not copy `reports/`, so every throwaway copy this suite
+  makes was a tree whose README documented a file it did not have.** The
+  account-scope packet
   added `reports/account-scope-contract-01/snapshot.sh` to the list
   `readme_check` asserts both halves of — that `README.md` names the path and
   that `os.path.exists` finds it — and `fresh_copy`'s entry list is explicit and
@@ -231,6 +232,19 @@
   first in which the file, the README line and the check that names it all
   landed in one commit — so no review of that packet's own diff could have found
   it, and the only witness is a green `unbroken tree`.
+
+  **And this entry first said "all 64 throwaway copies", which was a number
+  nothing reproduces.** It is corrected here, in the commit message it came
+  from, and in the `fresh_copy` comment, because 64 was in three places and a
+  number wrong in one of them teaches a reader to trust the other two. It was
+  never a count: instrumenting `fresh_copy` in a throwaway copy of the tree and
+  reading what it wrote gives **92 copies** with ruby, kamal and kamal-backup on
+  `PATH`, **79** with all three unreachable, and **89 or 76** in a run that
+  failed or skipped anything and so stopped at the suite's own `exit 1` before
+  reaching breakages 101-103 — whose three `fresh_copy` sites sit below that
+  guard. The static count is the only one that has never moved: 92
+  `$(fresh_copy …)` sites at `master`, at `81fffa6` and at every commit between.
+  The `reports` entry is the fix and it stands; only the count was wrong.
 
 - **`adapters/README.md` listed `guard` as a Go service. It is TypeScript** — 44
   `.ts` files, 0 `.go` files, no `go.mod`. The sentence was a claim about a

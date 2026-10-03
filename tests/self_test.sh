@@ -865,13 +865,44 @@ fresh_copy() {
   # single member is enough, because `readme_check` asserts both halves for every
   # path it names: that README.md mentions it, and that `os.path.exists` says it
   # is there. So an account-scope packet that documented
-  # `reports/account-scope-contract-01/snapshot.sh` turned every one of this
-  # suite's 64 throwaway copies into a tree whose README describes a file the
-  # copy does not have:
+  # `reports/account-scope-contract-01/snapshot.sh` turned every throwaway copy
+  # this suite makes into a tree whose README describes a file the copy does not
+  # have:
   #
   #     FAIL README.md  (documents every new template)
   #            README.md documents reports/account-scope-contract-01/snapshot.sh,
   #            which does not exist
+  #
+  # NO NUMBER, AND THAT IS THE CORRECTION RATHER THAN A LOSS. This paragraph used
+  # to say "all 64 throwaway copies", and 64 is not a count of anything. Measured
+  # by instrumenting `fresh_copy` in a throwaway copy of the tree and reading
+  # what it wrote — not by grepping, because grepping answers a different
+  # question — one full run makes:
+  #
+  #     92 copies   ruby, kamal and kamal-backup all on PATH
+  #     79 copies   the same machine with all three unreachable
+  #     89 / 76     either of the above, in a run that FAILED or SKIPPED anything
+  #                 and so stopped at this file's own `exit 1` before reaching
+  #                 breakages 101-103, whose three `fresh_copy` sites sit below
+  #                 that guard rather than above it
+  #
+  # Four numbers, none of them 64, and which one you get is a property of the
+  # machine and of how far the run got rather than of this file. 13 of the 92
+  # sites sit inside `command -v ruby` or `command -v kamal && command -v
+  # kamal-backup` (breakages 23, 23b, 40, and 78b-82 plus 84-87), and 3 sit
+  # after the `exit 1`, which is why an invocation-site count is a ceiling rather
+  # than an answer. The static count agrees and is the only one that has never
+  # moved: `grep -cE '\$\(fresh_copy ' tests/self_test.sh` says 92 at `master`, at
+  # `81fffa6` where the `reports` entry landed, and at every commit between.
+  #
+  # A number a run cannot reproduce is worse than no number, because the next
+  # reader cites it instead of measuring it. That is the rule the
+  # `templates/compose/mimir` comment in `tests/validate.sh` states for a path
+  # added to a list to satisfy a stale README: the prose is the thing that rots.
+  # "every copy this suite makes" was true before the packet and is true after
+  # it; the count was never the claim, and pinning one made the true claim
+  # unreviewable. `REPORT-kit-freshcopy-count-01.md` carries the method, the raw
+  # output and the five points of instrumentation.
   #
   # TWO DIRECTIONS, and the second is the one worth a paragraph.
   #
