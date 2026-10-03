@@ -598,7 +598,8 @@ def compare(row: dict, recorded: dict) -> list:
     # An exemption forgives a MISSING DECLARATION and nothing else, because that
     # is what was granted for it.
     forgiven = "account-scope.declaration-missing"
-    for (identifier, severity), count in sorted(have.items()):
+    for key, count in sorted(have.items()):
+        identifier, _, severity = key.rpartition("/")
         want = (recorded["failures"] if severity == "fail" else recorded["warnings"]).get(
             identifier, 0)
         if recorded["exempt"] and severity == "fail" and identifier == forgiven:
@@ -625,9 +626,6 @@ def compare(row: dict, recorded: dict) -> list:
         notes.append(
             "is exempt as a repository that has never declared, and now HAS a declaration. "
             "The exemption was a hole through which nothing was checked; delete it.")
-
-    if not notes and recorded["note"]:
-        notes.append(f"NOTE (recorded, not a difference): {recorded['note']}")
 
     return notes
 
@@ -814,6 +812,11 @@ def main(argv: list) -> int:
                 f"naming what it is expected to report."]
         else:
             row["notes"] = compare(row, recorded)
+            # A `note:` is recorded prose about a repository, not a difference,
+            # so it is printed on a row that MATCHES and never moves a verdict.
+            # Printing it on every run and on every verdict would make it noise,
+            # and a note nobody reads is a comment.
+            row["note"] = recorded["note"]
             row["state"] = "OK" if not row["notes"] else "FAIL"
         rows.append(row)
 
@@ -823,6 +826,8 @@ def main(argv: list) -> int:
 
     for row in rows:
         if row["state"] == "OK":
+            if row.get("note"):
+                print(f"{row['repo']}: OK — {row['note']}")
             continue
         print(f"{row['repo']}: {row['state']}")
         # `core`'s own findings first, each id once with its own message and the

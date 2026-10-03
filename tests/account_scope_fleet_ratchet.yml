@@ -1,47 +1,187 @@
 ---
-# The recorded state of the fleet's account-scope contract, and it is EMPTY ON
-# PURPOSE IN THIS COMMIT.
-#
-# `account_scope_fleet_check.py` ships with a record that tolerates nothing, so
-# its first run is RED and says which four repositories are red and why. A gate
-# that arrives green because it was born with a tolerance for every red it found
-# has proved nothing about the tree it was born on, and this repository's own
-# history has a name for that: "the gate that did not run the proof". The rows
-# arrive in the next commit, one per red, each carrying a `condition:`.
+# The recorded state of the fleet's account-scope contract: ONE ROW PER IN-SCOPE
+# REPOSITORY, every number exact, compared in BOTH directions.
 #
 # WHAT THIS FILE IS, and it is not a list of suppressed identifiers
 #
-#   ONE ROW PER IN-SCOPE REPOSITORY. Every repository `MVP-SCOPE.md` puts in the
-#   MVP needs a row, and a repository with no row is RED — not skipped, not
-#   assumed green. That is what makes a repository added to the in-scope table a
-#   deliberate act rather than one that silently widens the gate.
+#   A repository with NO ROW is red. That is what makes a repository added to
+#   `MVP-SCOPE.md`'s in-scope table a deliberate act rather than one that
+#   silently widens what the gate watches.
 #
-#   EVERY NUMBER IN A ROW IS EXACT AND BOTH-DIRECTIONAL. A row records the
-#   checker's exit code, its four enumerated counts, its two tallies, its warning
-#   ids, its failure ids and its blindnesses. Any difference is red in either
-#   direction: a repository that got WORSE is red, and a repository that got
-#   BETTER and whose row nobody retired is red too. That second half is the
-#   property a suppression list cannot have, and it is the reason this file is a
-#   full record rather than a list of things to ignore.
+#   A row whose numbers no longer match is red in EITHER direction: a repository
+#   that got worse, and a repository that got better and whose row nobody
+#   retired. The second half is the property a suppression list does not have,
+#   and it is the reason this is a full record rather than a list of things to
+#   ignore. **The rows below must shrink. They may not be widened.**
 #
-# THE RULES, and they are enforced by the runner's loader rather than by
+#   Measured against `cafaye/{identity,courier,guard,site,parlor,pantry,caf,kit,
+#   core}` on 2026-10-03, with `tests/account_scope_fleet_check.py --baseline`
+#   printing the numbers this file records. Every number below came out of that
+#   command; none was copied out of a report.
+#
+# THE RULES, and they are enforced by the runner's LOADER rather than by
 # convention — a record that cannot be read is not a record that says everything
 # is fine:
 #
 #   1. `fleet:` is one row per in-scope repository. `exempt:` is the subset that
 #      has never declared a surface.
 #   2. A row that tolerates a failure or a blindness carries a `condition:`. A
-#      tolerance with no stated end is a switch.
-#   3. A row with `failures: {}` and `blind: []` tolerates nothing, and that is
-#      the right row for most of this fleet today.
-#   4. An `exempt:` row forgives `account-scope.declaration-missing` and NOTHING
-#      ELSE — that is what the exemption was granted for. Any other failure it
-#      reports is red.
-#   5. An `exempt:` row whose repository now HAS a declaration is red. The
-#      exemption existed because the repository had never declared; the day it
-#      declares, the exemption is a hole through which nothing is checked.
-#   6. A repository named twice, in either list, refuses the whole file.
-#   7. A `counts:` block missing any of the six keys refuses the whole file, so a
+#      tolerance with no stated end is a switch, and the loader refuses one.
+#   3. `counts:` must carry all six keys. A missing one refuses the file, so a
 #      typo cannot read as "not recorded".
-fleet: []
-exempt: []
+#   4. An `exempt:` row forgives `account-scope.declaration-missing` and NOTHING
+#      ELSE. That is what the exemption was granted for.
+#   5. An `exempt:` row whose repository now HAS a declaration is red: the
+#      exemption existed because the repository had never declared, and the day
+#      it declares the exemption is a hole through which nothing is checked.
+#   6. A repository named twice, in either list, refuses the whole file.
+
+# --------------------------------------------------------------- declaring
+#
+# Six of the nine declare their account-scoped surface and declare it well.
+# `site` and `parlor` hold **zero** account-scoped routes and say so with core's
+# own explicit `nothing-scoped` warning rather than by silence — which is the
+# honest empty surface, and the reason their row tolerates nothing.
+fleet:
+  - repo: identity
+    exit: 0
+    note: >-
+      17 account-scoped and 25 not, 0 undeclared. The one warning is
+      `social-login-callback`, a route written as `socialLoginPrefix+"/{provider}"`
+      which the chi recogniser cannot see; core's fix for it is D34 §3, not ours.
+    counts: {account-scoped: 17, not-account-scoped: 25, stale: 0, undeclared: 0, failures: 0, warnings: 1}
+    warnings: {account-scope.contradiction-unreadable: 1, fleet.blind.unreadable-rows: 1}
+    failures: {}
+    blind: []
+
+  - repo: courier
+    exit: 0
+    note: >-
+      9 account-scoped and 10 not, 0 undeclared. Three warnings, all
+      `contradiction-unreadable`, and `fleet.blind.unreadable-rows` is the runner
+      counting that same fact rather than restating it — so if either moves, this
+      row is red.
+    counts: {account-scoped: 9, not-account-scoped: 10, stale: 0, undeclared: 0, failures: 0, warnings: 3}
+    warnings: {account-scope.contradiction-unreadable: 3, fleet.blind.unreadable-rows: 1}
+    failures: {}
+    blind: []
+
+  - repo: guard
+    exit: 0
+    note: >-
+      1 account-scoped (`/v1/me`, behind a prefix `app.use`) and 6 not. Six
+      `contradiction-unreadable` warnings is the largest count in the fleet and
+      it is recorded exactly, so a seventh is red rather than a slower slide.
+    counts: {account-scoped: 1, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 6}
+    warnings: {account-scope.contradiction-unreadable: 6, fleet.blind.unreadable-rows: 1}
+    failures: {}
+    blind: []
+
+  - repo: site
+    exit: 0
+    note: >-
+      Zero account-scoped routes, declared as zero. Its three routes are a
+      Next.js catch-all, two probes and four verbs, and `nothing-scoped` is the
+      honest answer rather than a silent one.
+    counts: {account-scoped: 0, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 1}
+    warnings: {account-scope.nothing-scoped: 1}
+    failures: {}
+    blind: []
+
+  - repo: parlor
+    exit: 0
+    note: >-
+      Zero account-scoped routes, declared as zero, byte-identical in shape to
+      `site` because `site` is generated from it.
+    counts: {account-scoped: 0, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 1}
+    warnings: {account-scope.nothing-scoped: 1}
+    failures: {}
+    blind: []
+
+  # ------------------------------------------------------------- declaring,
+  # and red on purpose
+  - repo: pantry
+    exit: 1
+    condition: >-
+      RED BY DESIGN AND NOT TO BE FIXED FROM HERE. Every route `pantry` serves is
+      generated by `oapi-codegen` as `r.Get(options.BaseURL+"/v1/...")`, and
+      core's chi recogniser requires a path to begin with a string literal, so it
+      drops all six. The declaration says so itself — `surface.minimum: 0`,
+      `internal/api/api.gen.go` named and contributing zero — which is the honest
+      way to write down a surface no checker can read. `pantry`'s own author
+      chose this red over a green and
+      `pantry/REPORT-pantry-account-scope-01.md` §8 says why: a green would have
+      required editing the declaration to describe a surface the declaration
+      cannot see.
+      THIS ROW ENDS when core's chi recogniser reads a leading concatenation
+      term — core's `DECISIONS.md` D34 §3, and a packet was live against it when
+      this row was written. That day `stale` and `surface-blind` both stop firing
+      and this row is red until it is deleted. **The number `stale: 1` is
+      smaller than the four the brief quoted because `pantry`'s master moved
+      twice during the packet** (it gained the compatibility graph, which turned
+      four generated routes into six and gave `get-service` a real registration to
+      disagree with); the row is exact to the tree named in the note, and the
+      runner re-measures it on every run rather than trusting this sentence.
+    counts: {account-scoped: 0, not-account-scoped: 5, stale: 1, undeclared: 0, failures: 1, warnings: 7}
+    warnings:
+      account-scope.contradiction-unreadable: 6
+      account-scope.nothing-scoped: 1
+      fleet.blind.unreadable-rows: 1
+    failures: {account-scope.stale: 1, fleet.blind.surface-blind: 1}
+    blind: [surface-blind]
+
+# ------------------------------------------------------------------ exempt
+#
+# Three in-scope repositories have never declared a surface, and each one is a
+# separate piece of work in a repository this packet is forbidden to edit. They
+# are exempt, not ratcheted, because the finding they report
+# (`declaration-missing`) is the absence of the thing itself rather than a defect
+# in something that exists — and rule 4 below means an exemption forgives THAT
+# and nothing else, so the day any of them reports something else, this is red.
+exempt:
+  - repo: caf
+    condition: >-
+      `caf` is in the MVP — `MVP-SCOPE.md` calls it the CLI front door — and has
+      never declared an account-scoped surface. It is a Go CLI: `d18-rowholder-audit.sh`
+      records `MIGRATES 0, SCOPED 0`, so on the measurement in `DEBT.md` D18 it
+      holds no customer rows and declares no entry points that reach any. It
+      still needs one the moment it does, and this exemption is what says so
+      without saying it is fine.
+      THIS ENDS when `caf` grows a route that reads a customer row, or when it
+      writes an `account_scope.yml` — at which point rule 5 turns this row red
+      and it is deleted in the same commit that added the declaration.
+    counts: {account-scoped: 0, not-account-scoped: 0, stale: 0, undeclared: 0, failures: 1, warnings: 0}
+    warnings: {}
+    failures: {account-scope.declaration-missing: 1}
+
+  - repo: kit
+    condition: >-
+      `kit` is in the MVP — it is the generator every service is built from — and
+      has never declared an account-scoped surface. It holds no HTTP surface at
+      all: `d18-rowholder-audit.sh` records `MIGRATES 6, SCOPED 6` but the same
+      audit's route table gives `kit` no recognisable entry points, and this
+      repository ships templates and configuration, not a service. It is exempt
+      for having no surface, not for being unimportant — it is the repository
+      that renders nine services and the check above is in its own gate.
+      THIS ENDS when `kit` grows an HTTP entry point, or when it writes an
+      `account_scope.yml`.
+    counts: {account-scoped: 0, not-account-scoped: 0, stale: 0, undeclared: 0, failures: 1, warnings: 0}
+    warnings: {}
+    failures: {account-scope.declaration-missing: 1}
+
+  - repo: core
+    condition: >-
+      `core` is in the MVP — `MVP-SCOPE.md` calls it the contract all of the
+      others are held to — and has never declared an account-scoped surface of
+      its own. The one irony here is worth naming rather than leaving for a
+      reader to find: `core` OWNS `account_scope_check.py`, runs its self-test in
+      its own CI, and does not run the checker against itself. `core`'s own CI
+      step reads `harness/tests/account_scope_self_test.sh`, which proves the
+      CHECKER can fail; it does not prove any service's declaration is checked,
+      which is the gap this packet exists to close and which only a repository
+      outside `core` could close without `core` editing its own gate.
+      THIS ENDS when `core` grows an HTTP entry point, or when it writes an
+      `account_scope.yml`.
+    counts: {account-scoped: 0, not-account-scoped: 0, stale: 0, undeclared: 0, failures: 1, warnings: 0}
+    warnings: {}
+    failures: {account-scope.declaration-missing: 1}
