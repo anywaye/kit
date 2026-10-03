@@ -3214,6 +3214,32 @@ expect_red_script 'breakage 37: the reporter grades a copy by resemblance, not e
 #     what a contributor actually writes when they are being careful about
 #     looking tidy, and it is the shape a grep-based check would miss. The check
 #     walks the AST, so there is nowhere to put one that it cannot see.
+#
+#     AND THE NEEDLE IS THE LABEL, WHICH `81fffa6` STOPPED BEING. That commit added a
+#     fourth carve-out program and, in the same hunk, renamed the check that owns all
+#     four of them:
+#
+#       -  check 'tests/classify.py + tests/staleness.py  (stdlib only; the carve-out, enforced)'
+#       +  check 'the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees)'
+#
+#     `expect_red_check` matches `FAIL $want` AND passes `$want` to `--only`, and
+#     `--only` is a substring match on the label. So a label that no longer exists does
+#     not weaken this proof, it deletes it — and silently, in the worst direction
+#     available, because `--only` matching nothing is ITSELF a fail:
+#
+#       FAIL: --only='tests/classify.py + tests/staleness.py' selected NO check out of the suite.
+#
+#     …which is a non-zero exit, so `the gate went red` was satisfied and only the
+#     `FAIL $want` half noticed. Measured in a copy with this exact mutation applied,
+#     both ways: the old needle selects nothing and can never match; the label below
+#     selects exactly one check and prints
+#     `FAIL the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees)`.
+#
+#     AGENTS.md's rule — the needle is the label, and a label a self-test asserts is a
+#     contract — has now been paid for here five times; 71, 75, 76 and 77 were the
+#     first four. This is the one that matters most, because it is the only proof in
+#     the repository that kit stays dependency-free, and from the outside a dead needle
+#     and a satisfied assertion are the same line.
 thirtyeight="$(fresh_copy a-third-party-import)"
 "$PY" - "$thirtyeight/tests/staleness.py" <<'PY'
 import sys
@@ -3226,7 +3252,7 @@ with open(path, "a", encoding="utf-8") as fh:
     fh.write("\n\ndef _third_party():\n    import requests  # self_test breakage 38\n")
 PY
 expect_red_check 'breakage 38: one of the two programs gains a third-party import' \
-  "$thirtyeight" 'tests/classify.py + tests/staleness.py' --static-only
+  "$thirtyeight" 'the carve-out programs' --static-only
 
 # 29. A HARNESS THAT LIES ABOUT ITS OWN FLEET.
 #
