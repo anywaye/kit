@@ -59,7 +59,7 @@ five docker/live tiers. The full gate's `self_test` phase is the 90-minute tier
 `AGENTS.md` says to run by hand rather than report, and this packet changed
 nothing it exercises.
 
-`shellcheck -S warning` is clean on both new shell files.
+`shellcheck -S warning` is clean on both new shell files. `gofmt -l` is clean on the probe — after a second pass, because the first draft was not: a missing space before a line continuation, and **no trailing newline at end of file**. Both are trivial and neither can change what a test asserts, which is precisely why they are worth naming. This repository has already shipped Go that did not parse under a `.snippet` extension, and a file kit hands out is a file that has to be checked in its own language rather than assumed.
 
 ## The control
 

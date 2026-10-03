@@ -245,7 +245,7 @@ func TestCrossTenantListOwnRowsVisible(t *testing.T) {
 	}
 
 	if len(rows) == 0 {
-		t.Fatalf("THE ALLOWANCE, and it is the arm a broken bind fails: A's own member "+
+		t.Fatalf("THE ALLOWANCE, and it is the arm a broken bind fails: A's own member " +
 			"list is empty. An empty list is a bind that resolves to nothing, not an isolation.")
 	}
 
