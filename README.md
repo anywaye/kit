@@ -336,6 +336,84 @@ example — the fleet holds `docker-compose.yml` in six services and none of the
 other eleven files each one needs, which is the finding a drift-only reporter
 has no word for.
 
+## The account-scope contract, across the whole fleet
+
+Six services declare their account-scoped surface in an `account_scope.yml`.
+`core/harness/account_scope_check.py` is what decides whether a declaration
+still describes the code — and at the time this was written **not one of the
+six ran it against itself**. The only references in the fleet were three
+declarations *mentioning* the tool, `core`'s CI running its own self-test over
+its own fixtures, and that self-test's script. So the contract was continuous
+in nobody's build: a service could add a route, widen a declaration, or delete
+`account_scope.yml` entirely and its own gate stayed green. `DEBT.md` D18's
+shape, one level up from where D18 had been looking.
+
+So the check that spans services lives here, in the repository that renders
+them:
+
+```sh
+# the fleet beside this repository
+python3 tests/account_scope_fleet_check.py
+
+# any fleet, and the flag a reader needs to re-derive a number in the report
+# without editing a file
+python3 tests/account_scope_fleet_check.py --repos-dir /path/to/fleet --baseline
+python3 tests/account_scope_fleet_check.py --only pantry
+```
+
+`--baseline` applies **no** record and reports the raw verdict for every
+repository, so a baseline is a measurement rather than something to be believed.
+The default applies
+[`tests/account_scope_fleet_ratchet.yml`](tests/account_scope_fleet_ratchet.yml),
+which is a **row per in-scope repository** — not a list of suppressed
+identifiers. A repository with no row is red; a row whose numbers no longer match
+is red **in both directions**, so a repository that got better and whose row
+nobody retired is as red as one that got worse.
+
+Five rules, and one of them is a refusal:
+
+| rule | what it catches |
+| --- | --- |
+| **continuity** | a repository that declares a surface and stops declaring one. Derived from `git cat-file -e HEAD:account_scope.yml`, because the checker alone reads a deleted declaration as one that was never written. |
+| **entry** | an in-scope repository that has never declared, unless it is on `exempt:` with a `condition:` |
+| **propagation** | every `fail` finding core's checker reports, with its exit code and its four counts, per repository |
+| **exactness** | any difference from the recorded state, in either direction |
+| **blindness** | a run that cannot distinguish "this repository is clean" from "this runner read nothing" |
+
+The last row is the one worth reading. A checker that attributed no entry point
+to any registration exits 0 over an empty enumeration, which is byte-identical
+to a checker pointed at an empty directory — and **a pattern that matches
+nothing is not a pass, it is an error**, a rule this repository has already been
+bitten by. `pantry` is the live instance: its routes are generated as
+`r.Get(options.BaseURL+"/v1/…"`, the chi recogniser drops them, and its own
+declaration says `surface.minimum: 0`, which is the honest way to write down a
+surface nobody can read. The runner reports that as `blind.surface-blind` rather
+than as a green.
+
+**It runs in two places, because one would have been the defect again.**
+`tests/validate.sh` invokes it against the fleet beside the repository, with a
+**reported SKIP** when there is none — and a CI runner has none, so a second
+check asserts the wiring itself runs everywhere, and a job in
+`.github/workflows/ci.yml` assembles a fleet of the nine and runs the contract
+for real. That job has no `continue-on-error`: a repository renamed or made
+private turns it red, which is the state a reader can act on.
+
+**Which repositories are in scope is read, not written down.**
+[`tests/account_scope_fleet_scope.yml`](tests/account_scope_fleet_scope.yml) is
+a fingerprinted copy of `moon/MVP-SCOPE.md`'s in-scope table, and it exists only
+because a CI runner that cloned nine repositories has no `moon` checkout. When
+the directive **is** readable — every developer's machine, and every run of
+`bash tests/validate.sh` — the two are compared and a disagreement is exit 2, so
+the directive wins and a stale copy is a red build rather than a quietly narrowed
+watch.
+
+**The baseline is measured against a frozen copy of the fleet**, because three
+sessions share this machine and two of them work in it:
+[`reports/account-scope-contract-01/snapshot.sh`](reports/account-scope-contract-01/snapshot.sh)
+unpacks all nine at named commits with `git archive` and gives each copy a git
+repository of its own, so the numbers in
+`REPORT-kit-account-scope-contract-01.md` name the tree they were taken from.
+
 ## The local stack — `templates/compose/`
 
 Postgres, NATS with JetStream, Redis, the OpenTelemetry collector, and the three

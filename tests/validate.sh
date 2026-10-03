@@ -6550,6 +6550,151 @@ PY
     report SKIP 'adopting repositories  (no fleet beside this one — set KIT_FLEET)'
   fi
 
+  # ------------------------------------------------- the account-scope contract
+  # SIX SERVICES DECLARE THEIR ACCOUNT-SCOPED SURFACE AND NOT ONE OF THEM RUNS
+  # THE CHECKER IN ITS OWN GATE. Measured, and the measurement is the whole
+  # reason this section exists:
+  #
+  #   cd /Users/kaka/Code/any/moon/cafaye && grep -rln "account_scope_check" \
+  #       --include="*.sh" --include="*.yml" --include="Makefile" --include="*.exs" . \
+  #     | grep -v "^./core/harness" | grep -v wt-m39
+  #     -> pantry/account_scope.yml
+  #        courier/account_scope.yml
+  #        guard/account_scope.yml
+  #        core/.github/workflows/ci.yml
+  #        core/harness/tests/account_scope_self_test.sh
+  #
+  # Every hit is either a declaration MENTIONING the tool or `core` running its
+  # own self-test over its own fixtures. So the contract is continuous in nobody's
+  # build: a service can add a route, widen a declaration, or delete
+  # `account_scope.yml` entirely and its own gate stays green. That is D18's
+  # shape one level up from where D18 has been looking.
+  #
+  # `tests/account_scope_fleet_check.py` runs core's checker over every repository
+  # `MVP-SCOPE.md` puts in the MVP and compares the answer with what
+  # `tests/account_scope_fleet_ratchet.yml` records — in BOTH directions, so a
+  # repository that got better and whose row nobody retired is as red as one that
+  # got worse.
+  #
+  # WHY IT REPLACES THE FIVE-FUNCTION ADAPTER CONTRACT rather than extending it:
+  # `cross_tenant_harness.sh`'s `adapter_install_probe` / `adapter_language_tool`
+  # / `adapter_migrate` / `adapter_prepare` / `adapter_run` are five questions
+  # about RUNNING A SERVICE, four of them about a live Postgres. There is no
+  # service to run here and nothing to bring up or tear down, so the harness's
+  # `up`/`run`/`down` has no meaning over a declaration checker. The discipline
+  # that contract carries — a run that could not happen exits non-zero and never
+  # reports a pass — is kept, and it is the discipline this section is really
+  # about.
+  #
+  # THE FLEET ROOT IS FOUND, NOT ASSUMED, and its absence is a reported SKIP
+  # rather than a pass, for the same reason as the check above and with the same
+  # two candidate layouts. A CI runner legitimately reaches the SKIP, which is
+  # why the account-scope contract has its OWN job in `.github/workflows/ci.yml`
+  # that assembles a fleet and runs this runner for real: wiring a check only
+  # into a path that skips on every machine that runs it is the defect this
+  # packet is about, done one level down.
+  account_scope_fleet_root() {
+    local cand
+    for cand in "$ROOT/.." "$ROOT/../cafaye"; do
+      # A directory holding `core/harness/account_scope_check.py` and one of
+      # the in-scope services is a fleet this runner can measure. Testing for
+      # the INSTRUMENT rather than for the directory is the same instinct as
+      # the `gate.yml` probe above: pointing at something that is not a fleet
+      # reports "no repository checked" — technically true and useless.
+      if [ -f "$cand/core/harness/account_scope_check.py" ] \
+         && [ -n "$(find "$cand" -maxdepth 2 -name account_scope.yml -not -path '*/.venv/*' \
+                    2>/dev/null | head -1)" ]; then
+        (cd "$cand" && pwd)
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  account_scope_contract_check() {
+    local root
+    root="$(account_scope_fleet_root)" || {
+      echo "no fleet root: no directory beside this one holds core's account-scope checker"
+      echo "and a service's account_scope.yml. set KIT_FLEET=<path> to point at one."
+      return "$SKIP_EXIT"
+    }
+    "$PY" "$ROOT/tests/account_scope_fleet_check.py" --repos-dir "$root"
+  }
+  section 'static: the account-scope contract, across every in-scope repository'
+  if [ -n "${KIT_FLEET:-}" ]; then
+    check 'in-scope repositories  (every one declares its account-scoped surface)' \
+      "$PY" "$ROOT/tests/account_scope_fleet_check.py" --repos-dir "$KIT_FLEET"
+  elif account_scope_fleet_root >/dev/null 2>&1; then
+    check 'in-scope repositories  (every one declares its account-scoped surface)' \
+      account_scope_contract_check
+  else
+    report SKIP 'in-scope repositories  (no fleet beside this one — set KIT_FLEET)'
+  fi
+
+  # THE GATE-DID-NOT-RUN-THE-PROOF GUARD, and it is a separate check on purpose.
+  #
+  # The check above SKIPs on every machine that has no fleet beside it, which on
+  # this repository's own CI is all of them — and a check whose only proof is a
+  # SKIP is the failure `DEBT.md` records by name. So the wiring is asserted
+  # separately, and it runs everywhere including CI: deleting the `check` above,
+  # renaming the program, or deleting either half of the RECORD turns this red
+  # rather than leaving the gate quieter.
+  #
+  # The assertion is on the INVOCATION, not on the file existing, for the reason
+  # AGENTS.md states about `lint-args`: a comment that names a check, or a file
+  # that is present and never run, both read exactly like a check that is run.
+  # `strip_shell_comments` is not applied here on purpose — the needle is a
+  # command line, and a comment quoting the whole command would satisfy a check
+  # that a deletion had just emptied. So the needle is the ARGUMENT that makes
+  # it a run rather than a mention: `--repos-dir`.
+  account_scope_wiring_check() {
+    "$PY" - "$ROOT" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+problems = []
+
+gate = os.path.join(root, "tests", "validate.sh")
+with open(gate, encoding="utf-8") as handle:
+    body = handle.read()
+
+# The invocation, and the argument that makes it an invocation. A `grep` for the
+# program's name alone is satisfied by the comments around it, which is the trap
+# this whole check exists in.
+if "tests/account_scope_fleet_check.py" not in body:
+    problems.append(
+        "tests/validate.sh never names tests/account_scope_fleet_check.py, so nothing "
+        "in this repository's own gate runs the account-scope contract"
+    )
+if "--repos-dir" not in body:
+    problems.append(
+        "tests/validate.sh does not pass --repos-dir to the account-scope runner, so the "
+        "mention above it may be a comment rather than a run"
+    )
+
+# And the record, which is what makes a red comparable to yesterday's red. A
+# runner with no record tolerates nothing, which is a defensible state for its
+# first commit and a broken gate for every one after it.
+for relative, why in (
+    ("tests/account_scope_fleet_ratchet.yml",
+     "the recorded state of the fleet's account-scope contract"),
+    ("tests/account_scope_fleet_scope.yml",
+     "the vendored in-scope table a machine with no scope decision beside it runs on"),
+):
+    path = os.path.join(root, relative)
+    if not os.path.isfile(path):
+        problems.append(f"{relative} is missing: it is {why}")
+
+if problems:
+    sys.exit("; ".join(problems))
+print("the account-scope runner is invoked by this gate with --repos-dir, and both "
+      "halves of its record are on disk")
+PY
+  }
+  check 'account-scope wiring  (the gate runs the runner, and the runner has a record)' \
+    account_scope_wiring_check
+
   # Dogfood lint/yamllint.yml on every YAML in the tree, not just the two
   # compose templates. kit ships the config and a repo that copies it lints its
   # own CI against it on day one, so a YAML that breaks the config is a YAML
@@ -8533,23 +8678,37 @@ root = sys.argv[1]
 # each other by the check below — so the sentence in AGENTS.md cannot quietly
 # stop matching the rule the gate enforces, which is the property that made
 # kit-05's fail-closed headline worth restating.
-ALLOWED = {"__future__", "argparse", "difflib", "glob", "json", "os", "re",
-           "subprocess", "sys", "urllib"}
+# `yaml` is PyYAML, which `tests/requirements.txt` already carries and the gate
+# already bootstraps — so naming it is the existing carve-out rather than a
+# widened one. AGENTS.md names it in the same paragraph that names the program
+# that needs it, and the check below asserts the two agree.
+STANDARD_LIBRARY = {
+    "__future__", "argparse", "difflib", "glob", "hashlib", "json", "os", "re",
+    "subprocess", "sys", "urllib",
+}
+ALLOWED = STANDARD_LIBRARY | {"yaml"}
 
 # generated_stack_check.py joined this list in fleet-generated-compose-01 and is
 # the first program here that answers git rather than parsing a file. It is
 # stdlib for the same reason the others are — the carve-out is what keeps kit
 # a repository with no dependencies — and naming it here is the only way it
 # stays inside the boundary rather than merely claiming to.
+# account_scope_fleet_check.py is the fourth: it exists because a CI runner has no
+# fleet beside the repository, so the contract has to be run by a program the
+# workflow can invoke directly rather than by this gate. AGENTS.md argues it in
+# the Rules section, and the assertion at the bottom of this block is what stops
+# that argument and this list from being different claims.
 programs = ["tests/classify.py", "tests/staleness.py",
-            "tests/generated_stack_check.py"]
+            "tests/generated_stack_check.py",
+            "tests/account_scope_fleet_check.py"]
 problems = []
 seen_modules = set()
 
 for rel in programs:
     path = os.path.join(root, rel)
     if not os.path.isfile(path):
-        problems.append(f"{rel} is missing: the carve-out is a boundary around two programs")
+        problems.append(
+            f"{rel} is missing: the carve-out is a boundary around its named programs")
         continue
     with open(path, encoding="utf-8") as fh:
         try:
@@ -8581,7 +8740,7 @@ for rel in programs:
             if top not in ALLOWED:
                 problems.append(
                     f"{rel}:{getattr(node, 'lineno', '?')} imports {top!r}, which is "
-                    f"not standard library or not on AGENTS.md's list. The two "
+                    f"not standard library or not on AGENTS.md's list. These "
                     f"programs are the ONE carve-out from 'config only', and the "
                     f"carve-out is what keeps kit a repository with no "
                     f"dependencies — so a new import is a decision about this "
@@ -8589,16 +8748,18 @@ for rel in programs:
                 )
 
 # A check that proved nothing because it parsed nothing is a check that ran
-# nothing. Both programs must be present AND the walk must have seen something.
+# nothing. Every program must be present AND the walk must have seen something.
 if not seen_modules:
     problems.append(
-        "no imports were found in either program, so the carve-out check would "
-        "approve anything: the programs have changed shape and the check has not"
+        "no imports were found in any of the programs, so the carve-out check "
+        "would approve anything: they have changed shape and the check has not"
     )
 
 # AGENTS.md and this list must agree. The list is the enforcement; the sentence
 # in AGENTS.md is what a reader believes, and a reader who believes something
-# else from the one that is enforced is worse off than either.
+# else from the one that is enforced is worse off than either. That is also why
+# `account_scope_fleet_check.py` had to be named there on the day it landed: the
+# fourth program is a decision, and a decision nobody can find is not made.
 #
 # `urllib` and its submodules are the reason this half exists as a separate
 # assertion: the reporter imports `urllib.request` and `urllib.error` for the
@@ -8618,15 +8779,23 @@ if problems:
     for p in problems:
         print("  -", p)
     sys.exit(1)
+# The sentence says WHICH modules are not standard library rather than asserting
+# every one of them is: `yaml` is PyYAML, which is the point, and a summary that
+# claimed "all standard library" over a list containing PyYAML would be a false
+# claim printed on every green run.
+third_party = sorted(m for m in seen_modules if m not in STANDARD_LIBRARY)
 print(
     f"carve-out boundary: {len(programs)} programs, {len(seen_modules)} distinct "
-    f"imports ({', '.join(sorted(seen_modules))}), all standard library, all named "
-    f"in AGENTS.md. kit has no dependency and cannot grow one without this gate "
-    f"going red."
+    f"imports ({', '.join(sorted(seen_modules))}); standard library except "
+    f"{', '.join(third_party) or '(none)'}"
+    + (", which is PyYAML — already in tests/requirements.txt and already "
+       "bootstrapped by this gate" if third_party else "")
+    + ". All named in AGENTS.md. kit has no dependency and cannot grow one without "
+      "this gate going red."
 )
 PY
   }
-  check 'tests/classify.py + tests/staleness.py  (stdlib only; the carve-out, enforced)' \
+  check 'the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees)' \
     carveout_boundary_check
 
   # (4) Never cache a test report.
@@ -8947,6 +9116,16 @@ for path in (
     "templates/compose/postgres/initdb/10-cluster.sh",
     "templates/database/README.md",
     "templates/database/contract.json",
+    # The account-scope contract, which is a check that spans repositories rather
+    # than a template a service copies. The four are named together because they
+    # are one thing: a README that documents the declaration format without
+    # documenting WHO RUNS THE CHECKER describes a convention, and a convention
+    # nothing enforces is the finding `DEBT.md` D18 keeps recording one level up
+    # from where it has been looking.
+    "tests/account_scope_fleet_check.py",
+    "tests/account_scope_fleet_ratchet.yml",
+    "tests/account_scope_fleet_scope.yml",
+    "reports/account-scope-contract-01/snapshot.sh",
 ):
     if path not in readme:
         problems.append(f"README.md never mentions {path}")

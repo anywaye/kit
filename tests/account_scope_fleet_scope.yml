@@ -1,0 +1,38 @@
+---
+# kit's copy of the MVP's in-scope table, for a machine that has no `moon`
+# checkout beside the fleet.
+#
+# WHY THIS FILE EXISTS, and it is a smaller thing than it looks
+#   The authority is `moon/MVP-SCOPE.md` — one directory above the fleet, in no
+#   repository. A developer's machine has it. A GitHub Actions runner cloning
+#   nine sibling repositories does not, and a CI job that cannot name the fleet
+#   has two choices: do not run, or guess. Not running is the packet's own
+#   defect — a gate that exists in a file nobody invokes.
+#
+#   So this is a DERIVED CACHE WITH A FINGERPRINT, not a second source of
+#   truth:
+#
+#     * `fingerprint` is sha256 of the nine names joined by newlines, taken from
+#       the table as `MVP-SCOPE.md` writes it. `account_scope_fleet_check.py`
+#       recomputes it from this file's own list and refuses the run if the file
+#       disagrees with itself.
+#     * When `MVP-SCOPE.md` IS readable — which is every developer's machine and
+#       every run of `bash tests/validate.sh` — the runner reads the directive,
+#       compares it with this list, and exits 2 if they differ. So the directive
+#       wins, and a stale copy here is a red build rather than a silent
+#       narrowing of what the gate watches.
+#
+#   Re-derive it by changing `inScope` and replacing `fingerprint` with what
+#   `python3 -c "import hashlib,sys;print(hashlib.sha256(chr(10).join(sys.argv[1:]).encode()).hexdigest())" <name> …`
+#   prints. The runner will tell you the two values if you get it wrong.
+inScope:
+  - identity
+  - courier
+  - guard
+  - site
+  - parlor
+  - pantry
+  - caf
+  - kit
+  - core
+fingerprint: 9fec5592376e521dd4c34adfeab238b8cd64f243fbe9a618a6d556ab91a434a9

@@ -2,6 +2,72 @@
 
 ### Added
 
+- **The account-scope contract is now continuous in a build, which it was not.**
+  Six services declare their account-scoped surface in an `account_scope.yml`
+  and `core/harness/account_scope_check.py` is what decides whether a
+  declaration still describes its code. Measured before this change, **not one
+  of the six ran it against itself**: the only references in the fleet were
+  three declarations *mentioning* the tool, `core`'s CI running its own
+  self-test over its own fixtures, and that self-test's script. So the contract
+  was continuous in nobody's build — a service could add a route, widen a
+  declaration, or delete `account_scope.yml` entirely and its own gate stayed
+  green. `DEBT.md` D18's shape, one level up from where D18 had been looking,
+  and the failure has a name in this repository's own history: *the gate that
+  did not run the proof*.
+
+  `tests/account_scope_fleet_check.py` runs core's checker over every repository
+  `MVP-SCOPE.md` puts in the MVP — nine — and compares the answer with
+  `tests/account_scope_fleet_ratchet.yml`, **in both directions**, so a
+  repository that got worse is red and a repository that got *better* and whose
+  row nobody retired is red too. That second half is the property a suppression
+  list does not have, and it is why the record is a full row per repository
+  rather than a list of things to ignore: a repository with **no** row is red,
+  because adding a repository to the in-scope table has to be a deliberate act.
+
+  **Five rules, and they are four rules plus a refusal.** Continuity: a
+  repository that declares a surface and stops declaring one is red, derived
+  from `git cat-file -e HEAD:account_scope.yml` because the checker alone reads
+  a deleted declaration as one that was never written. Entry: an in-scope
+  repository that has never declared is red unless it is on the `exempt:` list
+  with a `condition:`. Propagation: the checker's exit code and its four counts
+  are reported for every repository. Exactness: every recorded number is
+  two-directional. And the refusal — **a run that cannot distinguish "this
+  repository is clean" from "this runner read nothing" is red, not green**,
+  which is the sentence this packet exists to write down. Five blindnesses are
+  detected: a run that attributed no entry point to any registration, a
+  declaration that sets `surface.minimum: 0` over source files that exist
+  (`pantry`, live, and honestly self-declared), git history that could not be
+  read, a `--only` or a scope table that selected nothing, and unreadable
+  declared rows — which are counted and exact rather than passed over.
+
+  **It runs in two places, because one would have been the defect again.**
+  `tests/validate.sh` invokes it against the fleet beside the repository, with
+  a **reported SKIP** when there is none — and a CI runner has none, so a
+  second check asserts the wiring itself runs there. A new job in
+  `.github/workflows/ci.yml` assembles a fleet of the nine and runs the
+  contract for real. It carries no `continue-on-error`: a repository renamed or
+  made private turns that job red, which is the state a reader can act on.
+
+  **It replaces the five-function adapter contract rather than extending it**,
+  and the reason is in the file: `adapter_install_probe` /
+  `adapter_language_tool` / `adapter_migrate` / `adapter_prepare` /
+  `adapter_run` are five questions about *running a service*, four of them about
+  a live Postgres, and there is no service to run here. The discipline that
+  contract carries — a run that could not happen exits non-zero and never
+  reports a pass — is kept, and `up`/`run`/`down` is not.
+
+- **A frozen copy of the fleet, because three sessions share this machine and
+  two of them work in it.** `pantry`'s master moved twice while this was being
+  written, once between two measurements of the same command forty minutes
+  apart, so "the current baseline" measured against live working trees is a
+  number that changes while the report is being typed.
+  `reports/account-scope-contract-01/snapshot.sh` unpacks all nine at named
+  commits with `git archive` (which reads a repository and writes nothing in
+  it) and gives each copy a git repository of its own — because the runner's
+  continuity rule reads `HEAD`, and a copy without history makes the runner
+  correctly report itself blind, which is the runner working and also why the
+  script commits what it unpacked.
+
 - **A third cross-tenant adapter was attempted against `parlor` and WITHDRAWN,
   because no TypeScript service in this fleet holds a database.** The finding is
   measured rather than asserted: across `cafaye-ts`, `guard`, `parlor`, `site`
