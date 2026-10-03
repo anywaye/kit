@@ -156,6 +156,46 @@
   itself uses, so the adapter never becomes a second statement of a fact the
   migration already states.
 
+### Changed
+
+- **The account-scope record was RED on arrival with `pantry` and `identity`
+  moved, and `pantry` had got BETTER.** Core's D46 replaced a false `stale` on a
+  route that is mounted with `account-scope.registration-path-unreadable`, added
+  `account-scope.surface-unreadable`, and printed a fifth number on the summary
+  line. Measured with `tests/account_scope_fleet_check.py --baseline`:
+
+  | repository | was | is now |
+  | --- | --- | --- |
+  | `pantry` | exit 1, `0/5/1/0/1/7`, `stale: 1`, `surface-blind` | exit 0, `0/6/0/0/0/9`, `surface-unreadable` |
+  | `identity` | exit 0, `17/25/0/0/0/1` | exit 0, `17/25/0/0/0/3`, two `surface-unreadable` |
+
+  `pantry` went from a false FAILURE to a green and that is exactly as red as a
+  regression, which is the property a suppression list does not have and the
+  reason this file is a full row per repository. Both rows are restated from that
+  command's output; the other seven are byte-identical.
+
+  **`pantry`'s old `condition:` did not merely arrive, it was wrong about what
+  core would do.** It read "THIS ROW ENDS when core's chi recogniser reads a
+  leading concatenation term", after `pantry/DECISIONS.md` D34 §3 — and D46
+  lists that as its first **rejected** alternative, stating in the same sentence
+  that resolving identifier values through the module index does **not** close
+  `pantry`'s, "because `options.BaseURL` has no value in any tree". The chi
+  pattern still requires a string literal as the first term after `(`
+  (`core/harness/account_scope_check.py:486`) and pantry's D34 is still OPEN. So
+  the end is restated as a fact a reader can watch: the row ends when
+  `surface-unreadable` reports a **non-zero read count** for
+  `internal/api/api.gen.go` — today "0 of the 6 registration(s) in
+  `surface.sources` were read" — which is the whole of `surface.minimum: 0` and
+  the only reason `fleet.blind.surface-blind` still fires.
+
+  **The row is rewritten, not deleted, and its nine warnings are not a
+  tolerance.** A repository with no row is red, so removing it would have made
+  adding a repository to `MVP-SCOPE.md` silent. The loader demands a `condition:`
+  for `failures:` and `blind:` and for nothing else — a warning a row must write
+  down is the record working, not a switch — and this row keeps one condition for
+  the one failure it really carries. `identity` keeps none: nothing about it is a
+  failure and nothing about it is tolerated.
+
 ### Fixed
 
 - **`adapters/README.md` listed `guard` as a Go service. It is TypeScript** — 44
