@@ -857,8 +857,96 @@ fresh_copy() {
   # the second time this repository has paid it: **when a packet adds a file the
   # gate reads by path, `fresh_copy`'s list is part of that packet.** A new
   # check is not done until a throwaway copy can see the thing the check reads.
+  #
+  # `reports` is here for that reason, and it is the THIRD KIND of thing on this
+  # list. `LICENSE`, `DECISIONS.md`, `VERSION` and `MIGRATIONS.md` are files the
+  # gate opens; `.github`, `core` and `lint` are directories the gate reads
+  # members of. `reports/` is a directory the gate reaches ONE MEMBER DEEP — and a
+  # single member is enough, because `readme_check` asserts both halves for every
+  # path it names: that README.md mentions it, and that `os.path.exists` says it
+  # is there. So an account-scope packet that documented
+  # `reports/account-scope-contract-01/snapshot.sh` turned every throwaway copy
+  # this suite makes into a tree whose README describes a file the copy does not
+  # have:
+  #
+  #     FAIL README.md  (documents every new template)
+  #            README.md documents reports/account-scope-contract-01/snapshot.sh,
+  #            which does not exist
+  #
+  # NO NUMBER, AND THAT IS THE CORRECTION RATHER THAN A LOSS. This paragraph used
+  # to say "all 64 throwaway copies", and 64 is not a count of anything. Measured
+  # by instrumenting `fresh_copy` in a throwaway copy of the tree and reading
+  # what it wrote — not by grepping, because grepping answers a different
+  # question — one full run makes:
+  #
+  #     92 copies   ruby, kamal and kamal-backup all on PATH
+  #     79 copies   the same machine with all three unreachable
+  #     89 / 76     either of the above, in a run that FAILED or SKIPPED anything
+  #                 and so stopped at this file's own `exit 1` before reaching
+  #                 breakages 101-103, whose three `fresh_copy` sites sit below
+  #                 that guard rather than above it
+  #
+  # Four numbers, none of them 64, and which one you get is a property of the
+  # machine and of how far the run got rather than of this file. 13 of the 92
+  # sites sit inside `command -v ruby` or `command -v kamal && command -v
+  # kamal-backup` (breakages 23, 23b, 40, and 78b-82 plus 84-87), and 3 sit
+  # after the `exit 1`, which is why an invocation-site count is a ceiling rather
+  # than an answer. The static count agrees and is the only one that has never
+  # moved: `grep -cE '\$\(fresh_copy ' tests/self_test.sh` says 92 at `master`, at
+  # `81fffa6` where the `reports` entry landed, and at every commit between.
+  #
+  # A number a run cannot reproduce is worse than no number, because the next
+  # reader cites it instead of measuring it. That is the rule the
+  # `templates/compose/mimir` comment in `tests/validate.sh` states for a path
+  # added to a list to satisfy a stale README: the prose is the thing that rots.
+  # "every copy this suite makes" was true before the packet and is true after
+  # it; the count was never the claim, and pinning one made the true claim
+  # unreviewable. `REPORT-kit-freshcopy-count-01.md` carries the method, the raw
+  # output and the five points of instrumentation.
+  #
+  # TWO DIRECTIONS, and the second is the one worth a paragraph.
+  #
+  #   1. The FALSE RED, which is the loud one and which the control already names.
+  #      `expect_green 'unbroken tree'` runs FIRST and prints "the gate is RED on
+  #      an unbroken tree" — the sentence that makes every proof below it
+  #      meaningless, and the exact symptom the `MIGRATIONS.md` paragraph above
+  #      measured. The green-expecting proofs (23b, 31b, 59) go red with it, all
+  #      three for a reason that had nothing to do with the defect under test,
+  #      which is the failure mode this whole list exists to prevent. That half
+  #      is a red suite, and it is at least legible.
+  #
+  #   2. The SILENT one, and it is the reason this is a check of the harness
+  #      rather than a chore. 88 of this file's recipe invocations are
+  #      `expect_red_check`, and `expect_red_check` appends `--only=<label>` to
+  #      every child that does not already carry one — so the README check does
+  #      not RUN in any of them and not one of the 88 ever sees this. What is
+  #      left that does is the single plain `expect_red` in the file (breakage
+  #      1), and `expect_red` asserts the gate's EXIT STATUS and nothing else:
+  #      `the gate went red` is satisfied by a copy that is red for any reason at
+  #      all. One recipe is not a number anybody would act on. It is the SHAPE
+  #      that matters, because the direction of travel is one recipe per packet
+  #      that adds an unfiltered assertion, and the day the count is large the
+  #      suite reports "every proof held" while a growing share of the proofs
+  #      proved nothing at all — the exact inverse of the false red, and the
+  #      harder of the two to notice, because a suite that always goes red is at
+  #      least reporting something true.
+  #
+  # So the rule is the one the paragraph above ends on, paid a third time — and
+  # `reports/` is the packet that shows why writing it down is not enough. The
+  # file, the README line and the `readme_check` list entry that names it ALL
+  # landed in ONE commit, `81fffa6`, together with a header that documents the
+  # coupling. So this was not a split across commits and not a case of somebody
+  # forgetting a half: the packet did three of the four things a path the gate
+  # reads by path requires, in one diff, on a tree whose own gate was green
+  # throughout. Nothing in the packet was red and nothing in it looked unfinished.
+  # The fourth thing lives in a file the packet had no reason to be reading, and
+  # the only witness to its absence is a proof one level down that had been
+  # silently passing — which is the shape no review of the packet's own diff can
+  # catch, and the reason the honest form of the rule is the one above: the
+  # receipt is a green `unbroken tree`, not a remembered step.
   for entry in .gitleaks.toml .github AGENTS.md README.md CHANGELOG.md LICENSE \
-    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint templates tests; do
+    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint reports \
+    templates tests; do
     [ -e "$ROOT/$entry" ] && cp -R "$ROOT/$entry" "$dst/"
   done
   # KIT_GITLEAKS, unlike the other two, must ALSO be resolved before the first
@@ -3157,6 +3245,32 @@ expect_red_script 'breakage 37: the reporter grades a copy by resemblance, not e
 #     what a contributor actually writes when they are being careful about
 #     looking tidy, and it is the shape a grep-based check would miss. The check
 #     walks the AST, so there is nowhere to put one that it cannot see.
+#
+#     AND THE NEEDLE IS THE LABEL, WHICH `81fffa6` STOPPED BEING. That commit added a
+#     fourth carve-out program and, in the same hunk, renamed the check that owns all
+#     four of them:
+#
+#       -  check 'tests/classify.py + tests/staleness.py  (stdlib only; the carve-out, enforced)'
+#       +  check 'the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees)'
+#
+#     `expect_red_check` matches `FAIL $want` AND passes `$want` to `--only`, and
+#     `--only` is a substring match on the label. So a label that no longer exists does
+#     not weaken this proof, it deletes it — and silently, in the worst direction
+#     available, because `--only` matching nothing is ITSELF a fail:
+#
+#       FAIL: --only='tests/classify.py + tests/staleness.py' selected NO check out of the suite.
+#
+#     …which is a non-zero exit, so `the gate went red` was satisfied and only the
+#     `FAIL $want` half noticed. Measured in a copy with this exact mutation applied,
+#     both ways: the old needle selects nothing and can never match; the label below
+#     selects exactly one check and prints
+#     `FAIL the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees)`.
+#
+#     AGENTS.md's rule — the needle is the label, and a label a self-test asserts is a
+#     contract — has now been paid for here five times; 71, 75, 76 and 77 were the
+#     first four. This is the one that matters most, because it is the only proof in
+#     the repository that kit stays dependency-free, and from the outside a dead needle
+#     and a satisfied assertion are the same line.
 thirtyeight="$(fresh_copy a-third-party-import)"
 "$PY" - "$thirtyeight/tests/staleness.py" <<'PY'
 import sys
@@ -3169,7 +3283,7 @@ with open(path, "a", encoding="utf-8") as fh:
     fh.write("\n\ndef _third_party():\n    import requests  # self_test breakage 38\n")
 PY
 expect_red_check 'breakage 38: one of the two programs gains a third-party import' \
-  "$thirtyeight" 'tests/classify.py + tests/staleness.py' --static-only
+  "$thirtyeight" 'the carve-out programs' --static-only
 
 # 29. A HARNESS THAT LIES ABOUT ITS OWN FLEET.
 #
