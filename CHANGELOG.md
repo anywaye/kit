@@ -2,6 +2,84 @@
 
 ### Added
 
+- **`tests/tenant_isolation/` and `reports/tenant-isolation-harness/mutations.sh`:
+  a harness that PROVES one account cannot read another's rows, by running the
+  service's real query layer against a real database.** D18 says nothing proves
+  it and nothing can ask. `core`'s `account_scope_check.py` (landing
+  concurrently) is the other half — it DECLARES which entry points reach customer
+  data. This is the half that proves it, and it is in kit rather than in core for
+  the same reason `gate_check.py` is in core and `tests/gate_self_test.sh` is
+  here: kit has the docker fixtures and the fleet-wide shape.
+
+  **It runs the code, so it is not a linter.** A grep for `account_id` near a
+  query is blind in three ways this harness is not: a bind parameter passed as
+  the *previous* one (the predicate is right, the value under it is not); a query
+  that scopes in production and not on the error path; and an entry point that is
+  not a query at all — courier's `update/2` takes a struct, so the predicate that
+  scoped it is four frames away at the load site and a per-query lint sees a clean
+  `Repo.update`. Instead: a throwaway copy of the service, a real `postgres:17`
+  container whose name and host port are BOTH derived from the session, **the
+  service's own migrations**, two accounts seeded through the service's own write
+  path, and the service's own functions called as account A.
+
+  **The control passes, and that is a measurement: six negative assertions,
+  `Result: 6 passed`, 0.1s, against a real database.**
+
+  **The six breakages were each observed RED, on the assertion named after the
+  breakage** — a control never observed red is a check that cannot see the
+  defect it was written for, and that is worse than no check because it reports
+  green:
+
+  | # | breakage | planted in | the literal receipt |
+  |---|---|---|---|
+  | 1 | missing `WHERE` | `enabled/1` loses the account predicate, keeps `status == :enabled` | `1) test cross_tenant_enabled_list` |
+  | 2 | missing bind parameter | `list/1` keeps the predicate, pins a constant | `1) test cross_tenant_list_own_row_visible` |
+  | 3 | unscoped list | `page/3`, the query the HTTP index runs | `1) test cross_tenant_list` |
+  | 4 | unscoped update | the controller's `update/2` resolves its row by id alone | `1) test cross_tenant_update` |
+  | 5 | unscoped delete | the controller's `delete/2` resolves its row by id alone | `1) test cross_tenant_delete` |
+  | 6 | IDOR on fetch-by-id | `Repo.get_by(…, account_id:)` becomes `Repo.get` | `2) test cross_tenant_fetch_by_id` |
+
+  Each was reverted and green again. Four things are asserted per case: the
+  mutation is in the file **by text**, the suite goes red **and names the
+  assertion it was written for**, the literal failure line is kept rather than
+  paraphrased, and the revert returns it to green. Breakage 2 is why the probe has
+  an **allowance** assertion of its own — a predicate bound to the wrong account
+  reads as "zero rows", which every denial-only assertion is perfectly happy with.
+
+  Two of the six are worth naming because they are the class of defect this
+  replaces. Breakage 6 unscopes the controller's SHARED fetch, so update and
+  delete go red with it — reported as `2)` rather than `1)`, because the recipe
+  prints what the suite said instead of filtering it to one name. And breakage 3
+  was first written against `list/1`, which the recipe caught: courier's
+  controller paginates, so unscoping `list/1` proved nothing about the list
+  endpoint. **A breakage aimed at a function no entry point calls is a breakage of
+  a function, not of a surface.**
+
+  **And the claim is one language wide, in those words: cross-tenant isolation is
+  proven for Elixir, on a service that scopes correctly. Five languages remain
+  unproven.** The harness holds no Elixir — five functions, in
+  `tests/tenant_isolation/adapters/README.md`, are the whole contract, and the
+  recipe's *anchors* are the only language-specific part.
+
+- **the docker-tier rules now walk `tests/` RECURSIVELY, and the reason is that a
+  check whose scope is narrower than a reader believes costs its trust in the
+  findings it does report.** `docker_tier_project_name`'s `scripts` list was
+  `os.listdir(tests_dir)`, which reads the top level only — so the new harness,
+  in a subdirectory, was in neither `tiers` nor `uncovered`, and the gate would
+  have printed a tier count that did not include it and said nothing at all. It
+  brings a container up and derives its container name and its host port from the
+  session; that is now a fact the rules are pointed at rather than a fact a reader
+  has to notice.
+
+- **`reports/tenant-isolation-harness/BEFORE-*.ex` and `AFTER-*.ex`: the two source
+  files the six breakages are applied to, so a reviewer reads what is being broken
+  instead of reconstructing it.** They are byte-identical by construction — every
+  case reverts before the next — and they are committed because
+  `reports/wrapper-tier-scope/mutations.sh` already commits its `BEFORE.txt` and
+  `AFTER.txt` for the same reason.
+
+### Added
+
 - **`tests/generated_stack_check.py`, and a gate section that runs it: the file
   `caf dev` GENERATES is not a source file, and nothing said so in the six
   repositories nobody had visited yet.** `caf dev` renders a stack from

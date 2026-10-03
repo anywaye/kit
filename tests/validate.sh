@@ -11687,9 +11687,25 @@ tests_dir = sys.argv[1]
 # tier that brings a stack up without naming a project, and fails itself. A guard
 # that trips over the sentence explaining the guard is worse than useless — it
 # teaches the reader that the message is noise.
+# RECURSIVE, and the recursion is the point. This used to be `os.listdir(tests_dir)`,
+# which reads the top level only — so a docker tier placed in a subdirectory was
+# not merely unchecked, it was INVISIBLE: it was in neither `tiers` nor
+# `uncovered`, so the gate printed a count of tiers that did not include it and
+# said nothing about it at all.
+# `tests/tenant_isolation/cross_tenant_harness.sh` is that file: it brings a
+# container up, derives its container name and its host port from the session,
+# and would have carried on doing so with no rule pointed at any of it. The
+# finding this whole rule exists for is the same shape one level up — a check
+# whose scope is narrower than a reader believes costs its trust in the findings
+# it does report.
+#
+# The paths are RELATIVE to tests/, so the messages name a path a reader can open
+# rather than one relative to whatever directory the python happened to run in.
+_ti_root = os.path.abspath(tests_dir)
 scripts = sorted(
-    f
-    for f in os.listdir(tests_dir)
+    os.path.relpath(os.path.join(d, f), _ti_root)
+    for d, _subdirs, files in os.walk(_ti_root)
+    for f in files
     if f.endswith(".sh") and not f.startswith("_") and f != "validate.sh"
 )
 
