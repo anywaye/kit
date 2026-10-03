@@ -1060,7 +1060,34 @@ See `DECISIONS.md` (MD26, MD27).
     forbids and the kind of file that rots. If a third program is proposed, the
     default answer is no.
   - **`tests/gate_declaration_check.py` and `tests/core_fanout_check.py` are the
-    same carve-out, used twice, and a fourth is still a fourth.** They are
+    same carve-out, used twice, and a fourth is still a fourth.**
+    **`tests/generated_stack_check.py` is a third use of it, and the argument
+    for it is not that it is also a parser — it is not.** It parses no file
+    type at all: it asks GIT two questions (`check-ignore`, `ls-files`) about
+    whether `caf.dev.compose.yaml` is ignored and whether it is tracked, in
+    every repository beside this one that has a `cafaye.yml`. It is here
+    because the alternative is worse than a fourth program: re-implementing
+    gitignore semantics in Python is wrong on `!` negation, on anchored
+    paths, on `**`, and on a `core.excludesFile` in one developer's global
+    config, and it would disagree with git on every case that matters. It is
+    stdlib for the same reason the others are, it is named in the
+    `carve-out boundary` check's list in the same commit that added it, and
+    its population is read off the filesystem rather than written down. It also
+    reads ONE file — `MVP-SCOPE.md`, the fleet's scope decision, beside the
+    fleet and in no repository — for the set of repositories held frozen, and
+    **that read is a scope decision and not an allowlist**: the out-of-scope
+    list is the only exemption, a repository it does not name is blocking, and
+    a decision that cannot be read exempts nothing and says so with a
+    `SCOPE-ABSENT:` marker. A hardcoded frozen list would have the same defect
+    as the hand-written dirty list this check was written to replace, with the
+    opposite polarity: it goes stale silently, and the day the scope lifts the
+    exemptions outlive the decision that granted them.
+    `fleet_check.py` would have been the wrong home for it on two counts and
+    both are argued at the top of that file: its scope predicate is "declares
+    local infrastructure", which EXCLUDES `core` — the repository that had
+    this file committed — and its adoption ceiling would have made a hard FAIL
+    a WARN in every repository, forever, on the grounds that none of them has
+    adopted `kit.ref`. That defect has no adopter. They are
     real parsers over real file types, and inlining either into the 4,000-line
     `validate.sh` would bury the failure modes. The boundary they hold to is the
     classifier's: nothing imports them, and neither is installable. The one

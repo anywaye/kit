@@ -6101,6 +6101,96 @@ STUB
   esac
 
   # -------------------------------------------------------------------------
+  # THE GENERATED LOCAL STACK IS NOT A SOURCE FILE, and this is the check that
+  # stops it being committed as one. It is deliberately NOT part of the fleet
+  # gate above, and the two reasons are both load-bearing.
+  #
+  # SCOPE. That gate checks repositories that DECLARE LOCAL INFRASTRUCTURE — a
+  # root compose file or a root collector config. This one checks every
+  # repository that HAS A `cafaye.yml`, which is a different set: `core`, `docs`,
+  # `muse`, `guard` and `cafaye-ts` have manifests and no stack, and `core` is
+  # the repository that had this file COMMITTED. Folding it in would have scoped
+  # the check that matters most to the predicate that excludes it.
+  #
+  # SEVERITY. Every finding above is routed through the ADOPTION CEILING: a
+  # warning in a repository that has not adopted `kit.ref`, a failure in one
+  # that has. That ceiling is right there and wrong here, because it is about
+  # WHO OWNS A DEBT, and this defect has no adopter. A repository that has never
+  # heard of kit's stack still must not commit its generated one; there is no
+  # wave that makes that acceptable.
+  #
+  # It reads its population off the FILESYSTEM — a `cafaye.yml` at the root is
+  # what `caf dev` itself uses to decide a directory is a project at all — so a
+  # repository that grows a manifest is in scope the day it does, with nothing
+  # here edited. That is the whole argument for a guard at all: the list that
+  # prompted this work named five repositories and was correct only because
+  # somebody had run `caf dev` on that laptop and left a file behind. Five
+  # further repositories had manifests and no ignore entry and were invisible to
+  # it, and a list cannot tell you about a repository nobody has visited.
+  #
+  # SKIPS LOUDLY WHEN THERE IS NO FLEET, on the same `FLEET-ABSENT:` marker the
+  # gate above prints, so a clone of kit on CI reports that it looked at nothing
+  # rather than that the fleet is clean.
+  #
+  # AND IT RESPECTS THE SCOPE DECISION IN ITS EXIT STATUS, which is the whole
+  # difference between a gate that can go green on this machine and one that
+  # cannot. `MVP-SCOPE.md` — one directory above the fleet, in no repository —
+  # holds `billing`, `darkroom` and `muse` out of the MVP until it is launched
+  # and selling, and two of them carry this exact defect TODAY. The first
+  # version of this section failed on both, so merging it would have made kit's
+  # gate permanently red on a tree nobody is permitted to fix — and the
+  # predictable response to a gate that cannot go green is a human turning it
+  # off, which would have stopped the check running in the nine repositories that
+  # CAN be fixed today. A gate that cannot go green teaches the fleet to ignore
+  # gates, which is worse than not shipping the check.
+  #
+  # So the FINDINGS stay exactly as they were and only the exit status is
+  # routed: a finding in an in-scope repository fails, a finding in a frozen one
+  # is printed and does not, and the row below says which of the two happened.
+  # The frozen set is READ from that file through `--scope`, never written down
+  # here or in the checker, so the day the scope lifts the exemptions lift with
+  # it rather than outliving the decision that granted them. `KIT_SCOPE_FILE`
+  # overrides the location for a machine whose fleet is not beside its
+  # directive, and the check's own default is the directory above the fleet, so
+  # it also works when it is run on its own.
+  section 'static: the generated local stack is not committed'
+  gen_out='' gen_ec=0
+  gen_out="$("$PY" "$ROOT/tests/generated_stack_check.py" --repos-dir "${KIT_FLEET:-$ROOT/..}" --scope "${KIT_SCOPE_FILE:-$ROOT/../../MVP-SCOPE.md}" --no-fleet 2>&1)" || gen_ec=$?
+  # THE ROW NAMES WHICH VERDICT THIS IS, because a green that came from frozen
+  # repositories and a green that came from a clean fleet are different facts
+  # and the summary line is where a reader looks first. Read out of the output
+  # rather than restated here, because a second copy of the count is a second
+  # copy to be wrong.
+  gen_label='generated stack  (no repository commits the file caf dev generates)'
+  case "$gen_out" in
+    *SCOPE-ABSENT:*)
+      gen_label="$gen_label; no scope decision read, so nothing is exempt"
+      ;;
+  esac
+  # `sed -n` reads all of its input, so this cannot SIGPIPE the writer — the
+  # broken-pipe shape `expect_red_check` documents, and the reason those
+  # assertions match a captured variable instead.
+  gen_frozen=$(printf '%s\n' "$gen_out" | sed -n 's/^FROZEN-FINDINGS: \([0-9][0-9]*\) .*/\1/p')
+  case "$gen_frozen" in
+    ''|0) ;;
+    *) gen_label="$gen_label; $gen_frozen in frozen repositories, reported not counted" ;;
+  esac
+  case "$gen_out" in
+    *FLEET-ABSENT:*)
+      report SKIP 'generated stack  (no cafaye repository on this machine - set KIT_FLEET=<dir>)'
+      ;;
+    *)
+      if [ "$gen_ec" -eq 0 ]; then
+        report PASS "$gen_label"
+        printf '%s\n' "$gen_out" | sed 's/^/       /'
+      else
+        report FAIL "$gen_label"
+        printf '%s\n' "$gen_out" | sed 's/^/       /'
+      fi
+      ;;
+  esac
+
+  # -------------------------------------------------------------------------
   # THE COLLECTOR CONFIG IS MOUNTED FROM THE TREE `bin/dev` FETCHED, and this is
   # the check for a defect that ONLY RUNNING THE STACK could find.
   #
@@ -8446,7 +8536,13 @@ root = sys.argv[1]
 ALLOWED = {"__future__", "argparse", "difflib", "glob", "json", "os", "re",
            "subprocess", "sys", "urllib"}
 
-programs = ["tests/classify.py", "tests/staleness.py"]
+# generated_stack_check.py joined this list in fleet-generated-compose-01 and is
+# the first program here that answers git rather than parsing a file. It is
+# stdlib for the same reason the others are — the carve-out is what keeps kit
+# a repository with no dependencies — and naming it here is the only way it
+# stays inside the boundary rather than merely claiming to.
+programs = ["tests/classify.py", "tests/staleness.py",
+            "tests/generated_stack_check.py"]
 problems = []
 seen_modules = set()
 

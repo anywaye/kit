@@ -1,5 +1,49 @@
 ## Unreleased
 
+### Added
+
+- **`tests/generated_stack_check.py`, and a gate section that runs it: the file
+  `caf dev` GENERATES is not a source file, and nothing said so in the six
+  repositories nobody had visited yet.** `caf dev` renders a stack from
+  `cafaye.yml` and writes it to `caf.dev.compose.yaml` on every run — including
+  the run that finds no services, because the write precedes the empty-stack
+  return (`caf/internal/cli/dev.go:186`, before the `len(stack.Services) == 0`
+  check at `:194`). Two states are now failures:
+
+  - a repository that neither ignores it nor has un-tracked it, which is one
+    `git add -A` from a commit and, from there, a merge conflict nobody can
+    resolve by reading it because both sides are generated;
+  - a repository that TRACKS it, which was `core`'s state and is the case where
+    an ignore entry is necessary and **not** sufficient — git applies ignore
+    rules only to paths it is not already tracking, so `git check-ignore` keeps
+    answering "not ignored" about a tracked path however correct the
+    `.gitignore` is, until `git rm --cached` moves it.
+
+  Scope is read off the FILESYSTEM: a root `cafaye.yml` is exactly what `caf dev`
+  uses to decide a directory is a project at all, so a repository is in scope
+  the day it grows a manifest and nothing here is edited. Measured against the
+  real fleet with the five per-repository fixes not yet merged: **11 findings
+  across 10 of 16 repositories**, exit 1. Five of those ten — `cafaye-rb`,
+  `cafaye-ts`, `docs`, `guard`, `muse` — hold a manifest, no ignore entry and no
+  file on disk, and they are invisible to a hand-written list precisely because
+  nobody has run `caf dev` on that machine yet.
+
+  Green control over three conforming fixture repositories: exit 0. The TRACKED
+  branch is proved by a planted divergence (`git add -f`, then `git rm --cached`
+  turns it green) and the not-ignored branch by deleting the ignore line from a
+  conforming fixture. It is a third use of the `config only` carve-out and is
+  named in the `carve-out boundary` check's list in the same commit; it is stdlib
+  for the same reason the others are, and it parses no file type at all — it asks
+  git two questions, because re-implementing gitignore semantics in Python is
+  wrong on `!` negation, anchored paths, `**`, and a developer's global
+  `core.excludesFile`.
+
+  It is deliberately **not** part of `fleet_check.py`, and `tests/validate.sh`
+  argues both reasons: that gate's scope predicate is "declares local
+  infrastructure", which EXCLUDES `core` — the repository this check exists for —
+  and its adoption ceiling would make a hard FAIL a WARN in every repository
+  forever, on the grounds that none has adopted `kit.ref`. This defect has no
+  adopter.
 ### Fixed
 
 - **The docker-tier guard counted five tiers and three more were bringing a stack
@@ -29,6 +73,61 @@
   - Recipe: `reports/wrapper-tier-scope/mutations.sh`, **8 cases, all bit**, guard
     extracted from `tests/validate.sh` on every run so it cannot outlive it. Text
     scan only — no image, no container, no docker.
+
+
+- **The generated-stack gate failed on two repositories the scope decision holds
+  frozen, so merging it would have made kit's gate permanently red on a tree
+  nobody is permitted to fix.** `MVP-SCOPE.md` freezes `billing`, `darkroom` and
+  `muse` out of the MVP until it is launched and selling, and `darkroom` and
+  `muse` each hold the defect today: a manifest, no ignore entry, no file on
+  disk. `tests/generated_stack_check.py` asked git both questions of both
+  repositories and counted every answer, which is right — and then exited 1, and
+  the exit status is the part that decides whether a gate is ever run again. The
+  predictable response to a gate that cannot go green is a human disabling it,
+  and that would have stopped the check running in the nine repositories that
+  **can** be fixed today.
+
+  **Only the exit status moved. Detection, both messages and the `git rm
+  --cached` advice are unchanged**, and the frozen findings are still printed,
+  under their own `FROZEN-FINDINGS:` heading: a finding nobody may fix is still a
+  true finding, and suppressing it would be the same false green in a different
+  costume. What a reader can no longer do is mistake "clean" for "clean because
+  frozen" — the gate row itself now reads `generated stack (…; 2 in frozen
+  repositories, reported not counted)`, and a run with no scope decision at all
+  says `no scope decision read, so nothing is exempt`.
+
+  **The frozen set is READ from `MVP-SCOPE.md`, and no repository name is
+  written into this repository.** It comes in on `--scope`, whose default is the
+  directory above `--repos-dir` (a fleet-wide directive belongs beside the fleet
+  and in no repository, since putting it in one would make that repository the
+  owner of the others' exemptions), and `KIT_SCOPE_FILE` overrides the location
+  for a machine whose fleet is not beside its directive. A hardcoded frozen list
+  has the same defect as the hand-written dirty list this check replaced, with
+  the opposite polarity: it goes stale silently, and the day the scope lifts the
+  exemptions outlive the decision that granted them. Three properties of the
+  read are deliberate and each fails closed:
+
+  - **the out-of-scope list is the ONLY exemption.** A repository the decision
+    does not name is blocking, including one it never mentions — reading the
+    "in the MVP" table instead would have exempted precisely the four
+    repositories nobody has scoped yet;
+  - **an unreadable decision exempts nothing**, with a `SCOPE-ABSENT:` marker
+    naming the file and the reason — absent, unreadable, no such section, or a
+    section naming nothing this read as a name. The exemption is the only thing
+    that can turn a finding green, so the state in which it cannot be read must
+    not be a state in which it is granted;
+  - **a section this cannot parse is a loud red, not an empty set.** A rewrite
+    that moves the section, renames its trailing clause or reformats the list
+    keeps working; one that changes the sentence it keys on stops it, and says
+    so.
+
+  Measured on the fleet as it stands: `exit 1` before this commit with 6
+  findings, `exit 1` after with the same 6 — `darkroom` and `muse` reclassified
+  from blocking to frozen and printed under their own heading, and the four
+  blocking ones (`cafaye-rb`, `cafaye-ts`, `docs`, `guard`) unchanged. Proven
+  both ways on a two-repository fixture over the real `MVP-SCOPE.md`: the same
+  defect in `darkroom` alone is `exit 0` with the finding printed, and adding
+  `guard` makes it `exit 1`.
 
 - **Two of this repository's docker tiers hardcoded their compose project name, so
   two concurrent runs were one stack with two owners — and the failure read as a
