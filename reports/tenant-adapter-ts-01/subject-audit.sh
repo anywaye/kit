@@ -181,6 +181,7 @@ say ""
 
 ts_count=0
 eligible=""
+declared_unused=""
 
 for d in "$FLEET_ROOT"/*/; do
   d="${d%/}"
@@ -208,6 +209,16 @@ for d in "$FLEET_ROOT"/*/; do
   ts_count=$(( ts_count + 1 ))
   if [ "$n_imports" -gt 0 ] || [ "$n_migrations" -gt 0 ]; then
     eligible="$eligible $name"
+  elif [ "$declares" != "-" ]; then
+    # A declared driver with no import is NOT a query layer, so it does not make
+    # the adapter definable — but it is not nothing either. It is either dead
+    # weight or a half-finished migration onto a database, and both mean the
+    # language list has just gone stale in a way a reader cannot see. This branch
+    # exists because DECLARES was printed and then not acted on, which is
+    # `mutations.sh` B1, and it is the reason the recipe is a falsification rather
+    # than a demonstration: B1 went green against a signal the audit displayed and
+    # ignored.
+    declared_unused="$declared_unused $name($declares)"
   fi
 
   say "  $name"
@@ -250,6 +261,28 @@ if [ -n "$eligible" ]; then
   say "  this language's isolation is unproven. This is the condition this audit"
   say "  exists to go red on: the day a TypeScript service grows a database, the"
   say "  adapter becomes possible and the gap becomes real."
+  exit 1
+fi
+
+if [ -n "$declared_unused" ]; then
+  say "RESULT: a TypeScript service DECLARES a db driver that nothing imports:"
+  for s in $declared_unused; do say "  - $s"; done
+  say ""
+  say "  This is not yet a query layer, so it does not make the adapter definable:"
+  say "  a driver no module imports is scaffolding, and there is still nothing to"
+  say "  seed two accounts through. It is a finding rather than nothing because it"
+  say "  means one of two things, and a reader cannot tell which from the tree."
+  say ""
+  say "    * dead weight — a dependency left behind by a query layer that was"
+  say "      removed, and the language list is describing an architecture this"
+  say "      service no longer has;"
+  say "    * a half-finished migration ONTO a database — a driver installed"
+  say "      ahead of the first query, and the adapter is one packet from being"
+  say "      writable."
+  say ""
+  say "  Either way the DECLARES signal is now load-bearing, which it was not when"
+  say "  `mutations.sh` B1 first ran and found this audit printing it and ignoring"
+  say "  it."
   exit 1
 fi
 
