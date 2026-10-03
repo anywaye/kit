@@ -1,4 +1,4 @@
-# The adapter contract — five languages from here
+# The adapter contract — four languages from here
 
 `cross_tenant_harness.sh` brings up a database, a throwaway copy of a service,
 the service's own migrations, and a negative suite. It then reads what came back.
@@ -6,23 +6,58 @@ It contains **no Elixir, no Ecto, and no knowledge of what courier's tables are
 called**, and that separation is the whole reason another language is an adapter
 away rather than a second harness.
 
-**Exactly one adapter exists: `elixir.sh`.** The other five fleet languages —
-Go (identity, guard), Ruby (cafaye-rb), TypeScript (cafaye-ts), Python
-(cafaye-py), Rust (darkroom) — are **unproven**. Not "covered by the same rules",
-not "nominally supported": unproven, and the report says so in those words.
+**Two adapters exist: `elixir.sh` and `go.sh`.** The other four fleet languages —
+Ruby (cafaye-rb), TypeScript (cafaye-ts, guard), Python (cafaye-py), Rust
+(darkroom) — are **unproven**. Not "covered by the same rules", not "nominally
+supported": unproven, and the report says so in those words.
 
-## Why one, and honestly labelled
+## Why `guard` is TypeScript, and why that is a finding rather than a typo
+
+This list used to read **"Go (identity, guard)"**, and `guard` is not a Go
+service. It is 44 `.ts` files, 0 `.go` files and no `go.mod` — measured, because
+the sentence was a claim about a service nobody had looked at, and the whole of
+this harness is that a claim nobody has measured is worth nothing.
+
+So the count drops from five unproven languages to four, and it drops for **two**
+reasons rather than one: Go became proven, and one of the entries was never a Go
+service to begin with. A list like this is only as good as the worst-looked-up
+word in it, and the word nobody looks at is the one that is wrong.
+
+## Why one to begin with, and honestly labelled
 
 The alternative was six nominal adapters and one real one, and a reader would
 have had no way to tell which was which from the output. The whole of D18 is that
 a reader cannot distinguish a proven claim from an unexercised one, so the honest
-claim after this packet is:
+claim after the first adapter was:
 
 > cross-tenant isolation is **proven for Elixir**, on a service that scopes
 > correctly. **Five languages remain unproven.**
 
+and the honest claim now, after Go was added the same way and measured the same
+way, is:
+
+> cross-tenant isolation is **proven for Elixir and Go**, on services that scope
+> correctly. **Four languages remain unproven** — Ruby (cafaye-rb), TypeScript
+> (cafaye-ts, guard), Python (cafaye-py), Rust (darkroom).
+
 A working single-language harness, honestly labelled, beats six languages
-nominally covered.
+nominally covered. The second adapter changed that arithmetic without changing
+the rule.
+
+## WHAT THE SECOND ADAPTER COST, and why it is worth stating
+
+**`cross_tenant_harness.sh` is unchanged, byte for byte.** That was the
+prediction this file made — a second adapter that has to edit the harness has
+stopped being an adapter and become a fork — and it held. Both extra things the Go
+adapter needed went through variables the contract already granted it:
+`KIT_SERVICE_REPO` names the service, `KIT_TENANT_ADAPTER` names the adapter, and
+`KIT_TENANT_WORK` is where the container name is derived from.
+
+The one thing that did NOT fit was in identity's migrations, not in the harness,
+and it is written up as a finding in `REPORT-kit-tenant-adapter-go-01.md`:
+`cafaye.protect_table` refuses to install a policy unless a LOGIN role it derives
+from `current_user` already exists, so the substrate a migration installs can
+depend on infrastructure outside the migration.
 
 ## The five functions
 
