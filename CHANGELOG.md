@@ -2,6 +2,40 @@
 
 ### Added
 
+- **The README's file list is now closed in the direction a packet moves in.**
+  `readme_check` walks a hand-maintained tuple of 25 paths and asserts two
+  things per entry: the README names it, and it exists. So a documented path
+  that was **deleted** is a finding — and a path that was **added** and never
+  documented is not one at all. That second half is the half a packet produces,
+  and it was not theoretical: `templates/deploy/` shipped a 1,067-line
+  distribution and appears nowhere in the README, and
+  `.github/workflows/image.reusable.yml` is kit's *second* reusable standard
+  and appears nowhere either. Measured on this tree, 145 of the 175 tracked
+  files under `reports/`, `tests/` and `templates/` are not on the tuple, and
+  `grep -nE 'readme' tests/self_test.sh` returned **nothing** — so in a suite of
+  107 recipes, not one had ever turned this check on in either direction.
+
+  `readme_closure_check` is the companion. It **reads its coverage out of the
+  README** — every path-shaped run of text, with `{a,b}` sets expanded and
+  `<lang>` / `*` segments read as wildcards — and walks the five **adoption
+  trees** (`.github/`, `core/`, `docker/`, `lint/`, `templates/`) asking
+  whether every shipped path sits under one the README names. Coverage is per
+  **tree**, not per file: that bound is the argument, because requiring a row
+  per shipped file is the failure this check exists to prevent, and a README
+  listing 157 paths is a README nobody reads. `tests/` and `reports/` are out of
+  scope for stated reasons — one is the gate's own implementation, the other is
+  packet evidence — and both exclusions are written into the check.
+
+  Two properties are measured rather than asserted, in the check's own output:
+  a new file **inside** a documented tree (`templates/deploy/reference/`) leaves
+  the verdict green at 131 walked paths, and a new file **beside** one
+  (`templates/payments/gateway.yml`) turns it red naming the path. The first is
+  the control the check cannot lose — a closure check that demanded a row per
+  leaf would be the 157-paths README wearing a smaller hat.
+
+  Two README rows came out of it, and both were gaps rather than chores:
+  `.github/workflows/image.reusable.yml` and `templates/deploy/`.
+
 - **The account-scope contract is now continuous in a build, which it was not.**
   Six services declare their account-scoped surface in an `account_scope.yml`
   and `core/harness/account_scope_check.py` is what decides whether a
