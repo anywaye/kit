@@ -2,6 +2,47 @@
 
 ### Added
 
+- **A third cross-tenant adapter was attempted against `parlor` and WITHDRAWN,
+  because no TypeScript service in this fleet holds a database.** The finding is
+  measured rather than asserted: across `cafaye-ts`, `guard`, `parlor`, `site`
+  and `docs` there is **not one import** of a postgres or ORM driver, **not one
+  declared driver**, and **not one `.sql`** outside an `e2e/` fixture. So
+  `adapter_migrate` has no migrations to apply, there is no write path to seed
+  two accounts through, and there is no query layer for `adapter_run` to call as
+  account A. The adapter is **undefined, not unfinished**.
+
+  `reports/tenant-adapter-ts-01/subject-audit.sh` is the measurement, and it is
+  written to fail in the one direction that matters: it exits 0 while no
+  TypeScript service holds a database and exits **1 naming the service** the
+  moment one does, because that service is the first subject this harness can
+  measure in TypeScript and the adapter that must be written for it. An absence
+  is the easiest kind of claim to satisfy by accident, so a check that could
+  only report green would be reporting nothing.
+
+  `reports/tenant-adapter-ts-01/mutations.sh` is its recipe: **2 controls green,
+  6 breakages planted, 4 observed RED each naming its own assertion, 9 greens,
+  0 failures** — and the six are deliberately not six reds. B4 must stay GREEN
+  (a `.sql` under `e2e/` is a fixture for another service's migration, so the
+  exclusion needs its own control), B5 must go GREEN once the migrations
+  assertion is deleted from a copy of the audit, and B6 must make the recipe
+  **stop** on an anchor that matches zero times.
+
+  **The recipe found a real defect in the audit it was proving**, which is the
+  argument for writing it as a falsification rather than a demonstration: B1
+  planted a `pg` dependency and the audit stayed green, because `DECLARES` was
+  printed and never acted on. It now has its own verdict and its own exit-1
+  branch, naming the service and the driver — a declared driver nothing imports
+  is not a query layer, so it does not make the adapter definable, but it is
+  either dead weight from a removed query layer or a half-finished migration ONTO
+  one, and a reader cannot tell which from the tree.
+
+  **`cross_tenant_harness.sh` is unchanged, byte for byte**
+  (sha256 `46da0eb4fad234728b62540162df249b59d8e5ac1820fa5828ef05b2635cd760`).
+
+  `tests/tenant_isolation/adapters/README.md` keeps TypeScript in the unproven
+  list and now says **why**, in a sentence a reader can check, rather than
+  claiming a third proven language. The number stays four.
+
 - **The cross-tenant harness has a second adapter, and the honest claim is now
   two languages rather than one.** `tests/tenant_isolation/adapters/go.sh` is the
   five-function adapter against `identity`, and
