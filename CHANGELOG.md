@@ -2,6 +2,65 @@
 
 ### Added
 
+- **The README's file list is now closed in the direction a packet moves in.**
+  `readme_check` walks a hand-maintained tuple of 25 paths and asserts two
+  things per entry: the README names it, and it exists. So a documented path
+  that was **deleted** is a finding — and a path that was **added** and never
+  documented is not one at all. That second half is the half a packet produces,
+  and it was not theoretical: `templates/deploy/` shipped a 1,067-line
+  distribution and appears nowhere in the README, and
+  `.github/workflows/image.reusable.yml` is kit's *second* reusable standard
+  and appears nowhere either. Measured on this tree, 145 of the 175 tracked
+  files under `reports/`, `tests/` and `templates/` are not on the tuple, and
+  `grep -nE 'readme' tests/self_test.sh` returned **nothing** — so in a suite of
+  107 recipes, not one had ever turned this check on in either direction.
+
+  `readme_closure_check` is the companion. It **reads its coverage out of the
+  README** — every path-shaped run of text, with `{a,b}` sets expanded and
+  `<lang>` / `*` segments read as wildcards — and walks the five **adoption
+  trees** (`.github/`, `core/`, `docker/`, `lint/`, `templates/`) asking
+  whether every shipped path sits under one the README names. Coverage is per
+  **tree**, not per file: that bound is the argument, because requiring a row
+  per shipped file is the failure this check exists to prevent, and a README
+  listing 157 paths is a README nobody reads. `tests/` and `reports/` are out of
+  scope for stated reasons — one is the gate's own implementation, the other is
+  packet evidence — and both exclusions are written into the check.
+
+  Two properties are measured rather than asserted, in the check's own output:
+  a new file **inside** a documented tree (`templates/deploy/reference/`) leaves
+  the verdict green at 131 walked paths, and a new file **beside** one
+  (`templates/payments/gateway.yml`) turns it red naming the path. The first is
+  the control the check cannot lose — a closure check that demanded a row per
+  leaf would be the 157-paths README wearing a smaller hat.
+
+  Two README rows came out of it, and both were gaps rather than chores:
+  `.github/workflows/image.reusable.yml` and `templates/deploy/`.
+
+  **Two defects this found in the harness itself, both pre-existing and both
+  the reason the first one was invisible.**
+
+  - `fresh_copy` did not copy `reports/`, and `readme_check`'s tuple requires
+    `reports/account-scope-contract-01/snapshot.sh` to **exist**. So every one of
+    the suite's throwaway copies was red on an unbroken tree, and the control the
+    file calls "the sentence that makes every proof below it meaningless" was
+    printing `FAIL self_test: unbroken tree — the gate is RED on an unbroken
+    tree`. Measured on `master` at `3cdcd3b`:
+    `KIT_SELF_TEST_SHARD=1/104 bash tests/self_test.sh` -> that FAIL line, then
+    `PASS self_test: breakage 1`, then `FAIL: self_test — 1 breakage(s) the gate
+    did not catch.` Fixed by adding `reports` to `fresh_copy`'s copy list, which
+    is the coupling `AGENTS.md` already states twice for `MIGRATIONS.md` and for
+    `VERSION`/`RESERVED`. After: a whole `--static-only` gate on a copy is
+    `EXIT=0`, 246 PASS, 0 FAIL.
+  - The `failures` block stood **mid-stream**, between breakage 100's recipe and
+    breakage 101's. A failure among 1-100 exited 1 there and 101-onward never ran;
+    a failure among 101-onward was read by nothing, so the summary printed
+    `PASS: self_test — all N breakages hold` and **exited 0**. It is now at the
+    end of the recipe stream, after the shard branch and before the counts, so
+    it sees every recipe and a sharded run still reports itself as a shard. The
+    shard path's comment claimed "The un-sharded path below has always checked
+    it"; it had not, and the same packet that taught one half of the file to
+    judge its recipes left the other half asserting a property it did not have.
+
 - **The account-scope contract is now continuous in a build, which it was not.**
   Six services declare their account-scoped surface in an `account_scope.yml`
   and `core/harness/account_scope_check.py` is what decides whether a

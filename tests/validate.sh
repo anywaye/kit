@@ -9190,6 +9190,192 @@ PY
   }
   check 'README.md  (documents every new template)' readme_check
 
+  # THE CLOSURE HALF, and the direction the list above cannot see.
+  #
+  # WHAT `readme_check` GUARDS, restated because it is a one-sided list and the
+  # half it does not guard is the half a packet moves in. It walks a
+  # hand-maintained tuple and asserts, per entry, that the README names it AND
+  # that it exists. So a documented path that was then deleted is a finding. A
+  # path that was ADDED and never documented is not — `templates/deploy/` shipped
+  # a 1,067-line distribution for a packet and appears nowhere in the README,
+  # and `.github/workflows/image.reusable.yml` is kit's second reusable standard
+  # and appears nowhere either. The list's own comment is honest about this ("that
+  # omission is the check"), and honest about only that half.
+  #
+  # WHY IT IS A COMPANION AND NOT AN EXTENSION OF THE TUPLE. The tuple's failure
+  # mode is that it is hand-maintained, so "add one entry per new file" is the
+  # same ratchet the skip allowlist has, in the opposite direction: it only ever
+  # grows, and it grows by one line per artefact a fleet of nine services reads
+  # once. This check instead READS its coverage out of the README and asks
+  # whether the tree is closed under it, which means a packet that adds
+  # `templates/payments/gateway.yml` is caught on the day it does, with no edit
+  # to `validate.sh` at all.
+  #
+  # THE BOUND, and it is the whole argument. Requiring a row per shipped file is
+  # the failure this check exists to avoid: measured on this tree, 145 of the 175
+  # tracked files under `reports/`, `tests/` and `templates/` are not on the
+  # tuple, and a README listing 157 paths is a README nobody reads. So coverage
+  # is per TREE, not per file, and the trees are chosen by what the README is for:
+  #
+  #   IN:  .github/ core/ docker/ lint/ templates/ — the adoption trees. A file
+  #        here is something a service copies or a caller reaches by `uses:`, and
+  #        a reader who has never heard of it cannot adopt it.
+  #   OUT: tests/ — kit's own gate implementation. The README names every proof
+  #        a reader is expected to RUN (isolation, tenancy, canary, kamal, fetch,
+  #        live stack) and `tests/validate.sh` itself; `fingerprint.py` and
+  #        `bootstrap.sh` are how the gate runs, not what kit ships. Naming them
+  #        would add 17 rows and teach the reader nothing.
+  #   OUT: reports/ — packet evidence. `AGENTS.md` forbids committing a REPORTED
+  #        measurement; what is committed here is a packet's own mutation record,
+  #        which is addressed to whoever reads that packet's report, not to a
+  #        reader deciding whether to adopt kit. 32 files, zero rows.
+  #
+  # THE CHEAP TRUE CASE IS GREEN AND THAT IS THE POINT. The file this check was
+  # written against — a new file inside `templates/compose/grafana/provisioning/`,
+  # a directory the README already names — is COVERED, because the README's row
+  # for that tree describes its contents in prose ("Datasources, the dashboard
+  # provider, the fleet error dashboard and the alert rules"). A check that went
+  # red on it would be demanding a row for a fifth datasource, which is the
+  # 157-paths failure wearing a smaller hat. So the direction that goes red is
+  # the one a packet actually produces: a whole new tree nobody named.
+  #
+  # WEAKNESS, STATED BECAUSE IT IS THE SAME ONE `readme_check` HAS. Coverage is a
+  # substring over README prose, so a path named only in a passing sentence or a
+  # code fence satisfies it. Tightening that means requiring a table row, which
+  # is a different check with a different failure mode; the honest description is
+  # that this asserts the tree is CLOSED, not that the prose is good.
+  readme_closure_check() {
+    "$PY" - "$ROOT" <<'PY'
+import os
+import re
+import sys
+
+root = sys.argv[1]
+readme = open(f"{root}/README.md", encoding="utf-8").read()
+
+# Every path-shaped run of text in the README, anywhere — not only the
+# backticked ones, because three of the paths the existing tuple requires
+# (`tests/account_scope_fleet_check.py`, `reports/.../snapshot.sh`) are written
+# in prose and a backtick-only reader would call all three undocumented and be
+# wrong three times.
+TOKEN = re.compile(r"[A-Za-z0-9._<>-]+(?:/[A-Za-z0-9._<>{},*-]+)+")
+
+
+def expand(token):
+    """`{tempo,loki}/` names two paths. JSON-Schema-style set notation is the
+    only expansion the README uses, and it is expanded rather than treated as a
+    literal because `templates/compose/{tempo,loki}/` is a row about two
+    directories and reading it as one directory named `{tempo,loki}` would
+    report both of them undocumented."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", token)
+    if not m:
+        return [token]
+    out = []
+    for part in m.group(1).split(","):
+        out.extend(expand(token[: m.start()] + part + token[m.end() :]))
+    return out
+
+
+def as_pattern(token):
+    """A segment carrying `<…>` or `*` is a wildcard, because
+    `docker/Dockerfile.<lang>` and `templates/database/<lang>/` are how the
+    README names all seven Dockerfiles and all six connection configs. Treating
+    the angle brackets as literal characters measured as 13 false findings on an
+    unbroken tree, which is the fail-loud direction being pointed the wrong way."""
+    return re.compile(
+        "^"
+        + "/".join(
+            "[^/]+" if ("<" in seg or "*" in seg) else re.escape(seg)
+            for seg in token.split("/")
+        )
+        + "$"
+    )
+
+
+patterns = []
+for m in TOKEN.finditer(readme):
+    for token in expand(m.group(0).rstrip("/.,;:")):
+        token = token.strip().rstrip("/.,;:")
+        # A path inside another repository, or an absolute one, says nothing
+        # about what THIS tree ships, and `<kit>/docker/Dockerfile.go` is a path
+        # in kit as seen from a service — which does cover the real file, so the
+        # leading `<kit>/` is dropped rather than the token discarded.
+        if ".." in token or token.startswith(("http", "$", "/")):
+            continue
+        if token.startswith("<kit>/"):
+            token = token[len("<kit>/") :]
+        # ONE SEGMENT IS NOT A TREE, and admitting one is the fail-open direction
+        # this check exists to close. `## The templates half — templates/` is how
+        # the README introduces the section, so a one-segment token `templates`
+        # prefix-matches `templates/deploy/README.md` and the entire adoption
+        # tree is reported documented by a heading. Measured: with one-segment
+        # tokens admitted, the walk found ONE undocumented path where there are
+        # SEVEN — a green that hid six real gaps, and it hid them for the same
+        # reason a check whose pattern stopped matching does. Coverage is asserted
+        # per tree, and a tree is named by its path from the root.
+        if len(token.split("/")) < 2:
+            continue
+        patterns.append((token, as_pattern(token)))
+
+
+def documented(rel):
+    segs = rel.split("/")
+    # Longest prefix first: `templates/compose/grafana/provisioning` must be
+    # tried before `templates/compose`, and a file is covered by a token that
+    # names it OR any ancestor directory of it.
+    for n in range(len(segs), 0, -1):
+        head = "/".join(segs[:n])
+        for token, pattern in patterns:
+            if pattern.match(head):
+                return token
+    return None
+
+
+# The adoption trees, and why tests/ and reports/ are not among them. See the
+# comment above the function; this is the same list in a form the walk can read.
+ADOPTION_TREES = (".github", "core", "docker", "lint", "templates")
+
+# A walk, not `git ls-files`, and the reason is the harness rather than taste:
+# `tests/self_test.sh` makes a throwaway copy with no `.git` beside it, so a
+# check that shelled out to git would find zero files in every copy and pass
+# while proving nothing — the same false green `fresh_copy`'s comment describes.
+# Scratch that is not shipped is skipped by name instead.
+SKIP_DIRS = {"__pycache__", "node_modules"}
+
+undocumented = []
+walked = 0
+for tree in ADOPTION_TREES:
+    top = os.path.join(root, tree)
+    for dirpath, dirnames, filenames in os.walk(top):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        for name in filenames:
+            if name.startswith(".") and name not in (".env.example",):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), root)
+            walked += 1
+            if documented(rel) is None:
+                undocumented.append(rel)
+
+if undocumented:
+    sys.exit(
+        f"{len(undocumented)} shipped path(s) in an adoption tree are named "
+        f"nowhere in README.md: " + ", ".join(sorted(undocumented)) + ". Add the "
+        "TREE to the README's file table — the tree, not its leaves: this check "
+        "is closed under a documented directory, so listing the directory once "
+        "covers everything inside it, and listing every file would be the "
+        "157-paths README this check exists to prevent."
+    )
+
+# The count is printed on PASS, and it is a measurement rather than a constant:
+# a check that asserts "everything is covered" and reports nothing on success is
+# indistinguishable from a check whose pattern stopped matching, which is worse
+# than no check at all.
+print(f"{walked} path(s) walked across {len(ADOPTION_TREES)} adoption trees; every one is documented")
+PY
+  }
+  check 'README.md  (every shipped path in an adoption tree is documented)' \
+    readme_closure_check
+
   # kit's own licence, and the one property about it that can rot.
   #
   # WHY THIS EXISTS. kit carried no `LICENSE` at all while the rest of the fleet
