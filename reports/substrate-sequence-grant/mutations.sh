@@ -237,7 +237,11 @@ seq_grants() {
 
 has_priv() { q postgres "$1" "select has_sequence_privilege('probe_app', '$2'::regclass, '$3')"; }
 
-flat() { printf '%s' "$1" | tr '\n' ' '; }
+# One line, newlines flattened, in pure bash. NOT `printf … | tr`: this repository
+# has measured the pipe form returning 141 on a large input and the verdict
+# flipping on the SIZE of the output rather than on what is in it, and a
+# diagnostic is not worth reintroducing that.
+flat() { local s="${1//$'\n'/ }"; printf '%s' "$s"; }
 mentions() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 
 # row is "ok|id|sqlstate|message"
@@ -530,7 +534,7 @@ else
   restore
   if mentions "$out" 'ERROR'; then
     passes=$((passes + 1))
-    ok m2-raise-null "RED — $(printf '%s' "$out" | grep -m1 ERROR)"
+    ok m2-raise-null "RED — $(flat "$out")"
   else
     failures=$((failures + 1)); no m2-raise-null "NOT RED — the raise-on-empty shape was not caught"
   fi

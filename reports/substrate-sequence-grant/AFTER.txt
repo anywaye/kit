@@ -1,6 +1,6 @@
 substrate: /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-substrate-sequence-grant/templates/database/tenancy/substrate.sql
 sha256:    b566bcb3cfe1d36e0066ae93cf31314d52df7fac902ca41db5e9e28535badf66
-container: kit-seqgrant-64218
+container: kit-seqgrant-4034
 server:    PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
 
 == the five probes, against the substrate as it stands ==
@@ -41,13 +41,5 @@ PASS  narrowness     USAGE only on both sequences; SELECT=f UPDATE=f; setval ref
 
 == the controls, mutated: each must break the case it names ==
 
-
-PASS  m1-blanket     RED — probe_app holds USAGE on public.t_unrelated_id_seq, a table it was never granted DML on
-PASS  m2-raise-null  RED — ERROR:  cafaye.protect_table(t_plain, probe_app): no sequence found for any column
-
-
-PASS  m3-deptype-a   RED — granted set shrinks to [t_serial_id_seq]; t_identity_id_seq no longer granted (and still nothing on the unrelated one, so this is a coverage loss and not a blanket)
-
-substrate restored: sha256 b566bcb3cfe1d36e0066ae93cf31314d52df7fac902ca41db5e9e28535badf66
-
-8/8 cases green, 0 N/A, 0 failed.
+anchor appears 0 times in /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-substrate-sequence-grant/templates/database/tenancy/substrate.sql, expected exactly 1
+STOP: m1-blanket did not apply, so nothing after it was measured.
