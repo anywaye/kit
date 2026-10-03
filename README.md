@@ -385,10 +385,12 @@ to any registration exits 0 over an empty enumeration, which is byte-identical
 to a checker pointed at an empty directory — and **a pattern that matches
 nothing is not a pass, it is an error**, a rule this repository has already been
 bitten by. `pantry` is the live instance: its routes are generated as
-`r.Get(options.BaseURL+"/v1/…"`, the chi recogniser drops them, and its own
-declaration says `surface.minimum: 0`, which is the honest way to write down a
-surface nobody can read. The runner reports that as `blind.surface-blind` rather
-than as a green.
+`r.Get(options.BaseURL+"/v1/…"`, so the chi recogniser cannot evaluate the path.
+Core's D46 stopped discarding those registrations silently and **names** them —
+`registration-path-unreadable` per row, `surface-unreadable` per file, with the
+read count printed on every run — and `pantry`'s own declaration still says
+`surface.minimum: 0`, which is the honest way to write down a surface nobody can
+read. The runner reports that as `blind.surface-blind` rather than as a green.
 
 **It runs in two places, because one would have been the defect again.**
 `tests/validate.sh` invokes it against the fleet beside the repository, with a
