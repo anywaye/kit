@@ -1,5 +1,49 @@
 ## Unreleased
 
+### Added
+
+- **`tests/generated_stack_check.py`, and a gate section that runs it: the file
+  `caf dev` GENERATES is not a source file, and nothing said so in the six
+  repositories nobody had visited yet.** `caf dev` renders a stack from
+  `cafaye.yml` and writes it to `caf.dev.compose.yaml` on every run — including
+  the run that finds no services, because the write precedes the empty-stack
+  return (`caf/internal/cli/dev.go:186`, before the `len(stack.Services) == 0`
+  check at `:194`). Two states are now failures:
+
+  - a repository that neither ignores it nor has un-tracked it, which is one
+    `git add -A` from a commit and, from there, a merge conflict nobody can
+    resolve by reading it because both sides are generated;
+  - a repository that TRACKS it, which was `core`'s state and is the case where
+    an ignore entry is necessary and **not** sufficient — git applies ignore
+    rules only to paths it is not already tracking, so `git check-ignore` keeps
+    answering "not ignored" about a tracked path however correct the
+    `.gitignore` is, until `git rm --cached` moves it.
+
+  Scope is read off the FILESYSTEM: a root `cafaye.yml` is exactly what `caf dev`
+  uses to decide a directory is a project at all, so a repository is in scope
+  the day it grows a manifest and nothing here is edited. Measured against the
+  real fleet with the five per-repository fixes not yet merged: **11 findings
+  across 10 of 16 repositories**, exit 1. Five of those ten — `cafaye-rb`,
+  `cafaye-ts`, `docs`, `guard`, `muse` — hold a manifest, no ignore entry and no
+  file on disk, and they are invisible to a hand-written list precisely because
+  nobody has run `caf dev` on that machine yet.
+
+  Green control over three conforming fixture repositories: exit 0. The TRACKED
+  branch is proved by a planted divergence (`git add -f`, then `git rm --cached`
+  turns it green) and the not-ignored branch by deleting the ignore line from a
+  conforming fixture. It is a third use of the `config only` carve-out and is
+  named in the `carve-out boundary` check's list in the same commit; it is stdlib
+  for the same reason the others are, and it parses no file type at all — it asks
+  git two questions, because re-implementing gitignore semantics in Python is
+  wrong on `!` negation, anchored paths, `**`, and a developer's global
+  `core.excludesFile`.
+
+  It is deliberately **not** part of `fleet_check.py`, and `tests/validate.sh`
+  argues both reasons: that gate's scope predicate is "declares local
+  infrastructure", which EXCLUDES `core` — the repository this check exists for —
+  and its adoption ceiling would make a hard FAIL a WARN in every repository
+  forever, on the grounds that none has adopted `kit.ref`. This defect has no
+  adopter.
 ### Fixed
 
 - **Two of this repository's docker tiers hardcoded their compose project name, so
