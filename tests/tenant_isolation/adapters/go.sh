@@ -96,6 +96,27 @@ go_probe() {
     "$KIT_TENANT_PGPORT"
 }
 
+# harness_project_name — the container the harness started, derived from the
+# work directory it left behind.
+#
+# `cross_tenant_harness.sh` names its container `kit-tenant-iso-$SESSION` and its
+# work directory `kit-tenant-iso.$SESSION`. Nothing outside that file knows the
+# session except the recipe that exported it, and the adapter contract names five
+# readable variables and the session is not one of them — so the name is read out
+# of the one variable the contract does grant.
+harness_project_name() {
+  local base="${KIT_TENANT_WORK##*/}"
+  case "$base" in
+    kit-tenant-iso.*)
+      [ -n "${base#kit-tenant-iso.}" ] || return 1
+      printf 'kit-tenant-iso-%s' "${base#kit-tenant-iso.}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 adapter_prepare() {
   local src="$KIT_TENANT_SERVICE" dst="$KIT_TENANT_WORK/service"
   [ -f "$src/go.mod" ] || {
@@ -126,17 +147,74 @@ adapter_prepare() {
 
 adapter_migrate() {
   local dst="$KIT_TENANT_WORK/service"
+
+  # FINDING, AND IT IS A GOOD ONE: identity's migrations need a LOGIN ROLE THAT
+  # DOES NOT YET EXIST, and they derive its name from the role that is running
+  # them. `migrations/00016_account_isolation.sql` calls
+  # `cafaye.protect_table('account_users')` with one argument, and that function
+  # computes `login_role := coalesce(p_login_role, current_user || '_app')` and
+  # then RAISES unless such a role already exists and can log in:
+  #
+  #     ERROR: cafaye.protect_table(account_users, postgres_app):
+  #            postgres_app is not a LOGIN role on this cluster.
+  #
+  # The hint the migration ships with says what provides it: "kit's cluster
+  # provisions <service> and <service>_app". So the substrate this migration
+  # installs is DEPENDENT ON infrastructure outside the migration, and a harness
+  # that brings up a bare `postgres:17` has to provide it or 00016 cannot apply.
+  #
+  # It is provided BELOW, as a ROLE and nothing else — no table, no policy, no
+  # column. That is not the "hand-written schema" the adapter contract forbids:
+  # the contract forbids inventing DDL and then measuring the harness's own, and
+  # a LOGIN role is not a schema, is what kit's own cluster init script
+  # provisions, and is exactly what the migration's own error message asks for.
+  #
+  # The name is derived by the DATABASE, with the same expression `protect_table`
+  # itself uses, rather than written down here. An adapter that hardcoded
+  # `identity_app` would be a second statement of a fact the migration already
+  # states, and the two would be free to disagree.
+  #
+  # It runs through the harness's OWN container rather than a local `psql`: the
+  # harness has already died unless docker is present, and a postgres:17 image
+  # carries psql, so this adds no toolchain dependency to a machine that has one.
+  #
+  # The container name is DERIVED from $KIT_TENANT_WORK — the harness builds the
+  # work directory as `kit-tenant-iso.$SESSION` and the container as
+  # `kit-tenant-iso-$SESSION`, and those two differ by exactly that separator —
+  # because the adapter contract lets an adapter read $KIT_TENANT_WORK and not
+  # the session. The transformation is CHECKED rather than assumed: a work
+  # directory not shaped the way the harness names it returns rather than running
+  # `docker exec` against a name this file invented.
+  local project
+  project="$(harness_project_name)" || {
+    printf '  cannot derive the harness container name from KIT_TENANT_WORK=%s.\n' \
+      "$KIT_TENANT_WORK" >&2
+    return 1
+  }
+
+  if ! "$TIMEOUT_BIN" 60 docker exec "$project" psql -U postgres -d postgres \
+    -v ON_ERROR_STOP=1 -q \
+    -c "do \$\$ begin
+            if not exists (select 1 from pg_roles
+                             where rolname = current_user || '_app' and rolcanlogin) then
+              execute format('create role %I login', current_user || '_app');
+            end if;
+          end \$\$;" >"$KIT_TENANT_WORK/role.log" 2>&1; then
+    printf '  the login role cafaye.protect_table needs could not be provisioned:\n' >&2
+    sed 's/^/  /' "$KIT_TENANT_WORK/role.log" >&2
+    return 1
+  fi
+
   # The SERVICE's own migrations, against the harness's own database, applied with
   # the tool identity's own migrations/README.md names. Not a hand-written schema:
   # a harness that seeds a table it invented is measuring its own DDL rather than
   # the service's query layer.
   #
   # `postgres` is a superuser and that is load-bearing here for the same reason the
-  # DSN is: migrations/00016 creates the `cafaye` schema, the `identity_app` role
-  # and every policy, and Postgres refuses `CREATE EXTENSION` and `CREATE ROLE` to
-  # a non-superuser. As the superuser, the exemption from RLS applies to the
-  # policies that migration installs too — which is exactly the point the header
-  # above makes.
+  # DSN is: migrations/00016 creates the `cafaye` schema, the login role's grants
+  # and every policy, and it installs `FORCE ROW LEVEL SECURITY` on the tables it
+  # protects. As the superuser, the exemption from RLS applies to those policies
+  # too — which is exactly the point the header above makes.
   (
     cd "$dst" &&
       "$TIMEOUT_BIN" 300 goose -dir migrations postgres "$(go_probe)" up

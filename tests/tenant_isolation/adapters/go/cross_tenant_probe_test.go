@@ -380,7 +380,7 @@ func TestCrossTenantRevokeInvitationDeniesOtherAccount(t *testing.T) {
 // red, the six denials above are measuring the substrate and the recipe's tallies
 // mean nothing until it is fixed.
 func TestTheSubstrateIsNotWhatHoldsThisLine(t *testing.T) {
-	ctx := poolOrDie(t.Context())
+	ctx := t.Context()
 
 	tx, err := poolOrDie(ctx).Begin(ctx)
 	if err != nil {
