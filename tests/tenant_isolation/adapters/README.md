@@ -7,9 +7,26 @@ called**, and that separation is the whole reason another language is an adapter
 away rather than a second harness.
 
 **Two adapters exist: `elixir.sh` and `go.sh`.** The other four fleet languages —
-Ruby (cafaye-rb), TypeScript (cafaye-ts, guard), Python (cafaye-py), Rust
-(darkroom) — are **unproven**. Not "covered by the same rules", not "nominally
-supported": unproven, and the report says so in those words.
+Ruby (cafaye-rb), TypeScript (cafaye-ts, guard, parlor, site), Python
+(cafaye-py), Rust (darkroom) — are **unproven**. Not "covered by the same
+rules", not "nominally supported": unproven, and the report says so in those
+words.
+
+**TypeScript is unproven for a different reason from the other three, and the
+reason is measured.** A third adapter was attempted against `parlor` and
+withdrawn, because **no TypeScript service in the fleet holds a database**:
+across `cafaye-ts`, `guard`, `parlor`, `site` and `docs` there is not one import
+of a postgres or ORM driver, not one declared driver, and not one `.sql` outside
+an `e2e/` fixture. There is therefore nothing for `adapter_migrate` to apply, no
+write path to seed two accounts through, and no query layer for
+`adapter_run` to call as account A — the adapter is **undefined**, not
+unfinished, and no amount of work on it changes that. `reports/tenant-adapter-ts-01/subject-audit.sh`
+is the measurement, and it goes red the day that stops being true.
+
+That is not an argument that TypeScript is safe. It is an argument that **this
+harness cannot be the thing that says so**, and that a claim about TypeScript
+written here would be a claim about nothing. See
+`REPORT-kit-tenant-adapter-ts-01.md` for the full reading.
 
 ## Why `guard` is TypeScript, and why that is a finding rather than a typo
 
@@ -18,10 +35,53 @@ service. It is 44 `.ts` files, 0 `.go` files and no `go.mod` — measured, becau
 the sentence was a claim about a service nobody had looked at, and the whole of
 this harness is that a claim nobody has measured is worth nothing.
 
+**Re-measured by `tenant-adapter-ts-01`, and 44 is the number that holds.** A
+later note in the packet that introduced the TypeScript adapter put it at 40;
+that was wrong in the direction that matters, because the correction went
+unmade and the smaller number would have become the file's. A count that moves
+in two directions in two documents is one number, and the one nobody looked up
+twice is the one that was wrong.
+
 So the count drops from five unproven languages to four, and it drops for **two**
 reasons rather than one: Go became proven, and one of the entries was never a Go
 service to begin with. A list like this is only as good as the worst-looked-up
 word in it, and the word nobody looks at is the one that is wrong.
+
+## Where the TypeScript boundary actually is, and what would prove it
+
+The adapter contract answers for a service that holds rows. For a service that
+holds none, the honest answer is that **this harness has nothing to say**, and
+the boundary is somewhere else entirely. Two documents in this fleet already say
+where, and neither of them is an adapter:
+
+- **`MVP-SCOPE.md`**, the fleet's scope decision, draws the architecture as
+  `site (Next.js, SSR — generated from parlor)` → *server-side only, through
+  guard* → `identity (Go)`. Every arrow points **down** into the service that
+  holds the rows.
+- **`guard`'s own `test/tenantEntryPoints.test.ts`** says it in the first
+  paragraph, unprompted: *"guard holds no account's rows: there is no `assets`
+  table and no query that could drop `and account_id = $2`. What guard holds is
+  **state keyed by account** — a rate-limit bucket, a set of API-key records, a
+  browser session."*
+
+So the TypeScript-layer boundary is a **forwarding** property, not a query
+property: can a caller reach an account they do not hold by naming it. That is
+measurable, and `guard` has already measured it — with a negative case per
+account-scoped entry point, and with the entry points **derived from the source**
+rather than listed, so adding a route that takes an account fails the suite until
+its negative case exists. `parlor`'s equivalent is `src/lib/identity.ts`, where
+every account operation is a path segment built for an upstream call.
+
+Two things follow, and neither is this packet's job:
+
+1. **A TypeScript adapter is not the missing piece for TypeScript.** It would
+   measure nothing. The missing piece, if a fleet-wide claim is wanted, is a
+   forwarding-shaped harness — no database, two principals, one cross-tenant
+   name — which is a different instrument and a different packet.
+2. **`subject-audit.sh` is the tripwire for the real change.** The moment a
+   TypeScript service gains a database, this harness has a third language to
+   measure and the adapter becomes writable. Until then the number is four, and
+   the reason is measured rather than assumed.
 
 ## Why one to begin with, and honestly labelled
 
@@ -38,11 +98,19 @@ way, is:
 
 > cross-tenant isolation is **proven for Elixir and Go**, on services that scope
 > correctly. **Four languages remain unproven** — Ruby (cafaye-rb), TypeScript
-> (cafaye-ts, guard), Python (cafaye-py), Rust (darkroom).
+> (cafaye-ts, guard, parlor, site), Python (cafaye-py), Rust (darkroom). For
+> TypeScript this is a stronger statement than for the others: no TypeScript
+> service holds a database at all, so there is no query layer for this harness
+> to measure, and the number cannot move until one does.
 
 A working single-language harness, honestly labelled, beats six languages
 nominally covered. The second adapter changed that arithmetic without changing
-the rule.
+the rule, and **the third adapter did not change it at all** — because the
+service it was pointed at has nothing to measure. Writing one anyway, against a
+hand-written schema standing in for a real one, would have produced a third
+green line resting on a second measurement: identity's Go SQL, executed through
+a `.ts` file. That is the vacuous green this repository has a written rule
+about, wearing a third language's name.
 
 ## WHAT THE SECOND ADAPTER COST, and why it is worth stating
 
