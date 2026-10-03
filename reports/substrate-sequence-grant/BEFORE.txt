@@ -1,0 +1,52 @@
+substrate: /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-substrate-sequence-grant/templates/database/tenancy/substrate.sql
+sha256:    e2b4917be2a7f7c48964bd40fea0da93db503b4c736a42a44e44425cfbf7bf5e
+container: kit-seqgrant-4219
+server:    PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+
+== the five probes, against the substrate as it stands ==
+
+
+FAIL  bigserial      SQLSTATE 42501 / permission denied for sequence t_serial_id_seq
+
+FAIL  identity       insert landed (id 1) but protect_table granted NO USAGE on t_identity_id_seq — the identity edge of the catalog is uncovered
+N/A   breakage       protect_table granted probe_app no USAGE on t_serial_id_seq, so there is nothing to revoke
+PASS  no-sequence    no grant gained (still []), unrelated sequence untouched, insert landed
+PASS  narrowness     USAGE only on both sequences; SELECT=f UPDATE=f; setval refused on both
+note: probe_app holds NO sequence grant at all in the base phase, so cases
+      no-sequence and narrowness are green on an EMPTY set. They have not
+      measured narrowness here; the three mutations below are what measure it.
+
+--- literal INSERTs as probe_app, verbatim --------------------------------
+    --- t_serial — bigserial ---
+    BEGIN
+    
+    ROLLBACK
+    --- t_identity — generated always as identity ---
+    BEGIN
+    psql:/tmp/literal-inserts.sql:32: ERROR:  permission denied for sequence t_serial_id_seq
+    
+    2
+    INSERT 0 1
+    COMMIT
+    --- t_plain — bigint primary key, NO sequence ---
+    BEGIN
+    
+    4242
+    INSERT 0 1
+    COMMIT
+    --- t_unrelated — bigserial, NEVER protected ---
+    BEGIN
+    
+    psql:/tmp/literal-inserts.sql:64: ERROR:  permission denied for table t_unrelated
+    ROLLBACK
+--------------------------------------------------------------------------
+
+== the controls, mutated: each must break the case it names ==
+
+    N/A  m1/m2/m3  the substrate has no sequence loop to mutate — cases 1 and 2 above are
+                   the finding, and there is no control to demonstrate.
+
+substrate restored: sha256 e2b4917be2a7f7c48964bd40fea0da93db503b4c736a42a44e44425cfbf7bf5e
+
+2/8 cases green, 4 N/A, 2 failed.
+note: an N/A is not a pass. It is a case that could not run, which measured nothing.

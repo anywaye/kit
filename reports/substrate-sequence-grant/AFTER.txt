@@ -1,0 +1,45 @@
+substrate: /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-substrate-sequence-grant/templates/database/tenancy/substrate.sql
+sha256:    b566bcb3cfe1d36e0066ae93cf31314d52df7fac902ca41db5e9e28535badf66
+container: kit-seqgrant-4034
+server:    PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+
+== the five probes, against the substrate as it stands ==
+
+
+PASS  bigserial      insert landed, returning id = 1
+
+PASS  identity       insert landed (id 1); t_identity_id_seq granted USAGE
+
+PASS  breakage       revoked -> permission denied for sequence t_serial_id_seq; re-protected -> id 2
+PASS  no-sequence    no grant gained (still [public.t_identity_id_seq public.t_serial_id_seq]), unrelated sequence untouched, insert landed
+PASS  narrowness     USAGE only on both sequences; SELECT=f UPDATE=f; setval refused on both
+--- literal INSERTs as probe_app, verbatim --------------------------------
+    --- t_serial — bigserial ---
+    BEGIN
+    
+    3
+    INSERT 0 1
+    COMMIT
+    --- t_identity — generated always as identity ---
+    BEGIN
+    
+    2
+    INSERT 0 1
+    COMMIT
+    --- t_plain — bigint primary key, NO sequence ---
+    BEGIN
+    
+    4242
+    INSERT 0 1
+    COMMIT
+    --- t_unrelated — bigserial, NEVER protected ---
+    BEGIN
+    
+    psql:/tmp/literal-inserts.sql:64: ERROR:  permission denied for table t_unrelated
+    ROLLBACK
+--------------------------------------------------------------------------
+
+== the controls, mutated: each must break the case it names ==
+
+anchor appears 0 times in /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-substrate-sequence-grant/templates/database/tenancy/substrate.sql, expected exactly 1
+STOP: m1-blanket did not apply, so nothing after it was measured.
