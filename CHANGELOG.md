@@ -1,6 +1,62 @@
 ## Unreleased
 
+### Added
+
+- **The cross-tenant harness has a second adapter, and the honest claim is now
+  two languages rather than one.** `tests/tenant_isolation/adapters/go.sh` is the
+  five-function adapter against `identity`, and
+  `reports/tenant-adapter-go-01/mutations.sh` is its recipe: six breakages in
+  identity's own query layer, each one observed RED with the assertion it was
+  written for named, each reverted and green again, with the tree byte-identical
+  at the end. Measured: **1 control green (7 assertions), 6 breakages planted,
+  6 observed RED, 0 skipped, 0 anchors matching zero times.**
+
+  **`cross_tenant_harness.sh` is unchanged, byte for byte**, which is what
+  `adapters/README.md` predicted would fail if a second adapter needed a fork:
+  the service comes in through `KIT_SERVICE_REPO`, the adapter through
+  `KIT_TENANT_ADAPTER`, and the container name is derived from
+  `KIT_TENANT_WORK`. All three were already in the contract.
+
+  **The probe connects as a SUPERUSER, and that is the load-bearing decision.**
+  Postgres exempts a superuser from row-level security unconditionally, whatever
+  the FORCE says, so on this connection every denial in the probe is caused by
+  identity's own `WHERE account_id = $1` and by nothing else. Connected as
+  `identity` or `identity_app` instead — which is what a production deployment
+  looks like — all six breakages would have stayed green on a tree with every
+  predicate removed, and the harness would have been a second, worse measurement
+  of the substrate `tests/tenancy_test.sh` already proves. The probe asserts the
+  exemption still holds (`TestTheSubstrateIsNotWhatHoldsThisLine`) and that the
+  substrate is armed at the same time, so changing the DSN goes red rather than
+  quietly re-pointing the suite. `adapter_run` likewise refuses a `go test -run`
+  that started zero tests: `go test` prints `ok` and exits 0 in that case, which
+  is the vacuous green this repository has a written rule about.
+
+  **A finding about the substrate, reported and not fixed here.** identity's
+  `migrations/00016_account_isolation.sql` calls
+  `cafaye.protect_table('account_users')` with one argument, and that function
+  derives `login_role := coalesce(p_login_role, current_user || '_app')` and
+  then **raises** unless such a role already exists and can log in:
+
+      ERROR:  cafaye.protect_table(account_users, postgres_app):
+              postgres_app is not a LOGIN role on this cluster.
+
+  The hint the migration ships with names the provider — "kit's cluster
+  provisions `<service>` and `<service>_app`" — so the substrate a migration
+  installs depends on infrastructure **outside** the migration, and a harness
+  that brings up a bare `postgres:17` cannot apply 00016 at all. The adapter
+  provisions that role and nothing else: no table, no policy, no column, and the
+  name is derived **by the database** with the same expression `protect_table`
+  itself uses, so the adapter never becomes a second statement of a fact the
+  migration already states.
+
 ### Fixed
+
+- **`adapters/README.md` listed `guard` as a Go service. It is TypeScript** — 44
+  `.ts` files, 0 `.go` files, no `go.mod`. The sentence was a claim about a
+  service nobody had measured, which is the defect this harness exists to
+  remove. The count of unproven languages therefore drops from five to four, and
+  it drops for **two** reasons rather than one: Go became proven, and one entry
+  was never a Go service to begin with.
 
 - **`protect_table` granted the login role DML on a table and nothing on the
   sequences behind it, so a protected table with a `bigserial` column could not
