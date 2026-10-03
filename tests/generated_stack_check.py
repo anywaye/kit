@@ -118,13 +118,14 @@ WHICH FINDINGS FAIL THE GATE, AND WHY THAT IS A FILE AND NOT A LIST
     Four things about that, and each is a thing that has to be true rather than a
     thing that is usually true:
 
-    - IT IS READ, NEVER WRITTEN DOWN HERE. `darkroom` and `muse` do not appear in
-      this file as strings, and neither will any name the decision acquires
-      later. A hand-written frozen list has the same defect as the hand-written
-      dirty list this check was written to replace, with the opposite polarity:
-      it goes stale silently, and the day the scope lifts, the exemptions
-      outlive the decision that granted them — a gate that has stopped looking
-      at two repositories without anybody having turned it off.
+    - IT IS READ, NEVER WRITTEN DOWN HERE. No repository name appears in this
+      file as DATA — `darkroom` and `muse` are named below, and in two comments,
+      only to say that neither is here as code. A hand-written frozen list has
+      the same defect as the hand-written dirty list this check was written to
+      replace, with the opposite polarity: it goes stale silently, and the day
+      the scope lifts, the exemptions outlive the decision that granted them — a
+      gate that has stopped looking at two repositories without anybody having
+      turned it off.
     - THE OUT-OF-SCOPE LIST IS THE ONLY EXEMPTION. A repository the decision
       does not name is BLOCKING, including one it never mentions at all. An
       unmentioned repository has not been granted anything, and reading the
@@ -209,8 +210,11 @@ OUT_OF_SCOPE_HEADING = re.compile(r"^##\s+.*out\s+of\s+the\s+mvp", re.IGNORECASE
 # under the out-of-scope heading is still part of it.
 SECTION_HEADING = re.compile(r"^##\s")
 
-# A repository name as the decision writes them: `billing`, `cafaye-ts`. Also
-# matches things that are not repository names, which is why the tokens it
+# What the decision's own backticked names have to look like to count as a
+# repository: lowercase, and then letters, digits, `-`, `_` or `.`. Deliberately
+# shape-only and deliberately example-free — an example would be a real
+# repository name sitting in this file one careless edit away from a set. It
+# also matches things that are not repository names, which is why the tokens it
 # rejects are printed rather than dropped (see `main`) — a parse that silently
 # discarded half of what it read would be indistinguishable from a decision that
 # named half as much.
