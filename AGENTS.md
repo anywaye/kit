@@ -1052,7 +1052,7 @@ See `DECISIONS.md` (MD26, MD27).
     programs rather than configuration. They are here because a standard
     without a thing that enforces it is a standard enforced by whoever reads
     it. They stay inside the boundary deliberately: **standard library only,
-    no import outside `json`/`os`/`re`/`sys`/`argparse`/`subprocess`/`difflib`/`glob`/`urllib`/`__future__`**,
+    no import outside `json`/`os`/`re`/`sys`/`argparse`/`subprocess`/`difflib`/`glob`/`urllib`/`hashlib`/`__future__`**,
     no installable dependency, and **nothing imports them** — the real test of
     this rule is that nothing here is a library, and a classifier is not. The
     reporter prints a table for a scheduled job and **never commits its
@@ -1093,8 +1093,30 @@ See `DECISIONS.md` (MD26, MD27).
     classifier's: nothing imports them, and neither is installable. The one
     thing that changed is that they import PyYAML, which `tests/requirements.txt`
     already carries and the gate already bootstraps — so this is the existing
-    carve-out rather than a widened one. A **third** parser in `tests/` is the
-    case the rule above still refuses.
+    carve-out rather than a widened one.
+  - **`tests/account_scope_fleet_check.py` is a FOURTH program, and the rule
+    above says the default answer is no. It got a yes for one reason, stated
+    here so a reader can disagree with it.**
+    Six services declare their account-scoped surface in an `account_scope.yml`.
+    `core/harness/account_scope_check.py` is what decides whether a declaration
+    still describes its code. Measured at the time of writing, **not one of the
+    six ran it against itself** — the only references in the fleet were
+    declarations *mentioning* the tool and `core`'s CI running its own self-test
+    over its own fixtures. So the contract was continuous in nobody's build: a
+    service could add a route, widen a declaration, or delete
+    `account_scope.yml` entirely and its own gate stayed green. `DEBT.md` D18's
+    shape, one level up from where D18 had been looking.
+    The argument for a program rather than an inline block is the same one the
+    third use makes, at one more remove: it has to run **in CI**, and CI has no
+    fleet beside the repository, so the step has to assemble one, name it, and
+    invoke a program that is not the 620,000-line gate. Inlining it would mean
+    either a second copy for the CI job or a `validate.sh` flag that changes
+    what the gate is, and both of those are the mechanism this packet exists
+    against. It is not a fifth: it is the same shape, and the boundary is
+    unchanged — **standard library plus `yaml` (PyYAML, which
+    `tests/requirements.txt` already carries and the gate already bootstraps) and
+    `hashlib`, and nothing imports it.**
+    A **fifth** program is still refused, and this paragraph is not a precedent.
   - **The allowed-import list is ENFORCED, not aspirational.**
     `difflib` and `glob` arrived with the templates half of the staleness
     reporter — the first counts the lines two copies differ by, the second

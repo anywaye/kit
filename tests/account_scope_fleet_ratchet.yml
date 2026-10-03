@@ -1,0 +1,47 @@
+---
+# The recorded state of the fleet's account-scope contract, and it is EMPTY ON
+# PURPOSE IN THIS COMMIT.
+#
+# `account_scope_fleet_check.py` ships with a record that tolerates nothing, so
+# its first run is RED and says which four repositories are red and why. A gate
+# that arrives green because it was born with a tolerance for every red it found
+# has proved nothing about the tree it was born on, and this repository's own
+# history has a name for that: "the gate that did not run the proof". The rows
+# arrive in the next commit, one per red, each carrying a `condition:`.
+#
+# WHAT THIS FILE IS, and it is not a list of suppressed identifiers
+#
+#   ONE ROW PER IN-SCOPE REPOSITORY. Every repository `MVP-SCOPE.md` puts in the
+#   MVP needs a row, and a repository with no row is RED — not skipped, not
+#   assumed green. That is what makes a repository added to the in-scope table a
+#   deliberate act rather than one that silently widens the gate.
+#
+#   EVERY NUMBER IN A ROW IS EXACT AND BOTH-DIRECTIONAL. A row records the
+#   checker's exit code, its four enumerated counts, its two tallies, its warning
+#   ids, its failure ids and its blindnesses. Any difference is red in either
+#   direction: a repository that got WORSE is red, and a repository that got
+#   BETTER and whose row nobody retired is red too. That second half is the
+#   property a suppression list cannot have, and it is the reason this file is a
+#   full record rather than a list of things to ignore.
+#
+# THE RULES, and they are enforced by the runner's loader rather than by
+# convention — a record that cannot be read is not a record that says everything
+# is fine:
+#
+#   1. `fleet:` is one row per in-scope repository. `exempt:` is the subset that
+#      has never declared a surface.
+#   2. A row that tolerates a failure or a blindness carries a `condition:`. A
+#      tolerance with no stated end is a switch.
+#   3. A row with `failures: {}` and `blind: []` tolerates nothing, and that is
+#      the right row for most of this fleet today.
+#   4. An `exempt:` row forgives `account-scope.declaration-missing` and NOTHING
+#      ELSE — that is what the exemption was granted for. Any other failure it
+#      reports is red.
+#   5. An `exempt:` row whose repository now HAS a declaration is red. The
+#      exemption existed because the repository had never declared; the day it
+#      declares, the exemption is a hole through which nothing is checked.
+#   6. A repository named twice, in either list, refuses the whole file.
+#   7. A `counts:` block missing any of the six keys refuses the whole file, so a
+#      typo cannot read as "not recorded".
+fleet: []
+exempt: []

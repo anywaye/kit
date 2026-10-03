@@ -49,3 +49,100 @@ jobs:
     with:
       language: none
       working-dir: .
+
+  # ------------------------------------------------------------------ fleet
+  # THE ACCOUNT-SCOPE CONTRACT, and this job is the reason the check in
+  # `tests/validate.sh` is not the defect it was written to close.
+  #
+  # Six services declare their account-scoped surface in an `account_scope.yml`,
+  # `core/harness/account_scope_check.py` is what decides whether a declaration
+  # still describes its code, and NO service ran it against itself. Adding the
+  # check to `tests/validate.sh` alone would have reproduced the same failure one
+  # level down: the runner discovers the fleet BESIDE this repository, and a
+  # GitHub Actions runner that cloned one repository has no fleet beside it, so
+  # the check would SKIP on every run of every commit and be a green that
+  # verified nothing. `DEBT.md` has a name for that and it is "the gate that did
+  # not run the proof".
+  #
+  # So this job ASSEMBLES the fleet and runs the contract for real. The names
+  # come from `tests/account_scope_fleet_scope.yml`, which is kit's fingerprinted
+  # copy of `moon/MVP-SCOPE.md`'s in-scope table — the directive itself is in a
+  # repository no service clones, which is the reason the copy exists and also
+  # the reason the runner refuses to run if the copy disagrees with itself.
+  #
+  # WHY THIS IS NOT PART OF `ci.reusable.yml`: a reusable workflow runs against
+  # the CALLING repository, so it cannot check out a fleet of siblings into a
+  # layout this repository's runner can find. It is a job here instead, and it is
+  # not opt-in for the same reason the secret scanner is not — a contract that
+  # only runs when somebody asks for it is a report.
+  #
+  # WHAT THIS JOB CANNOT SEE, written down rather than discovered:
+  #
+  #   * the nine repositories at their default branch HEADS, which are not the
+  #     commits a pull request proposes. So this job proves the CONTRACT is
+  #     continuous across the fleet as it stands; it does not prove that a pull
+  #     request which breaks a declaration is caught by a service's own gate.
+  #     That half is `tests/validate.sh`'s, on a machine that has the fleet
+  #     beside it, and it is the half this packet could not close from here
+  #     without editing six services' CI — which the brief forbids.
+  #   * `kit` itself is symlinked rather than cloned, because this checkout IS
+  #     kit and a second clone of the default branch would check a different
+  #     `account_scope.yml` question than the one this commit is about.
+  #
+  # A failed clone is NOT tolerated. `continue-on-error` is the setting that
+  # turns a gate into a report, and this job has none of it: if a repository has
+  # been renamed or made private, this job goes red naming which one, which is
+  # the state a reader can act on.
+  account-scope-contract:
+    name: account-scope contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: assemble the fleet beside kit
+        env:
+          FLEET: ${{ runner.temp }}/fleet
+          KIT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$FLEET"
+          # Read the names OUT OF the fingerprinted table rather than writing a
+          # list here. A second list in a second file is a second copy of the
+          # fleet's shape, and this repository's `MVP-SCOPE.md` argument is that
+          # such a copy is a hole nothing checks.
+          names="$(python3 - "$KIT" <<'PY'
+          import sys, yaml
+          table = yaml.safe_load(
+              open(f"{sys.argv[1]}/tests/account_scope_fleet_scope.yml", encoding="utf-8")
+          )
+          print(" ".join(table["inScope"]))
+          PY
+          )"
+          echo "in scope: $names"
+          for repo in $names; do
+            if [ "$repo" = "kit" ]; then
+              ln -s "$KIT" "$FLEET/$repo"
+              echo "  kit         -> this checkout (symlinked, not re-cloned)"
+              continue
+            fi
+            # Full history, not a shallow clone, and the reason is the runner's
+            # own rule 1: it reads `git cat-file -e HEAD:account_scope.yml` to
+            # tell a declaration that was never written from one that was
+            # deleted. A depth-1 clone answers that question for the tree at
+            # HEAD and nothing else, which happens to be enough — but the
+            # runner reports itself blind rather than guessing, and there is no
+            # reason to hand it a repository that cannot answer.
+            git clone --quiet --depth 1 "https://github.com/cafaye/$repo.git" "$FLEET/$repo"
+            echo "  $repo"
+          done
+      - name: run the contract
+        env:
+          FLEET: ${{ runner.temp }}/fleet
+          KIT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 "$KIT/tests/account_scope_fleet_check.py" \
+            --repos-dir "$FLEET" \
+            --scope-table "$KIT/tests/account_scope_fleet_scope.yml"
