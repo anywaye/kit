@@ -1114,3 +1114,69 @@ passing it is still not something a text scan can read.
 away. A guard whose number was adjusted to a target is a guard measuring the
 target. Recipe and measurements: `reports/wrapper-tier-scope/mutations.sh`,
 8 cases, all bit.
+
+---
+
+## MD33 — **the README's file list is CLOSED UNDER THE README, and the unit is a TREE**
+
+The trade this packet was dispatched to make. `readme_check` walks a
+hand-maintained tuple of 25 paths and asserts two things per entry: the README
+names it, and it exists. So a documented path that was **deleted** is a finding.
+A path that was **added** is not one at all. `readme_closure_check` now walks
+the five adoption trees and asks whether every shipped path sits under a path
+the README names. What was **not** made: a row per shipped file, a row per
+directory, or a check that `tests/` and `reports/` are documented too.
+
+**The two things that were not made, and why.**
+
+1. *A row per shipped file.* Measured on this tree, **145 of the 175** tracked
+   files under `reports/`, `tests/` and `templates/` are not on the tuple. A
+   README listing 157 paths is a README nobody reads, and a check that demanded
+   them would be satisfied by the very thing it exists to prevent. So coverage
+   is asserted per **tree**, and the cheapest true case is deliberately green: a
+   new file inside `templates/compose/grafana/provisioning/` — a directory the
+   README already names — leaves the verdict green, and a recipe proves it.
+2. *A row per directory.* Measured, 34 directories under `templates/` are not
+   covered by a listed path, and the natural closure — every directory must be
+   listed — is the same 157-paths failure with fewer leaves. Listing a
+   *directory* covers its whole subtree, which is why three entries in the
+   original tuple are directories and why this packet's own new row is
+   `` `templates/deploy/` and `templates/bin/deploy.sh` `` rather than six
+   leaves.
+
+**Why `tests/` and `reports/` are out of scope, which is a judgement and not a
+measurement.** `tests/` is kit's own gate implementation; the README already
+names every proof a reader is expected to *run* (`isolation_test.sh`,
+`tenancy_test.sh`, `canary_test.sh`, `kamal_test.sh`, `fetch_test.sh`,
+`stack_live_test.sh`) and `tests/validate.sh` itself, and naming `fingerprint.py`
+and `bootstrap.sh` would add 17 rows that teach a reader nothing. `reports/` is
+packet evidence: it is addressed to whoever reads that packet's report, not to a
+reader deciding whether to adopt kit, and it is 32 files. Both exclusions are
+written into the check rather than left as a gap a future reader mistakes for
+coverage.
+
+**The alternative that was rejected outright: extending the tuple by hand.** One
+entry per new file is what the list already is, and it is the same ratchet as
+`templates/tier/skip-allowlist`, in the opposite direction — it only grows, and
+it grows by one line per artefact a fleet of nine services reads once. Worse, it
+is satisfied by pasting a path into the README, which is exactly the edit the
+tuple's own comment forbids for the `mimir` case. Reading coverage out of the
+README instead means a packet that adds `templates/payments/` is caught on the
+day it does, with **no edit to `tests/validate.sh` at all**.
+
+**The fail-open trap found while writing it, recorded because the shape is
+familiar.** A **one-segment token is not a tree**. `## The templates half —
+`templates/`` is how the README introduces the section, so a one-segment token
+prefix-matches everything beneath it and the whole adoption tree reports itself
+documented by a heading. Measured: with one-segment tokens admitted the walk
+found **one** undocumented path where there are **seven** — a green hiding six
+real gaps, which is the same direction as a check whose pattern stopped
+matching. A rule about coverage is itself a rule about scope, and scope has the
+same two halves.
+
+**What it costs.** Coverage is a substring over README prose, so a path named
+only in a passing sentence or a code fence satisfies it — the same weakness
+`readme_check` has had since it was written. Tightening it means requiring a
+table row, which is a different check with a different failure mode. The honest
+description of what this asserts is that **the tree is CLOSED**, not that the
+prose is good.

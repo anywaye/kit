@@ -36,6 +36,31 @@
   Two README rows came out of it, and both were gaps rather than chores:
   `.github/workflows/image.reusable.yml` and `templates/deploy/`.
 
+  **Two defects this found in the harness itself, both pre-existing and both
+  the reason the first one was invisible.**
+
+  - `fresh_copy` did not copy `reports/`, and `readme_check`'s tuple requires
+    `reports/account-scope-contract-01/snapshot.sh` to **exist**. So every one of
+    the suite's throwaway copies was red on an unbroken tree, and the control the
+    file calls "the sentence that makes every proof below it meaningless" was
+    printing `FAIL self_test: unbroken tree — the gate is RED on an unbroken
+    tree`. Measured on `master` at `3cdcd3b`:
+    `KIT_SELF_TEST_SHARD=1/104 bash tests/self_test.sh` -> that FAIL line, then
+    `PASS self_test: breakage 1`, then `FAIL: self_test — 1 breakage(s) the gate
+    did not catch.` Fixed by adding `reports` to `fresh_copy`'s copy list, which
+    is the coupling `AGENTS.md` already states twice for `MIGRATIONS.md` and for
+    `VERSION`/`RESERVED`. After: a whole `--static-only` gate on a copy is
+    `EXIT=0`, 246 PASS, 0 FAIL.
+  - The `failures` block stood **mid-stream**, between breakage 100's recipe and
+    breakage 101's. A failure among 1-100 exited 1 there and 101-onward never ran;
+    a failure among 101-onward was read by nothing, so the summary printed
+    `PASS: self_test — all N breakages hold` and **exited 0**. It is now at the
+    end of the recipe stream, after the shard branch and before the counts, so
+    it sees every recipe and a sharded run still reports itself as a shard. The
+    shard path's comment claimed "The un-sharded path below has always checked
+    it"; it had not, and the same packet that taught one half of the file to
+    judge its recipes left the other half asserting a property it did not have.
+
 - **The account-scope contract is now continuous in a build, which it was not.**
   Six services declare their account-scoped surface in an `account_scope.yml`
   and `core/harness/account_scope_check.py` is what decides whether a

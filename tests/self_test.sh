@@ -554,6 +554,21 @@
 #        because every `--verify` fixture it built came from a kit Dockerfile --
 #        and a foreign base image's labels are precisely the labels kit's
 #        Dockerfile did not write.
+#   104. a TEMPLATE TREE the README has never heard of  -> the closure check
+#        goes red. The direction `readme_check` cannot see: it walks a
+#        hand-maintained tuple and asserts each entry is BOTH named in the
+#        README and present on disk, so a documented path that was DELETED is a
+#        finding and a path that was ADDED is not one at all. `grep -nE 'readme'
+#        tests/self_test.sh` returned NOTHING before this recipe, so the check
+#        had two failure modes and this suite had never turned either on --
+#        which is the same hole the `reports` entry left, and the reason a check
+#        that has never been falsified is a hope with an exit status.
+#   104b. a new file INSIDE a documented tree           -> GREEN, and it names
+#        what it walked. The control the check cannot afford to lose: the bound
+#        is per TREE and not per file, because requiring a row per shipped file
+#        is the failure this check exists to prevent. Measured here, 145 of the
+#        175 tracked files under reports/, tests/ and templates/ are not on the
+#        tuple, and a README listing 157 paths is a README nobody reads.
 #
 # Both are `expect_red_script` against `tests/shard_test.sh`, which is a proof
 # rather than a gate over a tree for the same reason `classify_test.sh` is: the
@@ -857,8 +872,29 @@ fresh_copy() {
   # the second time this repository has paid it: **when a packet adds a file the
   # gate reads by path, `fresh_copy`'s list is part of that packet.** A new
   # check is not done until a throwaway copy can see the thing the check reads.
+  #   `reports` is here for the same reason, and its absence was a FALSE RED on
+  #   every breakage rather than on one. `readme_check` asserts that every path its
+  #   tuple names EXISTS, and one of those paths is
+  #   `reports/account-scope-contract-01/snapshot.sh`. A copy without `reports/`
+  #   therefore fails that check on an unbroken tree, which is the control this
+  #   file runs FIRST — the sentence its own header calls "the control that makes
+  #   every proof below it meaningless". Measured on `master` at `3cdcd3b`, before
+  #   this line existed:
+  #
+  #     $ KIT_SELF_TEST_SHARD=1/104 bash tests/self_test.sh
+  #     FAIL self_test: unbroken tree — the gate is RED on an unbroken tree (exit 1)
+  #     PASS self_test: breakage 1: templates/otel/go/traceparent.go deleted
+  #     FAIL: self_test — 1 breakage(s) the gate did not catch.
+  #
+  #   A red in a copy is a red in every proof below it, and it is invisible in the
+  #   per-breakage lines because each of those asserts ONE named check went red —
+  #   which it did, for its own reason, on top of a check that had been red all
+  #   along. This is the coupling the comment above already describes, twice
+  #   (`MIGRATIONS.md` and `VERSION`/`RESERVED`), and it is here for the third
+  #   time: the tuple grew a `reports/` entry, and nothing noticed that the copy
+  #   list is the other half of that tuple.
   for entry in .gitleaks.toml .github AGENTS.md README.md CHANGELOG.md LICENSE \
-    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint templates tests; do
+    DECISIONS.md MIGRATIONS.md RESERVED VERSION core docker lint reports templates tests; do
     [ -e "$ROOT/$entry" ] && cp -R "$ROOT/$entry" "$dst/"
   done
   # KIT_GITLEAKS, unlike the other two, must ALSO be resolved before the first
@@ -4706,31 +4742,12 @@ printf 'the withdrawn distribution, back again under the same name\n' \
 expect_red_check 'breakage 100: a reserved name is back in the tree' \
   "$base100" 'reserved tombstones' --static-only
 
-printf '\n'
-# TWO skip kinds, counted apart, because they are two different problems and one
-# message would misdescribe half of them.
-#
-#   `skips`         a missing TOOLCHAIN. The recipe is sound and the machine
-#                   cannot run it. Fix the machine.
-#   `env_skips`     the gate exited non-zero reporting NO finding at all (see
-#                   `expect_red_check`). The recipe could not be EVALUATED, so
-#                   this is not evidence about the check and must never be
-#                   reported as one.
-#
-# Both are fatal, and both stay fatal: a proof nobody ran is not a proof, and
-# collapsing the second into the first is how a machine problem gets filed as a
-# gate defect and "fixed" by weakening something.
-if [ "$failures" -ne 0 ]; then
-  echo "FAIL: self_test — $failures breakage(s) the gate did not catch."
-  [ "$skips" -eq 0 ] || echo "note: $skips breakage(s) skipped (no toolchain) — reported above."
-  [ "$env_skips" -eq 0 ] || echo "note: $env_skips breakage(s) SKIPPED as ENVIRONMENT failures (the gate reported no finding) — reported above. These are not gate defects."
-  exit 1
-fi
-if [ "$skips" -ne 0 ] || [ "$env_skips" -ne 0 ]; then
-  [ "$skips" -eq 0 ] || echo "FAIL: self_test — $skips breakage(s) skipped for a missing toolchain. A skipped proof is not a proof."
-  [ "$env_skips" -eq 0 ] || echo "FAIL: self_test — $env_skips breakage(s) could not be evaluated (the gate exited without reporting a finding). An unevaluated proof is not a proof, and this one is an environment failure rather than a gate defect."
-  exit 1
-fi
+# The two fatal skip/failure checks used to stand HERE — between breakage 100's
+# recipe and breakage 101's — and they are now at the end of the recipe stream,
+# immediately above the summary. See the long comment there for why; the short
+# version is that a fatal check placed mid-stream can only ever see the recipes
+# above it, so a failure among 101-104 exited 0 through a summary that printed
+# PASS.
 # 101. The skip stops requiring the work to still be there.
 #
 # The single most expensive thing a cache can do is hand back a green for work
@@ -4827,6 +4844,86 @@ edit "$base103/docker/provenance.sh" '    return 6
 expect_red_check 'breakage 103: the ownership-by-namespace check is removed, so a base image inherits a stamp that satisfies ours' \
   "$base103" 'tests/provenance_test.sh  (11 leak shapes refused'
 
+# ---------------------------------------------------------------------------
+# 104: THE README'S CLOSURE HALF, IN BOTH DIRECTIONS.
+#
+# WHY THIS EXISTS AT ALL. `grep -nE 'readme' tests/self_test.sh` returned
+# NOTHING before this recipe. `readme_check` walks a hand-maintained tuple of 25
+# paths and asserts two things per entry — the README names it, and it exists —
+# so it had two failure modes and no recipe had ever turned either on. Every
+# other one-sided list in this file has a recipe that proves the half it does
+# NOT guard is not guarded, and that asymmetry is what keeps a list honest. This
+# one had no witness, which is the same shape as the `reports` entry that cost
+# the fleet a whole packet.
+#
+# WHAT IT PROVES. `readme_closure_check` is the companion to `readme_check`: it
+# reads its coverage out of the README and walks the five adoption trees asking
+# whether every shipped path sits under one the README names. It was not
+# theoretical — the tree it was written against shipped `templates/deploy/`
+# (1,067 lines) and `.github/workflows/image.reusable.yml` (kit's second
+# reusable standard) with neither named in the README.
+#
+# ONE MUTATION, ONE CAUSE, and it is an ADDITION rather than a substitution.
+# Every other recipe in this file breaks something; an omission cannot be
+# introduced by substitution, so this one creates a file. That is also why the
+# mutation is NOT written with `edit`: `edit`'s refusal to match is what makes a
+# stale recipe loud, and it has no opinion about a file that was never there.
+# The guards are `mkdir -p` and `cat >` under this file's `set -euo pipefail` —
+# both fail loudly rather than silently leaving the copy unbroken — and the copy
+# itself is proven green by the `unbroken tree` control near the top, so the new
+# file is the only difference between a green gate and this red one.
+#
+# WHY `templates/payments/` AND NOT THE GRAFANA TREE. The obvious mutation is a
+# new file inside `templates/compose/grafana/provisioning/`, a directory the
+# README already names. Measured on this branch, that file makes
+# `readme_closure_check` stay GREEN — which is correct, and is what 104b proves
+# deliberately — but it also turns THREE other checks red
+# (`grafana provisioning`, `grafana dashboards`, `grafana panels`), so it is a
+# mutation with four causes and this recipe would prove nothing about any of
+# them. A brand-new tree is unreachable by every other check.
+base104="$(fresh_copy kit-104)"
+mkdir -p "$base104/templates/payments"
+cat > "$base104/templates/payments/gateway.yml" <<'YML'
+# A template tree the README has never heard of, which is the shape a packet
+# produces when it adds something rather than editing something.
+datasources: []
+YML
+expect_red_check 'breakage 104: a template tree nobody documented' \
+  "$base104" 'README.md  (every shipped path'
+
+# ---------------------------------------------------------------------------
+# 104b: THE CONTROL, and it is the one this check cannot afford to lose.
+#
+# The failure `readme_closure_check` exists to avoid is requiring a README row
+# for every shipped file: measured on this tree, 145 of 175 tracked files under
+# reports/, tests/ and templates/ are not on the tuple, and a README listing 157
+# paths is a README nobody reads. So the direction that must stay GREEN is a new
+# file INSIDE a documented tree — and a check that went red on it would be the
+# 157-paths README wearing a smaller hat, satisfied by the very thing it exists
+# to prevent.
+#
+# WHY THIS IS `expect_green_check` AND NOT A FILTERED RUN. That helper
+# deliberately does not add `--only`, because the assertion here is a `check`
+# row rather than a `report`... but the general rule stands and is inherited
+# rather than re-derived: a filter whose correctness depends on a string is a
+# decoration on the command line. This helper also sets `KIT_FINGERPRINT=0`,
+# which matters MORE here than for its other caller: a cache hit is a green that
+# no check ran to produce, and this proof asserts a green while naming what the
+# check said.
+#
+# `templates/deploy/` is the tree. It was documented by this same packet's
+# README rows, so the control also proves those rows do the work the check
+# claims — a new leaf under them costs the reader nothing.
+base104b="$(fresh_copy kit-104b)"
+cat > "$base104b/templates/deploy/reference/second.deploy.yml" <<'YML'
+# A second worked example under a tree the README names. Nothing reads it, which
+# is the point: the check is CLOSED under a documented directory, so adding a
+# leaf to one must not cost the README a row.
+access_log: false
+YML
+expect_green_check 'breakage 104b: a new file INSIDE a documented tree needs no README row' \
+  "$base104b" 'README.md  (every shipped path' 'path(s) walked across' --static-only
+
 # The count is COUNTED, not written down. Every breakage above calls exactly one
 # of the four red-expecting helpers, so this cannot drift from the recipes the
 # way a hardcoded "all N breakages" does — and the header's list is checked
@@ -4877,8 +4974,9 @@ if [ -n "$_shard_i" ]; then
   # This block exited 0 without reading `failures` at all, so a breakage that
   # genuinely failed inside a sharded run printed its own FAIL line and then had
   # the shard summarised as PASS — the sentence asserting the opposite of what
-  # the line above it said. The un-sharded path below has always checked it; the
-  # shard path was written as if counting the recipes were the same as judging
+  # the line above it said. The un-sharded path below now checks it, and checks
+  # it at the END of the recipe stream rather than mid-way through it; the shard
+  # path was written as if counting the recipes were the same as judging
   # them, which is the exact conflation the count-vs-declared check further down
   # exists to prevent.
   #
@@ -4897,6 +4995,58 @@ if [ -n "$_shard_i" ]; then
   echo "PASS: self_test — shard $_shard_i/$_shard_n ran $_shard_ran of $total breakages and every one it ran held."
   echo "       This is a SHARD. It has NOT evaluated the other $((total - _shard_ran)) breakage(s); run the rest to claim the suite."
   exit 0
+fi
+
+printf '\n'
+# TWO skip kinds, counted apart, because they are two different problems and one
+# message would misdescribe half of them.
+#
+#   `skips`         a missing TOOLCHAIN. The recipe is sound and the machine
+#                   cannot run it. Fix the machine.
+#   `env_skips`     the gate exited non-zero reporting NO finding at all (see
+#                   `expect_red_check`). The recipe could not be EVALUATED, so
+#                   this is not evidence about the check and must never be
+#                   reported as one.
+#
+# Both are fatal, and both stay fatal: a proof nobody ran is not a proof, and
+# collapsing the second into the first is how a machine problem gets filed as a
+# gate defect and "fixed" by weakening something.
+#
+# WHERE THIS BLOCK STANDS IS LOAD-BEARING, and it used to stand in the wrong
+# place: between breakage 100's recipe and breakage 101's, which is MID-STREAM.
+# A fatal check in mid-stream can only ever see the recipes above it, so both
+# ways of being wrong were wrong at once:
+#
+#   - a failure among breakages 1-100 exited 1 THERE, and breakages 101-104
+#     never ran at all — the unreachable-recipe defect breakage 101 was written
+#     for, one level up and in the other direction; and
+#   - a failure among breakages 101-104 was not read by any verdict that
+#     depended on it, so the summary below printed
+#     `PASS: self_test -- all N breakages hold` and **exited 0**. The run was
+#     red in the one place a reader looks first and green in the one place a
+#     machine looks.
+#
+# The second is the shape this repository refuses to ship more than any other.
+# It was reachable only because the SHARD path got its own `failures` check when
+# breakage 101 was moved above the summary — at which point the comment there
+# began claiming "The un-sharded path below has always checked it", which was
+# not true. The same packet that taught one half of this file to judge its
+# recipes left the other half with a comment asserting a property it did not
+# have, which is the failure this file documents better than anything else in it.
+#
+# It is found by reading rather than by a run, because the run that would find
+# it is 60 minutes long and the defect is a placement. Both facts belong here
+# rather than in a commit message nobody reads twice.
+if [ "$failures" -ne 0 ]; then
+  echo "FAIL: self_test — $failures breakage(s) the gate did not catch."
+  [ "$skips" -eq 0 ] || echo "note: $skips breakage(s) skipped (no toolchain) — reported above."
+  [ "$env_skips" -eq 0 ] || echo "note: $env_skips breakage(s) SKIPPED as ENVIRONMENT failures (the gate reported no finding) — reported above. These are not gate defects."
+  exit 1
+fi
+if [ "$skips" -ne 0 ] || [ "$env_skips" -ne 0 ]; then
+  [ "$skips" -eq 0 ] || echo "FAIL: self_test — $skips breakage(s) skipped for a missing toolchain. A skipped proof is not a proof."
+  [ "$env_skips" -eq 0 ] || echo "FAIL: self_test — $env_skips breakage(s) could not be evaluated (the gate exited without reporting a finding). An unevaluated proof is not a proof, and this one is an environment failure rather than a gate defect."
+  exit 1
 fi
 
 counted=$(grep -cE '^ *expect_red(_check|_lang|_script)? +.breakage +[0-9]+[a-z]*:' "$0" || true)
