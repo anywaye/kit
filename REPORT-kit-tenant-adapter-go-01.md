@@ -38,6 +38,29 @@ tree byte-identical at the end .. yes (cmp BEFORE-store.go AFTER-store.go)
 Recipe exit status **0**. Full transcript:
 `reports/tenant-adapter-go-01/` and the `PASS:` summary it prints.
 
+### What the gate said, and what I did about it
+
+`bash tests/validate.sh --static-only` — **447 PASS, 1 FAIL, 6 SKIP.**
+
+The FAIL is `generated stack (no repository commits the file caf dev generates)`
+and it is **pre-existing and not mine**, stated rather than assumed: the four
+blocking findings are `cafaye-rb`, `cafaye-ts`, `docs` and `guard`, each missing
+`/caf.dev.compose.yaml` from its `.gitignore`. All four are on `master`, none is
+a worktree, and this packet's diff is eight files, every one of them inside kit
+(`git diff --name-only master...HEAD`). The check reads sibling repositories'
+`.gitignore` and `git ls-files`; nothing I wrote is an input to it.
+
+It is also **not mine to fix** — four other repositories' trees are not this
+packet's to edit. Recorded here rather than quietly green-washed, because a gate
+that reported a red and had it dropped is a gate nobody reads.
+
+The 6 SKIPs are `--static-only`'s own, named in the run: `lint_test.sh` and the
+five docker/live tiers. The full gate's `self_test` phase is the 90-minute tier
+`AGENTS.md` says to run by hand rather than report, and this packet changed
+nothing it exercises.
+
+`shellcheck -S warning` is clean on both new shell files.
+
 ## The control
 
 ```

@@ -229,9 +229,12 @@ cp "$STORE" "$OUT/BEFORE-store.go"
 RESTORE_CMD="cp '$OUT/BEFORE-store.go' '$STORE'"
 
 # The seven tests the probe carries, and the five of them the six breakages are
-# written for. Written down HERE rather than discovered at run time, because a
-# list assembled by running the probe and reading its output would be satisfied
-# by the very run it is supposed to be checking.
+# written for. `PROBE_TESTS` is stated HERE as well as in the probe file, and that
+# duplication is deliberate and it fails TOWARD RED: a test added to the probe
+# without this line updated makes the control fail and names both numbers. The
+# alternative — counting whatever the runner printed and comparing it to itself —
+# is the property stated in one place and therefore asserted in none, and it is
+# the shape this repository has already been bitten by twice.
 ALLOWANCE="TestCrossTenantListOwnRowsVisible"
 SUBSTRATE="TestTheSubstrateIsNotWhatHoldsThisLine"
 PROBE_TESTS="7"
@@ -259,8 +262,11 @@ fi
 passed="$( count_prefix "$out" '--- PASS: ' )"
 if [ "${passed:-0}" -ne "$PROBE_TESTS" ]; then
   say ""
-  say "FAIL: the control reported ${passed:-0} passing tests, expected $PROBE_TESTS."
-  say "  A run that measured nothing must not be reported as a control."
+  say "FAIL: the control reported ${passed:-0} passing tests; this recipe declares $PROBE_TESTS."
+  say "  Either the probe gained or lost a test and this line was not updated with it"
+  say "  — which is the intended direction for that mistake to fail in — or the run"
+  say "  measured less than it claims. A run that measured nothing must not be"
+  say "  reported as a control."
   failures=$(( failures + 1 ))
   restore
   tenant_harness_down
