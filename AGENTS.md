@@ -1072,7 +1072,16 @@ See `DECISIONS.md` (MD26, MD27).
     config, and it would disagree with git on every case that matters. It is
     stdlib for the same reason the others are, it is named in the
     `carve-out boundary` check's list in the same commit that added it, and
-    its population is read off the filesystem rather than written down.
+    its population is read off the filesystem rather than written down. It also
+    reads ONE file — `MVP-SCOPE.md`, the fleet's scope decision, beside the
+    fleet and in no repository — for the set of repositories held frozen, and
+    **that read is a scope decision and not an allowlist**: the out-of-scope
+    list is the only exemption, a repository it does not name is blocking, and
+    a decision that cannot be read exempts nothing and says so with a
+    `SCOPE-ABSENT:` marker. A hardcoded frozen list would have the same defect
+    as the hand-written dirty list this check was written to replace, with the
+    opposite polarity: it goes stale silently, and the day the scope lifts the
+    exemptions outlive the decision that granted them.
     `fleet_check.py` would have been the wrong home for it on two counts and
     both are argued at the top of that file: its scope predicate is "declares
     local infrastructure", which EXCLUDES `core` — the repository that had

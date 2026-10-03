@@ -190,7 +190,7 @@ the same predicate `caf dev` uses. `is_worktree` excludes worktrees, matching
 | then `git rm --cached` | **green** |
 | reverse: generated file with no manifest | **exit 1** |
 | real fleet, fixes not merged | **exit 1, 11 findings / 10 repos** |
-| gate section in `validate.sh --static-only` | `FAIL generated stack` — correct, fixes unmerged |
+| gate section in `validate.sh --static-only` | `FAIL generated stack` — correct *as it stood then*; see §8, its exit status did not respect the fleet's scope decision |
 | `carve-out boundary` check with the new program listed | **PASS**, 3 programs, 10 stdlib imports |
 
 ### Two bugs I found in my own check, by running it
@@ -258,3 +258,76 @@ this repository already has names for.
   floor. I did not run `bin/prime` (it needs a migrated Postgres, which is outside
   this packet's budget), so I am not claiming it green; I am claiming nothing in
   `core` reads the file, which is measured above.
+
+---
+
+## 8. Correction: the check was right and its exit status was not
+
+`MVP-SCOPE.md` became the fleet's scope decision after §5 was written. It freezes
+`billing`, `darkroom` and `muse` out of the MVP until it is launched and selling,
+and `darkroom` and `muse` each carry this exact defect today — a manifest, no
+ignore entry, no file on disk. Two of the check's findings were therefore in
+repositories nobody is permitted to fix, and the check could not go green on this
+machine.
+
+**The defect was never the detection.** The reasoning at the top of the file
+stands: unlike adoption debt, this has no adopter and no wave that makes it
+acceptable, and `core` being TRACKED is a real defect in an in-scope repository
+either way. What was wrong is that a *finding* was wired straight to an *exit
+status*, so two repositories the decision had frozen out of the MVP were
+indistinguishable, to the gate, from two it had not.
+
+Merging it as written would have made kit's gate permanently red on a tree nobody
+can fix. The predictable response is a human disabling the check — which stops it
+running in the nine repositories that **can** be fixed today. A gate that cannot
+go green teaches a fleet to ignore gates, which is worse than not shipping the
+check.
+
+### What changed, and what deliberately did not
+
+- **Detection and both messages are byte-identical.** The `git rm --cached`
+  advice, the `TRACKED`-alone rule, the not-ignored finding: untouched.
+- **Every finding is still printed, frozen or not**, under a separate
+  `FROZEN-FINDINGS:` heading that names the repositories and says why they are not
+  actionable. Suppressing them would be the same false green in a different
+  costume — and a defect nobody may fix still gets fixed the day the scope lifts,
+  which is cheap only if it was written down before then.
+- **Only the exit status is routed.** In scope → fails. Frozen → printed, exit 0.
+- **The gate row names which of the two happened**: `generated stack (…; 2 in
+  frozen repositories, reported not counted)`, or `no scope decision read, so
+  nothing is exempt`.
+
+### The scope set is derived, and three properties of that read are deliberate
+
+It comes from `--scope`, defaulting to the directory above `--repos-dir`. No
+repository name is written into this repository: a hardcoded frozen list has the
+same defect as the hand-written dirty list §5 replaced, with the opposite
+polarity — it goes stale silently, and the day the scope lifts, the exemptions
+outlive the decision that granted them.
+
+1. **The out-of-scope list is the only exemption.** A repository the decision
+   does not name is blocking, including one it never mentions. Reading the "in
+   the MVP" table instead would have exempted precisely the repositories nobody
+   has scoped yet (`cafaye-rb`, `cafaye-ts`, `docs`, `guard`).
+2. **An unreadable decision exempts nothing**, with a `SCOPE-ABSENT:` marker
+   naming the file and which of four reasons applied. The exemption is the only
+   thing that can turn a finding green, so the state in which it cannot be read
+   must not be a state in which it is granted.
+3. **A section this cannot parse is a loud red, not an empty set.** Absent,
+   unreadable, no `## … Out of the MVP …` heading, or a section naming nothing
+   readable as a name — four distinguishable reasons, because "the decision says
+   nothing is frozen" and "there is no decision" are different facts.
+
+### Measured, both directions
+
+| what | result |
+|---|---|
+| real fleet, before this commit | **exit 1**, 6 findings |
+| real fleet, after this commit | **exit 1**, the same 6: `darkroom` and `muse` reclassified and printed under `FROZEN-FINDINGS:`, `cafaye-rb` / `cafaye-ts` / `docs` / `guard` still blocking |
+| fixture over the real `MVP-SCOPE.md`, only `darkroom` (frozen) defective | **exit 0**, finding printed |
+| the same fixture plus `guard` (in scope) defective | **exit 1**, both findings printed |
+| no `MVP-SCOPE.md` beside the fleet | `SCOPE-ABSENT:` printed, and the frozen repositories' findings are counted again |
+
+**Still the first thing I would do next** (§6): a `self_test.sh` recipe. The
+fixture in the last two rows is the one, and it is the shape a recipe wants —
+two repositories, one flag between them.

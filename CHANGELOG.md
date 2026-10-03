@@ -46,6 +46,60 @@
   adopter.
 ### Fixed
 
+- **The generated-stack gate failed on two repositories the scope decision holds
+  frozen, so merging it would have made kit's gate permanently red on a tree
+  nobody is permitted to fix.** `MVP-SCOPE.md` freezes `billing`, `darkroom` and
+  `muse` out of the MVP until it is launched and selling, and `darkroom` and
+  `muse` each hold the defect today: a manifest, no ignore entry, no file on
+  disk. `tests/generated_stack_check.py` asked git both questions of both
+  repositories and counted every answer, which is right — and then exited 1, and
+  the exit status is the part that decides whether a gate is ever run again. The
+  predictable response to a gate that cannot go green is a human disabling it,
+  and that would have stopped the check running in the nine repositories that
+  **can** be fixed today.
+
+  **Only the exit status moved. Detection, both messages and the `git rm
+  --cached` advice are unchanged**, and the frozen findings are still printed,
+  under their own `FROZEN-FINDINGS:` heading: a finding nobody may fix is still a
+  true finding, and suppressing it would be the same false green in a different
+  costume. What a reader can no longer do is mistake "clean" for "clean because
+  frozen" — the gate row itself now reads `generated stack (…; 2 in frozen
+  repositories, reported not counted)`, and a run with no scope decision at all
+  says `no scope decision read, so nothing is exempt`.
+
+  **The frozen set is READ from `MVP-SCOPE.md`, and no repository name is
+  written into this repository.** It comes in on `--scope`, whose default is the
+  directory above `--repos-dir` (a fleet-wide directive belongs beside the fleet
+  and in no repository, since putting it in one would make that repository the
+  owner of the others' exemptions), and `KIT_SCOPE_FILE` overrides the location
+  for a machine whose fleet is not beside its directive. A hardcoded frozen list
+  has the same defect as the hand-written dirty list this check replaced, with
+  the opposite polarity: it goes stale silently, and the day the scope lifts the
+  exemptions outlive the decision that granted them. Three properties of the
+  read are deliberate and each fails closed:
+
+  - **the out-of-scope list is the ONLY exemption.** A repository the decision
+    does not name is blocking, including one it never mentions — reading the
+    "in the MVP" table instead would have exempted precisely the four
+    repositories nobody has scoped yet;
+  - **an unreadable decision exempts nothing**, with a `SCOPE-ABSENT:` marker
+    naming the file and the reason — absent, unreadable, no such section, or a
+    section naming nothing this read as a name. The exemption is the only thing
+    that can turn a finding green, so the state in which it cannot be read must
+    not be a state in which it is granted;
+  - **a section this cannot parse is a loud red, not an empty set.** A rewrite
+    that moves the section, renames its trailing clause or reformats the list
+    keeps working; one that changes the sentence it keys on stops it, and says
+    so.
+
+  Measured on the fleet as it stands: `exit 1` before this commit with 6
+  findings, `exit 1` after with the same 6 — `darkroom` and `muse` reclassified
+  from blocking to frozen and printed under their own heading, and the four
+  blocking ones (`cafaye-rb`, `cafaye-ts`, `docs`, `guard`) unchanged. Proven
+  both ways on a two-repository fixture over the real `MVP-SCOPE.md`: the same
+  defect in `darkroom` alone is `exit 0` with the finding printed, and adding
+  `guard` makes it `exit 1`.
+
 - **Two of this repository's docker tiers hardcoded their compose project name, so
   two concurrent runs were one stack with two owners — and the failure read as a
   database-boundary violation.** `tests/isolation_test.sh` and

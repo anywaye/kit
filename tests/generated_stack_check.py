@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kit's gate on the generated local stack: is `caf.dev.compose.yaml` build output?
 
-    tests/generated_stack_check.py [--repos-dir <dir>] [--no-fleet]
+    tests/generated_stack_check.py [--repos-dir <dir>] [--scope <file>] [--no-fleet]
 
 WHAT IT IS FOR
     `caf dev` reads a repository's `cafaye.yml`, renders a stack from it, and
@@ -109,6 +109,43 @@ THE REVERSE DIRECTION, and why it is a finding rather than a curiosity
     anybody noticing; a reverse-direction check is cheap and it is the only one
     that would have asked.
 
+WHICH FINDINGS FAIL THE GATE, AND WHY THAT IS A FILE AND NOT A LIST
+    The exit status is a question about SCOPE, and the scope decision is a FILE.
+    `MVP-SCOPE.md` — one directory above the fleet, in no repository — names the
+    repositories held out of the MVP until it is launched and selling. A finding
+    in one of those is PRINTED and does not fail.
+
+    Four things about that, and each is a thing that has to be true rather than a
+    thing that is usually true:
+
+    - IT IS READ, NEVER WRITTEN DOWN HERE. `darkroom` and `muse` do not appear in
+      this file as strings, and neither will any name the decision acquires
+      later. A hand-written frozen list has the same defect as the hand-written
+      dirty list this check was written to replace, with the opposite polarity:
+      it goes stale silently, and the day the scope lifts, the exemptions
+      outlive the decision that granted them — a gate that has stopped looking
+      at two repositories without anybody having turned it off.
+    - THE OUT-OF-SCOPE LIST IS THE ONLY EXEMPTION. A repository the decision
+      does not name is BLOCKING, including one it never mentions at all. An
+      unmentioned repository has not been granted anything, and reading the
+      "in the MVP" table instead would invert the default: the four repositories
+      nobody has scoped yet would be the only four exempt.
+    - THE DECISION LIVES BESIDE THE FLEET AND IN NO REPOSITORY, because it
+      governs dispatch across nine repositories and putting it in one of them
+      would make that repository the owner of the others' exemptions. It comes
+      in on `--scope`, and the default is the directory above `--repos-dir`,
+      which is where a fleet-wide directive lives.
+    - AN UNREADABLE DECISION EXEMPTS NOTHING, and says so. See
+      `read_out_of_scope` and the `SCOPE-ABSENT:` marker. The exemption is the
+      only thing that can turn a finding green, so the state in which it cannot
+      be read must not be a state in which it is granted — and the state in
+      which it cannot be read must be VISIBLE, because "clean" and "clean
+      because frozen" are different facts and a reader is entitled to tell them
+      apart. `SCOPE-ABSENT:` is the sibling of `FLEET-ABSENT:` and means
+      something different from it in the direction that matters: FLEET-ABSENT
+      means nothing was looked at, SCOPE-ABSENT means everything was looked at
+      and nothing was forgiven.
+
 WHY IT SKIPS AND DOES NOT PASS WHEN THERE IS NO FLEET
     A clone of kit on CI has no siblings. "No fleet was found" is not "the
     fleet is clean", and a gate that reports the second when it means the first
@@ -119,10 +156,12 @@ WHY IT SKIPS AND DOES NOT PASS WHEN THERE IS NO FLEET
     callers.
 
 EXIT STATUS
-    0  every repository with a manifest ignores the generated file, and none
-       tracks it. Also 0 with the FLEET-ABSENT marker under --no-fleet.
-    1  at least one repository in scope does not ignore the generated file, or
-       tracks it, or holds one with no manifest to generate it from
+    0  every repository IN SCOPE ignores the generated file, none tracks it, and
+       none holds one with no manifest to generate it. Findings in repositories
+       the scope decision holds frozen are printed and do not change this.
+    1  at least one repository IN SCOPE does not ignore the generated file, or
+       tracks it, or holds one with no manifest to generate it from. Findings
+       that exist only in frozen repositories are not one of these.
     2  bad invocation, or git could not be read for a repository in scope
 """
 
@@ -130,6 +169,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 
@@ -148,6 +188,34 @@ MANIFEST_FILE = "cafaye.yml"
 # that has stopped answering cannot hang a gate, and so a hung git is a named
 # exit code rather than a gate with no verdict.
 GIT_TIMEOUT = 30
+
+# THE SCOPE DECISION, by name and by shape. Neither is a promise about its
+# contents: `MVP-SCOPE.md` is a directive document a person writes and revises,
+# and the two expressions below are what this check needs from it — a heading
+# that says which section holds the frozen repositories, and backticked names in
+# the prose under it. Everything about it is derived from the file, because a
+# list written into this script would be a list this script has to be edited to
+# keep true, and the day nobody edits it is the day two repositories stop being
+# checked without any event to point at.
+SCOPE_FILE_NAME = "MVP-SCOPE.md"
+
+# `## Out of the MVP — do not develop these`. Matched on the words rather than
+# the whole line so a rewording of the trailing clause does not silently empty
+# the exemption set: it would empty it LOUDLY instead (see `read_out_of_scope`),
+# which is the only acceptable direction for a match that has gone stale.
+OUT_OF_SCOPE_HEADING = re.compile(r"^##\s+.*out\s+of\s+the\s+mvp", re.IGNORECASE)
+
+# Any `##` heading ends the current section. `###` does not, so a subsection
+# under the out-of-scope heading is still part of it.
+SECTION_HEADING = re.compile(r"^##\s")
+
+# A repository name as the decision writes them: `billing`, `cafaye-ts`. Also
+# matches things that are not repository names, which is why the tokens it
+# rejects are printed rather than dropped (see `main`) — a parse that silently
+# discarded half of what it read would be indistinguishable from a decision that
+# named half as much.
+BACKTICKED = re.compile(r"`([^`\n]+)`")
+REPOSITORY_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 
 def is_checkout(path: str) -> bool:
@@ -379,6 +447,72 @@ def discover(repos_dir: str) -> list:
     return found
 
 
+def read_out_of_scope(path: str) -> tuple:
+    """The frozen repositories this scope decision declares. (exempt, dropped, reason)
+
+    `exempt` is the set of repository names, or None when the decision could not
+    be read at all. `reason` says why, and is None exactly when `exempt` is a
+    set. `dropped` is the backticked tokens in the out-of-scope section that are
+    not repository names — `caf dev`, a file name — kept so the caller can print
+    them: a parse that quietly discarded what it did not recognise is a parse
+    whose result cannot be checked by reading the output.
+
+    FOUR WAYS THIS CANNOT READ THE DECISION, and every one of them returns None
+    rather than an empty set, because "the decision says nothing is frozen" and
+    "there is no decision" have to be distinguishable:
+
+      1. THE FILE IS ABSENT, which is a clone of kit with no fleet-wide
+         directive beside it. Fail closed: everything is in scope.
+      2. THE FILE CANNOT BE READ — permissions, a directory where a file was
+         promised. Fail closed, and say THAT rather than "not found", because
+         the two are fixed by different people.
+      3. THERE IS NO OUT-OF-SCOPE SECTION. This is the interesting one, because
+         it is what a REWORDED directive looks like: the document is right there
+         and this check cannot find the part it needs. Returning an empty set
+         would be the fail-open direction wearing a success's clothing — the gate
+         would go red on two repositories the decision froze, and the reader
+         would be told the decision named nothing rather than told this parse
+         could not find it.
+      4. THE SECTION NAMES NOTHING RECOGNISABLE. Same reasoning, and it is the
+         case a check written against one document's exact formatting always
+         eventually hits.
+
+    The section is located by its heading and read to the next `##`, which is
+    what makes "derive from the file" mean something: a rewrite that moves the
+    section, renames the heading's trailing clause or reformats the list keeps
+    working, and only a rewrite that changes the SENTENCE this check keys on
+    stops it — and stops it loudly.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return None, [], "no such file"
+    except OSError as exc:
+        return None, [], f"unreadable ({exc.strerror or exc})"
+
+    found = False
+    inside = False
+    body: list = []
+    for line in lines:
+        if SECTION_HEADING.match(line):
+            inside = bool(OUT_OF_SCOPE_HEADING.match(line))
+            found = found or inside
+            continue
+        if inside:
+            body.append(line)
+
+    if not found:
+        return None, [], "it carries no `## ... Out of the MVP ...` section"
+
+    tokens = [m.group(1).strip() for m in BACKTICKED.finditer("\n".join(body))]
+    exempt = {t for t in tokens if REPOSITORY_NAME.match(t)}
+    dropped = sorted({t for t in tokens if t not in exempt})
+    if not exempt:
+        return None, dropped, "its out-of-scope section names no repository this read as a name"
+    return exempt, dropped, None
+
+
 def main(argv: list) -> int:
     parser = argparse.ArgumentParser(
         prog="generated_stack_check.py",
@@ -386,11 +520,28 @@ def main(argv: list) -> int:
     )
     parser.add_argument("--repos-dir", default=None,
                         help="directory holding one checkout per cafaye repository")
+    parser.add_argument(
+        "--scope",
+        default=None,
+        help=f"the scope decision naming the repositories that are frozen "
+             f"(default: ../{SCOPE_FILE_NAME}, the directory above --repos-dir). "
+             f"A repository it does not name is IN scope, and fails this gate.",
+    )
     parser.add_argument("--no-fleet", action="store_true",
                         help="accept that there is no fleet (exit 0 with a note)")
     args = parser.parse_args(argv)
 
-    repos_dir = args.repos_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    repos_dir = os.path.abspath(
+        args.repos_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+    )
+    # The default is DERIVED from --repos-dir rather than from this file's own
+    # location, so a caller who points the check at another fleet gets that
+    # fleet's decision rather than this checkout's — and so the two flags cannot
+    # disagree about which tree is being gated.
+    scope_path = os.path.abspath(
+        args.scope or os.path.join(os.path.dirname(repos_dir), SCOPE_FILE_NAME)
+    )
+    frozen_by_decision, dropped_names, scope_reason = read_out_of_scope(scope_path)
     names = discover(repos_dir)
 
     if not names:
@@ -402,6 +553,8 @@ def main(argv: list) -> int:
             f"Pass --repos-dir, or --no-fleet to accept it."
         )
 
+    # Findings as (repository, message) rather than as a flat list of strings, so
+    # the partition below never has to parse a name back out of prose it wrote.
     problems: list = []
     checked = 0
     # The three populations, counted separately so the summary can be read as a
@@ -421,12 +574,28 @@ def main(argv: list) -> int:
             # The reverse direction is checked for the repositories that are OUT
             # of scope, because holding the generated file without the manifest
             # is precisely the case the scope rule excludes.
-            problems.extend(check_reverse_direction(name, repo))
+            problems.extend((name, m) for m in check_reverse_direction(name, repo))
             continue
         in_scope.append(name)
-        problems.extend(check_repo(name, repo))
-        problems.extend(check_reverse_direction(name, repo))
+        problems.extend((name, m) for m in check_repo(name, repo))
+        problems.extend((name, m) for m in check_reverse_direction(name, repo))
         checked += 1
+
+    # THE PARTITION, and it is the whole correction. Detection is unchanged and
+    # stays unconditional: every repository is asked the same two questions and
+    # every answer is printed. What the scope decision changes is which findings
+    # the EXIT STATUS counts — and the two lists are printed under separate
+    # headings, so no reader can mistake a frozen finding for a suppressed one.
+    #
+    # The exempt set is `frozen_by_decision`, which is None whenever the decision
+    # could not be read. `name in None` is False for every name, so an unreadable
+    # decision puts every finding in the blocking list — and that is the intended
+    # behaviour rather than an accident of the expression: the alternative is a
+    # gate that forgives everything on the machines where nobody could say who
+    # forgave what.
+    blocking = [p for p in problems if p[0] not in (frozen_by_decision or ())]
+    frozen = [p for p in problems if p[0] in (frozen_by_decision or ())]
+    frozen_repos = sorted({n for n, _ in frozen})
 
     summary = (
         f"{checked} of {len(names)} repository(ies) have a {MANIFEST_FILE} and were "
@@ -437,21 +606,99 @@ def main(argv: list) -> int:
             f"; {no_manifest} have none, cannot produce the file, and were counted "
             f"rather than dropped"
         )
-    print(summary, file=sys.stderr if problems else sys.stdout)
+    # stdout, always, and this is a change: the summary used to move to stderr
+    # when there were problems, so the two lines a reader needs in order to
+    # interpret a verdict — how many repositories, and what scope applied to
+    # them — were split across two streams by a rule nobody chose deliberately.
+    print(summary)
 
-    if problems:
-        for p in problems:
-            print(f"  - {p}", file=sys.stderr)
+    # THE SCOPE, stated on every run whether or not anything was found, because
+    # its absence is what makes "clean" ambiguous: a run that found nothing and
+    # had no decision to compare against has proved less than a run that found
+    # nothing with one.
+    if frozen_by_decision is None:
         print(
-            f"FAIL generated-stack: {len(problems)} problem(s) across the fleet. "
-            f"{GENERATED_STACK_FILE} is build output: `caf dev` renders it from "
-            f"{MANIFEST_FILE} and rewrites it on every run. A repository that has "
+            f"SCOPE-ABSENT: no scope decision was read from {scope_path} — "
+            f"{scope_reason} — so NO repository is exempt and every finding below is "
+            f"blocking. The frozen set is read from that file and is never written into "
+            f"this script; pass --scope <path>, or set KIT_SCOPE_FILE, where a decision "
+            f"exists."
+        )
+    else:
+        present = sorted(n for n in frozen_by_decision if n in names)
+        print(
+            f"SCOPE-READ: {scope_path} holds {len(frozen_by_decision)} repository(ies) "
+            f"out of scope until the MVP is launched and selling, and "
+            f"{len(present)} of the {len(frozen_by_decision)} are in this fleet: "
+            f"{', '.join(present) if present else '(none of them)'}. A finding in one "
+            f"of those is printed and does NOT fail this gate. Nothing else is exempt — "
+            f"a repository the decision does not name is blocking, including one it "
+            f"never mentions at all."
+        )
+    if dropped_names:
+        print(
+            f"SCOPE-NOT-NAMES: {len(dropped_names)} backticked token(s) in that section "
+            f"are not repository names and were read as prose, not as exemptions: "
+            f"{', '.join(dropped_names)}"
+        )
+
+    # FLUSH before anything reaches stderr. validate.sh captures `2>&1` into a
+    # variable, which makes stdout block-buffered, so without this the summary
+    # and the scope line — the two lines a verdict has to be read against —
+    # arrive AFTER the verdict that uses them.
+    sys.stdout.flush()
+
+    if blocking:
+        print(f"BLOCKING: {len(blocking)} finding(s) below — every one of them fails "
+              f"this gate:", file=sys.stderr)
+    for finding in blocking:
+        print(f"  - {finding[1]}", file=sys.stderr)
+    if frozen:
+        print(
+            f"FROZEN-FINDINGS: {len(frozen)} ({', '.join(frozen_repos)}) are reported "
+            f"below and do NOT fail this gate, because the scope decision holds those "
+            f"repositories out of the MVP until it is launched and selling and nobody "
+            f"is permitted to fix them today. They are printed because they are true "
+            f"and worth knowing, not because they can be acted on now: a defect nobody "
+            f"may fix still gets fixed the day the scope lifts, and the only way that "
+            f"day is cheap is if it was written down before it.",
+            file=sys.stderr,
+        )
+        for finding in frozen:
+            print(f"  - {finding[1]}", file=sys.stderr)
+
+    if blocking:
+        also = (
+            f", and {len(frozen)} further finding(s) in frozen repositories that do not "
+            f"count against it"
+            if frozen
+            else ""
+        )
+        print(
+            f"FAIL generated-stack: {len(blocking)} blocking problem(s) across the "
+            f"fleet{also}. {GENERATED_STACK_FILE} is build output: `caf dev` renders it "
+            f"from {MANIFEST_FILE} and rewrites it on every run. A repository that has "
             f"never heard of kit's stack still must not commit its generated one — "
             f"unlike the adoption debt `fleet_check.py` names, this defect has no "
             f"adopter and no wave that makes it acceptable.",
             file=sys.stderr,
         )
         return 1
+
+    if frozen:
+        # NOT the sentence below, and the difference is the whole correction: the
+        # existing PASS line asserts that EVERY repository with a manifest ignores
+        # the file, and it would be saying that about darkroom and muse, which do
+        # not. A green that overstates what was checked is the false green this
+        # line exists instead of.
+        print(
+            f"PASS generated-stack: no repository the scope decision leaves in scope "
+            f"commits the file `caf dev` generates. {len(frozen)} finding(s) in frozen "
+            f"repositories ({', '.join(frozen_repos)}) are printed above and do not "
+            f"fail this gate. Checked {len(in_scope)}: "
+            f"{', '.join(in_scope) if in_scope else '(none)'}."
+        )
+        return 0
 
     print(
         f"PASS generated-stack: every repository with a {MANIFEST_FILE} ignores "
