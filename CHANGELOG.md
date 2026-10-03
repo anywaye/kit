@@ -1,5 +1,97 @@
 ## Unreleased
 
+### Fixed
+
+- **`protect_table` granted the login role DML on a table and nothing on the
+  sequences behind it, so a protected table with a `bigserial` column could not
+  be INSERTed by the role the substrate exists to hand DML to.** A table's INSERT
+  reads its sequence before it writes the row, and a sequence is a separate
+  object with separate grants — the table grant does not carry it. Measured on
+  PostgreSQL 18.6, as `<service>_app`, against the substrate as it stood:
+
+      ERROR:  permission denied for sequence notification_preferences_id_seq
+
+  which is SQLSTATE `42501` — the code the policies themselves raise, so a test
+  asserting only the code passes for the wrong reason. That is not hypothetical:
+  a probe in `courier` passed on a sequence denial until it also required the
+  message. `protect_table` now grants `usage` on every sequence owned by a column
+  of the table it is protecting, found through the same `pg_depend` edge Postgres
+  itself uses for `serial`, and **not by name**: `<column>_id_seq` is this
+  migration's convention and is not the next service's.
+
+  **The grant is `usage` and only `usage`.** `usage` is what `nextval` checks,
+  so it is the minimum that makes the INSERT work; it is deliberately not
+  `select` (which would let the login role read `last_value` and reason about
+  other tables' row counts) and not `update` (which would let it `setval` and
+  forge ids). Both refusals are asserted. A blanket `grant all on all sequences
+  in schema public` also makes the INSERT work and hands the same role every
+  sequence in the database, and the negative control is built to catch exactly
+  that.
+
+  **MEASURED, AND IT CORRECTS THE PREMISE: an `identity` column was never locked
+  out.** On PostgreSQL 17.11 and 18.6, `INSERT` into a table whose id is
+  `generated always as identity` succeeds for a role holding **no** privilege on
+  the sequence at all, while that same role's explicit `nextval()` on the
+  sequence is refused — the fetch happens on a path with no ACL check. So the
+  `bigserial` case is the lockout and the `identity` case was not. The loop grants
+  `usage` on the identity sequence anyway, because it is the table's own sequence
+  and nothing wider, and because a substrate whose correctness rests on an
+  undocumented executor detail is one minor version from the same lockout — and
+  because a column declared `DEFAULT nextval('…')` by hand rather than by
+  `serial` is the `bigserial` case again.
+
+  The loop is a `for … in select`, so an empty result set is a loop that does not
+  run. Most tables in any service have no serial column, and the same loop written
+  as `select … into` would raise on every one of them.
+
+  There is no second copy of the grant story to go stale:
+  `protect_credential_table` calls `protect_table` rather than repeating it, and
+  that was run rather than argued — a `bigserial api_keys` table through
+  `protect_credential_table('api_keys', 'token_digest')` leaves `probe_app`
+  holding `USAGE` on `api_keys_id_seq`.
+
+  Five cases and three mutated controls, red first, in
+  `reports/substrate-sequence-grant/` — `BEFORE.txt` is the run against the
+  substrate as it stood (`FAIL bigserial — permission denied for sequence`,
+  `2/8 green, 4 N/A, 2 failed`), `AFTER.txt` is the same script on the fix
+  (`8/8 cases green`). The negative control is green on an EMPTY grant set before
+  the fix and the run says so out loud, because "nothing changed" and "nothing is
+  too wide" are the same observation when the set is empty.
+
+  `courier` carries this file verbatim at `priv/repo/substrate.sql`, sha256
+  `e2b4917be2a7f7c48964bd40fea0da93db503b4c736a42a44e44425cfbf7bf5e`, and its
+  migration pins both that digest and the commit — untouched here, because that
+  pin is what stops a substrate edit silently changing a migration in a
+  repository nobody was looking at. **A follow-up packet re-copies from kit**;
+  editing the copy here would defeat the pin. `identity` needs the same change and
+  its copy is a different shape: the function body is inlined into
+  `migrations/00016_account_isolation.sql` rather than copied as a file, so it has
+  no digest to re-pin the way courier's does. `identity` carries **no latent
+  lockout today** — none of its four protected tables has a sequence-backed id;
+  its keys are `uuid DEFAULT gen_random_uuid()` and composite. It acquires one the
+  first time a protected table grows a serial column.
+
+- **`templates/database/tenancy/isolation.sql` asserts the SQLSTATE and not the
+  message, so every `'42501'` in it would be satisfiable by a sequence denial —
+  and is not, only because its probe table has no sequence column.** Reported,
+  not fixed here: the file and `assertions.txt` are one contract compared in both
+  directions across six language templates, and changing what `cafaye_observed`
+  returns changes the meaning of every assertion in it.
+
+  `pg_temp.cafaye_observed` is `return sqlstate;` in its `exception` handler, and
+  four assertions compare against the literal `'42501'` — the same code both the
+  policies and a missing sequence grant raise. That is the ambiguity the entry
+  above exists to remove, one layer in and in kit's own tree.
+
+  What has kept it unreachable is the fixture: `cafaye_probe_things` is
+  `id uuid primary key default gen_random_uuid()`, so no statement in the file can
+  produce a sequence denial and 39 assertions have been green straight through
+  this defect. That is also the trap — the natural next step for that suite is to
+  give the probe table a serial column, and on the day that happens every
+  `'42501'` assertion becomes satisfiable by the wrong failure, silently.
+  `reports/substrate-sequence-grant/` requires the message today, which is what
+  tells the two apart.
+
 ### Added
 
 - **`tests/generated_stack_check.py`, and a gate section that runs it: the file
