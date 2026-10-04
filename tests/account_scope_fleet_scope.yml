@@ -28,7 +28,11 @@
 inScope:
   - identity
   - courier
-  - guard
+  # Renamed from `guard`, and re-derived from MVP-SCOPE.md rather than edited
+  # in place. This vendored copy is what a machine with no `moon` checkout runs
+  # on, and the checker refuses to run when it and the directive disagree --
+  # which is how the four places this rename touched were found at all.
+  - gateway
   - site
   - parlor
   - pantry

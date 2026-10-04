@@ -14,7 +14,7 @@
 #   and it is the reason this is a full record rather than a list of things to
 #   ignore. **The rows below must shrink. They may not be widened.**
 #
-#   Measured against `cafaye/{identity,courier,guard,site,parlor,pantry,caf,kit,
+#   Measured against `cafaye/{identity,courier,gateway,site,parlor,pantry,caf,kit,
 #   core}`, with `tests/account_scope_fleet_check.py --baseline` printing the
 #   numbers this file records. Every number below came out of that command; none
 #   was copied out of a report.
@@ -90,7 +90,12 @@ fleet:
     failures: {}
     blind: []
 
-  - repo: guard
+  # Renamed from `guard`. The key is the repository's NAME, which the checker
+  # matches against the row it parses out of MVP-SCOPE.md and against the
+  # directory it walks under --repos-dir. All three moved together on purpose:
+  # moving one alone would leave the row unreadable and this gate red on a
+  # rename rather than on a finding.
+  - repo: gateway
     exit: 0
     note: >-
       1 account-scoped (`/v1/me`, behind a prefix `app.use`) and 6 not. Six
