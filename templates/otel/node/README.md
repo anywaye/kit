@@ -75,7 +75,7 @@ node --test traceparent.test.mjs
 bun test traceparent.test.mjs
 ```
 
-`node:test`, `node:assert` and `node:crypto` are all stdlib. Both runners pass on the same `.mjs` with no build step, which is why guard and parlor (bun) and every node service share one implementation instead of two.
+`node:test`, `node:assert` and `node:crypto` are all stdlib. Both runners pass on the same `.mjs` with no build step, which is why gateway and parlor (bun) and every node service share one implementation instead of two.
 
 The suite needs **no dependencies and no network** — that is the point of the
 codec. If it ever needs a `go mod download` or a `bundle install`, this

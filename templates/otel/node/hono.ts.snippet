@@ -15,7 +15,7 @@
 //   - Never rejects a request over a malformed header. §3.2.2.3 says ignore it.
 //
 // OBSERVABILITY IS ON BY DEFAULT (PLAN.md §7b)
-//   `GUARD_OTEL_ENDPOINT` DEFAULTS to the collector that ships with the stack,
+//   `GATEWAY_OTEL_ENDPOINT` DEFAULTS to the collector that ships with the stack,
 //   so a developer working on this service sees real traces with nothing
 //   switched on. Unsetting the variable is a genuine no-op; pointing it at
 //   somebody else's OTLP endpoint is a supported deployment, not a degraded
@@ -62,7 +62,7 @@ import { Hono } from "hono";
 import type { Context, Next } from "hono";
 
 /** The emitting service. The mandatory prefix on every span name. */
-const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? "guard";
+const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? "gateway";
 const SERVICE_VERSION = process.env.OTEL_SERVICE_VERSION ?? "0.0.0";
 
 /**
@@ -96,14 +96,14 @@ const PER_SIGNAL = ["OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER", "OTEL_LOGS_
 /**
  * The OTLP endpoint, and the WHOLE of the contract (core D16).
  *
- * `GUARD_OTEL_ENDPOINT` wins, then the standard `OTEL_EXPORTER_OTLP_ENDPOINT` so
+ * `GATEWAY_OTEL_ENDPOINT` wins, then the standard `OTEL_EXPORTER_OTLP_ENDPOINT` so
  * the service also works with generic OTel tooling, then the shipped collector.
  * The precedence is written down rather than discovered later: a contract with
  * an undocumented precedence order is a bug report.
  */
 export function endpoint(): string {
   return (
-    process.env.GUARD_OTEL_ENDPOINT ||
+    process.env.GATEWAY_OTEL_ENDPOINT ||
     process.env.OTEL_EXPORTER_OTLP_ENDPOINT ||
     DEFAULT_ENDPOINT
   );
@@ -148,7 +148,7 @@ function buildResource() {
   };
   const environment = process.env.DEPLOYMENT_ENVIRONMENT;
   if (environment) attributes["deployment.environment"] = environment;
-  const tenant = process.env.GUARD_TENANT_ID;
+  const tenant = process.env.GATEWAY_TENANT_ID;
   if (tenant) attributes["tenant_id"] = tenant;
   return resourceFromAttributes(attributes);
 }

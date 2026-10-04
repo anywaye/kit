@@ -485,7 +485,7 @@ emit_verify() {
   # this?", and one value in the private namespace answers it; requiring both
   # would be a second copy of `tests/provenance_test.sh` part B's five-key
   # agreement check, and a check that is a copy of another check goes red twice
-  # for one cause. Measured: this is the branch `cafaye/guard:e2e` takes.
+  # for one cause. Measured: this is the branch `cafaye/gateway:e2e` takes.
   if [ -z "$got_dirty" ] && [ -z "$got_tv" ]; then
     printf '%s: FAIL %s carries only org.opencontainers.image.*, so those labels came from the BASE\n' "$PROG" "$image" >&2
     printf '%s:   IMAGE it was built FROM and not from a kit Dockerfile: nothing here set\n' "$PROG" >&2

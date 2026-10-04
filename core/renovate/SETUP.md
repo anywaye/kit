@@ -89,7 +89,7 @@ One pull request each, in the order of the three real consumers first:
 | `muse` | python | `vendir.yml.muse` | proven byte-identical; drop the hand-bumped `CORE_REF` |
 | `pantry` | rust | `vendir.yml.pantry` | proven byte-identical; `cafaye_root()` reads the path, so do not move it |
 | `caf` | go | `vendir.yml.caf` | **needs the filename rename first** — see that file's banner |
-| `billing`, `guard` | — | none | they fetch core at `master` at test time and vendor nothing. Adopting vendir means *introducing* a frozen copy, which is a policy change, not a migration. Both have comments in their workflows explaining why they chose live fetch; read those first. |
+| `billing`, `gateway` | — | none | they fetch core at `master` at test time and vendor nothing. Adopting vendir means *introducing* a frozen copy, which is a policy change, not a migration. Both have comments in their workflows explaining why they chose live fetch; read those first. |
 
 A repository that vendors nothing gets no `vendir.yml`. Adding one to a
 repository whose authors deliberately chose to fetch the schema at test time

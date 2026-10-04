@@ -8,7 +8,7 @@ services.
 ```
 github.com/cafaye/caf     Go       github.com/cafaye/billing  Ruby
 github.com/cafaye/identity Go      github.com/cafaye/courier  Elixir
-github.com/cafaye/guard   TypeScript  github.com/cafaye/muse   Python
+github.com/cafaye/gateway TypeScript  github.com/cafaye/muse   Python
 github.com/cafaye/darkroom Rust    github.com/cafaye/parlor   TypeScript
 ```
 
@@ -42,8 +42,8 @@ Measured on 2026-09-30 against `41f8bcb`, by `tests/staleness.py --scope
 templates --repos-dir …`, over the nine services (the fleet the packet counts;
 `docs` and `cafaye-{py,rb,ts}` are toolchain repos, not services, and
 `pantry` is a registry that has not called kit's workflow). **Nine of 108 cells are
-byte-identical.** One of them, `guard/bin/prime`, is the only copy in the fleet
-that matches kit exactly — and it matches because `guard` is the service that
+byte-identical.** One of them, `gateway/bin/prime`, is the only copy in the fleet
+that matches kit exactly — and it matches because `gateway` is the service that
 caused kit's `bun` job to exist, so it is the one service that copied a template
 *after* it was written rather than before. That is the whole adoption story in
 one cell.
@@ -1096,7 +1096,7 @@ is waiting on is costed in [`DECISIONS.md`](DECISIONS.md). Every other audit is
 fatal.
 
 `bun` is a first-class `language` value: frozen install from `bun.lock`,
-`typecheck`, `bun test`. It exists because `guard` was hand-rolling an entire
+`typecheck`, `bun test`. It exists because `gateway` was hand-rolling an entire
 workflow for want of one — a repo that has adopted `bun` here can delete that
 file and collapse it to the `uses:` above.
 
@@ -1341,7 +1341,7 @@ equivalent, and the adoption numbers say so:
 
 Counted, not estimated: a non-worktree directory beside this one that contains a
 workflow with a `uses: cafaye/kit/.github/workflows/ci.reusable.yml` line. The
-eleven are `billing caf core courier darkroom docs guard identity kit muse
+eleven are `billing caf core courier darkroom docs gateway identity kit muse
 parlor`, and `kit` is in the list because it calls its own workflow — the
 repository that defines the standard should be the first repository held to it,
 and excluding it would make the denominator flattering rather than true.

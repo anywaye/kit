@@ -192,7 +192,7 @@ The gate variable is **demanded**. Set it and zero tests may run:
 REQUIRED_DB=1 go test -tags tier_db -count=1 ./...
 ```
 
-`guard`'s `GUARD_REDIS_REQUIRED` is the best of the six designs in the fleet and
+`gateway`'s `GATEWAY_REDIS_REQUIRED` is the best of the six designs in the fleet and
 is the pattern: it fails at **tier-invocation time, before a report exists**, so
 nothing downstream can misreport. A run that cannot happen cannot be summarised
 as a pass.

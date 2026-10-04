@@ -119,7 +119,7 @@
         "with check (true)"
       ],
       "forbiddenWhy": [
-        "`auth.uid()` is Supabase's helper, not ours. It reads a JWT claim out of a GUC, which is ONE authentication shape out of six languages — identity issues opaque session tokens, guard verifies JWKS bearer JWTs — and a substrate that hardcoded one would be silently wrong for the other five. The seam is `begin_account/1`, and a service fills it from whatever it already authenticates. That is also why this substrate does not parse tokens: a template that guessed would be right once.",
+        "`auth.uid()` is Supabase's helper, not ours. It reads a JWT claim out of a GUC, which is ONE authentication shape out of six languages — identity issues opaque session tokens, gateway verifies JWKS bearer JWTs — and a substrate that hardcoded one would be silently wrong for the other five. The seam is `begin_account/1`, and a service fills it from whatever it already authenticates. That is also why this substrate does not parse tokens: a template that guessed would be right once.",
         "",
         "The other four are the shapes that make a policy decorative. `to public` is an unnamed role, and an unnamed policy is evaluated for every role on the cluster including the eight other services'. `for all` collapses four commands into one qualifier that can then never be widened for one of them without widening all of them. `USING (true)` and `with check (true)` are an always-permissive policy that reads in review exactly like a real one, and they are the shape every \"permissive RLS policy\" lint is written to flag."
       ]

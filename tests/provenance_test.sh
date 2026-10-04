@@ -364,7 +364,7 @@ cat >"$STUB/docker" <<'STUBEOF'
 case "$3" in
   null) printf 'null\n'; exit 0 ;;
   inherit)
-    # EXACTLY what `cafaye/guard:e2e` carries: an image built FROM oven/bun,
+    # EXACTLY what `cafaye/gateway:e2e` carries: an image built FROM oven/bun,
     # measured from the real image on the machine that wrote this suite.
     printf '%s\n' '{"org.opencontainers.image.created":"2026-04-10T03:06:38.682Z","org.opencontainers.image.revision":"700fc117a2fd01ac0201deaa6fa69c5557acb04f","org.opencontainers.image.source":"https://github.com/oven-sh/bun"}'
     exit 0 ;;
@@ -387,11 +387,11 @@ case "$3" in
     # thing that catches them.
     printf '%s\n' '{"org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"oven-sh/bun"}'
     exit 0 ;;
-  ours) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"cafaye/guard"}'
+  ours) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"cafaye/gateway"}'
     exit 0 ;;
   foreign) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"oven-sh/bun"}'
     exit 0 ;;
-  badshape) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"https://github.com/cafaye/guard"}'
+  badshape) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"https://github.com/cafaye/gateway"}'
     exit 0 ;;
   *) printf 'stub: unhandled fixture %s\n' "$3" >&2; exit 127 ;;
 esac
@@ -445,12 +445,12 @@ verify_says() {
   pass "verify/$label: exits $want and names \"$needle\""
 }
 
-# THE WITNESS. `inherit` is the real `cafaye/guard:e2e` label set, byte for byte
+# THE WITNESS. `inherit` is the real `cafaye/gateway:e2e` label set, byte for byte
 # off the image on the machine that wrote this suite, and it is the one case
 # that was green before this packet's fix.
 verify_exits 6 'D1 inherited base-image labels are refused with NO flags at all' inherit
 verify_says 'oven-sh/bun' 'D1b the refusal NAMES Bun rather than us' 6 inherit
-verify_exits 6 'D2 inherited labels are refused even asserting our own repo' inherit --expect-source cafaye/guard
+verify_exits 6 'D2 inherited labels are refused even asserting our own repo' inherit --expect-source cafaye/gateway
 
 # THE CASE THAT ONLY OWNERSHIP CAN SEE, and the one that makes breakage 103
 # provable. Every field here passes the shape grammar — `owner/repo`, 40 hex,
@@ -469,7 +469,7 @@ verify_says 'BASE' 'D2b and the refusal is the NAMESPACE one, not shape and not 
 # A FOREIGN BUT WELL-FORMED source: `oven-sh/bun` is two clean lowercase
 # segments with exactly one slash, so it passes every grammar in the file. This
 # is the case shape cannot see and the reason `--expect-source` exists.
-verify_exits 5 'D3 a well-formed FOREIGN source fails --expect-source' foreign --expect-source cafaye/guard
+verify_exits 5 'D3 a well-formed FOREIGN source fails --expect-source' foreign --expect-source cafaye/gateway
 # THE OVERRULE, asserted rather than asserted-against: no `--expect-source` is a
 # loud WARNING at exit 0, and the warning says in words that ownership was not
 # established. If a successor hardens this to a failure, D4 goes red and the
@@ -482,12 +482,12 @@ verify_says 'unknown was expected' 'D5 asserting `unknown` fails and names the e
 # own namespace and asserts the right repository, and the source is a URL — over
 # the one-slash budget, with a scheme, a host and a port. The authoring path
 # already refuses it; this asserts the VERIFY path does too.
-verify_exits 6 'D6 a source violating the shape grammar fails on shape' badshape --expect-source cafaye/guard
-verify_says 'it must be owner/repo' 'D7 and the failure carries the expect_* line' 6 badshape --expect-source cafaye/guard
+verify_exits 6 'D6 a source violating the shape grammar fails on shape' badshape --expect-source cafaye/gateway
+verify_says 'it must be owner/repo' 'D7 and the failure carries the expect_* line' 6 badshape --expect-source cafaye/gateway
 
 # A correct stamp with a matching expectation exits 0. Without this control a
 # verifier that refused everything would pass every refusal above.
-verify_exits 0 'D8 a correct stamp with matching --expect-source and --expect-revision' ours --expect-source cafaye/guard --expect-revision 0123456789abcdef0123456789abcdef01234567
+verify_exits 0 'D8 a correct stamp with matching --expect-source and --expect-revision' ours --expect-source cafaye/gateway --expect-revision 0123456789abcdef0123456789abcdef01234567
 verify_says 'no labels at all' 'D9 an image with NO labels still exits 4, not 6' 4 null
 
 # `--expect-source` is a stamp value, so it is checked against the source
@@ -506,7 +506,7 @@ fi
 # the note has stopped carrying information. The other direction — an absent
 # identity field is a refusal and an absent metadata field is a note — is what
 # D1, D2 and the `cafaye/e2e-parlor:local` measurement cover.
-stub_verify ours --expect-source cafaye/guard
+stub_verify ours --expect-source cafaye/gateway
 if contains "$STUB_OUT" '<absent>'; then
   fail "verify/D11 a fully stamped image reported an absent field: [$STUB_OUT]"
 elif contains "$STUB_OUT" 'note:'; then
