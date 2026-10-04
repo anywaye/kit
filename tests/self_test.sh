@@ -1613,7 +1613,28 @@ expect_green_check() {
   if [ "$ec" -ne 0 ]; then
     printf 'FAIL self_test: %s — the gate went RED (exit %s), so the ceiling is not in force\n' \
       "$label" "$ec"
-    printf '%s\n' "$out" | grep -E '^(FAIL|  -|       )' | tail -20 | sed 's/^/       /'
+    # THE FAILING CHECKS ARE NAMED FIRST AND UNTRUNCATED, and that ordering is
+    # the whole fix. This dump used to be
+    #
+    #     grep -E '^(FAIL|  -|       )' | tail -20
+    #
+    # whose `^       ` alternative -- meant for the indented detail under a
+    # verdict -- also matches every suite header and sub-suite summary a nested
+    # run prints. On breakage 59 those were 26 `PASS staleness_test:` rows, two
+    # `PASS: <suite>` summaries, three `-- <suite>` headers and the
+    # `--no-live` note: more than the whole window. So `tail -20` kept the
+    # epilogue and discarded the evidence, and the run ended at
+    # `FAIL: 3 check(s) failed.` with nothing naming what failed -- printed
+    # directly beneath a summary asserting "The FAIL lines above name them."
+    #
+    # Filtering the successes OUT does not work either, and was tried first:
+    # the rows are `PASS: <suite> -- ...`, not `PASS <suite>`, and the `--`
+    # headers match the indent alternative just as well. Whichever way you
+    # filter, a gate with enough passing checks starves the failures out of a
+    # fixed window. So the names go first and unbounded -- one line per failing
+    # check, bounded by how many failed, which is the number you came to read --
+    # and only the trailing context is capped.
+    printf '%s\n' "$out" | { grep -E '^FAIL'; grep -E '^(  -|       )' | tail -12; } | sed 's/^/       /'
     failures=$((failures + 1))
   elif ! contains "$out" "PASS $want"; then
     printf 'FAIL self_test: %s — the gate stayed GREEN but `%s` did not report PASS\n' \
@@ -1926,7 +1947,28 @@ expect_green() {
     printf 'PASS self_test: %s — the gate is green on an unbroken tree\n' "$label"
   else
     printf 'FAIL self_test: %s — the gate is RED on an unbroken tree (exit %s)\n' "$label" "$ec"
-    printf '%s\n' "$out" | grep -E '^(FAIL|note:|  -|       )' | tail -20 | sed 's/^/       /'
+    # THE FAILING CHECKS ARE NAMED FIRST AND UNTRUNCATED, and that ordering is
+    # the whole fix. This dump used to be
+    #
+    #     grep -E '^(FAIL|  -|       )' | tail -20
+    #
+    # whose `^       ` alternative -- meant for the indented detail under a
+    # verdict -- also matches every suite header and sub-suite summary a nested
+    # run prints. On breakage 59 those were 26 `PASS staleness_test:` rows, two
+    # `PASS: <suite>` summaries, three `-- <suite>` headers and the
+    # `--no-live` note: more than the whole window. So `tail -20` kept the
+    # epilogue and discarded the evidence, and the run ended at
+    # `FAIL: 3 check(s) failed.` with nothing naming what failed -- printed
+    # directly beneath a summary asserting "The FAIL lines above name them."
+    #
+    # Filtering the successes OUT does not work either, and was tried first:
+    # the rows are `PASS: <suite> -- ...`, not `PASS <suite>`, and the `--`
+    # headers match the indent alternative just as well. Whichever way you
+    # filter, a gate with enough passing checks starves the failures out of a
+    # fixed window. So the names go first and unbounded -- one line per failing
+    # check, bounded by how many failed, which is the number you came to read --
+    # and only the trailing context is capped.
+    printf '%s\n' "$out" | { grep -E '^(FAIL|note:)'; grep -E '^(  -|       )' | tail -12; } | sed 's/^/       /'
     failures=$((failures + 1))
   fi
 }
