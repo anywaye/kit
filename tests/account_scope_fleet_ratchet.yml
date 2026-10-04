@@ -96,14 +96,41 @@ fleet:
   # moving one alone would leave the row unreadable and this gate red on a
   # rename rather than on a finding.
   - repo: gateway
-    exit: 0
+    exit: 1
+    condition: >-
+      ONE FAILURE IS TOLERATED AND IT IS NOT A SWITCH: `account-scope.undeclared`
+      on the GO registration of `GET /v1/me`, at `internal/api/api.gen.go:1191`.
+      THE END: the packet that ports the bearer gate to `internal/httpapi` writes
+      that row, and this file goes back to `exit: 0` in the same commit.
+      WHY IT IS NOT DECLARED NOW, since both alternatives were measured rather
+      than argued. `accountScoped: false` is a claim nothing in this fleet can
+      refute — `handler_for` resolves every `wrapper.X` on those seven lines to
+      the generated forwarding method and the hop list from that file is empty, so
+      the checker never opens `internal/httpapi/httpapi.go`; five mutations were
+      planted in that handler and reverted and every one of them produced NO
+      finding. A `false` row nobody can refute, on the one route this file exists
+      to describe, is the permissive direction. `accountScoped: true` fires and
+      the failure is TRUE — the Go router mounts all seven operations behind
+      nothing while `openapi/v1.yaml` gives `/v1/me` a `security:` block — but it
+      is also PERMANENT: `chain_gate` looks for `app.use(`/`.use(` and chi mounts
+      with `r.Use(`, so no middleware added to the Go router can clear it. A row
+      red forever with an unreachable end is the switch this rule exists to
+      refuse. `undeclared` costs one honest failure instead of two lies.
     note: >-
-      1 account-scoped (`/v1/me`, behind a prefix `app.use`) and 6 not. Six
-      `contradiction-unreadable` warnings is the largest count in the fleet and
-      it is recorded exactly, so a seventh is red rather than a slower slide.
-    counts: {account-scoped: 1, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 6}
+      1 account-scoped and 12 not, and THE WIDING IS THE FINDING, not a slide:
+      the surface is now registered TWICE, seven operations by the TypeScript
+      reference in `src/index.ts` and the same seven by the Go service in
+      `internal/api/api.gen.go`, both live until the packet that deletes `src/`.
+      6 became 12 because there are two registrations, and it returns to 6 with
+      the seven rows that name `src/` when that source leaves the surface. Six
+      `contradiction-unreadable` warnings is unchanged and is recorded exactly, so
+      a seventh is red rather than a slower slide. `/v1/me` is account-scoped and
+      is DECLARED as such — behind `accountFrom.via: requireJwt` — on the
+      TypeScript registration; the TypeScript one had lost its row entirely and
+      that was this row's own finding.
+    counts: {account-scoped: 1, not-account-scoped: 12, stale: 0, undeclared: 1, failures: 1, warnings: 6}
     warnings: {account-scope.contradiction-unreadable: 6, fleet.blind.unreadable-rows: 1}
-    failures: {}
+    failures: {account-scope.undeclared: 1}
     blind: []
 
   - repo: site
