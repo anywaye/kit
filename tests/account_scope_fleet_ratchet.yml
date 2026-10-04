@@ -150,34 +150,80 @@ fleet:
       1 to exit 0 — so the tolerance that survives is not the one that condition
       was waiting on.
       THIS ROW ENDS when `account-scope.surface-unreadable` reports a NON-ZERO
-      READ count for `internal/api/api.gen.go`. Today it says "0 of the 6
+      READ count for `internal/api/api.gen.go`. Today it says "0 of the 9
       registration(s) in `surface.sources` were read", and that zero is the whole
       of `surface.minimum: 0`. The day it moves, `minimum` is settable above zero
-      on a tree that serves six routes, `fleet.blind.surface-blind` stops firing,
+      on a tree that serves NINE routes, `fleet.blind.surface-blind` stops firing,
       and this row is red until it is deleted. There are two ways to it and both
       are outside this repository: `oapi-codegen` emits the paths as string
       literals, or `pantry` mounts them from a file a person wrote and names that
       file in `surface.sources`. Editing `api.gen.go` is NOT one of them — it is
       generated, and it comes back on every `go generate` (`pantry/DECISIONS.md`
       D34).
+      THE SIX BECAME NINE, and that is the only number in this condition that
+      moved: MD19's packet 2 added three POST operations to `pantry`, so
+      `api.gen.go` mounts nine registrations instead of six, and
+      `account-scope.surface-unreadable` counts them. The verdict is unchanged —
+      still 0 of N read, still `fleet.blind.surface-blind`, still one failure —
+      so the TOLERANCE this row exists to record did not move and is not rewritten
+      to sound different from itself. What the number proves is the opposite of a
+      reprieve: the write surface made the surface BIGGER and the checker read
+      NONE of it, which is a worse version of the same blind spot rather than a
+      smaller one.
     note: >-
-      Zero account-scoped and six not, 0 undeclared, and **exit 0** — it was exit
-      1 when this row was written, so this row is the one that SHRANK and the
-      gate is red until it says so. The surface is now NAMED rather than dropped:
-      `registration-path-unreadable` says `get-service` "is mounted and
-      unverified rather than stale", and `surface-unreadable` says
-      `internal/api/api.gen.go` mounts six `Get` registrations at lines 852 to
-      867 whose path is an expression, and that **0 of the 6** were read. Six
-      rows, six unreadable registrations, zero verified — which is exactly what
-      `surface.minimum: 0` says, and why the one failure left on this row is
-      this runner reporting the declaration's own honesty as unverifiable rather
-      than as a pass. The enumeration half is checked elsewhere and by nobody
-      else: `pantry/internal/httpapi/scope_declaration_test.go` walks the LIVE
-      router with `chi.Walk`, which the Python harness cannot do.
-    counts: {account-scoped: 0, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 9}
+      **THREE ACCOUNT-SCOPED, SIX NOT, 0 undeclared, 8 warnings, exit 0.** The six
+      read rows are unchanged; the three write rows are new, and this is the
+      DIRECTION MD19 flags — "a repository that got better and whose row nobody
+      retired is also red". The row was re-measured, not reworded:
+      `account-scope.nothing-scoped: 1` is GONE, because that warning exists to
+      report a declaration with no account-scoped row in it, and
+      `pantry/account_scope.yml` now has three. That warning leaving is the fleet
+      learning something true.
+      The numbers are not copied out of a report. Measured:
+      `tests/account_scope_fleet_check.py --repos-dir <fleet> --only pantry`, with
+      `pantry` resolved to the packet's worktree through a symlink so the row is
+      measured against the branch and not against master. Before the update it
+      reported, in as many words, `records account-scoped=0 and the run measured
+      3`, `records warnings=9 and the run measured 8`, and `records warning
+      account-scope.nothing-scoped x1 and this run did not report it`. Those three
+      lines are the bidirectional property doing its job.
+      THE THREE WRITE ROWS DECLARE `accountScoped: true` WITH AN `accountFrom`,
+      and the declaration says the resolution by SYMBOL: `via: resolvePublisher`,
+      pointing at `internal/httpapi/write.go`'s `publisherID := pub.ID`. Core's
+      checker reads both halves — the symbol must appear in the named file, and the
+      line that registers the route must go through it — so this is the first
+      pantry row whose tenancy key is machine-checked rather than asserted.
+      TWO THINGS MEASURED WHILE GETTING THERE, both of which cost a cycle and are
+      recorded here because the next repository to declare an account-scoped row
+      will hit both: `accountFrom` is a MAPPING (`via`, `file`, `line`) and a
+      bare string makes core's checker raise `AttributeError: 'str' object has no
+      attribute 'get'` and emit NOTHING at all; and an `accountScoped: true` row
+      may NOT carry a `reason:` (`account-scope.schema`), because the closed
+      vocabulary is a list of reasons a route is NOT scoped. There is no member for
+      "reached by a verified principal", which is a real gap in the format and not
+      something a declaration can route around — reported to the manager rather than
+      worked around.
+      STILL 0 READ, AND STILL TOLERATED, because nothing here fixed it: this is
+      `internal/api/api.gen.go` mounting nine registrations — `Get`, `Post` — whose
+      path argument is an expression, at lines 1183 to 1207, and core's chi
+      recogniser requires a string literal as the first term after `(`. Six became
+      nine and the read count stayed at zero. The registration anchors moved from
+      852-867 to 1183-1207 for a reason worth recording: the generator emits a body
+      type, a request-body alias, a body binder and a decode-error handler above
+      the registration block for each operation that takes one, so three POSTs
+      moved the block further than three extra lines. `pantry`'s own
+      `TestEveryRegisteredAtLineStillRegistersThatRoute` is what caught it, and it
+      is why `pantry`'s `bin/prime-go` now REGENERATES AND DIFFS rather than
+      grepping for the generator's header — a grep for the header passed on a tree
+      where the document and the generated server had silently diverged.
+      The enumeration half is checked elsewhere and by nobody else:
+      `pantry/internal/httpapi/scope_declaration_test.go` walks the LIVE router
+      with `chi.Walk`, which the Python harness cannot do, and its
+      `TestAPublisherIsResolvedOnlyFromAVerifiedAssertionOnANonPublicRoute` derives
+      which routes resolve a publisher BY CONTENT rather than from a list.
+    counts: {account-scoped: 3, not-account-scoped: 6, stale: 0, undeclared: 0, failures: 0, warnings: 8}
     warnings:
       account-scope.contradiction-unreadable: 6
-      account-scope.nothing-scoped: 1
       account-scope.registration-path-unreadable: 1
       account-scope.surface-unreadable: 1
       fleet.blind.unreadable-rows: 1
