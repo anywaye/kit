@@ -729,16 +729,36 @@ def main(argv: list) -> int:
     # absent and where it was looked for, and is counted in the gate's skip
     # total — so "the account-scope contract was not exercised by this run" is on
     # the record instead of being indistinguishable from "the contract is broken".
+    # THESE TWO ARE IN THIS ORDER, AND THE ORDER IS THE FIX. They were the other
+    # way round, which made the second one unreachable: a `--repos-dir` that is
+    # not a directory fails `os.path.isfile` on anything joined to it, so the
+    # instrument branch above had already returned and the "no fleet at <dir>.
+    # Set --repos-dir, or KIT_FLEET." sentence could never be printed. Measured,
+    # on the tree this commit started from:
+    #
+    #     $ … account_scope_fleet_check.py --repos-dir /…/definitely-not-here
+    #     COULD NOT RUN: no account-scope checker at
+    #       /…/definitely-not-here/core/harness/account_scope_check.py. …
+    #     EXIT=78
+    #
+    # So the one failure a caller can most easily cause — a typo in a path they
+    # typed — was reported as a missing file thirty characters further along,
+    # and the sentence that tells them which variable to set was dead code.
+    # Asking whether the FLEET exists before asking whether the INSTRUMENT inside
+    # it exists costs nothing and makes both sentences reachable.
+    #
+    # No verdict moves. Both branches return `EXIT_CONFIG`, and for a directory
+    # that exists the instrument test is the only one that can fire.
+    if not os.path.isdir(repos_dir):
+        print(f"COULD NOT RUN: no fleet at {repos_dir}. Set --repos-dir, or KIT_FLEET.",
+              file=sys.stderr)
+        return EXIT_CONFIG
+
     checker = os.path.join(repos_dir, CHECKER_RELPATH)
     if not os.path.isfile(checker):
         print(f"COULD NOT RUN: no account-scope checker at {checker}. The instrument this "
               f"gate exists to run is not on disk, so nothing below verified anything and "
               f"this exit is {EXIT_CONFIG}, not 0.", file=sys.stderr)
-        return EXIT_CONFIG
-
-    if not os.path.isdir(repos_dir):
-        print(f"COULD NOT RUN: no fleet at {repos_dir}. Set --repos-dir, or KIT_FLEET.",
-              file=sys.stderr)
         return EXIT_CONFIG
 
     # ---- the scope decision, and kit's vendored copy of its table ----------
