@@ -816,7 +816,7 @@ the list was not expressible; without it, a typo like `language: golang`
 matches no `if:` condition, every language job skips, and the run goes green
 having tested nothing. The gate job fails that run instead.
 
-`bun` is the worked example: it was added because `guard` carried a standing
+`bun` is the worked example: it was added because `gateway` carried a standing
 note that it hand-rolled a whole workflow for want of a `bun` job. All four
 artifacts landed with it, in one commit.
 

@@ -110,7 +110,7 @@
 diverged billing docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=billing since=2026-09-30 until=2026-12-31
 diverged courier docker/Dockerfile reason="the :app release name is set to this service's own application; the template's placeholder is a slot the adopter is required to fill" owner=courier since=2026-09-30 until=2026-12-31
 diverged darkroom docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=darkroom since=2026-09-30 until=2026-12-31
-diverged guard docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=guard since=2026-09-30 until=2026-12-31
+diverged gateway docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=gateway since=2026-09-30 until=2026-12-31
 diverged identity docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=identity since=2026-09-30 until=2026-12-31
 diverged muse docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=muse since=2026-09-30 until=2026-12-31
 diverged parlor docker/Dockerfile reason="SERVICE_NAME is set to this service's own binary; the template's placeholder is a slot the adopter is required to fill" owner=parlor since=2026-09-30 until=2026-12-31
@@ -140,7 +140,7 @@ diverged billing mise.toml reason="the template is kit's union of every language
 diverged caf mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=caf since=2026-09-30 until=2026-12-31
 diverged courier mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=courier since=2026-09-30 until=2026-12-31
 diverged darkroom mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=darkroom since=2026-09-30 until=2026-12-31
-diverged guard mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=guard since=2026-09-30 until=2026-12-31
+diverged gateway mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=gateway since=2026-09-30 until=2026-12-31
 diverged identity mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=identity since=2026-09-30 until=2026-12-31
 diverged muse mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=muse since=2026-09-30 until=2026-12-31
 diverged pantry mise.toml reason="the template is kit's union of every language's tool pins (19 tools, 74 code lines); this service keeps its own, raises the versions to what it deploys (README step 4) and adds its own env and tasks" owner=pantry since=2026-09-30 until=2026-12-31
@@ -152,7 +152,7 @@ diverged parlor mise.toml reason="the template is kit's union of every language'
 # been SUPERSEDED rather than filled in. The template is 121 lines in nine
 # sections. The services' files are 281 to 664 lines, and only 12 to 40 of the
 # template's lines survive in any one of them — 23 in six of the nine, a line
-# survival rate near 19%. The headings are the services' own: `guard` has
+# survival rate near 19%. The headings are the services' own: `gateway` has
 # "Rules", "Gates", "Adding an endpoint"; the template has "Conventions",
 # "Observability", "Testing", "Contracts", "Before you open a PR".
 #
@@ -177,7 +177,7 @@ diverged billing AGENTS.md reason="kit's 121-line template was superseded by thi
 diverged caf AGENTS.md reason="kit's 121-line template was superseded by this service's own 369-line document; 23 of the template's lines survive and ## Observability is not among them" owner=caf since=2026-09-30 until=2026-12-31
 diverged courier AGENTS.md reason="kit's 121-line template was superseded by this service's own 384-line document; 23 of the template's lines survive and ## Observability is not among them" owner=courier since=2026-09-30 until=2026-12-31
 diverged darkroom AGENTS.md reason="kit's 121-line template was superseded by this service's own 281-line document; 23 of the template's lines survive and ## Observability is not among them" owner=darkroom since=2026-09-30 until=2026-12-31
-diverged guard AGENTS.md reason="kit's 121-line template was superseded by this service's own 307-line document; 23 of the template's lines survive and ## Observability is not among them" owner=guard since=2026-09-30 until=2026-12-31
+diverged gateway AGENTS.md reason="kit's 121-line template was superseded by this service's own 307-line document; 23 of the template's lines survive and ## Observability is not among them" owner=gateway since=2026-09-30 until=2026-12-31
 diverged identity AGENTS.md reason="kit's 121-line template was superseded by this service's own 489-line document; 23 of the template's lines survive and ## Observability is not among them" owner=identity since=2026-09-30 until=2026-12-31
 diverged muse AGENTS.md reason="kit's 121-line template was superseded by this service's own 402-line document; 17 of the template's lines survive and ## Observability is not among them" owner=muse since=2026-09-30 until=2026-12-31
 diverged pantry AGENTS.md reason="kit's 121-line template was superseded by this service's own 308-line document; 21 of the template's lines survive and ## Observability is not among them" owner=pantry since=2026-09-30 until=2026-12-31
@@ -185,11 +185,11 @@ diverged parlor AGENTS.md reason="kit's 121-line template was superseded by this
 
 # --- bin/prime --------------------------------------------------------------
 #
-# Measured: 7 diverged, 1 byte-identical (guard), 1 unknown (pantry, no
+# Measured: 7 diverged, 1 byte-identical (gateway), 1 unknown (pantry, no
 # language declared).
 #
-# `guard` is the one artefact in the whole fleet that is byte-identical to
-# kit's. It is worth noticing WHY: `guard` is the service kit's own CHANGELOG
+# `gateway` is the one artefact in the whole fleet that is byte-identical to
+# kit's. It is worth noticing WHY: `gateway` is the service kit's own CHANGELOG
 # credits with causing the `bun` job to exist, so it is the one service that
 # copied a kit template after it was written rather than before.
 #
@@ -248,7 +248,7 @@ diverged billing bin/dev reason="not a copy of kit's loop in any era: this is a 
 absent caf bin/dev reason="this service holds no compose stack at all — it builds with the host toolchain and goreleaser — so kit's bring-up loop was never applicable" owner=caf since=2026-09-30 until=2026-12-31
 absent courier bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=courier since=2026-09-30 until=2026-12-31
 absent darkroom bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=darkroom since=2026-09-30 until=2026-12-31
-absent guard bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=guard since=2026-09-30 until=2026-12-31
+absent gateway bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=gateway since=2026-09-30 until=2026-12-31
 absent identity bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=identity since=2026-09-30 until=2026-12-31
 absent muse bin/dev reason="this service drives compose directly; the loop was never adopted and nobody has said so" owner=muse since=2026-09-30 until=2026-12-31
 absent pantry bin/dev reason="this service holds kit's .env.example but no compose file at all, so there is no stack for kit's loop to bring up" owner=pantry since=2026-09-30 until=2026-12-31
@@ -275,12 +275,12 @@ absent parlor bin/dev reason="this service holds no compose stack — it runs it
 # measurement:
 #
 #   $ grep -cE '\./(otel-collector|tempo|loki|grafana)' */docker-compose.yml
-#   billing 0  courier 0  darkroom 0  guard 0  identity 0  muse 0
+#   billing 0  courier 0  darkroom 0  gateway 0  identity 0  muse 0
 #   $ grep -cE '^\s+- \./' templates/compose/docker-compose.yml
 #   5
 #
 # None of the six mounts a single one of kit's stack files. They declare ONE OR
-# TWO SERVICES of their own (`db`, `postgres`, `guard`, `identity`, `muse`,
+# TWO SERVICES of their own (`db`, `postgres`, `gateway`, `identity`, `muse`,
 # `darkroom`) and they are not kit's stack with pieces removed — they are
 # REPLACEMENTS that kept a filename. `docker compose config` is GREEN on five of
 # the six, so they are valid, runnable stacks. They are simply not this one.
@@ -308,7 +308,7 @@ absent parlor bin/dev reason="this service holds no compose stack — it runs it
 diverged billing compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=billing since=2026-09-30 until=2026-12-31
 diverged courier compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=courier since=2026-09-30 until=2026-12-31
 diverged darkroom compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=darkroom since=2026-09-30 until=2026-12-31
-diverged guard compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=guard since=2026-09-30 until=2026-12-31
+diverged gateway compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=gateway since=2026-09-30 until=2026-12-31
 diverged identity compose reason="this stack predates kit's observability profile and declares one or two services of its own; it is a replacement, not kit's stack, and nobody re-copied" owner=identity since=2026-09-30 until=2026-12-31
 diverged muse compose reason="this stack predates kit's observability profile and is a replacement; separately, this file does not parse as YAML, which a byte-comparison cannot see" owner=muse since=2026-09-30 until=2026-12-31
 diverged pantry compose reason="this stack is .env.example alone with no compose file at all, and predates kit's observability profile" owner=pantry since=2026-09-30 until=2026-12-31
@@ -353,7 +353,7 @@ absent pantry ci.reusable.yml reason="this repository's CI is a workspace-drift 
 
 diverged billing lint/rubocop.yml reason="this config disables Metrics cops kit leaves on; nobody has recorded which, or why" owner=billing since=2026-09-30 until=2026-12-31
 diverged parlor lint/eslint.config.mjs reason="this config was written for this service's own Next.js and Playwright setup, and shares no rules with kit's" owner=parlor since=2026-09-30 until=2026-12-31
-absent guard lint/eslint.config.mjs reason="this service lints with its own tsc and no eslint config, and kit's has never been copied" owner=guard since=2026-09-30 until=2026-12-31
+absent gateway lint/eslint.config.mjs reason="this service lints with its own tsc and no eslint config, and kit's has never been copied" owner=gateway since=2026-09-30 until=2026-12-31
 absent caf lint/golangci.yml reason="this service ships no golangci config and lints in its own workflow steps instead" owner=caf since=2026-09-30 until=2026-12-31
 diverged identity lint/golangci.yml reason="this service has its own golangci config, written for its own layout, and the STRICTNESS NOTES block kit ships is not in it" owner=identity since=2026-09-30 until=2026-12-31
 unknown pantry lint/golangci.yml reason="this service declares no language, so kit cannot say whether its golangci config would apply" owner=pantry since=2026-09-30 until=2026-12-31
@@ -363,7 +363,7 @@ absent billing lint/hadolint.yaml reason="this service's CI does not run hadolin
 absent caf lint/hadolint.yaml reason="this service ships no Dockerfile, so there is nothing for hadolint to check" owner=caf since=2026-09-30 until=2026-12-31
 absent courier lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=courier since=2026-09-30 until=2026-12-31
 absent darkroom lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=darkroom since=2026-09-30 until=2026-12-31
-absent guard lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=guard since=2026-09-30 until=2026-12-31
+absent gateway lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=gateway since=2026-09-30 until=2026-12-31
 absent identity lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=identity since=2026-09-30 until=2026-12-31
 absent muse lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=muse since=2026-09-30 until=2026-12-31
 absent pantry lint/hadolint.yaml reason="this service's CI does not run hadolint, and kit's config was never copied" owner=pantry since=2026-09-30 until=2026-12-31
@@ -372,7 +372,7 @@ absent billing lint/yamllint.yml reason="this service's CI does not run yamllint
 absent caf lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=caf since=2026-09-30 until=2026-12-31
 absent courier lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=courier since=2026-09-30 until=2026-12-31
 absent darkroom lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=darkroom since=2026-09-30 until=2026-12-31
-absent guard lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=guard since=2026-09-30 until=2026-12-31
+absent gateway lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=gateway since=2026-09-30 until=2026-12-31
 absent identity lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=identity since=2026-09-30 until=2026-12-31
 absent muse lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=muse since=2026-09-30 until=2026-12-31
 absent pantry lint/yamllint.yml reason="this service's CI does not run yamllint, and kit's config was never copied" owner=pantry since=2026-09-30 until=2026-12-31

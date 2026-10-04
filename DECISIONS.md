@@ -445,7 +445,7 @@ which is a different bug with a different symptom.
 
 **Why the seam is a function and not a token format.** `cafaye.begin_account/1`
 takes a uuid. How a service turns the credential in its hand into an account is
-that service's business — `identity` issues opaque session tokens and `guard`
+that service's business — `identity` issues opaque session tokens and `gateway`
 verifies JWKS bearer JWTs — and a template that picked one of those would be
 silently wrong for the other five. `auth.uid()` is therefore **forbidden** in the
 substrate, and the gate fails the build on it.

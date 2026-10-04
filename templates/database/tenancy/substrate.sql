@@ -68,7 +68,7 @@
 -- WHAT IS NOT HERE. No JWT parsing, no token format, no session store, and no
 -- `auth.uid()`. How a service turns the credential in its hand into an account
 -- is that service's own business — identity issues opaque session tokens and
--- guard verifies JWKS bearer JWTs, and a template that picked one of those would
+-- gateway verifies JWKS bearer JWTs, and a template that picked one of those would
 -- be wrong for the other. The seam is `cafaye.begin_account/1`, and a service
 -- calls it once per request from whatever it already authenticates.
 --

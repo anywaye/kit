@@ -52,13 +52,13 @@
 "python" = "3.13"
 "uv" = "0.5.11"
 
-# ----------------------------------------------------------- node (guard/parlor)
+# ---------------------------------------------------------- node (gateway/parlor)
 # The major is the supported line (22 = LTS). Pin a point release if a native
 # module forces you to; otherwise a major is one bump, not a per-patch PR.
 "node" = "22"
 "pnpm" = "9.15.4" # only if the repo ships pnpm-lock.yaml; delete otherwise
 
-# ------------------------------------------------------------- bun (guard/parlor)
+# ------------------------------------------------------------- bun (gateway/parlor)
 # An EXACT pin, not a series, and the reason is a lockfile: bun.lock is a text
 # format whose resolver output is tied to the bun that wrote it, and a worktree
 # on a different patch resolves differently for the same manifest. Keep the

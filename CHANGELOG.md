@@ -217,6 +217,41 @@
 
 ### Changed
 
+- **The fleet's gateway is `gateway`. Every reference in kit to the service
+  formerly named `guard` now names `gateway`, and nothing else moved.**
+
+  kit is the generator every service is built from, so the templates are the
+  whole blast radius: a template that still says `guard` regenerates the old
+  name into every service scaffolded after it. `templates/otel/node/hono.ts.snippet`
+  — the file a new Bun/Hono service is generated from — carried
+  `GUARD_OTEL_ENDPOINT`, `GUARD_TENANT_ID` and a default service name of
+  `"guard"`, and all three are now `GATEWAY_*` and `"gateway"`.
+
+  `templates/parity-allowlist` moves with it: 8 ratchet rows and their `owner=`
+  fields. **The entry count is the measurement and it did not move — 80 across 9
+  repositories before and after**, which is what the check prints on PASS. A
+  rename that had changed that number would have deleted or invented a debt
+  record, and the ledger's dead-entry rule is what makes the number trustworthy
+  in the first place.
+
+  **The trap was that `guard` is mostly NOT the service here.** In this
+  repository the word is far more often a TRIPWIRE — *a comment-rot guard*, *a
+  guard that cannot go red*, *a shard guard* — and kit has been using it that
+  way for thirty packets. `templates/parity-allowlist` alone holds 22 of the
+  word and only 8 are the service. A mechanical replacement would have produced
+  documents that are actively wrong, so the sweep was done by reading every
+  sentence and asking whether `guard` names the thing that runs on a port or the
+  thing that asserts something. Only the first moved. `lint-args guard` — a STEP
+  NAME in three jobs, asserted as a string literal in four places in
+  `tests/validate.sh` — is a tripwire and renaming it would break the check that
+  requires it.
+
+  Measured: 248 PASS / 2 FAIL / 6 SKIP before and after, with every check's
+  verdict and label byte-identical between the two runs. The two FAILs are
+  pre-existing and unrelated — `generated stack` and `in-scope repositories`
+  both name the `guard` repository **on disk**, and the directory rename is the
+  manager's, not this packet's.
+
 - **The account-scope record was RED on arrival with `pantry` and `identity`
   moved, and `pantry` had got BETTER.** Core's D46 replaced a false `stale` on a
   route that is mounted with `account-scope.registration-path-unreadable`, added

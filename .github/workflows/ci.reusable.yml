@@ -176,8 +176,8 @@ on:
       # The test is written. It is not gated. Nobody finds out.
       #
       # So the caller NAMES the variable and this workflow exports it as `1` on
-      # the test step of every language job, which is guard's
-      # GUARD_REDIS_REQUIRED pattern: it fails at tier-invocation time, before a
+      # the test step of every language job, which is gateway's
+      # GATEWAY_REDIS_REQUIRED pattern: it fails at tier-invocation time, before a
       # report exists, so nothing downstream can misreport the run.
       #
       # Setting it commits the repo to the normalised result format
@@ -485,8 +485,8 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred. guard's
-          # GUARD_REDIS_REQUIRED pattern: it turns "no database" from a skip
+          # The demand, exported rather than inferred. gateway's
+          # GATEWAY_REDIS_REQUIRED pattern: it turns "no database" from a skip
           # into a failure at INVOCATION time, before a report exists, so
           # nothing downstream can summarise the run as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
@@ -1073,7 +1073,7 @@ jobs:
           if-no-files-found: ignore
 
   # ------------------------------------------------------------------- bun
-  # The job guard's own CI hand-rolled, because kit had none. guard ships
+  # The job gateway's own CI hand-rolled, because kit had none. gateway ships
   # bun.lock and no package-lock.json, so the `node` job above would have died
   # on `npm ci` on day one and the whole file would have stayed bespoke.
   #

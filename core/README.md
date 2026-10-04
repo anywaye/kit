@@ -18,7 +18,7 @@ core master: 39acaed6f1e25a895b0410e0689fe68d523b1b63
 repository  pin           source    behind  state
 muse        15e541cd9988  CORE_REF      19  behind
 billing     -             none          ?  undeclared
-guard       -             none          ?  undeclared
+gateway     -             none          ?  undeclared
 pantry      -             none          ?  undeclared
 caf         -             none          ?  undeclared
 (…)
@@ -35,7 +35,7 @@ not twelve copies of a hand-bump, and the difference matters:
 | `caf` | one document committed, `go:embed`ded | **no** |
 | `pantry` | one document committed, used as a workspace marker | **no** |
 | `billing` | `actions/checkout` at `ref: master` in CI | no, by choice |
-| `guard` | `curl` from `raw.githubusercontent.com` at test time | no, by choice |
+| `gateway` | `curl` from `raw.githubusercontent.com` at test time | no, by choice |
 
 Three findings that changed the plan:
 
@@ -44,8 +44,8 @@ Three findings that changed the plan:
    origin; these two are in that 4.3%, inside our own fleet, today. The
    staleness reporter reports them `undeclared`, which is a different statement
    from `current` and is the only honest thing to say.
-2. **`billing` and `guard` fetch core at test time on purpose, and say so in
-   comments.** `guard`'s reads: *"The schema is fetched rather than vendored so
+2. **`billing` and `gateway` fetch core at test time on purpose, and say so in
+   comments.** `gateway`'s reads: *"The schema is fetched rather than vendored so
    this tracks what core publishes today instead of freezing a copy that silently
    goes stale."* Adopting vendir there means *introducing* a frozen copy — a
    policy change, not a migration. Their authors made a considered choice; this

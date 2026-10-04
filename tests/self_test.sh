@@ -549,7 +549,7 @@
 #        is a red from the wrong cause wearing this breakage's name.
 #   103. the OWNERSHIP-BY-NAMESPACE check deleted from `--verify` -> a base
 #        image's own OCI labels satisfy a stamp that is ours. The one that
-#        shipped: `--verify cafaye/guard:e2e` printed `oven-sh/bun`'s source and
+#        shipped: `--verify cafaye/gateway:e2e` printed `oven-sh/bun`'s source and
 #        exited 0, and the suite written to prevent it could not see the case
 #        because every `--verify` fixture it built came from a kit Dockerfile --
 #        and a foreign base image's labels are precisely the labels kit's

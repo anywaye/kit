@@ -6108,7 +6108,7 @@ STUB
   # SCOPE. That gate checks repositories that DECLARE LOCAL INFRASTRUCTURE — a
   # root compose file or a root collector config. This one checks every
   # repository that HAS A `cafaye.yml`, which is a different set: `core`, `docs`,
-  # `muse`, `guard` and `cafaye-ts` have manifests and no stack, and `core` is
+  # `muse`, `gateway` and `cafaye-ts` have manifests and no stack, and `core` is
   # the repository that had this file COMMITTED. Folding it in would have scoped
   # the check that matters most to the predicate that excludes it.
   #
@@ -6560,7 +6560,7 @@ PY
   #     | grep -v "^./core/harness" | grep -v wt-m39
   #     -> pantry/account_scope.yml
   #        courier/account_scope.yml
-  #        guard/account_scope.yml
+  #        gateway/account_scope.yml
   #        core/.github/workflows/ci.yml
   #        core/harness/tests/account_scope_self_test.sh
   #
@@ -7206,7 +7206,7 @@ for lang in langs:
     if 'export "$REQUIRED_TIER=1"' not in body:
         problems.append(
             f"job {lang}: its test step does not export the demanded gate variable. "
-            f"guard's GUARD_REDIS_REQUIRED fails at tier-INVOCATION time, before a "
+            f"gateway's GATEWAY_REDIS_REQUIRED fails at tier-INVOCATION time, before a "
             f"report exists; a variable applied after the run cannot do that"
         )
     if "kit-tier.log" not in body:
