@@ -98,6 +98,20 @@ on:
       # input. Defaulting it to `master` matches every caller in the fleet,
       # which is written `uses: cafaye/kit/...@master`.
       #
+      # THIS PARAGRAPH WAS RIGHT AND FOUR `run:` BODIES CONTRADICTED IT. The
+      # `secrets`, `zizmor` and `telemetry` jobs all reached into kit's tree with
+      # `${GITHUB_ACTION_PATH}` — the variable this comment names as unavailable —
+      # and did so under `set -euo pipefail`, where an unset variable is not an
+      # empty path but a fatal on the step's first line. Measured in `cafaye/site`
+      # run 37236386666 and `cafaye/parlor` run 37230458669: the `secrets` job
+      # failed four days after the concurrency fix in ad3e320 released the jobs
+      # that had never run. The reasoning above was applied to the lint configs
+      # and not to these five lines, which is the whole of it: a rule written
+      # down once, obeyed in one place, and contradicted in another by nobody
+      # reading the other place. `kit_gate_tree_check` in tests/validate.sh now
+      # asserts the variable appears in no `run:` body in this file, so the
+      # paragraph and the code cannot disagree again.
+      #
       # Raise it to a SHA when you pin the `uses:` line to one. It is NOT a
       # second, independent pin: a caller who pins the workflow to a SHA and
       # leaves this at `master` gets that SHA's workflow with today's lint
@@ -1287,6 +1301,28 @@ jobs:
       - name: install rust
         if: ${{ matrix.language == 'rust' }}
         uses: dtolnay/rust-toolchain@stable
+      # Kit's own tree, for the fallback suite below. `uses:` a checkout rather
+      # than reading `$GITHUB_ACTION_PATH`, and the reason is the same one the
+      # language jobs use: GitHub documents `GITHUB_ACTION_PATH` as
+      # composite-action-only, so inside a REUSABLE WORKFLOW it is not set and
+      # `${GITHUB_ACTION_PATH}/…` expands to nothing. Under `set -euo pipefail`
+      # that is not a missing optional path — it is `unbound variable` and the
+      # step dies on its first line. See the `kit-gate-tree` comment block at the
+      # top of the `secrets` job.
+      #
+      # `$RUNNER_TEMP` and NOT `.kit` inside the workspace, for a reason specific
+      # to this job's neighbour: `secrets` runs a history scan rooted at
+      # `$GITHUB_WORKSPACE`, and a second git repository inside the tree it scans
+      # is a nested-repo question nobody should have to answer.
+      - name: kit (conformance fallback)
+        uses: actions/checkout@v7
+        with:
+          repository: cafaye/kit
+          ref: ${{ inputs.kit-lint-ref }}
+          path: ${{ runner.temp }}/kit
+          sparse-checkout: templates/otel
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: conformance suite
         # The suite the repo copied, not the one in kit: a service that has
         # patched its own middleware runs its own tests. Falls back to kit's
@@ -1295,12 +1331,13 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         env:
           KIT_TELEMETRY_DIR: ${{ inputs.working-dir }}/templates/otel/${{ matrix.language }}
+          KIT_TREE_DIR: ${{ runner.temp }}/kit
         run: |
           set -euo pipefail
           dir="$KIT_TELEMETRY_DIR"
           if [ ! -d "$dir" ]; then
             echo "::notice::no $dir in this repo; running kit's own copy of the suite"
-            dir="${GITHUB_ACTION_PATH}/templates/otel/${KIT_TELEMETRY_LANG:-${{ matrix.language }}}"
+            dir="$KIT_TREE_DIR/templates/otel/${KIT_TELEMETRY_LANG:-${{ matrix.language }}}"
           fi
           case "${{ matrix.language }}" in
             go)
@@ -1362,17 +1399,72 @@ jobs:
           # steps, and a diff scan cannot see a deleted secret.
           fetch-depth: 0
           persist-credentials: false
+      # =========================================================================
+      # `kit-gate-tree` — WHY THIS STEP, AND WHY IT IS A `uses:` CHECKOUT
+      #
+      # This job needs two files that live in kit's tree and in no other:
+      # `tests/bootstrap.sh` and `tests/gitleaks_gate.sh`. Until 2026-10-05 it
+      # reached for them with `${GITHUB_ACTION_PATH}`, and that is the variable
+      # GitHub documents as **composite-action-only**. This file is a REUSABLE
+      # WORKFLOW, so the variable is not set, and under `set -euo pipefail` an
+      # unset one is not an empty path — it is a fatal:
+      #
+      #   …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+      #   ##[error]Process completed with exit code 1.
+      #
+      # Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run
+      # 37230458669, on the `secrets` job, on its second line.
+      #
+      # The reason this survived for four days across eleven repositories is the
+      # reason half this file's history survived: every check in kit PARSES the
+      # YAML, and a variable that expands to nothing parses. A reusable workflow
+      # has no way to know its own location — `github.workflow_ref` is the
+      # CALLER's workflow — so there was no path to check and nothing to assert.
+      # The `kit-lint-ref` input is what makes one exist: the tree is FETCHED by
+      # a name, so the fetch is the mechanism and the name is the pin.
+      #
+      # `$RUNNER_TEMP` and NOT `<working-dir>/.kit`, deliberately. The scan below
+      # is rooted at `$GITHUB_WORKSPACE` and reads the repository's full git
+      # history, so putting a second git repository inside the tree it scans is
+      # a nested-repository question with no good answer — kit's own history
+      # would become part of the caller's scan. `$RUNNER_TEMP` is per-job scratch
+      # space that is emptied at the end of the job, which is exactly the
+      # lifetime this file needs and no more.
+      #
+      # `sparse-checkout: tests` because the other half of this job's rationale —
+      # not scanning a service's committed `.gitleaks.toml` twice, not shipping
+      # kit's `templates/` into a caller's build — is already in the script. What
+      # is read out of this checkout is `tests/`, and a full clone of kit on
+      # every push of every repository is a cost paid for files nobody opens.
+      # =========================================================================
+      - name: kit (gate scripts)
+        uses: actions/checkout@v7
+        with:
+          repository: cafaye/kit
+          ref: ${{ inputs.kit-lint-ref }}
+          path: ${{ runner.temp }}/kit
+          sparse-checkout: tests
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: install gitleaks (pinned release, sha256-verified)
         # kit's own bootstrap, not a third-party action. Two reasons, and both
         # of them are properties this repository already holds hadolint to: the
         # version and the hash are one edit in a file we ship, and the scan
         # cannot be quietly swapped for another scanner by a dependency bump.
+        #
+        # `KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`. See the step above, which
+        # is where the whole of that argument is; this is the fourth place the
+        # same mistake was made and the reason `kit_gate_tree_check` in
+        # tests/validate.sh now asserts on the absence of the variable rather
+        # than on this file happening to be correct today.
+        env:
+          KIT_TREE_DIR: ${{ runner.temp }}/kit
         run: |
           set -euo pipefail
-          . "${GITHUB_ACTION_PATH}/tests/bootstrap.sh"
+          . "$KIT_TREE_DIR/tests/bootstrap.sh"
           kit_bootstrap_binary gitleaks \
             "https://github.com/gitleaks/gitleaks/releases/download/v${KIT_GITLEAKS_VERSION}" \
-            "$KIT_GITLEAKS_SHA256S" "$GITHUB_ACTION_PATH" \
+            "$KIT_GITLEAKS_SHA256S" "$KIT_TREE_DIR" \
             "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@arch@.tar.gz" gitleaks
           echo "GITLEAKS=$BIN" >> "$GITHUB_ENV"
       - name: gitleaks (full history, redacted)
@@ -1388,7 +1480,13 @@ jobs:
         # which would use this network access to verify a live credential
         # against its issuer — a scanner that can reach the internet is a
         # scanner that can be made to exfiltrate.
-        run: bash "${GITHUB_ACTION_PATH}/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"
+        #
+        # `$KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`. See the `kit (gate
+        # scripts)` step above this job's other two; the short version is that
+        # the variable is composite-action-only and this is a reusable workflow.
+        env:
+          KIT_TREE_DIR: ${{ runner.temp }}/kit
+        run: bash "$KIT_TREE_DIR/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"
 
   # ------------------------------------------------------------------ zizmor
   # GitHub Actions' own security audit, run on the adopting repository's own
@@ -1426,5 +1524,33 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check 'zizmor==1.30.1'
+      # Kit's own tree, for `tests/zizmor_gate.sh`. `uses:` a checkout, never
+      # `$GITHUB_ACTION_PATH` — the variable is documented as composite-action-only
+      # and this is a reusable workflow, so it is not set here and reading it
+      # under `set -euo pipefail` is a fatal on the step's first line. The full
+      # argument, with the two runs that show it, is on the `secrets` job's
+      # `kit (gate scripts)` step; this job is the SECOND one that had the defect
+      # and the reason `kit_gate_tree_check` asserts on the variable's absence
+      # rather than on either file happening to be correct today.
+      - name: kit (gate scripts)
+        uses: actions/checkout@v7
+        with:
+          repository: cafaye/kit
+          ref: ${{ inputs.kit-lint-ref }}
+          path: ${{ runner.temp }}/kit
+          sparse-checkout: tests
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: zizmor (unpinned-uses recorded, everything else fatal)
-        run: bash "${GITHUB_ACTION_PATH}/tests/zizmor_gate.sh" "$GITHUB_WORKSPACE" "$(command -v zizmor)"
+        # `PY` is exported as well as `KIT_TREE_DIR`, and that is a SECOND defect
+        # in this job rather than a detail of the first: `tests/zizmor_gate.sh`
+        # ends by piping zizmor's JSON report through `"$PY" - …`, and nothing
+        # here ever set it. In kit's own gate `PY` comes from
+        # `kit_bootstrap_python`, which `validate.sh` calls; a reusable workflow
+        # has no such call, so the script reached its own last line and died on
+        # `PY: unbound variable`. Both are the same shape — a script written to
+        # be called by one caller, run by another that had not been read.
+        env:
+          KIT_TREE_DIR: ${{ runner.temp }}/kit
+          PY: python3
+        run: bash "$KIT_TREE_DIR/tests/zizmor_gate.sh" "$GITHUB_WORKSPACE" "$(command -v zizmor)"

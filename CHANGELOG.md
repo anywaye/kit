@@ -1,5 +1,73 @@
 ## Unreleased
 
+### Fixed
+
+- **A reusable workflow has no location of its own, and four `run:` bodies in
+  `ci.reusable.yml` were reading one anyway.** `GITHUB_ACTION_PATH` is
+  documented by GitHub as supported only in composite actions;
+  `.github/workflows/ci.reusable.yml` is a *reusable* workflow, so the variable
+  is not set in it. Under `set -euo pipefail` an unset variable is not an empty
+  path — it is a fatal on the step's **first line**:
+
+  ```
+  …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+  ##[error]Process completed with exit code 1.
+  ```
+
+  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  on the `secrets` job — the one job in the file with no opt-in, the one this
+  repository calls the only control a service cannot choose not to run. It was
+  not a job that found nothing; it was a job that could not start. `zizmor` has
+  the same defect and is fixed in the same place (it is gated on an input, so it
+  has never run in the fleet), and so does `telemetry`'s fallback to kit's own
+  copy of the conformance suite.
+
+  **The file already knew.** The `kit-lint-ref` input's own comment names
+  `GITHUB_ACTION_PATH` as composite-action-only and explains that kit's configs
+  therefore have to be **fetched by a name** — and then five lines in three jobs
+  contradicted it. The reasoning was applied to the lint configs and not to
+  these. That is the whole of it: a rule written down once, obeyed in one place,
+  and contradicted in another by nobody reading the other place.
+
+  The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
+  `inputs.kit-lint-ref` — the same mechanism the six language jobs already use —
+  and the tree lands in `$RUNNER_TEMP`, **not** `<working-dir>/.kit`: `secrets`
+  runs a full-history git scan rooted at `$GITHUB_WORKSPACE`, and a second git
+  repository inside the tree being scanned is a question with no good answer.
+
+  **`kit_gate_tree_check` is the check, and it has four branches because writing
+  it found two defects in it.**
+
+  - 106 restores the variable.
+  - 106b is the **obvious fix, refused**: deleting the lines turns a fatal into
+    `bash: no such file or directory`, which is the same red job with the
+    diagnosis further away, and a variable-only check calls that a pass. So the
+    check asserts the *coupling* — a step reading the fetched tree needs a fetch
+    above it.
+  - 106c drops one checkout's `ref`. This recipe **found a real bug**: the pin
+    was originally asserted inside a per-step loop, so it reported one unpinned
+    checkout once per reading step and would have passed *entirely* for a
+    checkout no step referenced. A check whose coverage depends on an unrelated
+    step has a hole shaped like the defect it exists for.
+  - 106d pins to the literal `master`. This is what `inputs.kit-lint-ref`
+    evaluates to when a caller sets nothing, so it **looks** pinned; a check
+    written as "is it pinned to something" accepts it, and a caller pinning
+    `uses:` to a sha then gets that workflow with the gate scripts from `master`.
+  - 106e is the **green control**, and it exists because this check's first
+    version failed **seven jobs that were correct**. It looked for `tests/` and
+    `templates/` anywhere in a run body, and every language job prints
+    `See templates/tier/README.md` in an error message while running the
+    *caller's* own gate. A check that fires on correct work teaches its reader
+    to ignore it.
+
+- **`tests/zizmor_gate.sh` read `$PY`, and the `zizmor` job never set it.** A
+  second defect in the same job and the same shape as the one above: the script
+  ends by piping zizmor's report through `"$PY" - …`, which in kit's own gate
+  comes from `kit_bootstrap_python`. A reusable workflow makes no such call, so
+  the job reached the script's last line and died on `PY: unbound variable`.
+  Both are one mistake wearing two hats — a script written to be called by one
+  caller and run by another that had not been read.
+
 ### Added
 
 - **The README's file list is now closed in the direction a packet moves in.**

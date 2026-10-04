@@ -10869,6 +10869,250 @@ PY4
     reusable_concurrency_check
 
   # -------------------------------------------------------------------------
+  # `kit-gate-tree`: a reusable workflow has NO location of its own, so every
+  # path into kit's tree must be a FETCH, and this is the check that says so.
+  #
+  # WHAT IT IS FOR. `GITHUB_ACTION_PATH` is documented by GitHub as supported
+  # only in composite actions. This repository's own header comment on the
+  # `kit-lint-ref` input says exactly that, and then four `run:` bodies in the
+  # same file read `${GITHUB_ACTION_PATH}/…` anyway. Under `set -euo pipefail` an
+  # unset variable is not an empty string — it is a fatal on the step's FIRST
+  # line — so `secrets`, `zizmor` and `telemetry` could not start. Measured in
+  # `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669:
+  #
+  #     …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+  #     ##[error]Process completed with exit code 1.
+  #
+  # WHY A PARSE DID NOT CATCH IT, which is the part worth keeping. Every other
+  # check in this file reads the workflow as YAML, and an unexpanded variable is
+  # a perfectly good string. There was no way for a check to notice, because a
+  # reusable workflow genuinely cannot know its own checkout path: inside one,
+  # `github.workflow_ref` is the CALLER's workflow, and `github.action_path` is
+  # the composite-action-only variable again. The tree has to be FETCHED by a
+  # name, which is what the `kit-lint-ref` input is for, and this check asserts
+  # that the fetch is what happens.
+  #
+  # WHY IT IS A SEPARATE CHECK AND NOT A LINE IN ANOTHER ONE. `ci_check` reads
+  # the `language` case statement; `lint_args_seam_check` reads three lint jobs.
+  # Neither looks at `secrets`, `zizmor` or `telemetry`, so a variable restored
+  # in any of them would be invisible to both. A defect that has been live in
+  # three jobs at once is a property of the FILE, and the check has to be too.
+  #
+  # WHAT IT ASSERTS, in three parts, and each part is a different failure:
+  #
+  #   1. no `run:` body in a reusable workflow mentions GITHUB_ACTION_PATH.
+  #      Stripped of comments first, because a check satisfied by the sentence
+  #      explaining why the variable is wrong is the failure mode AGENTS.md
+  #      names, and this file now contains several paragraphs that name it.
+  #   2. every job whose steps reference a path INTO kit's tree has a
+  #      `actions/checkout` of `cafaye/kit` before that step. Without this, part
+  #      1 alone is satisfiable by deleting the line — which turns a fatal into
+  #      a `bash: no such file or directory`, i.e. the same red job with the
+  #      diagnosis further away.
+  #   3. that checkout is pinned by `inputs.kit-lint-ref` and not by a literal.
+  #      A checkout of `cafaye/kit` with no `ref` follows the default branch, so
+  #      the pin that the input exists to express would be silently dropped by
+  #      the same edit that fixed the path.
+  kit_gate_tree_check() {
+    "$PY" - "$ROOT" "$REUSABLE_WORKFLOWS" <<'PYG'
+import os
+import sys
+
+import yaml
+
+root, reusables = sys.argv[1], sys.argv[2].split()
+
+# The variable, and the two contexts GitHub documents it for. Read as constants
+# with the reason attached, because the list of variables a reusable workflow may
+# not read is a fact about the platform and belongs where a reader finds it
+# rather than in the body of a loop.
+COMPOSITE_ONLY = ("GITHUB_ACTION_PATH", "github.action_path")
+
+# The variable that means "the directory kit's tree was fetched into". Part (2)
+# below is stated in terms of THIS and not in terms of a path substring, and the
+# first version of this check did the opposite and was wrong for a measured
+# reason: it looked for `tests/` and `templates/` anywhere in a run body, and
+# every one of the seven language jobs prints `See templates/tier/README.md` in
+# an error message while running `bash tests/validate.sh` — which is the
+# CALLER's own gate, in the CALLER's own tree, with no kit checkout anywhere
+# near it. Five jobs failed a check that had nothing to say about them.
+#
+# A check that fires on correct work teaches its reader to ignore it, and this
+# one fired on seven jobs before anything was shipped. The signal that is
+# actually load-bearing is the coupling: a step that reads kit's tree can only
+# do so through the directory the fetch put it in, so the fetch is what must
+# precede it.
+KIT_TREE_VAR = "KIT_TREE_DIR"
+
+
+def strip_shell_comments(src):
+    """Drop `#` comments from a run body, keeping quoted `#` as content.
+
+    Same rule as `strip_shell_comments` in the tier-demand check above, restated
+    rather than imported: this is a separate heredoc, and a shared helper across
+    two `python - <<PY` blocks would mean either duplication or a new file in
+    `tests/`, and the carve-out boundary in AGENTS.md counts programs.
+    """
+    out = []
+    for line in src.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        quote = None
+        cut = None
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = None
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+                cut = i
+                break
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
+def kit_checkouts(steps):
+    """Indexes of steps that check `cafaye/kit` out."""
+    found = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        if not str(step.get("uses") or "").startswith("actions/checkout"):
+            continue
+        with_ = step.get("with") or {}
+        if str(with_.get("repository") or "") == "cafaye/kit":
+            found.append((i, with_))
+    return found
+
+
+problems = []
+measured_checkouts = 0
+measured_refs = 0
+
+for rel in reusables:
+    path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        continue
+    with open(path, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+
+    for job_name, job in (doc.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps") or []
+        kit_at = kit_checkouts(steps)
+
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            body = strip_shell_comments(step.get("run") or "")
+            label = step.get("name") or step.get("uses") or f"step {i}"
+
+            # (1) the variable itself, in executable text only.
+            for var in COMPOSITE_ONLY:
+                if var in body:
+                    problems.append(
+                        f"{rel}: job {job_name} step '{label}' reads {var}. That "
+                        f"variable is documented as composite-action-only, so it is "
+                        f"not set inside a reusable workflow — and under "
+                        f"`set -euo pipefail` an unset variable is not an empty path "
+                        f"but a fatal on the first line, which is how the `secrets`, "
+                        f"`zizmor` and `telemetry` jobs failed. Check kit's tree out "
+                        f"with `uses: actions/checkout` and read it from there"
+                    )
+
+            # (2) a step that reads the fetched tree, with no fetch above it.
+            if KIT_TREE_VAR not in body:
+                continue
+
+            if not kit_at:
+                problems.append(
+                    f"{rel}: job {job_name} step '{label}' reads `{KIT_TREE_VAR}` — the "
+                    f"directory kit's tree was fetched into — but the job never checks "
+                    f"`cafaye/kit` out. Add a `kit (gate scripts)` checkout before it, "
+                    f"pinned by `inputs.kit-lint-ref`, and set the variable to its path"
+                )
+                continue
+
+            # A step may also read the tree without naming the variable, in which
+            # case the checkout alone has to be enough — so require that the
+            # variable is EXPORTED by the step that fetched, or by the job's env.
+            exports = " ".join(
+                f"{k}={v}" for k, v in ((step.get("env") or {}) if isinstance(step, dict) else {}).items()
+            )
+            job_env = " ".join(
+                f"{k}={v}" for k, v in ((job.get("env") or {}) if isinstance(job, dict) else {}).items()
+            )
+            declared = KIT_TREE_VAR in exports or KIT_TREE_VAR in job_env
+            if not declared and not any(
+                KIT_TREE_VAR in " ".join(
+                    f"{k}={v}" for k, v in ((s.get("env") or {}) if isinstance(s, dict) else {}).items()
+                )
+                for s in steps
+                if isinstance(s, dict)
+            ):
+                problems.append(
+                    f"{rel}: job {job_name} step '{label}' reads `{KIT_TREE_VAR}` but "
+                    f"nothing in the job ever sets it, so under `set -euo pipefail` the "
+                    f"step is a fatal on `{KIT_TREE_VAR}: unbound variable` — the same "
+                    f"defect as an unset `GITHUB_ACTION_PATH`, reached by the other door"
+                )
+
+            # (3) is NOT here. The pin is a property of the CHECKOUT, so it is
+            # asserted once per checkout below, and the first version of this
+            # check asserted it inside the per-step loop — which reported the same
+            # unpinned checkout once for every step that read the tree after it
+            # (twice, in the `secrets` job), and asserted it only for checkouts
+            # that some step happened to reference. A check whose coverage
+            # depends on an unrelated step is a check with a hole in it: an
+            # unpinned checkout in a job whose steps read nothing from it was
+            # invisible, which is the whole defect class this check exists for.
+        measured_checkouts += len(kit_at)
+
+        for at, with_ in kit_at:
+            ref = str(with_.get("ref") or "")
+            if ref == "":
+                problems.append(
+                    f"{rel}: job {job_name} checks `cafaye/kit` out with no `ref`, so it "
+                    f"follows the default branch. The gate scripts it is read for would "
+                    f"then be whatever `master` is on that day, which is the "
+                    f"unpinned-uses finding this repository declines to make silently. "
+                    f"Pin it to `${{{{ inputs.kit-lint-ref }}}}`"
+                )
+            elif "kit-lint-ref" not in ref:
+                # A LITERAL ref, including the default this input carries. It has
+                # to be this branch: `ref: master` is exactly what the input
+                # evaluates to when a caller sets nothing, so accepting the
+                # literal would accept a job that ignores a caller who pins
+                # `uses:` to a sha and raises `kit-lint-ref` with it. The input's
+                # own comment says the two must agree; this is what holds them to
+                # it.
+                problems.append(
+                    f"{rel}: job {job_name} pins `cafaye/kit` to the literal `{ref}` "
+                    f"rather than to `inputs.kit-lint-ref`. A caller that raises the "
+                    f"input to a sha would then get that workflow with the gate "
+                    f"scripts from `{ref}` — the drift the input exists to prevent, "
+                    f"made by the same edit that looks like pinning"
+                )
+            else:
+                measured_refs += 1
+
+if problems:
+    sys.exit("; ".join(problems))
+
+print(
+    f"{len(reusables)} reusable workflow(s) reach kit's tree only through a checkout: "
+    f"{measured_checkouts} `cafaye/kit` checkout(s), {measured_refs} of them pinned by "
+    f"`inputs.kit-lint-ref`, and no run body reads a composite-action-only variable"
+)
+PYG
+  }
+  check "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" \
+    kit_gate_tree_check
+
+  # -------------------------------------------------------------------------
   # Secrets. Two scanners and two different questions, and this section is the
   # part of the gate that proves both of them can fail.
   #
