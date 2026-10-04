@@ -292,6 +292,86 @@
 
 ### Fixed
 
+- **`ci.reusable.yml` asked for the concurrency lock its caller was already
+  holding, so the `uses:` job produced no job, no check-run and no log line in any
+  caller, for four days.** Every caller in the fleet declared
+
+      concurrency:
+        group: ${{ github.workflow }}-${{ github.ref }}
+        cancel-in-progress: true
+
+  and `.github/workflows/ci.reusable.yml` declared the identical block from
+  `8ebf4db`, the commit that first published it. Inside a reusable workflow
+  `github.workflow` is the **caller's** workflow name and `github.ref` is the
+  caller's ref, so both sides computed `ci-refs/heads/master` and asked for one
+  lock. The caller holds it.
+
+      $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+          --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
+      typecheck + build | completed/success
+      bin/prime         | completed/success
+      $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+      failure
+
+  Both jobs green, the run red, and `gh run view --log-failed` returns **nothing
+  at all** because no step failed. `bin/prime` runs the suite, so tests were not
+  entirely absent — but the `language` gate job is **unconditional** and no
+  caller had ever produced a job ending `/ language`, so **no repository in the
+  fleet had run kit's linter in CI**, and neither had anything else gated behind
+  that job.
+
+  The file itself was never at fault, and that was measured rather than assumed:
+  the blob on `master` is byte-identical to the fixed one apart from one line, it
+  parses, it declares every input callers pass, and calling it unchanged from a
+  throwaway repository produced all thirteen jobs. Reproduced end to end with one
+  variable changed at a time:
+
+      caller group `${{ github.workflow }}-${{ github.ref }}`  ->  1 job,  callee gone,  run failure
+      caller group `caller-${{ github.workflow }}-${{ ... }}`  -> 13 jobs, callee present
+
+  **The fix is one line in the shared file and not thirteen caller PRs**, which is
+  also the only fix that reaches a repository nobody remembers exists: kit's
+  reusable workflows namespace their group with `kit-`. That repairs kit's own CI
+  too — `ci.yml`'s group is `ci-<ref>` and this one is now `kit-ci-<ref>` — with no
+  change to `ci.yml`. The caller's cancellation still propagates into the called
+  workflow, measured rather than assumed, because dropping the block is the other
+  way to stop a collision and it trades a missing job for an unbounded pile of
+  superseded runs:
+
+      push A -> called job in_progress; push B -> A's called job `cancelled`
+
+  `image.reusable.yml` declares no `concurrency` block at all, and `identity`'s and
+  `site`'s `publish` runs **do** produce `image / build (and publish, if asked)` on
+  every run — the fleet's own control, same mechanism, same org, same ref. The
+  one difference is the block.
+
+- **`reusable_concurrency_check`: a check for the collision, because the gate was
+  green for the whole four days and every claim it made was TRUE.** The path
+  resolved, `workflow_call` was declared, the inputs matched, and the workflow was
+  valid — it is two valid workflows asking for one lock, and the only place both
+  sides are visible at once is the gate. It asserts two separable claims: every
+  standard kit hands out namespaces its group with `kit-`, and a caller must not
+  normalise to the same expression as one of kit's. The second is read from kit's
+  own `ci.yml`, because kit is a caller of itself and held the defect in both
+  files at once; it is deliberately **not** a fleet sweep, because
+  `fleet_check.py` already reads the repositories beside this one and a second
+  reader of the same fleet would be a second answer to a question kit already
+  asks.
+
+  **The normalisation earns its keep because of `core`,** which writes
+  `${{ github.workflow }}-${{ ref }}` — not `github.ref`. Same value to GitHub,
+  different bytes to a `==`, so a byte comparison would have reported the one
+  repository in the fleet that spelled it differently as clean.
+
+  Three breakages, 105 / 105b / 105c, one line in one file each, and each can
+  only be caught by its own branch. **105 is not the historical revert**, and that
+  is the interesting part: putting the bare group back is the truest mutation
+  available and it is the wrong one, because in kit's own tree it also collides
+  with `ci.yml`, so it satisfies the comparison branch too and a recipe proving
+  two branches proves neither. Measured — that spelling reports both messages.
+  The suffix is the shape a "make the group more specific" patch actually takes,
+  and it is unprefixed without colliding.
+
 - **`fresh_copy` did not copy `reports/`, so every throwaway copy this suite
   makes was a tree whose README documented a file it did not have.** The
   account-scope packet

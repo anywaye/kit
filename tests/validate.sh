@@ -10711,6 +10711,164 @@ PY1
   check "reusable workflows  (workflow_call inputs use only documented keys)" workflow_inputs_check
 
   # -------------------------------------------------------------------------
+  # The concurrency group a reusable workflow asks for must not be one its
+  # CALLER can also ask for.
+  #
+  # MEASURED, and the measurement is four days long. Every caller in the fleet
+  # declared
+  #
+  #     concurrency:
+  #       group: ${{ github.workflow }}-${{ github.ref }}
+  #       cancel-in-progress: true
+  #
+  # and `.github/workflows/ci.reusable.yml` declared the identical block from the
+  # commit that first published it (8ebf4db, 2026-09-30). Inside a reusable
+  # workflow `github.workflow` is the CALLER's workflow name and `github.ref` is
+  # the caller's ref, so both sides computed the same string and asked for the
+  # same lock. The caller holds it. The `uses:` job produced no job, no
+  # check-run and no log line:
+  #
+  #   $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+  #       --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
+  #   typecheck + build | completed/success
+  #   bin/prime         | completed/success
+  #   $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+  #   failure
+  #
+  # BOTH jobs green, the run red, `--log-failed` empty. The `language` gate job is
+  # UNCONDITIONAL, so its absence is the unambiguous signal, and no caller in the
+  # fleet has ever produced a job ending `/ language` — which is where lint, the
+  # frozen install and the coverage step live.
+  #
+  # WHY A CHECK IN THIS FILE AND NOT A RUNNER. `callable_check` above already
+  # asserts the path resolves, that `workflow_call` is declared, and that the
+  # inputs match; the file was green for the whole of the time this was broken,
+  # because every one of those claims was TRUE. This defect is not about the
+  # workflow being valid. It is about two valid workflows asking for one lock, and
+  # the only place both sides are visible at once is here.
+  #
+  # WHAT IT ASSERTS, and it is deliberately narrow — a check that claims more
+  # than it does is the defect it exists to catch, so it does not attempt to
+  # evaluate a concurrency expression. It compares the SHAPES:
+  #
+  #   1. every standard kit hands out namespaces its group with `kit-`, so a
+  #      caller's group and kit's cannot be the same string;
+  #   2. a caller that calls a kit standard and declares `concurrency` must not
+  #      produce a group that normalises to the same expression as one of kit's.
+  #
+  # (2) is read from THIS repository's own `.github/workflows/ci.yml`, because
+  # kit is a caller of itself and had the defect in both files at once. It is not
+  # a fleet sweep: `fleet_check.py` reads the repositories beside this one and
+  # reports a loud SKIP when there are none, and a second reader of the same
+  # fleet would be a second answer to a question kit already asks. What kit OWNS
+  # is its own spelling, and a caller is one `kit-` prefix away from the fix.
+  #
+  # THE NORMALISATION IS THE PART THAT MATTERS, and it exists because `core`
+  # writes `${{ github.workflow }}-${{ ref }}` — not `github.ref`. Those are the
+  # same value to GitHub and different bytes to a `==`, so a byte comparison
+  # would have called the one repository that got it differently CLEAN.
+  reusable_concurrency_check() {
+    "$PY" - "$ROOT" "$REUSABLE_WORKFLOWS" <<'PY4'
+import os
+import re
+import sys
+
+import yaml
+
+root, reusables = sys.argv[1], sys.argv[2].split()
+
+PREFIX = "kit-"
+
+
+def group_of(doc):
+    """A workflow's concurrency group, or None.
+
+    Read as a document rather than grepped: `concurrency` may be a bare string
+    (`concurrency: my-group`) or a mapping, and only the mapping form carries the
+    `group` key. A check that read one spelling would pass on a tree using the
+    other.
+    """
+    conc = (doc or {}).get("concurrency")
+    if isinstance(conc, str):
+        return conc
+    if isinstance(conc, dict):
+        got = conc.get("group")
+        return got if isinstance(got, str) else None
+    return None
+
+
+def normalise(expr):
+    """Reduce a group expression to the thing two files can collide ON.
+
+    `github.ref` and the bare `ref` are the same value to GitHub, and the fleet
+    uses both spellings, so they are the same token here. `github.workflow` is
+    left as its own token rather than substituted: kit's group prefixes it with
+    `kit-`, and a caller's does not, which is exactly the difference being
+    measured. Whitespace and quoting are stripped so a reformat is not a fix.
+    """
+    out = re.sub(r"github\.ref\b", "ref", expr)
+    out = out.replace("${{", "").replace("}}", "")
+    out = out.replace("github.", "")
+    return re.sub(r"\s+", "", out.strip().strip("'\""))
+
+
+problems = []
+kit_groups = {}
+
+for rel in reusables:
+    path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        continue
+    with open(path, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+    group = group_of(doc)
+    if group is None:
+        # Declaring no `concurrency` cannot collide with anything. That is the
+        # state `image.reusable.yml` is in, and it is why its two callers
+        # produce `image / build` on every run while `ci.reusable.yml`'s eleven
+        # produce nothing.
+        continue
+    kit_groups[rel] = group
+    if not group.startswith(PREFIX):
+        problems.append(
+            f"{rel}: concurrency group `{group}` does not begin with `{PREFIX}`. "
+            f"A reusable workflow and its caller both evaluate `github.workflow` "
+            f"and `github.ref` to the CALLER's values, so an unprefixed group is "
+            f"the group the caller is already holding: the `uses:` job is then "
+            f"never created, with no job, no check-run and no log to show for it. "
+            f"Prefix it with `{PREFIX}`."
+        )
+
+# kit's own caller. Same file, same group, both sides — which is why this defect
+# was invisible: kit held the standard AND was a caller of it.
+self_path = os.path.join(root, ".github", "workflows", "ci.yml")
+if os.path.isfile(self_path):
+    with open(self_path, encoding="utf-8") as fh:
+        self_doc = yaml.safe_load(fh)
+    mine = group_of(self_doc)
+    for rel, theirs in kit_groups.items():
+        if mine is not None and normalise(mine) == normalise(theirs):
+            problems.append(
+                f".github/workflows/ci.yml declares concurrency group `{mine}` and "
+                f"{rel} declares `{theirs}`. These are the same lock: the caller "
+                f"holds it and the callee is refused, so the `uses:` job below "
+                f"never runs. One of the two has to differ."
+            )
+
+if problems:
+    sys.exit("; ".join(problems))
+
+print(
+    f"{len(kit_groups)} reusable workflow(s) declare a `kit-` namespaced "
+    f"concurrency group, and kit's own caller does not collide with "
+    f"{'any of them' if kit_groups else 'them'}"
+)
+PY4
+  }
+  check "reusable workflows  (no caller and callee share a concurrency group)" \
+    reusable_concurrency_check
+
+  # -------------------------------------------------------------------------
   # Secrets. Two scanners and two different questions, and this section is the
   # part of the gate that proves both of them can fail.
   #

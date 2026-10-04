@@ -1011,6 +1011,49 @@ organization.
 
 Two jobs for two languages? Call it twice with two different `language` values.
 
+**If you declare `concurrency`, your group must not begin with `kit-`.** Every
+other spelling is yours. This is the one caller-side rule kit has, and it exists
+because its absence is invisible: for four days every caller in the fleet and
+`ci.reusable.yml` itself declared
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+```
+
+Inside a reusable workflow `github.workflow` is the **caller's** workflow name
+and `github.ref` is the caller's ref, so both sides computed `ci-refs/heads/master`
+and asked for one lock. The caller holds it. The `uses:` job above was then never
+created — no job, no check-run, no log line — while the caller's own jobs ran
+green and the run concluded `failure`:
+
+```
+$ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+    --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
+typecheck + build | completed/success
+bin/prime         | completed/success
+$ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+failure
+```
+
+`gh run view --log-failed` returns **nothing at all**, because no step failed.
+The signal that is not ambiguous is the `language` gate job, which is
+**unconditional**: no caller had ever produced a job ending `/ language`, and
+that job is where the frozen install, **lint** and the coverage step live.
+`bin/prime` runs the suite, so tests were not entirely absent — but no repository
+in the fleet had run kit's linter in CI.
+
+kit's reusable workflows therefore namespace their own group (`kit-…`), and
+`reusable_concurrency_check` reads kit's `ci.yml` — which is itself a caller —
+and fails on a collision in either direction, after normalising `ref` and
+`github.ref` to the same token. Eleven repositories were affected and none of them
+had to change: the fix is one line in the shared file, which is also the only fix
+that reaches a repository nobody remembers exists. `image.reusable.yml` declares
+no `concurrency` block at all, which is why `identity`'s and `site`'s `publish`
+runs produce `image / build` on every run while `ci.reusable.yml`'s callers
+produced nothing.
+
 **2. Publish the image.** CI proves the tree; it does not produce a deployable
 artifact, and `config/deploy.yml` deploys an image rather than a commit. So a
 service also calls the second reusable workflow, from its own
@@ -1278,6 +1321,12 @@ bash <kit>/tests/validate.sh
 ### Adoption checklist
 
 - [ ] `.github/workflows/ci.yml` calls `cafaye/kit/.github/workflows/ci.reusable.yml@master`
+- [ ] If `ci.yml` declares `concurrency`, its `group` does **not** begin with
+      `kit-`. Any other spelling is fine, including declaring none. This is the
+      only caller-side rule kit has, and it is the one whose absence is
+      invisible: a colliding group means the `uses:` job is never created, so the
+      run is `failure` with green jobs and an empty `--log-failed`. See
+      [the caller contract](#how-a-service-repo-adopts-kit).
 - [ ] `.github/workflows/publish.yml` calls `cafaye/kit/.github/workflows/image.reusable.yml@master`
       with `push: true`, and the workflow grants `packages: write`. **Without it
       nothing builds the image `config/deploy.yml` deploys**, and CI stays green

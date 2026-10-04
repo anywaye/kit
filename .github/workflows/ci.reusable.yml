@@ -15,6 +15,13 @@
 #         language: go
 #         working-dir: .
 #
+# If you also declare `concurrency`, your group must NOT begin with `kit-`. Every
+# other spelling is yours. The whole fleet wrote
+# `${{ github.workflow }}-${{ github.ref }}`, this file wrote the same string, and
+# for four days the `uses:` job above produced no job, no check-run and no log in
+# any repository — see the long comment on `concurrency` at the bottom of this
+# file for the measurement.
+#
 # The `.github/workflows/` in that path is not decoration. GitHub resolves a
 # reusable workflow at `{owner}/{repo}/.github/workflows/{file}@{ref}` and
 # documents that subdirectories of the workflows directory are not supported, so
@@ -229,8 +236,72 @@ on:
         default: 'false'
 permissions:
   contents: read
+
+# ===========================================================================
+# THE `kit-` PREFIX ON THE CONCURRENCY GROUP IS LOAD-BEARING, and it is here
+# because the fleet ran half a CI for four days without anybody noticing.
+#
+# WHAT WENT WRONG, MEASURED. Every caller in the fleet declares
+#
+#     concurrency:
+#       group: ${{ github.workflow }}-${{ github.ref }}
+#       cancel-in-progress: true
+#
+# and this file declared the identical block from the commit that first
+# published it (8ebf4db, 2026-09-30). Inside a reusable workflow `github.workflow`
+# is the CALLER's workflow name and `github.ref` is the caller's ref — GitHub does
+# not re-scope either to the called file — so caller and callee computed the same
+# string, `ci-refs/heads/master`, and asked for the same lock. The caller holds it.
+# The called workflow's request is refused, or cancels the holder, and the `uses:`
+# job produces NO job, NO check-run and NO log line.
+#
+# The signature is the reason it survived. In cafaye/parlor, run 37230458669:
+#
+#     $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+#         --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
+#     typecheck + build | completed/success
+#     bin/prime         | completed/success
+#
+#     $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+#     failure
+#
+# Both jobs green, the run red, `gh run view --log-failed` empty — because no step
+# failed, and the one job that mattered was never created. The `language` gate
+# below is UNCONDITIONAL, so its absence is the unambiguous signal: no caller in
+# the fleet has ever produced a job ending `/ language`. Lint, the frozen install
+# and the coverage step live behind it. `bin/prime` ran the suite, so tests were
+# not entirely absent — but no repository in the fleet has run kit's linter in CI.
+#
+# Reproduced end to end against this exact file, byte-identical to master
+# (git blob f91df58), with one variable changed at a time:
+#
+#   caller group `${{ github.workflow }}-${{ github.ref }}`   ->  1 job, callee gone, run failure
+#   caller group `caller-${{ github.workflow }}-${{ ... }}`   -> 13 jobs, callee present
+#
+# So the fix is HERE and not in thirteen callers, which is also the only fix that
+# reaches a repository nobody remembers exists. It repairs kit's own CI as a side
+# effect: `ci.yml`'s group is `ci-<ref>` and this one is now `kit-ci-<ref>`.
+#
+# AND THE RENAME COSTS NOTHING. A second push must still cancel the first one's
+# called jobs, and that was measured rather than assumed, because dropping this
+# block would have been the other way to stop a collision and it is the way that
+# trades a missing job for an unbounded pile of superseded runs:
+#
+#   push A -> called job in_progress; push B -> A's called job `cancelled`,
+#   run A `cancelled`.
+#
+# The caller's cancellation propagates into the called workflow, so kit's block is
+# a second layer rather than the only one, and renaming the group leaves it working.
+#
+# THE RULE FOR A CALLER, which is the half this file cannot enforce: if you declare
+# `concurrency`, your group must NOT begin with `kit-`. Every other spelling is
+# yours. `reusable_concurrency_check` in tests/validate.sh reads the callers beside
+# this repository and fails on a collision in either direction, and
+# `tests/self_test.sh` breakage 105 puts the bare spelling back to prove the check
+# can still see it.
+# ===========================================================================
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: kit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
