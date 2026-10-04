@@ -694,12 +694,47 @@ def main(argv: list) -> int:
     vendored_path = arguments.scope_table or os.path.join(
         here, "tests", "account_scope_fleet_scope.yml")
 
+    # `EXIT_CONFIG`, and this used to be `EXIT_COULD_NOT_RUN`. Both are non-zero,
+    # which is the part that was always right; they are not the same claim, and
+    # the difference is that `tests/validate.sh` maps 78 to SKIP and maps 2 to
+    # FAIL. So this branch was reporting, in the gate's own vocabulary, that kit's
+    # TREE is defective because a FLEET has no `core` beside it — and
+    # `EXIT_CONFIG`'s own docstring says that is the mistake it exists to prevent
+    # ("a missing fleet is a SKIP in tests/validate.sh rather than a FAIL that
+    # blames the tree for the machine"). Three lines below, the sibling branch
+    # for a missing fleet directory does exactly that. So the two adjacent
+    # conditions, both statements about the machine rather than about kit, were
+    # reported in two different vocabularies, and only one of them named what it
+    # could not do.
+    #
+    # WHAT THAT COST, measured, and it is the whole reason this is not a comment.
+    # The gate's own fleet-adoption ceiling is proved green by
+    # `tests/self_test.sh` breakage 59, which points `KIT_FLEET` at a fixture
+    # fleet — a fixture is a directory of service repositories and nothing else,
+    # so it has no `core` and this branch fired. The child gate exited 1 and the
+    # recipe reported, in those words, that the adoption ceiling was NOT in force:
+    #
+    #     FAIL self_test: breakage 59: an UNADOPTED service copies the stack —
+    #       green, and named — the gate went RED (exit 1), so the ceiling is not in force
+    #            FAIL in-scope repositories  (every one declares its account-scoped surface)
+    #              COULD NOT RUN: no account-scope checker at <fixture>/core/harness/
+    #                account_scope_check.py. … this exit is 2, not 0.
+    #
+    # The ceiling was in force throughout, and the finding printed underneath it
+    # was about a directory nobody shipped. That is the worst direction to be
+    # wrong in: a red line that accuses an enforcement mechanism of not being
+    # enforced, produced by an unrelated check that could not run at all.
+    #
+    # SKIP is not a quieter FAIL. It prints the same sentence, names what is
+    # absent and where it was looked for, and is counted in the gate's skip
+    # total — so "the account-scope contract was not exercised by this run" is on
+    # the record instead of being indistinguishable from "the contract is broken".
     checker = os.path.join(repos_dir, CHECKER_RELPATH)
     if not os.path.isfile(checker):
         print(f"COULD NOT RUN: no account-scope checker at {checker}. The instrument this "
               f"gate exists to run is not on disk, so nothing below verified anything and "
-              f"this exit is {EXIT_COULD_NOT_RUN}, not 0.", file=sys.stderr)
-        return EXIT_COULD_NOT_RUN
+              f"this exit is {EXIT_CONFIG}, not 0.", file=sys.stderr)
+        return EXIT_CONFIG
 
     if not os.path.isdir(repos_dir):
         print(f"COULD NOT RUN: no fleet at {repos_dir}. Set --repos-dir, or KIT_FLEET.",
