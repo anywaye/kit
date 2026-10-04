@@ -139,6 +139,57 @@ duplicates one that is. Both branches are proved by breakages 78 and 79, because
 a check widened to accommodate a second standard is exactly the kind of thing
 that ends up widened into uselessness.
 
+**A reusable workflow's `concurrency.group` is namespaced with `kit-`, and that
+is the only caller-side rule kit has.** Every caller declares
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+```
+
+and `ci.reusable.yml` declared the identical block from `8ebf4db`, the commit
+that first published it. **Inside a reusable workflow `github.workflow` is the
+CALLER's workflow name and `github.ref` is the caller's ref** — GitHub does not
+re-scope either to the called file — so both sides computed `ci-refs/heads/master`
+and asked for **one lock**. The caller holds it, the callee's request is refused,
+and the `uses:` job produces **no job, no check-run and no log line**. Measured in
+`parlor`, run 37230458669: two jobs green, the run `failure`, and
+`gh run view --log-failed` **empty**, because no step failed.
+
+- **The signal that is not ambiguous is the `language` gate job**, because it has
+  no `if:` on purpose. No caller in the fleet had ever produced a job ending
+  `/ language`, and that job is where the frozen install, **lint** and the
+  coverage step live — so `bin/prime` running the suite meant tests were not
+  absent, while **no repository in the fleet had run kit's linter in CI**.
+- **Reproduced with one variable changed at a time**, against a byte-identical
+  copy of the blob on `master`: caller's group as written → **1 job**, callee
+  gone; caller's group prefixed with `caller-` → **13 jobs**, callee present.
+- **The control was free.** `image.reusable.yml` declares no `concurrency` block
+  at all, and `identity`'s and `site`'s `publish` runs produce
+  `image / build (and publish, if asked)` on every run — same mechanism, same org,
+  same ref. The one difference between the workflow that works and the one that
+  never ran is the block.
+- **Renaming the group is not deleting it**, and that was measured because
+  *dropping* the block is the other way to stop a collision and it trades a
+  missing job for an unbounded pile of superseded runs: push A → called job
+  `in_progress`, push B → A's called job `cancelled`. The caller's cancellation
+  propagates into the called workflow, so kit's block is a second layer rather
+  than the only one.
+- **The fix belongs in kit and not in eleven caller PRs**, because it is the only
+  one that reaches a repository nobody remembers exists, and it repairs kit's own
+  CI with no change to `ci.yml` (`ci-<ref>` vs `kit-ci-<ref>`).
+- `reusable_concurrency_check` reads kit's own `ci.yml` — which is a caller, and
+  held the defect in both files at once — and fails on a collision in either
+  direction **after normalising `ref` and `github.ref` to the same token**,
+  because `core` writes the short form and a byte comparison would have called
+  the one repository that spelled it differently clean. It is deliberately **not**
+  a fleet sweep: `fleet_check.py` already reads the repositories beside this one.
+- Breakages **105 / 105b / 105c** prove the two branches and the normalisation
+  separately, and **105 is deliberately not the historical revert** — in kit's own
+  tree that spelling also collides with `ci.yml`, so it satisfies both branches
+  and a recipe proving two branches proves neither.
+
 A caller writes exactly this, and nothing else:
 
 ```yaml
@@ -349,16 +400,18 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   is the one that tells a working config from a valid one, and — unlike every
   other phase — it is **fatal on a skip**, because the claim under test is "kit's
   configs work" and a run in which no linter executed has not tested it.
-- **self_test** — one hundred and four breakages of a throwaway copy. One
-  hundred and two assert
-  the gate goes red; two assert it stays **green** while naming what it said —
+- **self_test** — one hundred and ten breakages of a throwaway copy. One
+  hundred and seven assert
+  the gate goes red; three assert it stays **green** while naming what it said —
   23b a SKIP, because a check that turns a red into an honest skip is
-  load-bearing precisely by not going red, and 59 a FINDING, because kit-13's
-  adoption ceiling is only a ceiling if its unadopted side is proved green too.
+  load-bearing precisely by not going red; 59 a FINDING, because kit-13's
+  adoption ceiling is only a ceiling if its unadopted side is proved green too;
+  and 104b a walked path count, because a closure check that demanded a README row
+  per shipped file is the failure it exists to prevent.
   One further GREEN control (31b) asserts a service config that AGREES with
   kit's does not fail, because a check satisfied by banning the file would train
   every service to delete one. Six are a semantic mutation of one language each,
-  so **every suite is proven able to fail** rather than assumed to. Fifty-seven
+  so **every suite is proven able to fail** rather than assumed to. Ninety-two
   assert that one *named* check reported `FAIL`, so a check written for a specific
   defect is proven still load-bearing. Two assert that a *proof* goes red: one
   inverts the classifier's fail-closed property, and one makes the staleness
@@ -650,8 +703,8 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   rubocop ran on kit's own Ruby with kit's own config. That is the only way an
   obsolete key surfaces before six repos inherit it.
 - The suite must be able to fail: `self_test` breaks a throwaway copy of the
-  tree ninety-four ways and asserts the run goes red. If you change the suite,
-  keep that true.
+  tree one hundred and ten ways and asserts the run goes red. If you change
+  the suite, keep that true.
 
 ## The classifier fails closed, and that is a rule about code
 
