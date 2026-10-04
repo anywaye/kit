@@ -569,13 +569,36 @@
 #        is the failure this check exists to prevent. Measured here, 145 of the
 #        175 tracked files under reports/, tests/ and templates/ are not on the
 #        tuple, and a README listing 157 paths is a README nobody reads.
+#   105. the reusable workflow stops namespacing its concurrency group -> the
+#        collision check goes red. THE DEFECT THIS PACKET IS FOR, and it is the
+#        four-day one: caller and callee both declared
+#        `${{ github.workflow }}-${{ github.ref }}`, which inside a reusable
+#        workflow is the CALLER's value, so both asked for one lock and the
+#        `uses:` job produced no job, no check-run and no log for eleven
+#        repositories. `bin/prime` ran the suite, so tests were not absent --
+#        but no repository in the fleet ran kit's LINTER in CI.
+#   105b. a caller adopts the `kit-` prefix            -> the collision check
+#        goes red, on its SECOND branch. The mistake the workflow's header warns
+#        about, made in kit's own `ci.yml`. Separate from 105 because 105 leaves
+#        the comparison untested and this leaves the prefix rule untested, and a
+#        check whose two branches were only ever exercised together is a check
+#        that could have one of them deleted.
+#   105c. the same lock spelled `ref` on one side and `github.ref` on the other
+#        -> the collision check goes red. `core` writes the short form, so a
+#        byte comparison would have called the ONE repository in the fleet that
+#        spelled it differently clean.
 #
-# Both are `expect_red_script` against `tests/shard_test.sh`, which is a proof
+# 104 and 104b are `expect_red_script` against `tests/shard_test.sh`, which is a proof
 # rather than a gate over a tree for the same reason `classify_test.sh` is: the
 # property is about the suite's own arithmetic, so there is nothing for a check
 # over the tree to look at. The mutation is the defect that shipped — a 0-based
 # residue compared against a 1-based shard index — and it is why a four-shard merge
 # gate once reported all four green with the fourth having verified nothing.
+#
+# 105, 105b and 105c are `expect_red_check` over a tree, against
+# `reusable_concurrency_check`, and they are three rather than one because that
+# check makes two separable claims. See the recipes for why proving them together
+# would prove neither.
 
 set -euo pipefail
 
@@ -5046,6 +5069,91 @@ datasources: []
 YML
 expect_red_check 'breakage 104: a template tree nobody documented' \
   "$base104" 'README.md  (every shipped path'
+
+# ---------------------------------------------------------------------------
+# 105, 105b, 105c: THE REUSABLE WORKFLOW ASKED FOR THE CALLER'S OWN LOCK.
+#
+# MEASURED, and this is the defect these three exist for. Every caller in the
+# fleet declared
+#
+#     concurrency:
+#       group: ${{ github.workflow }}-${{ github.ref }}
+#       cancel-in-progress: true
+#
+# and `.github/workflows/ci.reusable.yml` declared the identical block from
+# 8ebf4db, the commit that first published it. Inside a reusable workflow
+# `github.workflow` is the CALLER's workflow name and `github.ref` is the
+# caller's ref, so both sides computed `ci-refs/heads/master` and asked for one
+# lock. The caller holds it. The `uses:` job was never created:
+#
+#   $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+#       --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
+#   typecheck + build | completed/success
+#   bin/prime         | completed/success
+#   $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+#   failure
+#
+# Both jobs green, the run red, `--log-failed` EMPTY. The `language` gate job is
+# unconditional, so its absence is the signal, and no caller in the fleet has ever
+# produced a job ending `/ language` — which is where lint, the frozen install and
+# the coverage step live. Four days, eleven repositories.
+#
+# WHY THESE THREE AND NOT ONE. `reusable_concurrency_check` asserts two separable
+# claims, and a recipe that fires on both proves neither: this file's own history
+# is a check written for a specific defect and later satisfied by a DIFFERENT one
+# (breakage 75). So each breakage moves one line in one file, and each can only be
+# caught by the branch it is about.
+#
+# WHICH IS WHY 105 IS NOT THE HISTORICAL REVERT. Putting the bare
+# `${{ github.workflow }}-${{ github.ref }}` back is the truest mutation available
+# and it is the WRONG one here, because in kit's own tree that also collides with
+# `ci.yml` — so it satisfies the comparison branch as well, and a recipe that
+# proves two branches proves neither. Measured: that spelling reports BOTH
+# messages. This one suffixes instead, which is the shape a "fix it by making the
+# group more specific" patch actually takes, and it is unprefixed WITHOUT
+# colliding: so only the prefix rule can see it.
+base105="$(fresh_copy kit-105)"
+edit "$base105/.github/workflows/ci.reusable.yml" \
+  '  group: kit-${{ github.workflow }}-${{ github.ref }}' \
+  '  group: ${{ github.workflow }}-${{ github.ref }}-ci'
+expect_red_check 'breakage 105: the callee stops namespacing its concurrency group, so it asks for the lock its caller already holds' \
+  "$base105" 'no caller and callee share a concurrency group' --static-only
+
+# 105b. The mistake the header warns a caller about, made in kit's OWN caller:
+# adopting the `kit-` prefix, which is the one group a caller may not use. It
+# fires the SECOND branch — the comparison — and cannot fire the first, because
+# `ci.yml` is not a standard kit hands out and the prefix rule is asserted only
+# over `$REUSABLE_WORKFLOWS`.
+#
+# That separation is the whole reason this is a separate recipe. 105 leaves the
+# comparison untested and 105b leaves the prefix rule untested; a check whose two
+# branches were only ever exercised together is a check that could have one of
+# them deleted.
+base105b="$(fresh_copy kit-105b)"
+edit "$base105b/.github/workflows/ci.yml" \
+  '  group: ${{ github.workflow }}-${{ github.ref }}' \
+  '  group: kit-${{ github.workflow }}-${{ github.ref }}'
+expect_red_check 'breakage 105b: a caller adopts the kit- prefix, which is the one group it may not ask for' \
+  "$base105b" 'no caller and callee share a concurrency group' --static-only
+
+# 105c. THE NORMALISATION, and it is here because of `core`, which writes
+# `${{ github.workflow }}-${{ ref }}` — not `github.ref`.
+#
+# Those are the same value to GitHub and different bytes to a `==`, so a check
+# that compared the two strings literally would have reported the ONE repository
+# in the fleet that spelled it differently as clean. This mutation is two lines in
+# two files for that one reason and it is not an accident: each side keeps the
+# `kit-` prefix, so the prefix rule stays green and only the normalised comparison
+# can see it. A byte-comparison version of this check passes here.
+base105c="$(fresh_copy kit-105c)"
+edit "$base105c/.github/workflows/ci.reusable.yml" \
+  '  group: kit-${{ github.workflow }}-${{ github.ref }}' \
+  '  group: kit-${{ github.workflow }}-${{ ref }}'
+edit "$base105c/.github/workflows/ci.yml" \
+  '  group: ${{ github.workflow }}-${{ github.ref }}' \
+  '  group: kit-${{ github.workflow }}-${{ github.ref }}'
+expect_red_check 'breakage 105c: the same lock spelled `ref` on one side and `github.ref` on the other' \
+  "$base105c" 'no caller and callee share a concurrency group' --static-only
 
 # ---------------------------------------------------------------------------
 # 104b: THE CONTROL, and it is the one this check cannot afford to lose.
