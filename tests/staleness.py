@@ -865,7 +865,7 @@ def report_template_failures(findings: list[dict]) -> int:
 
     A finding list is short and specific, so every line names the repository and
     the artefact. "6 unpinned cells" is a number somebody has to go and look up;
-    "guard/docker/Dockerfile is an unpinned divergence" is a task.
+    "gateway/docker/Dockerfile is an unpinned divergence" is a task.
 
     The three shapes are told apart by their KEYS, not by a flag, so a fourth
     shape cannot be silently rendered as one of these three. A dead pin carries

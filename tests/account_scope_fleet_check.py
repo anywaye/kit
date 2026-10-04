@@ -17,7 +17,7 @@ WHAT THIS IS, AND WHY IT IS NOT core's CI
           | grep -v "^./core/harness" | grep -v wt-m39
           -> pantry/account_scope.yml
              courier/account_scope.yml
-             guard/account_scope.yml
+             gateway/account_scope.yml
              core/.github/workflows/ci.yml
              core/harness/tests/account_scope_self_test.sh
 

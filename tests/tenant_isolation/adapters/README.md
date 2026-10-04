@@ -7,7 +7,7 @@ called**, and that separation is the whole reason another language is an adapter
 away rather than a second harness.
 
 **Two adapters exist: `elixir.sh` and `go.sh`.** The other four fleet languages —
-Ruby (cafaye-rb), TypeScript (cafaye-ts, guard, parlor, site), Python
+Ruby (cafaye-rb), TypeScript (cafaye-ts, gateway, parlor, site), Python
 (cafaye-py), Rust (darkroom) — are **unproven**. Not "covered by the same
 rules", not "nominally supported": unproven, and the report says so in those
 words.
@@ -15,7 +15,7 @@ words.
 **TypeScript is unproven for a different reason from the other three, and the
 reason is measured.** A third adapter was attempted against `parlor` and
 withdrawn, because **no TypeScript service in the fleet holds a database**:
-across `cafaye-ts`, `guard`, `parlor`, `site` and `docs` there is not one import
+across `cafaye-ts`, `gateway`, `parlor`, `site` and `docs` there is not one import
 of a postgres or ORM driver, not one declared driver, and not one `.sql` outside
 an `e2e/` fixture. There is therefore nothing for `adapter_migrate` to apply, no
 write path to seed two accounts through, and no query layer for
@@ -28,9 +28,9 @@ harness cannot be the thing that says so**, and that a claim about TypeScript
 written here would be a claim about nothing. See
 `REPORT-kit-tenant-adapter-ts-01.md` for the full reading.
 
-## Why `guard` is TypeScript, and why that is a finding rather than a typo
+## Why `gateway` is TypeScript, and why that is a finding rather than a typo
 
-This list used to read **"Go (identity, guard)"**, and `guard` is not a Go
+This list used to read **"Go (identity, gateway)"**, and `gateway` is not a Go
 service. It is 44 `.ts` files, 0 `.go` files and no `go.mod` — measured, because
 the sentence was a claim about a service nobody had looked at, and the whole of
 this harness is that a claim nobody has measured is worth nothing.
@@ -56,17 +56,17 @@ where, and neither of them is an adapter:
 
 - **`MVP-SCOPE.md`**, the fleet's scope decision, draws the architecture as
   `site (Next.js, SSR — generated from parlor)` → *server-side only, through
-  guard* → `identity (Go)`. Every arrow points **down** into the service that
+  gateway* → `identity (Go)`. Every arrow points **down** into the service that
   holds the rows.
-- **`guard`'s own `test/tenantEntryPoints.test.ts`** says it in the first
-  paragraph, unprompted: *"guard holds no account's rows: there is no `assets`
-  table and no query that could drop `and account_id = $2`. What guard holds is
+- **`gateway`'s own `test/tenantEntryPoints.test.ts`** says it in the first
+  paragraph, unprompted: *"gateway holds no account's rows: there is no `assets`
+  table and no query that could drop `and account_id = $2`. What gateway holds is
   **state keyed by account** — a rate-limit bucket, a set of API-key records, a
   browser session."*
 
 So the TypeScript-layer boundary is a **forwarding** property, not a query
 property: can a caller reach an account they do not hold by naming it. That is
-measurable, and `guard` has already measured it — with a negative case per
+measurable, and `gateway` has already measured it — with a negative case per
 account-scoped entry point, and with the entry points **derived from the source**
 rather than listed, so adding a route that takes an account fails the suite until
 its negative case exists. `parlor`'s equivalent is `src/lib/identity.ts`, where
@@ -98,7 +98,7 @@ way, is:
 
 > cross-tenant isolation is **proven for Elixir and Go**, on services that scope
 > correctly. **Four languages remain unproven** — Ruby (cafaye-rb), TypeScript
-> (cafaye-ts, guard, parlor, site), Python (cafaye-py), Rust (darkroom). For
+> (cafaye-ts, gateway, parlor, site), Python (cafaye-py), Rust (darkroom). For
 > TypeScript this is a stronger statement than for the others: no TypeScript
 > service holds a database at all, so there is no query layer for this harness
 > to measure, and the number cannot move until one does.
