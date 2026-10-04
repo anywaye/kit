@@ -152,14 +152,16 @@ because a suite that always goes red is at least reporting something true.
 
 ## 4. Uncaught breakages, before and after
 
-`bash tests/self_test.sh`, full suite, `timeout`, no timeout reached. Three complete
-runs, one per state of the tree.
+`bash tests/self_test.sh`, full suite, `timeout 9000`, no timeout reached. Three
+complete runs, one per state of the tree. **Tallies and verdicts kept apart** — the
+`FAIL` column is a tally of recipes that did not hold, and it is not a claim about the
+tree.
 
 | run | harness | evaluated | `PASS` | `FAIL` — the gate did not catch | exit |
 | --- | --- | --- | --- | --- | --- |
 | **BEFORE** | `HEAD~1`'s `self_test.sh` | 105 | 100 | **5** — unbroken tree, 23b, 31b, 38, 59 | 1 |
 | **AFTER** | `reports` on the list (`c5e4282`) | 105 | 103 | **2** — 38, 59 | 1 |
-| **FINAL** | + the needle on 38 (`8f97213`) | see §6 | | **1** — 59 | 1 |
+| **FINAL** | + the needle on 38 (`8f97213`) | 105 | 104 | **1** — 59 | 1 |
 
 BEFORE, the five:
 
@@ -178,6 +180,17 @@ AFTER, the two:
 FAIL self_test: breakage 38: one of the two programs gains a third-party import — the gate went red, but NOT via `tests/classify.py + tests/staleness.py`
 FAIL self_test: breakage 59: an UNADOPTED service copies the stack — green, and named — the gate went RED (exit 1), so the ceiling is not in force
 FAIL: self_test — 2 breakage(s) the gate did not catch.
+```
+
+FINAL, the one, and the four that are green beside it:
+
+```
+PASS self_test: unbroken tree — the gate is green on an unbroken tree
+PASS self_test: breakage 23b: an interpreter below the floor is a named skip, not a silent pass — reported as `templates/otel/ruby  (ruby 2.6.10 is below the template's 2.7 floor)`
+PASS self_test: breakage 31b: a service config that MATCHES kit is not a failure — the gate is green on an unbroken tree
+PASS self_test: breakage 38: one of the two programs gains a third-party import — caught by `the carve-out programs`
+FAIL self_test: breakage 59: an UNADOPTED service copies the stack — green, and named — the gate went RED (exit 1), so the ceiling is not in force
+FAIL: self_test — 1 breakage(s) the gate did not catch.
 ```
 
 **Both remaining failures are `81fffa6`'s as well, and neither is a consequence of the
@@ -226,10 +239,11 @@ PASS: every check passed.
 exit 0
 ```
 
-Fixed in `8f97213`. This is the **only proof in the repository that kit gains no
-dependency**, and a dead needle is indistinguishable from a satisfied assertion from the
-outside. AGENTS.md's rule — *the needle is the label, and a label a self-test asserts is
-a contract* — has now been paid for here five times; 71, 75, 76 and 77 were the first
+Fixed in `8f97213`, and confirmed in the FINAL run: `caught by \`the carve-out
+programs\``. This is the **only proof in the repository that kit gains no dependency**,
+and a dead needle is indistinguishable from a satisfied assertion from the outside.
+AGENTS.md's rule — *the needle is the label, and a label a self-test asserts is a
+contract* — has now been paid for here five times; 71, 75, 76 and 77 were the first
 four, and AGENTS.md records each.
 
 ### 4b. Breakage 59 — a new fleet-reading check the synthetic fleet cannot satisfy. **LEFT ALONE, ON PURPOSE.**
@@ -289,9 +303,9 @@ fleet on the strength of being a path.**
 ## 5. What still fails on the real tree, and why it is not mine
 
 `bash tests/validate.sh --static-only`, run from inside
-`/Users/kaka/Code/any/moon/cafaye/` so the fleet beside the repository is found:
+`/Users/kaka/Code/any/moon/cafaye/` so the fleet beside the repository is found.
 
-* on `HEAD~1`, before the change:
+On `HEAD~1`, before the change:
 
 ```
 FAIL generated stack  (no repository commits the file caf dev generates); 2 in frozen repositories, reported not counted
@@ -299,9 +313,20 @@ FAIL: 1 check(s) failed.
 exit 1
 ```
 
-* on `HEAD`, after the change: **the same single `FAIL`, and nothing else.** See §9 for
-  the run and §9's note that the measurement is a `--static-only` run and therefore does
-  not include the live tiers, the lint tier or the self-test phase.
+On `HEAD`, after the change — **the same single row, and nothing else**:
+
+```
+FAIL generated stack  (no repository commits the file caf dev generates); 2 in frozen repositories, reported not counted
+FAIL: 1 check(s) failed.
+note: 6 check(s) skipped (reported above).
+bash tests/validate.sh --static-only  48.66s user 36.48s system 69% cpu 2:01.78 total
+exit 1
+```
+
+`--static-only` is the phase set that includes `readme_check`, the classifier, the
+staleness reporter, the secrets tier, the shellcheck pass and every fleet check; it
+excludes the three docker live tiers, the lint tier and the self-test phase, and §4 is
+where the last of those is reported.
 
 It is pre-existing, and measured rather than asserted:
 
@@ -309,9 +334,8 @@ It is pre-existing, and measured rather than asserted:
   `81fffa6` — the account-scope packet:
 
 ```
-$ git log --format='%h %ad %s' --date=short -1 2e75d34
-2e75d34 2026-10-03 Merge branch 'worker/kit-tenant-adapter-ts-01' — TypeScript is unproven because it holds no rows
-$ git cat-file -e 2e75d34:tests/generated_stack_check.py && git merge-base --is-ancestor 2e75d34 81fffa6 && echo yes
+$ git cat-file -e 2e75d34:tests/generated_stack_check.py && \
+  git merge-base --is-ancestor 2e75d34 81fffa6 && echo yes
 yes
 ```
 
@@ -341,65 +365,87 @@ forbids me to touch. **Not fixed, and the fix is not mine to make.**
 
 ---
 
-## 6. The final measurement
+## 6. Why 59 is the only one left, and what it would take
 
-### 6a. What three complete runs say
+Not a summary — the argument, because "I fixed two of five" is not a claim anybody
+should act on.
 
-| state of the tree | evaluated | `PASS` | `FAIL` | the failures |
-| --- | --- | --- | --- | --- |
-| `HEAD~1` | 105 | 100 | **5** | unbroken tree, 23b, 31b, 38, 59 |
-| `c5e4282` (`reports` on the list) | 105 | 103 | **2** | 38, 59 |
-| `8f97213` (+ the needle on 38) | see §6d | | **1** | 59 |
+* The four that this packet turned green are green **in the FINAL run itself**, quoted
+  in §4: the unbroken-tree control, 23b, 31b and 38. 38's row names the check that
+  caught it, `the carve-out programs`, which is the assertion doing its job in the
+  direction that matters — the named check, not merely a red gate.
+* 59 is red for a cause that has nothing to do with `reports/` or with the needle:
+  `in-scope repositories  (every one declares its account-scoped surface)` cannot find
+  its instrument in a two-repository fixture, and refuses to report "no repository
+  checked" as a pass. §4b has the reproduction, the exit code, and the nine
+  repositories the vendored scope table demands.
+* It was red in the BEFORE run too, for the same reason, alongside the README red. So
+  the count went 5 → 2 → 1 by removing four reds and adding none.
 
-### 6b. Breakage 38, four ways
+**The pre-`9cddeee` count was 0 and this packet does not get back to it.** Both
+survivors are `81ffda6`'s — `81fffa6`'s, to be exact — both are named above with a
+reproduction each, and the one left is a decision about a nine-repository fixture
+rather than a typo. That is the honest place to stop, and it is the brief's own
+instruction: a nameable remaining failure gets named, not chased.
 
-1. **By hand, both directions** (§4a): the old needle selects NO check and can never
-   match; the new needle with the mutation prints
-   `FAIL the carve-out programs  (stdlib plus PyYAML; …)`; the new needle on the same
-   copy with the mutation reverted prints `PASS: every check passed.`
-2. **In the suite, sharded.** `KIT_SELF_TEST_SHARD=2/4` → `PASS: self_test — shard 2/4
-   ran 28 of 107 breakages and every one it ran held`, containing
-   `PASS self_test: breakage 38: one of the two programs gains a third-party import —
-   caught by \`the carve-out programs\``. Shard 2 is the shard 38 belongs to:
-   `(38-1) % 4 + 1 = 2`.
-3. **In the suite, unsharded, against the two trees that predate the needle change:** 38
-   was `FAIL` in both, identically.
-4. **What "dead" looked like:** with the old needle the mutation produced no
-   `FAIL <needle>` line at all — only `FAIL: --only='…' selected NO check out of the
-   suite.` So the recipe was red for a reason it did not name, which is exactly the
-   state a dead proof is in.
-
-### 6c. The other three shards of that sharded run are not evidence
-
-Shard 1 (`unbroken tree`), shard 3 (23b, 31b, 43, 59) and shard 4 (44) all reported
-`FAIL`, and none of it is a property of the tree:
-
-* **43 and 44 passed in both intact unsharded runs**, same harness, same mutations.
-  Their needle is `tests/gitleaks_gate.sh  (finds a real secret, …)`, and in the
-  sharded run the child's row was `FAIL gitleaks  (8.30.1, full history, --redact)` —
-  a copy whose `.git` was already gone, so "full history" had nothing to read and the
-  check 43 names never appeared.
-* The `unbroken tree` control and 23b / 31b / 59 are the four §4 shows **green** on the
-  same commits.
-* Shard 2 — the one that ran entirely before the tree went — is clean, and its
-  `every one it ran held` is a claim about 28 breakages and not about 107.
-
-So the sharded run narrows the field to 59 and adds nothing else, and it does so by
-contradicting two runs that did not have a tree disappear under them. Reported as what
-it is.
-
-### 6d. The number, plainly
-
-**Uncaught breakages over the 105 recipes a red run evaluates: 5 before → 2 after fix 1
-→ 1 after both.** The one is **breakage 59**, left on purpose, cause in §4b. The
-pre-`9cddeee` count was **0**, and this packet does **not** get back to it: the two that
-remain are both `81fffa6`'s, both named, and the one left is a decision about a
-nine-repository fixture rather than a typo. Reporting that plainly is worth more here
-than a green I could not account for.
+**A fourth and fifth row of evidence, because two runs of this were destroyed** (§7).
+The unsharded FINAL run is complete and quoted. A four-way sharded run
+(`KIT_SELF_TEST_SHARD=i/4`) also completed all four shards, and shard 2 — the shard
+breakage 38 belongs to, `(38-1) % 4 + 1 = 2` — reported `PASS: self_test — shard 2/4
+ran 28 of 107 breakages and every one it ran held`. Its other three shards are **not**
+evidence: the tree was deleted underneath them, and the two rows that prove it
+(`breakage 43` and `breakage 44`) **passed in both intact unsharded runs** with the
+same harness and the same mutations.
 
 ---
 
-## 7. Two things noticed, neither of them changed
+## 7. What this machine did to the measurements, and what that costs the report
+
+Three sessions share this box, and it is a 16GB one. Everything below is environment
+and none of it is evidence about the tree — but it changes which numbers in §4 are
+measured and which are assembled, so it is written down rather than smoothed over.
+
+1. **The worktree was deleted twice, mid-run, by another session.**
+   `wt-m39-kit-freshcopy-01` and `wt-reg-identity-down-05` both vanished while this
+   packet was running, and the branch went with them. The first kill presented as a
+   crash — `tests/self_test.sh: line 2999: everything.: command not found`, `exit 127`
+   — because bash was reading a script being unlinked from under itself. Both commits
+   survived as git objects; `git cat-file -t` confirmed them and the ref and worktree
+   were rebuilt on top.
+2. **A full run was SIGKILLed** by the OOM killer, at 16GB with two other full
+   `self_test` runs and two other new worktrees on the box at the same time. The FINAL
+   run was therefore taken from a private `git clone --no-local` of `kit` at
+   `8f97213`, outside the fleet root, so that a third party's worktree churn could not
+   reach it again.
+3. **A four-way sharded run completed and is still not evidence for three of its four
+   shards** (§6).
+
+What that means for a reader, stated as categories:
+
+* **Measured, complete, unsharded, from the worktree:** BEFORE (5 uncaught) and AFTER
+  (2 uncaught). Both finished, both printed their own summary line, both are quoted in
+  full.
+* **Measured, complete, unsharded, from the private clone:** FINAL (1 uncaught), quoted
+  in §4.
+* **Measured, complete, sharded:** shard 2/4 only — 28 of 107 breakages, all held.
+* **Measured, by hand, both directions, on a purpose-built copy:** everything in §2,
+  §4a and §4b. These are the load-bearing claims and **none of them depends on a full
+  suite run** — the `reports` half is a whole `validate.sh --static-only` in a
+  `fresh_copy`-shaped tree with and without the directory, and the 38 half is a whole
+  gate run three times with the mutation present, absent, and under the old needle.
+* **Not claimed:** that the suite is green. It is not, and it will not be until 59 is
+  dealt with on purpose.
+
+The private clone is legitimate for the self-test phase and for nothing else, and the
+reason is structural rather than convenient: **`fresh_copy` puts every copy in
+`$TMPDIR`, with no fleet beside it and no `.git`**, so the suite's measurements cannot
+see the fleet or the repository history either way. Every `--static-only` run in §2
+and §5 was made from inside the fleet root, which is the only place the fleet is
+visible — and §5's run is the one that can see `generated stack` at all.
+
+---
+
+## 8. Two things noticed, neither of them changed
 
 * **`tests/self_test.sh`'s header says `105 labelled invocations, 103 distinct breakage
   numbers`; the tree now has 107 and 105.** Measured:
@@ -431,41 +477,6 @@ fresh_copy call sites (code):             64
 
 ---
 
-## 8. What this machine did to the measurements, and what that costs the report
-
-Three sessions share this box, and it is a 16GB one. Everything below is environment,
-and none of it is evidence about the tree — but it changes which numbers in §4 and §6
-are measured and which are assembled, so it is written down rather than smoothed over.
-
-1. **The worktree was deleted twice, mid-run, by another session.** `wt-m39-kit-freshcopy-01`
-   and `wt-reg-identity-down-05` both vanished while this packet was running; the
-   first kill looked like a crash — `tests/self_test.sh: line 2999: everything.: command
-   not found`, `exit 127` — because bash was reading a script being unlinked from under
-   itself. The branch went with it both times. Both commits survived as git objects and
-   were recovered by recreating the ref and the worktree; `git fsck --lost-found` listed
-   them as dangling before the ref was rebuilt.
-2. **A full run was SIGKILLed** — the OOM killer, at 16GB with two other full
-   `self_test` runs and two other new worktrees on the box at the same time.
-3. **A four-way sharded run completed all four shards and is still not evidence** for
-   three of them, because the tree went away underneath shards 1, 3 and 4 while shard 2
-   was running (§6c).
-
-What that means for a reader:
-
-* **Measured, complete, unsharded:** the BEFORE run and the AFTER-fix-1 run. Both
-  finished, both printed their own summary, both are quoted in full in §4.
-* **Measured, complete, sharded:** shard 2/4 only — 28 of 107 breakages, all held.
-* **Measured, by hand, both directions, on a purpose-built copy:** everything in §2,
-  §4a and §4b. These are the strongest claims in the report and none of them depends
-  on a full suite run.
-* **Assembled from the three above:** the `8f97213` row's exact `PASS`/`FAIL` split.
-  §6d states the `FAIL` count (1, and 59 is its name) and §6b states the two halves
-  that establish it — 38 green in shard 2 and in a hand-built copy, and 38 the only
-  other red in the intact AFTER run. A fourth full run would turn that assembled row
-  into a measured one; it is not claimed as one.
-
----
-
 ## 9. Reproducing this, from a clean checkout
 
 ```sh
@@ -473,7 +484,7 @@ What that means for a reader:
 grep -n 'lint reports \\' tests/self_test.sh
 
 # 2. the copy, built the way fresh_copy builds one, with and without reports/
-#    (script used here: the entry list above, chmod +x "$dst"/tests/*.sh)
+#    (entry list as above, plus chmod +x "$dst"/tests/*.sh, plus KIT_GITLEAKS)
 bash tests/validate.sh --static-only        # in each; §2
 
 # 3. the real tree, from INSIDE the fleet root — a worktree in /tmp reports green
@@ -482,13 +493,19 @@ cd /Users/kaka/Code/any/moon/cafaye/wt-m39-kit-freshcopy-01
 bash tests/validate.sh --static-only        # §5: one FAIL, generated stack
 
 # 4. the suite
-bash tests/self_test.sh                     # §4; ~25 min, give it a timeout
+bash tests/self_test.sh                     # §4; ~29 min, give it a timeout
 ```
 
-The private copy §8 refers to was a `git clone --no-local` of `kit` at
-`8f97213`, run outside the fleet root. That is legitimate for the self-test phase and
-not for anything else, and the reason is structural rather than convenient:
-**`fresh_copy` puts every copy in `$TMPDIR`, with no fleet beside it and no `.git`,**
-so the suite's measurements cannot see the fleet or the repository history either way.
-The `--static-only` runs in §2 and §5 were made inside the fleet root, from the
-worktree, which is the only place the fleet is visible.
+## 10. Commits
+
+| commit | what |
+| --- | --- |
+| `c5e4282` | `reports` on `fresh_copy`'s list, with the comment; `CHANGELOG.md` under `### Fixed` |
+| `8f97213` | breakage 38's needle, from a label that no longer exists to the one that does |
+| `b27efd9` | this report |
+
+Two commits rather than one, on purpose: they are independent, and either can be
+reverted without the other. Reverting `8f97213` alone puts the suite back to 2
+uncaught; reverting `c5e4282` alone puts it back to 5 **and** re-arms the silent half
+in §3, where 88 recipes would again be filtered away from a copy that is red for a
+reason of its own.
