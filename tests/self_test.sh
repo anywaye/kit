@@ -69,6 +69,15 @@
 #        control, and it exists because this check's first version failed SEVEN
 #        jobs that were correct — every language job names `templates/tier/`
 #        in an error message while running the caller's own gate.
+#   107-107c. from every linted file needing type information. 107 narrows the
+#        `files` glob back to four extensions, which is the defect that
+#        shipped: `recommendedTypeChecked` is UNSCOPED and one config inside it
+#        adds `.mts`/`.cts` to the linted set, so those files got the rules and
+#        never the type information. 107b widens it to `.jsx` — a one-word edit
+#        that reads like more strictness and is a red build in every React
+#        service. 107c is the separate `tsconfigRootDir` claim, and it is its own
+#        recipe because 107 was blamed on it: the reported cause and the real
+#        one are different, and a recipe that fired on both would prove neither.
 #   90-93. from the account boundary. 90 removes `FORCE ROW LEVEL SECURITY` from
 #        the substrate — the setting that is in no guide and that no lint in this
 #        fleet checked for before `templates/database/tenancy/` existed, and the
@@ -5317,6 +5326,67 @@ jobs:
 YML
 expect_green_check 'breakage 106e: a job names kit paths in prose and fetches nothing — the seven jobs the first version of this check failed' \
   "$base106e" "reach kit's tree only through a checkout" --static-only
+
+# ---------------------------------------------------------------------------
+# 107, 107b, 107c: EVERY LINTED FILE GETS TYPE INFORMATION.
+#
+# MEASURED, and the diagnosis that arrived with it was wrong. `lint/eslint.config.mjs`
+# enabled `tseslint.configs.recommendedTypeChecked` and supplied `parserOptions`
+# under `files: ['**/*.{js,mjs,cjs,ts,tsx}']`. One config inside
+# `recommendedTypeChecked` — `typescript-eslint/eslint-recommended` — declares
+# `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS `.mts` and
+# `.cts` to the set of files ESLint will lint, while `recommendedTypeChecked`
+# itself is UNSCOPED. So every `.mts` file was linted, was handed the type-aware
+# rules, and was never handed the type information those rules require:
+#
+#   Error: Error while loading rule '@typescript-eslint/await-thenable':
+#   You have used a rule which requires type information, but don't have
+#   parserOptions set to generate type information for this file.
+#
+# Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669 on
+# the `node` job — the job's first real execution, suppressed for four days by
+# the collision ad3e320 fixed. Both services carry three root-level `.mts` files
+# (vitest.config.mts, vite.config.mts, vite.node.config.mts), so this was never
+# marginal. The run dies at exit 2 before reporting a single finding.
+#
+# IT WAS BLAMED ON `tsconfigRootDir: import.meta.dirname`, which IS wrong and IS
+# also fixed — but is not what produced the error. Measured on eslint 9.39.5 /
+# typescript-eslint 8: with `projectService: true`, setting `tsconfigRootDir` to
+# `/nonexistent-root`, or deleting it, leaves the run byte-identical, because the
+# service walks UP from the linted FILE rather than searching from the root. A
+# recipe written for the reported cause would have been green on the defect that
+# actually shipped, which is why 107 mutates the GLOB and 107c — the separate
+# `tsconfigRootDir` claim — is a different recipe against a different assertion.
+base107="$(fresh_copy kit-107)"
+edit "$base107/lint/eslint.config.mjs" \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx}'],"
+expect_red_check 'breakage 107: the files glob stops covering what recommendedTypeChecked can lint, so a .mts file gets the rules and never the type information' \
+  "$base107" "every linted file is given type information" --static-only
+
+# 107b. THE OTHER DIRECTION, which is the one that is tempting. Adding `.jsx` is
+# a one-word edit that reads like making the check stricter, and it would turn
+# every React service red with `was not found by the project service`, because no
+# config above adds `.jsx` to the linted set (so it is not currently linted) and
+# no `.jsx` file is in anyone's tsconfig. A React service's components are
+# `.tsx`. This recipe is here so the check's second branch is proven rather than
+# merely written down.
+base107b="$(fresh_copy kit-107b)"
+edit "$base107b/lint/eslint.config.mjs" \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts,jsx}'],"
+expect_red_check 'breakage 107b: the files glob widens to an extension nothing lints and nobody has a tsconfig for' \
+  "$base107b" "every linted file is given type information" --static-only
+
+# 107c. `tsconfigRootDir` named kit's directory. Not the reported cause, and a
+# separate assertion for exactly that reason — a recipe that fired on both would
+# prove neither, which is the rule breakage 105 exists to state.
+base107c="$(fresh_copy kit-107c)"
+edit "$base107c/lint/eslint.config.mjs" \
+  'tsconfigRootDir: process.cwd()' \
+  'tsconfigRootDir: import.meta.dirname'
+expect_red_check 'breakage 107c: tsconfigRootDir names kits own directory, so the first allowDefaultProject entry would resolve to .kit/lint and match nothing' \
+  "$base107c" "every linted file is given type information" --static-only
 
 # ---------------------------------------------------------------------------
 # 104b: THE CONTROL, and it is the one this check cannot afford to lose.

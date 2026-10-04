@@ -118,6 +118,10 @@ REUSABLE_WORKFLOWS="$WORKFLOW $IMAGE_WORKFLOW"
 # heredocs is a dozen chances to spell it three ways.
 GITLEAKS_CONFIG='.gitleaks.toml'
 GITLEAKS_GATE='tests/gitleaks_gate.sh'
+# Same reason, for the same reason. `eslint_typed_scope_check` reads this path
+# twice — once as the file to open and once in its own failure messages — and a
+# literal in two places is two chances to spell it three ways.
+ESLINT_CONFIG='lint/eslint.config.mjs'
 ZIZMOR_CONFIG='.github/zizmor.yml'
 
 # The one `language` option that is not a language. `none` means "this
@@ -10867,6 +10871,222 @@ PY4
   }
   check "reusable workflows  (no caller and callee share a concurrency group)" \
     reusable_concurrency_check
+
+  # -------------------------------------------------------------------------
+  # `eslint_typed_scope`: every linted file gets type information, or the
+  # type-aware rules cannot run at all.
+  #
+  # WHAT IT IS FOR. `lint/eslint.config.mjs` turned on
+  # `tseslint.configs.recommendedTypeChecked` and supplied `parserOptions` under
+  # a `files` glob of `**/*.{js,mjs,cjs,ts,tsx}`. Meanwhile one of the configs
+  # inside `recommendedTypeChecked` — `typescript-eslint/eslint-recommended` —
+  # declares `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS
+  # `.mts` and `.cts` to the set of files ESLint will lint. So every `.mts` file
+  # in a service was linted, was handed the type-aware rules, and was never
+  # handed the type information those rules require:
+  #
+  #   Error: Error while loading rule '@typescript-eslint/await-thenable':
+  #   You have used a rule which requires type information, but don't have
+  #   parserOptions set to generate type information for this file.
+  #
+  # Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669,
+  # on the `node` job, whose first real execution this was — the job had been
+  # suppressed for four days by the concurrency collision fixed in ad3e320. Both
+  # services carry three `.mts` files at the repo root (vitest.config.mts,
+  # vite.config.mts, vite.node.config.mts), so this was never marginal. The run
+  # dies at exit 2 before reporting a single finding.
+  #
+  # THE DIAGNOSIS THAT WAS WRONG, recorded because the wrong diagnosis is the
+  # more useful half. It was attributed to `tsconfigRootDir:
+  # import.meta.dirname` — kit's directory rather than the caller's — and that is
+  # a real misconfiguration which is also fixed. It is not what produced the
+  # error. Measured on eslint 9.39.5 / typescript-eslint 8: with
+  # `projectService: true`, setting `tsconfigRootDir` to `/nonexistent-root`, or
+  # deleting it, leaves the run byte-identical, because the project service walks
+  # UP from the linted FILE to find a tsconfig rather than searching from the
+  # root. A check written for the reported cause would have been green on the
+  # defect that actually shipped.
+  #
+  # WHY THIS IS A CHECK RATHER THAN A COMMENT. `files` is load-bearing in a way
+  # nothing else in this file's static phase can see, because ESLint 9 accepts a
+  # `files` glob that is narrower than the set of files its own inputs pull in,
+  # and there is no parse error and no warning: the run simply dies when the
+  # first type-aware rule is constructed. The only place this is observable is a
+  # real run against a real project — which is `tests/lint_test.sh`'s job, and
+  # which has an assertion for it. What THIS check does is hold the invariant the
+  # fix rests on, so a future edit to either list is caught here rather than in
+  # eleven services' CI.
+  #
+  # BOTH DIRECTIONS, because they are different mistakes with different costs.
+  # Too NARROW is the defect that shipped: a crash, exit 2, no findings. Too WIDE
+  # lints files kit never linted before — `.jsx` is the standing example, and
+  # adding it would turn every React service red with `was not found by the
+  # project service` since no `.jsx` file is in anyone's tsconfig. So the
+  # assertion is a superset-with-a-reason: every extension the recommended sets
+  # add must be present, and an extension nobody has a reason for is a finding.
+  eslint_typed_scope_check() {
+    "$PY" - "$ROOT" "$ESLINT_CONFIG" <<'PYE'
+import re
+import sys
+
+path = sys.argv[2]
+
+
+def strip_js_comments(src):
+    """Remove `//` and block comments, leaving string contents intact.
+
+    This exists because the first version of this check read its answer out of
+    the file's own COMMENT and went red on a config that is correct. `tsconfig-
+    RootDir` appears eleven times in the header above, explaining at length why
+    the value must be the caller's workspace, and the regex matched the first of
+    those rather than the `process.cwd()` on the last line.
+
+    That is AGENTS.md's rule arriving in a new place: "a check that can be
+    satisfied by a comment is not a check", and the mirror image is worse — a
+    check that can be FALSIFIED by one. The file documenting its own invariant
+    is the normal case, not an unlucky one, so any check reading a JS or shell
+    file has to strip comments first or it is reading the prose.
+
+    Strings are tracked because a `//` inside a quoted path is content: the
+    `paths` style glob in this very file is full of them.
+    """
+    out = []
+    i, n = 0, len(src)
+    while i < n:
+        ch = src[i]
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(src[i])
+                if src[i] == "\\":
+                    if i + 1 < n:
+                        out.append(src[i + 1])
+                        i += 2
+                        continue
+                elif src[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+                if src[i] == "\n":
+                    out.append("\n")
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+src = strip_js_comments(open(path, encoding="utf-8").read())
+
+# The extensions `recommendedTypeChecked` can hand a type-aware rule. Held HERE
+# and asserted against kit's glob rather than read out of an installed
+# typescript-eslint, because this repository ships no node_modules and no
+# dependencies, and a check that could only run where a package was installed
+# would be a check that never runs in the one place it is needed. The value is
+# typescript-eslint 8's own `eslint-recommended` `files`, quoted in
+# lint/eslint.config.mjs's own header comment; if a future version changes it,
+# this list is the thing to update and the comment is where the reason lives.
+#
+# `.jsx` is deliberately NOT here and the comment says why; it is a plausible
+# addition to this tuple and one that would be wrong.
+REQUIRED = ("ts", "tsx", "mts", "cts")
+
+# kit's glob, read out of the file rather than restated. A restatement would be a
+# second copy of the same fact, and AGENTS.md's rule about `advisoryOps` and
+# `unrecognisedTier` is the general form of the point: a property stated in two
+# places is a property asserted zero times.
+m = re.search(r"files:\s*\[([^\]]*\*\.\{[^}]*\}[^\]]*)\]", src)
+if not m:
+    sys.exit(
+        f"{path}: could not find the brace-globbed `files` entry this check reads. "
+        f"The check has stopped being able to ask its question, and a check that "
+        f"cannot ask its question is not a check"
+    )
+present = set(re.findall(r"[a-z]+", m.group(1)))
+
+problems = []
+missing = [e for e in REQUIRED if e not in present]
+if missing:
+    problems.append(
+        f"{path}: the `files` glob covering `parserOptions` is missing {missing}. "
+        f"tseslint.configs.recommendedTypeChecked contains a config whose own "
+        f"`files` adds {list(REQUIRED)} to the set of files ESLint lints, and "
+        f"`recommendedTypeChecked` itself is UNSCOPED — so a linted file outside "
+        f"this glob is given the type-aware rules and never given the type "
+        f"information they require, and the run dies at exit 2 with `You have "
+        f"used a rule which requires type information` before reporting a single "
+        f"finding. This is the defect that shipped: cafaye/site run 37236386666 "
+        f"and cafaye/parlor run 37230458669, both of which carry three root-level "
+        f"`.mts` files"
+    )
+
+# And the other direction. `jsx` is the named example, and the reason is
+# measured: nothing above adds it to the linted set, so adding it here widens
+# kit's lint in every service in the fleet, and no `.jsx` file is in anyone's
+# tsconfig — so every one of them goes red with `was not found by the project
+# service`. A React service's components are `.tsx`.
+UNJUSTIFIED = ("jsx",)
+stray = [e for e in UNJUSTIFIED if e in present]
+if stray:
+    problems.append(
+        f"{path}: the `files` glob now covers {stray}. No recommended set adds "
+        f"those to the linted set, so this widens what kit lints in every service "
+        f"in the fleet, and a `.jsx` file is in nobody's tsconfig — so the cost is "
+        f"a red `was not found by the project service` in each of them. If this is "
+        f"wanted it is a decision about the fleet's lint policy and belongs in a "
+        f"comment here saying so"
+    )
+
+# `tsconfigRootDir` must be the CALLER's workspace. Not the reported cause of the
+# crash above, and still asserted: it is load-bearing in exactly one place, and
+# that place is `allowDefaultProject`, whose globs are matched RELATIVE TO IT
+# (`useProgramFromProjectService.js` does
+# `path.relative(parseSettings.tsconfigRootDir, filePathAbsolute)`). With kit's
+# own directory as the root, a pattern meant to cover the caller's root config
+# files resolves to `.kit/lint/*.mts` and matches nothing — the error says so:
+# `allowDefaultProject is set to ["*.mts"], which does not match '../../x.mts'`.
+# So the value is wrong in a way that is invisible until the first entry is added.
+tm = re.search(r"tsconfigRootDir:\s*([^,\n}]+)", src)
+if not tm:
+    problems.append(
+        f"{path}: no `tsconfigRootDir` is set. typescript-eslint then infers one, "
+        f"and the inference is a guess about a directory layout kit does not know"
+    )
+elif "import.meta.dirname" in tm.group(1):
+    problems.append(
+        f"{path}: `tsconfigRootDir` is `import.meta.dirname`, which is kit's own "
+        f"`lint/` directory rather than the caller's workspace. It is not the cause "
+        f"of the crash the header describes — with `projectService: true` the "
+        f"service walks up from the linted FILE, so this value is ignored for "
+        f"project lookup — but `allowDefaultProject` globs are matched relative to "
+        f"it, so the first entry added would resolve to `.kit/lint/` and match "
+        f"nothing. It must be the caller's workspace"
+    )
+
+if problems:
+    sys.exit("; ".join(problems))
+
+print(
+    f"every extension recommendedTypeChecked can lint ({', '.join(REQUIRED)}) is "
+    f"inside the `files` glob that supplies parserOptions, no extension is present "
+    f"without a reason, and tsconfigRootDir is the caller's workspace rather than "
+    f"kit's"
+)
+PYE
+  }
+  check "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" \
+    eslint_typed_scope_check
 
   # -------------------------------------------------------------------------
   # `kit-gate-tree`: a reusable workflow has NO location of its own, so every

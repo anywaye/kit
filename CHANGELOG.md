@@ -68,6 +68,75 @@
   Both are one mistake wearing two hats — a script written to be called by one
   caller and run by another that had not been read.
 
+- **Every linted file gets type information, or the type-aware rules cannot run
+  at all — and `recommendedTypeChecked` is UNSCOPED, so `files` is load-bearing.**
+  `lint/eslint.config.mjs` enabled `tseslint.configs.recommendedTypeChecked` and
+  supplied `parserOptions` under `files: ['**/*.{js,mjs,cjs,ts,tsx}']`. One
+  config *inside* `recommendedTypeChecked` — `typescript-eslint/eslint-recommended`
+  — declares `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which **adds**
+  `.mts` and `.cts` to the set of files ESLint will lint. So every `.mts` file in
+  a service was linted, was handed the type-aware rules, and was never handed the
+  type information those rules require:
+
+  ```
+  Error: Error while loading rule '@typescript-eslint/await-thenable':
+  You have used a rule which requires type information, but don't have
+  parserOptions set to generate type information for this file.
+  ```
+
+  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  on the `node` job — whose first real execution this was, suppressed for four
+  days by the collision `ad3e320` fixed. Both services carry three root-level
+  `.mts` files, so this was never marginal. The run dies at **exit 2 before
+  reporting a single finding**.
+
+  **The diagnosis that arrived with it was wrong, and the wrong one is the more
+  useful half.** It was attributed to `tsconfigRootDir: import.meta.dirname` —
+  kit's directory rather than the caller's. That is a real misconfiguration and
+  it is fixed here, but it is **not** what produced the error. Measured on
+  eslint 9.39.5 / typescript-eslint 8: with `projectService: true`, setting
+  `tsconfigRootDir` to `/nonexistent-root`, or deleting it entirely, leaves the
+  run byte-identical — the project service walks **up from the linted file** to
+  find a tsconfig and never consults the root. A check written for the reported
+  cause would have been green on the defect that actually shipped.
+
+  `tsconfigRootDir` is still fixed, because it is load-bearing in exactly one
+  place and it is a place kit would otherwise reach for: `allowDefaultProject`
+  globs are matched **relative to it**
+  (`useProgramFromProjectService.js` does
+  `path.relative(parseSettings.tsconfigRootDir, filePathAbsolute)`). With kit's
+  directory as the root, a pattern meant to cover the caller's own root config
+  files resolves to `.kit/lint/*.mts` and matches nothing — and the error says
+  so: `allowDefaultProject is set to ["*.mts"], which does not match
+  '../../x.mts'`. A latent misconfiguration, invisible until the first entry is
+  added. The value is now `process.cwd()`, which is the caller's workspace by
+  construction because the lint step carries `working-directory:` — no new
+  workflow input, so **no caller in the fleet needs a PR**.
+
+  `.jsx` is deliberately still absent. Nothing above adds it to the linted set,
+  so adding it would widen kit's lint in every service and turn each React repo
+  red with `was not found by the project service`.
+
+  **Two checks, because the two halves fail differently.**
+
+  - `eslint_typed_scope_check` holds the invariant, in both directions: every
+    extension the recommended sets can lint must be present, and an extension
+    with no reason is a finding. It **strips JS comments before reading**, and
+    that is not hygiene: the file now explains `tsconfigRootDir` in eleven
+    comment lines, and the check's first version matched one of those and went
+    red on a config that is correct. AGENTS.md's "a check that can be satisfied
+    by a comment is not a check" has a mirror image that is worse — a check that
+    can be *falsified* by one.
+  - `tests/lint_test.sh` **runs** it, with six new assertions and three controls.
+    The control for the pre-fix glob asserts the crash *by its own message*, not
+    by its exit status, because the pre-fix failure was also red and was
+    mistaken for the linter working. The `allowDefaultProject` pair had the same
+    defect and it was caught by measurement: both runs exit non-zero, so two
+    `red` assertions could not tell "the glob resolved and the linter found the
+    bug" from "the glob matched nothing and ESLint exited 2 anyway". Reverting
+    kit's `tsconfigRootDir` was 22/22 green until that was fixed, which is the
+    same confusion as the defect itself: a red run that found nothing.
+
 ### Added
 
 - **The README's file list is now closed in the direction a packet moves in.**

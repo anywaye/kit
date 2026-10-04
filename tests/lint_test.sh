@@ -579,6 +579,215 @@ EOF
     cp "$KIT_ESLINT" "$WORK/eslint-outside/eslint.config.mjs"
     run 'node: the SAME config BESIDE the repo cannot resolve @eslint/js (so kit must be checked out INSIDE)' red \
       sh -c "cd '$e' && ./node_modules/.bin/eslint --config '$WORK/eslint-outside/eslint.config.mjs' ./src"
+
+    # ===========================================================================
+    # THE `.mts` / `.cts` GLOB, which is the defect that actually shipped.
+    #
+    # Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669,
+    # both of which carry three `.mts` files at the repo root:
+    #
+    #   Error: Error while loading rule '@typescript-eslint/await-thenable':
+    #   You have used a rule which requires type information, but don't have
+    #   parserOptions set to generate type information for this file.
+    #
+    # The cause is NOT the one that was reported, and asserting the reported one
+    # would have proved nothing. It is a GLOB MISMATCH: a config inside
+    # `recommendedTypeChecked` (`typescript-eslint/eslint-recommended`) declares
+    # `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS `.mts`
+    # and `.cts` to the files ESLint will lint, while kit's own `files` glob —
+    # the only thing that supplies `parserOptions`, and so the only source of
+    # type information — was `**/*.{js,mjs,cjs,ts,tsx}`, narrower than both. Every
+    # `.mts` file therefore got the type-aware rules and never got the type
+    # information, and the run died at exit 2 before reporting a single finding.
+    #
+    # `tsconfigRootDir` was blamed because it IS wrong — it named kit's `lint/`
+    # rather than the caller's — but with `projectService: true` the service walks
+    # UP from the linted file to find a tsconfig and never consults it. Measured:
+    # setting it to `/nonexistent-root`, and deleting it, both leave the run
+    # identical. It is load-bearing only for `allowDefaultProject`, whose globs
+    # are matched relative to it.
+    #
+    # So the proof below is a PAIR, and a pair is required: the fixture's tsconfig
+    # MUST include the `.mts` file (or the widened glob reports a project-service
+    # miss instead, which is a different failure with the same exit code), and the
+    # control MUST narrow the glob back to four extensions. Then the same file,
+    # the same node, the same packages and the same tsconfig differ in exactly one
+    # thing — the width of the glob that supplies type information.
+    cat >"$e/tsconfig.mts.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["src", "*.mts"]
+}
+EOF
+    mv "$e/tsconfig.mts.json" "$e/tsconfig.json"
+    # A root-level `.mts` with a `==`, exactly as a service's vite.config.mts is a
+    # root-level `.mts`. Plain data, so the finding is `eqeqeq` and nothing else.
+    cat >"$e/vite.config.mts" <<'EOF'
+const limit = 10;
+
+export default { limit: limit == 10 };
+EOF
+    # The control: kit's config with the glob narrowed BACK to four extensions,
+    # which is what shipped. Nothing else differs.
+    sed "s#'\*\*/\*\.{js,mjs,cjs,ts,tsx,mts,cts}'#'**/*.{js,mjs,cjs,ts,tsx}'#" \
+      "$e/.kit/lint/eslint.config.mjs" >"$e/fixtures/narrow-glob.config.mjs"
+    run 'node: kit config lints a root-level .mts file (the glob covers what recommendedTypeChecked can lint)' red \
+      sh -c "cd '$e' && ./node_modules/.bin/eslint --config '$e/.kit/lint/eslint.config.mjs' ./vite.config.mts"
+    run 'node: ...and the SAME file under the PRE-FIX glob is the crash instead, not a finding (so the glob is what fixed it)' red \
+      sh -c "cd '$e' && ./node_modules/.bin/eslint --config '$e/fixtures/narrow-glob.config.mjs' ./vite.config.mts"
+    # The pair above proves only that both are RED, which a crash and a finding
+    # both are — and that is the whole trap this section exists to avoid, because
+    # the pre-fix failure was ALSO red and was mistaken for the linter working.
+    # So the control is additionally required to produce the CRASH rather than a
+    # finding, read out of its own output.
+    if out=$(cd "$e" && ./node_modules/.bin/eslint --config "$e/fixtures/narrow-glob.config.mjs" ./vite.config.mts 2>&1); then
+      :
+    fi
+    case "$out" in
+      *"requires type information"*)
+        pass 'node: the pre-fix glob dies on the type-information error, and the fixed glob reports eqeqeq instead'
+        ;;
+      *)
+        fail 'node: the pre-fix glob dies on the type-information error, and the fixed glob reports eqeqeq instead' "$out"
+        ;;
+    esac
+    # And the direction that matters most: the FIXED glob must report a FINDING,
+    # not merely exit non-zero. A widened glob that made the file unlintable would
+    # satisfy both assertions above and check nothing.
+    if out=$(cd "$e" && ./node_modules/.bin/eslint --config "$e/.kit/lint/eslint.config.mjs" ./vite.config.mts 2>&1); then
+      :
+    fi
+    case "$out" in
+      *"eqeqeq"*) pass 'node: the fixed glob reports a real finding on the .mts file, rather than making it unlintable' ;;
+      *) fail 'node: the fixed glob reports a real finding on the .mts file, rather than making it unlintable' "$out" ;;
+    esac
+    # `tsconfigRootDir`, asserted as the CALLER's workspace. Not the reported
+    # cause, and still load-bearing for `allowDefaultProject` — whose globs are
+    # matched relative to it, so a pattern meant to cover this fixture's root
+    # config file resolves to `.kit/lint/*.mts` and matches nothing when the root
+    # is kit's directory. The error names itself:
+    #     allowDefaultProject is set to ["*.mts"], which does not match '../../x.mts'
+    # Derived from KIT'S OWN FILE by one substitution, and that is the point.
+    #
+    # The first version of this assertion wrote its own config out by hand, with
+    # `tsconfigRootDir: process.cwd()` typed into it — so it proved the
+    # MECHANISM is load-bearing and said nothing at all about kit's shipped
+    # value. Measured: reverting `lint/eslint.config.mjs` to
+    # `import.meta.dirname` left this file 20/20 green, because the copy under
+    # test was not the file under test. So the value is now patched INTO a copy
+    # of kit's config, and reverting kit's file turns this red.
+    #
+    # The substitution is `projectService: true` -> the same call plus an
+    # `allowDefaultProject` entry, and nothing else about the file changes.
+    sed "s#projectService: true#projectService: { allowDefaultProject: ['*.mts'] }#" \
+      "$e/.kit/lint/eslint.config.mjs" >"$e/fixtures/adp-at-caller.config.mjs"
+    # The control is the SAME file with its root replaced by kit's own directory.
+    # One value differs, and it is the value under test.
+    #
+    # ANCHORED ON THE `parserOptions` LINE, and that anchoring is not tidiness.
+    # The first version matched `tsconfigRootDir: \(.*\)` anywhere, and this file
+    # now mentions `tsconfigRootDir` in eight COMMENT lines explaining why the
+    # value is what it is — one of which ends in a backtick-quoted `*/`. The
+    # substitution rewrote it, which closed a comment that was still open and
+    # turned the whole file into a syntax error:
+    #
+    #     SyntaxError: Unexpected token '.'
+    #
+    # So the control did not fail by being wrong, it failed by not parsing, and
+    # it would have "passed" a `does not match` assertion by producing any error
+    # at all. Anchoring on the same line as `parserOptions` — the only line where
+    # the two appear together — is the difference between substituting the value
+    # and substituting the documentation of the value.
+    #
+    # And the trailing `.*` had to become `[^}]*` for the same reason twice over:
+    # `.*` ran to the end of the line and took the line's closing ` },` with it,
+    # so the file did not parse. A substitution that can eat its own delimiter is
+    # a substitution whose failure mode is a syntax error somewhere else.
+    sed "s#\(parserOptions: { projectService: { allowDefaultProject: \['\*\.mts'\] }, \)tsconfigRootDir: [^}]*#\1tsconfigRootDir: import.meta.dirname#" \
+      "$e/fixtures/adp-at-caller.config.mjs" >"$e/fixtures/adp-at-kit.config.mjs"
+    # The control must PARSE. Asserted, because the alternative is a control that
+    # produces an error of some kind for reasons of its own and is then read as
+    # evidence about `allowDefaultProject`.
+    if node --check "$e/fixtures/adp-at-kit.config.mjs" >/dev/null 2>&1; then
+      pass 'node: the tsconfigRootDir control parses as JS (so it can fail for the reason it is here to fail)'
+    else
+      fail 'node: the tsconfigRootDir control parses as JS (so it can fail for the reason it is here to fail)' \
+        "$(node --check "$e/fixtures/adp-at-kit.config.mjs" 2>&1 | head -3)"
+    fi
+    # Guard the control against being a no-op copy of the config under test: if
+    # kit's file ever stops naming a `tsconfigRootDir`, the substitution matches
+    # nothing and the two files are identical, the pair below reports the same
+    # answer twice, and it is green for a reason nobody can see.
+    if cmp -s "$e/fixtures/adp-at-caller.config.mjs" "$e/fixtures/adp-at-kit.config.mjs"; then
+      fail 'node: the tsconfigRootDir control is a DISTINCT file (so the pair below is not one run twice)' \
+        "both fixtures are byte-identical, so \`tsconfigRootDir\` was not found in kit's config to replace"
+    else
+      pass 'node: the tsconfigRootDir control is a DISTINCT file (so the pair below is not one run twice)'
+    fi
+    # The fixture's tsconfig deliberately does NOT include `*.mts`, so this file
+    # can only be linted at all if `allowDefaultProject` matches it.
+    cat >"$e/tsconfig.json" <<'EOF'
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["src"]
+}
+EOF
+    # RED, not green: the file carries a `==`, so a run in which
+    # `allowDefaultProject` RESOLVED reports the finding. Asserting `green` here
+    # was the first version of this assertion and it was wrong — it would have
+    # passed for a run that linted nothing at all, which is the failure mode this
+    # whole file exists to prevent.
+    #
+    # AND NOT `run … red` EITHER, which was the second version and was worse,
+    # because it hid the very thing the pair exists to measure. BOTH runs exit
+    # non-zero here: the resolved one on `eqeqeq`, the unresolved one on
+    # `allowDefaultProject is set to […], which does not match`. Measured with
+    # kit's `tsconfigRootDir` reverted to `import.meta.dirname`, this whole file
+    # was 22/22 green — a pair of `red` assertions cannot tell "the glob resolved
+    # and the linter found the bug" from "the glob matched nothing and ESLint
+    # exited 2 anyway", which is the same confusion as the defect itself: a red
+    # run that found nothing.
+    #
+    # So the finding is asserted OUT OF THE OUTPUT, not out of the exit status.
+    # That is AGENTS.md's rule ("the test is the finding, not the exit status")
+    # arriving in a file that had just broken it.
+    if out=$(cd "$e" && ./node_modules/.bin/eslint --config "$e/fixtures/adp-at-caller.config.mjs" ./vite.config.mts 2>&1); then
+      :
+    fi
+    case "$out" in
+      *eqeqeq*)
+        pass 'node: allowDefaultProject resolves against the CALLER workspace, so a caller root .mts is LINTED and its == found'
+        ;;
+      *)
+        fail 'node: allowDefaultProject resolves against the CALLER workspace, so a caller root .mts is LINTED and its == found' "$out"
+        ;;
+    esac
+    # ...and the control, which is the whole reason the value is fixed: the SAME
+    # config with kit's directory as the root cannot match the caller's file, and
+    # reports so in its own message.
+    if out=$(cd "$e" && ./node_modules/.bin/eslint --config "$e/fixtures/adp-at-kit.config.mjs" ./vite.config.mts 2>&1); then
+      :
+    fi
+    case "$out" in
+      *"does not match"*)
+        pass 'node: ...and the SAME config rooted at KIT`S directory cannot match a caller file (so tsconfigRootDir is load-bearing)'
+        ;;
+      *)
+        fail 'node: ...and the SAME config rooted at KIT`S directory cannot match a caller file (so tsconfigRootDir is load-bearing)' "$out"
+        ;;
+    esac
   fi
 else
   skip 'node: node or npm is not installed' 'the eslint control did not run'
@@ -586,6 +795,12 @@ else
   skip 'node: node or npm is not installed' 'the working-directory requirement did not run'
   skip 'node: node or npm is not installed' 'the .kit/** ignore did not run'
   skip 'node: node or npm is not installed' 'the checkout-location constraint did not run'
+  skip 'node: node or npm is not installed' 'the .mts/.cts glob width did not run'
+  skip 'node: node or npm is not installed' 'the pre-fix control for the .mts glob did not run'
+  skip 'node: node or npm is not installed' 'the fixed glob reporting a finding did not run'
+  skip 'node: node or npm is not installed' 'the tsconfigRootDir/allowDefaultProject resolution did not run'
+  skip 'node: node or npm is not installed' 'the tsconfigRootDir control being distinct did not run'
+  skip 'node: node or npm is not installed' 'the tsconfigRootDir control parsing did not run'
 fi
 
 # ===========================================================================
