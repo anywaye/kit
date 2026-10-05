@@ -36,6 +36,15 @@
 # bundle add opentelemetry-instrumentation-rack
 # bundle add opentelemetry-instrumentation-active_record
 # bundle add opentelemetry-instrumentation-faraday
+#
+# The two versioned gems are on DIFFERENT tracks, and that is not a mistake to be
+# tidied: the fleet's billing resolves opentelemetry-sdk 1.13.1 with
+# opentelemetry-exporter-otlp 0.37.0, and the exporter's dependency is on the
+# 1.x sdk while its own releases number from 0.x. `bundle add` without a version
+# resolves both; the resolved pair is in ../pins.md. The instrumentation gems
+# are intentionally left unpinned here because the right set is whichever ones
+# this service actually loads — see the `use_all!` note below, which is the
+# thing that decides.
 # ---------------------------------------------------------------------------
 
 # config/initializers/otel.rb

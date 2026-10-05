@@ -31,13 +31,18 @@
 #
 # ---------------------------------------------------------------------------
 # mix deps.get
-#   {:opentelemetry, "~> 1.5"},
+#   {:opentelemetry, "~> 1.7"},
 #   {:opentelemetry_exporter,
-#    "~> 1.5",
+#    "~> 1.11",
 #    only: [:dev, :test, :prod]},
 #   {:opentelemetry_bandit, "~> 0.6"},
 #   {:opentelemetry_phoenix, "~> 0.3"},
 #   {:telemetry_metrics, "~> 1.0"}
+#
+# The sdk and the exporter are on DIFFERENT tracks and both were stale here: they
+# were both "~> 1.5", and the fleet's courier resolves opentelemetry 1.7.0 with
+# opentelemetry_exporter 1.11.0. The exporter declares a dependency on the sdk,
+# so a "~> 1.5" floor on the exporter cannot install a 1.7 sdk. See ../pins.md.
 # ---------------------------------------------------------------------------
 
 defmodule Courier.Telemetry do
