@@ -811,7 +811,103 @@ par_pids=""
 par_slots=""
 par_running=0
 
-have() { command -v "$1" >/dev/null 2>&1; }
+# The probe each toolchain actually answers. This is a TABLE rather than a
+# blanket `--version` because `--version` is not a universal spelling: `go` and
+# `gofmt` both REJECT it ("flag provided but not defined: -version") and exit
+# non-zero, so a blanket probe declares a perfectly working Go 1.26 absent and
+# skips two tiers that would otherwise run. That is the failure this whole
+# change exists to remove, reintroduced from the other side — a probe that says
+# "no" about a toolchain that works is as wrong as one that says "yes" about a
+# toolchain that does not, and the second one is the one that hides a tier.
+#
+# A toolchain not named here is probed with `--version`, which is what every
+# other one of these answers. The fallback is the majority behaviour rather
+# than a refusal, so adding a toolchain to the callers below does not also
+# require a second edit here.
+_kit_probe_for() {
+  case "$1" in
+    go) printf '%s' 'version' ;;
+    # `gofmt` is the odd one out: it takes NO version argument at all. Anything
+    # that is not a flag it recognises is read as Go SOURCE, so `gofmt version`
+    # is a parse error on the word "version" ("version:1:1: expected 'package',
+    # found 2.0"), and `gofmt --version` is "flag provided but not defined". It
+    # has exactly one spelling that answers without reading stdin as source:
+    # `-h`, which prints usage and exits 0.
+    gofmt) printf '%s' '-h' ;;
+    # `printf '--version'` is parsed as an OPTION by bash's printf, not as a
+    # format string, and prints "printf: --: invalid option" to stderr while
+    # emitting nothing on stdout. That is not a hypothetical: it made
+    # python3 and elixir read as absent on a machine where both work, which
+    # would have skipped six tiers. The `--` is what says "the arguments start
+    # here"; every other printf in this file that emits a value that could
+    # begin with a dash uses the same form.
+    *)      printf '%s' '--version' ;;
+  esac
+}
+
+# Can this gate actually RUN $1? Not "is there a file called $1 on PATH".
+#
+# WHY IT IS NOT `command -v`, and the case that made the difference is a real
+# run of this gate rather than a thought experiment. Every toolchain here is
+# managed by mise, and mise installs a SHIM for each one: `command -v rustc`
+# finds `~/.local/share/mise/shims/rustc` and says yes on a machine where that
+# shim cannot resolve a version and errors the moment it is invoked:
+#
+#     $ command -v rustc && echo yes
+#     yes
+#     $ rustc --version
+#     mise ERROR No version is set for shim: rustc
+#
+# So `have rustc` was TRUE on a machine with no working rustc, and every caller
+# below took the "the toolchain is installed" branch and reported a FAIL for a
+# toolchain that was never there. That inverts the rule this repository states
+# everywhere else: a check that cannot run is a `report SKIP` NAMING the reason,
+# never a red and never a silent pass. `b553c7d` records the intended outcome in
+# its own words — "8 skips, all reported, each for a reason the environment
+# genuinely states (... 3 needing rustc)" — and this machine produced a FAIL
+# for exactly those three.
+#
+# It is also the asymmetry `b553c7d` set out to remove, arriving from the other
+# side. That commit made python resolve through mise because "a bare
+# `command -v` for everything else" was invisible interactively and fatal
+# non-interactively. This is the same defect one level up: the command EXISTS,
+# and it still cannot run.
+#
+# WHAT IT COSTS, stated rather than assumed. This now RUNS the command instead
+# of naming it, so every `have` costs a process where it used to cost a PATH
+# scan, and two of them (`go` and `gofmt`, below) can be slow to answer. That
+# is why the answer is computed once per command and cached, and why the probe
+# is bounded by `timeout` rather than left to hang on a toolchain that is
+# present and wedged. A probe with no bound is the same bug wearing a different
+# hat: an unbounded check for "is this thing usable" fails by hanging rather
+# than by answering.
+#
+# A TIMEOUT IS A "no", and that is deliberate rather than convenient: a
+# toolchain that cannot print its version inside 30 seconds is not one this
+# gate can build a tier out of, and reporting it as absent is the honest
+# reading. It is also why the bound is generous — this is a version string, not
+# a build, and the toolchains here are on a warm PATH.
+_kit_have_cache=""
+have() {
+  local cmd="$1" cached runner probe
+  case "$_kit_have_cache" in
+    *"|$cmd="*) cached="${_kit_have_cache#*"|$cmd="}"; cached="${cached%%|*}"
+      [ "$cached" = yes ] && return 0 || return 1 ;;
+  esac
+  runner="$(_timeout_bin 2>/dev/null || printf '')"
+  probe="$(_kit_probe_for "$cmd")"
+  if command -v "$cmd" >/dev/null 2>&1; then
+    if [ -n "$runner" ]; then
+      "$runner" 30 "$cmd" "$probe" >/dev/null 2>&1 && cached=yes || cached=no
+    else
+      "$cmd" "$probe" >/dev/null 2>&1 && cached=yes || cached=no
+    fi
+  else
+    cached=no
+  fi
+  _kit_have_cache="${_kit_have_cache}|${cmd}=${cached}|"
+  [ "$cached" = yes ]
+}
 
 # No tracked file carries a merge-conflict marker.
 #
