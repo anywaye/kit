@@ -9,12 +9,13 @@ SELF-TEST's rows. Aggregating those into one column is how a profile claims a
 ten-minute run that cost four, and it is why this renders the two populations
 separately and refuses to sum a `cpu` row with a `phase` row.
 
-Standard library only, like the other two programs in `tests/`. `validate.sh`'s
-`carve-out boundary` check walks the AST of every Python file in this directory
-and fails on an import outside json/os/re/sys/argparse/subprocess/difflib/glob/
-urllib/__future__ — so this imports three of those and is green on arrival. It
-is a FOURTH program under that rule's carve-out and it is deliberately the
-smallest: it reads a file and prints a table.
+Standard library only, like the other programs in `tests/`. There was a
+`carve-out boundary` check in `validate.sh` that walked the AST of every Python
+file here and failed on an import outside json/os/re/sys/argparse/subprocess/
+difflib/glob/urllib/__future__; it went with the cross-repo fleet programs, and
+AGENTS.md records that the rule is now a convention rather than a control. So the
+two imports below are on their honour, and this file is deliberately the smallest
+thing in the directory: it reads a file and prints a table.
 
     python3 tests/profile_report.py /tmp/profile.tsv [--top N] [--sort sum|label]
 """

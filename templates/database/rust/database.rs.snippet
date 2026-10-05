@@ -141,12 +141,11 @@ pub async fn ping(client: &tokio_postgres::Client) -> Result<(), String> {
 //   FORBIDDEN in generated config, and `tests/validate.sh` fails the build when
 //   one appears.
 //
-//   (This comment deliberately does not spell those settings out. The first
+//   (This paragraph deliberately does not spell those settings out. The first
 //   version of it quoted them, and the check that forbids them flagged its own
-//   explanation — which is the failure mode AGENTS.md records about
-//   `gate_declaration_check`: a check that fires on correct work teaches the
-//   reader to ignore it. The names belong in the contract file, where a program
-//   reads them.)
+//   explanation — a check that fires on correct work teaches the reader to
+//   ignore it. The names belong in the contract file, where a program reads
+//   them.)
 //
 //   If a pooler IS ever adopted, this file and templates/database/contract.json
 //   change together, and that is a DECISIONS.md entry rather than a one-line

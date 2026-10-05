@@ -322,11 +322,12 @@ not by a gate, because a service that follows the advice has deleted the very
 thing `check_stale_copy` looks for. Correcting the sentence without adding a
 check would have left the gate blind in exactly the case the correction created.
 
-**Enforced by:** `check_override_surface` in `tests/fleet_check.py`, which fails
-an adopting service that sets any of the three on the shared cluster.
-`tests/self_test.sh` breakage 83 proves the check is still load-bearing, and the
-green control is every other fixture recipe in that file: they all set
-`POSTGRES_DB` on the service's **own** service and stay green.
+**Enforced by:** nothing, and the honest version of that is *nothing was*. The
+check was `check_override_surface` in `tests/fleet_check.py`, which read the
+adopting repositories and failed one that set any of the three on the shared
+cluster. It went with the rest of the cross-repo surface, so the rule above is
+now advice that a service is trusted to follow rather than a control kit can
+apply — which is the trade MD36 records as deliberate.
 
 ---
 
@@ -1284,3 +1285,66 @@ mise does not export it. kit has no business editing a developer's global tool
 config to turn three skips green — and a skip that is reported is the gate
 working as designed. A developer who wants rustc in the gate adds one line to
 their own mise config.
+
+---
+
+## MD36 — kit grades kit, and the fleet surface is gone rather than gated
+
+**Decision.** Every check that read a repository other than this one is removed:
+`tests/fleet_check.py` (1169 lines), `tests/account_scope_fleet_check.py` (930),
+`tests/generated_stack_check.py` (716), `tests/gate_declaration_check.py` (582),
+the `account_scope_fleet_scope.yml` and `account_scope_fleet_ratchet.yml` tables,
+the `account-scope-contract` job in `.github/workflows/ci.yml`, and the fleet
+section of `tests/validate.sh`. About 3,600 lines.
+
+**This reverses a position taken earlier in the same session, and the reason it
+reverses is evidence, not taste.** The argument for keeping `fleet_check.py` was
+that it fails only a repository carrying a `kit.ref`, so the promise being graded
+is that repository's own. Two facts kill it. First, **it had no test**: the only
+thing that ever proved it worked was `tests/self_test.sh`, deleted earlier in the
+same session, so 1169 lines of parser had not been exercised by a single
+assertion since. A check nobody can demonstrate is not a check. Second, **it
+could not run where it is supposed to**: a clone of kit has no siblings, so every
+run of every commit in CI took the `FLEET-ABSENT` branch and reported SKIP. The
+job it was paired with existed precisely to work around that, by cloning six
+repositories into a fleet layout — which is to say, to manufacture the sibling
+tree that kit had refused to reach. That is the `secrets` job's shape again, one
+layer down, and MD34's argument applies verbatim: the finding lands on whoever
+maintains the repository that broke, and on someone who is not them.
+
+**The general form, and it is the line the gate now holds.** *kit's gate asserts
+things about kit.* Not about its callers, not about the fleet, not about a
+sibling's history. Three reasons, in the order they actually decided it:
+
+1. **A finding nobody in this repository can fix is not this gate's finding.**
+   A red build is a request to act. If the person who can act is in another
+   repository, the request is misaddressed, and the response is to mute the
+   check rather than to fix the code.
+2. **An unreachable check is a green that verifies nothing** — the exact phrase
+   the `account-scope-contract` job used to justify itself, applied here to the
+   check it existed to rescue. SKIP is honest; a SKIP on every run forever is a
+   control that has been replaced by its own description of itself.
+3. **Adoption is not a licence to be graded by your callee.** The `kit.ref`
+   argument was the best one available and it still lost, because it asks a
+   question about the *checker* (who consented?) rather than about the *finding*
+   (who is affected?). Consent to be checked does not make it this repository's
+   job.
+
+**What is kept, and why it is not a contradiction.** `tests/staleness.py` reads
+repositories, and it stays: it has 26 assertions in `tests/staleness_test.sh`,
+and its other job — grading this repository's own `templates/` against what it
+ships — is squarely kit's own behaviour. A check with a test and a subject that
+is this tree is exactly the thing the rule keeps. The remaining cross-repo reader
+is the lint-drift check in `validate.sh`, which compares a *service's* lint
+config to kit's for services that call the reusable workflow; it is narrower
+than anything removed here (a machine-checkable opt-in) and it is the next
+candidate if this line is drawn further.
+
+**What this costs, written down rather than discovered.** Three rules that were
+mechanically enforced are now advice: no adopter carries a D12/D13 workaround;
+no service sets `POSTGRES_USER`/`POSTGRES_DB`/`POSTGRES_PASSWORD` on the shared
+cluster; a service's `.golangci.yml` and `.rubocop.yml` match kit's. Each is a
+real rule that caught real defects. The trade is deliberate and the mitigation is
+`core`: the first two are owned and fixed there, and a service that wants them
+checked runs the check itself. What is given up is kit noticing when a service
+stops obeying.

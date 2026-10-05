@@ -225,12 +225,9 @@ vendor_dir() { stack_setting KIT_VENDOR_DIR ".kit/stack"; }
 # one above in the header: `.env` is git-ignored, so a pin kept there exists on
 # one developer's machine and on no CI runner, and "one command, always current"
 # becomes "one command, whatever this laptop last fetched". The name is not a
-# variable — it is the contract `tests/fleet_check.py` reads, and a check that
-# had to be told where to look would be a check whose location is a second thing
-# to keep in step. That is also why the check reads `kit.ref` by the same
-# name-resolution rule this script uses, rather than by a glob: two readers of
-# "where is the pin" that disagree are how a gate passes on a file the tool
-# ignores.
+# variable — it is the contract, and anything that grades the pin reads it by
+# this same name-resolution rule rather than by a glob: two readers of "where is
+# the pin" that disagree are how a gate passes on a file the tool ignores.
 REF_FILE="kit.ref"
 
 # Set by `resolve_stack`, read by everything after it. Empty means "not resolved

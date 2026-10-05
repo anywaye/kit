@@ -2,6 +2,36 @@
 
 ### Removed
 
+- **Every check that read a repository other than this one.** `tests/fleet_check.py`
+  (1169 lines), `tests/account_scope_fleet_check.py` (930),
+  `tests/generated_stack_check.py` (716), `tests/gate_declaration_check.py` (582),
+  the `account_scope_fleet_scope.yml` and `account_scope_fleet_ratchet.yml`
+  tables, the `account-scope-contract` job in `.github/workflows/ci.yml`, and the
+  fleet section of `tests/validate.sh`. Roughly 3,600 lines. The argument is
+  `DECISIONS.md` MD36 and it is one line: **kit's gate asserts things about kit.**
+
+  Two facts decided it rather than taste. `fleet_check.py` had **no test** — the
+  only thing that ever proved it worked was `self_test.sh`, deleted earlier in
+  this release — so 1169 lines of parser had been unexercised by a single
+  assertion. And it **could not run where it belongs**: a clone of kit has no
+  sibling checkouts, so every CI run took the `FLEET-ABSENT` branch and reported
+  SKIP. The `account-scope-contract` job existed to work around exactly that, by
+  cloning six `cafaye/*` repositories into a fleet layout so the check would have
+  siblings to read. That is the removed `secrets` job's shape one layer down: a
+  finding that lands on whoever maintains the repository that broke, not on
+  someone who can fix it.
+
+  The `kit.ref` adoption ceiling was the best argument for keeping the fleet
+  check and it still lost, because it asks who *consented* rather than who is
+  *affected*. Consent to be checked does not make it kit's job.
+
+  Three rules that were mechanically enforced are now advice rather than
+  controls: no adopter carries a D12/D13 workaround, no service sets
+  `POSTGRES_USER`/`POSTGRES_DB`/`POSTGRES_PASSWORD` on the shared cluster, and a
+  service's lint config matches kit's. `core` owns the first two. What is given
+  up is kit noticing when a service stops obeying — recorded in MD36 rather than
+  discovered later.
+
 - **The committed-history secret scanner, and the job that ran it.** `gitleaks`,
   `.gitleaks.toml`, `tests/gitleaks_gate.sh`, the `secrets` job in
   `ci.reusable.yml`, the `KIT_GITLEAKS_VERSION` / `KIT_GITLEAKS_SHA256S` pins in

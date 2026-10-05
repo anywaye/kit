@@ -142,8 +142,6 @@ the entry; deleting the entry to shrink the file is a hard failure of its own.
 | `tests/kamal_test.sh` | The proof: generates the config **from the templates** and runs the **real** `kamal` and the real `kamal-backup` against it. 22 cases, all against the binaries. It exists because a doubled registry host, a missing `builder.arch` and a cross-file secret are all valid YAML that parses clean. | kit |
 | `tests/fetch_test.sh` | Executes the fetch against a local bare remote: a pin resolves and the bytes are identical, a branch is refused **before any network call**, and offline mode is real in all four of its states. | kit |
 | `tests/stack_live_test.sh` | Brings the **fetched** stack up, sends real OTLP, reads a trace out of Tempo and a **derived metric** off the collector's own exporter, and finds no canary in either. | kit |
-| `tests/fleet_check.py` | Reads the **other** repositories: a stale copy of the stack, a weakened redaction boundary, a collector config nothing starts, a published port on a service kit already ships, an unpinned ref. Under the **adoption ceiling**: a `FAIL` inside a repository that has a `kit.ref`, a named `WARN` inside one that has not. | kit, over the sibling checkouts |
-| `tests/generated_stack_check.py` | Asks **git** two questions of every sibling that has a `cafaye.yml` — is `caf.dev.compose.yaml` ignored, is it tracked — and reports the reverse direction too: the generated file with no manifest to have generated it. No adoption ceiling, because this defect has no adopter. A finding in a repository the fleet's scope decision holds **frozen** is printed and does not fail: the frozen set is read from `MVP-SCOPE.md` (`--scope`, default beside the fleet), never written into this repository, and a decision that cannot be read exempts nothing. | kit, over the sibling checkouts |
 | `tests/canary_test.sh` | Plants a canary in ten leak shapes against a real collector and asserts it reaches no exporter. | kit |
 | `tests/no_telemetry_in_readiness.sh` | Kills the collector and proves a service still starts, still serves and still reports healthy. | kit |
 | `templates/otel/<lang>/` | W3C traceparent: a stdlib codec, an executed conformance suite, an SDK snippet, and a README. | Every service, per language |
@@ -286,116 +284,14 @@ rots: a `gate.yml` carrying a hand-rolled escape-tolerant regex is *weaker* than
 one without it, because the escape runs absorb characters a stricter pattern
 would have rejected.
 
-So the rule is enforced rather than written down, in
-[`tests/gate_declaration_check.py`](tests/gate_declaration_check.py):
-
-```sh
-python3 tests/gate_declaration_check.py ../cafaye
-```
-
-It looks for three shapes — an escape token in a `proof[].match`, a `run:` block
-scalar whose whole body is the declared argv, and a comment citing a checker
-term while claiming a `run:` spelling the checker cannot see — and it runs as
-part of `bash tests/validate.sh` against whatever fleet is found beside the
-repository. It does **not** prescribe a `run:` spelling: that would be a second
-copy of a decision `core` owns, and `courier`'s block scalar is correct for
-three real reasons.
-
-Its first version was a keyword scan and it reported 4 repositories and 24
-findings against the real fleet, nearly all false — including `core/gate.yml`
-for the sentence "That is MD12's collect-then-run machinery", because `D12` is a
-substring of `MD12`. All three rules are structural as a result. A check that
-fires on correct work teaches the reader to ignore it, and it had taught on the
-first repository scanned.
-
-The one that reads `core/`'s consumers is `--scope core`, and it is documented in
-[`core/README.md`](core/README.md). The one that reads **this** repository's
-consumers is `--scope templates`, and the difference is not cosmetic: a pin can
-be stale and a file can be **gone**, and `templates/` has drifted far enough
-that gone is the commonest answer. The seven stacks above are the worked
-example — the fleet holds `docker-compose.yml` in six services and none of the
-other eleven files each one needs, which is the finding a drift-only reporter
-has no word for.
-
-## The account-scope contract, across the whole fleet
-
-Six services declare their account-scoped surface in an `account_scope.yml`.
-`core/harness/account_scope_check.py` is what decides whether a declaration
-still describes the code — and at the time this was written **not one of the
-six ran it against itself**. The only references in the fleet were three
-declarations *mentioning* the tool, `core`'s CI running its own self-test over
-its own fixtures, and that self-test's script. So the contract was continuous
-in nobody's build: a service could add a route, widen a declaration, or delete
-`account_scope.yml` entirely and its own gate stayed green. `DEBT.md` D18's
-shape, one level up from where D18 had been looking.
-
-So the check that spans services lives here, in the repository that renders
-them:
-
-```sh
-# the fleet beside this repository
-python3 tests/account_scope_fleet_check.py
-
-# any fleet, and the flag a reader needs to re-derive a number in the report
-# without editing a file
-python3 tests/account_scope_fleet_check.py --repos-dir /path/to/fleet --baseline
-python3 tests/account_scope_fleet_check.py --only pantry
-```
-
-`--baseline` applies **no** record and reports the raw verdict for every
-repository, so a baseline is a measurement rather than something to be believed.
-The default applies
-[`tests/account_scope_fleet_ratchet.yml`](tests/account_scope_fleet_ratchet.yml),
-which is a **row per in-scope repository** — not a list of suppressed
-identifiers. A repository with no row is red; a row whose numbers no longer match
-is red **in both directions**, so a repository that got better and whose row
-nobody retired is as red as one that got worse.
-
-Five rules, and one of them is a refusal:
-
-| rule | what it catches |
-| --- | --- |
-| **continuity** | a repository that declares a surface and stops declaring one. Derived from `git cat-file -e HEAD:account_scope.yml`, because the checker alone reads a deleted declaration as one that was never written. |
-| **entry** | an in-scope repository that has never declared, unless it is on `exempt:` with a `condition:` |
-| **propagation** | every `fail` finding core's checker reports, with its exit code and its four counts, per repository |
-| **exactness** | any difference from the recorded state, in either direction |
-| **blindness** | a run that cannot distinguish "this repository is clean" from "this runner read nothing" |
-
-The last row is the one worth reading. A checker that attributed no entry point
-to any registration exits 0 over an empty enumeration, which is byte-identical
-to a checker pointed at an empty directory — and **a pattern that matches
-nothing is not a pass, it is an error**, a rule this repository has already been
-bitten by. `pantry` is the live instance: its routes are generated as
-`r.Get(options.BaseURL+"/v1/…"`, so the chi recogniser cannot evaluate the path.
-Core's D46 stopped discarding those registrations silently and **names** them —
-`registration-path-unreadable` per row, `surface-unreadable` per file, with the
-read count printed on every run — and `pantry`'s own declaration still says
-`surface.minimum: 0`, which is the honest way to write down a surface nobody can
-read. The runner reports that as `blind.surface-blind` rather than as a green.
-
-**It runs in two places, because one would have been the defect again.**
-`tests/validate.sh` invokes it against the fleet beside the repository, with a
-**reported SKIP** when there is none — and a CI runner has none, so a second
-check asserts the wiring itself runs everywhere, and a job in
-`.github/workflows/ci.yml` assembles a fleet of the nine and runs the contract
-for real. That job has no `continue-on-error`: a repository renamed or made
-private turns it red, which is the state a reader can act on.
-
-**Which repositories are in scope is read, not written down.**
-[`tests/account_scope_fleet_scope.yml`](tests/account_scope_fleet_scope.yml) is
-a fingerprinted copy of `moon/MVP-SCOPE.md`'s in-scope table, and it exists only
-because a CI runner that cloned nine repositories has no `moon` checkout. When
-the directive **is** readable — every developer's machine, and every run of
-`bash tests/validate.sh` — the two are compared and a disagreement is exit 2, so
-the directive wins and a stale copy is a red build rather than a quietly narrowed
-watch.
-
-**The baseline is measured against a frozen copy of the fleet**, because three
-sessions share this machine and two of them work in it:
-[`reports/account-scope-contract-01/snapshot.sh`](reports/account-scope-contract-01/snapshot.sh)
-unpacks all nine at named commits with `git archive` and gives each copy a git
-repository of its own, so the numbers in
-`REPORT-kit-account-scope-contract-01.md` name the tree they were taken from.
+There was a check here that read the adopting repositories and refused those
+three shapes. It is gone, and `core` owns both defects and both fixes now, so
+nothing in kit grades a repository it does not own. The lesson it earned is
+kept because it generalises: **a check that fires on correct work teaches the
+reader to ignore it.** That check's first version reported 4 repositories and 24
+findings against the real fleet, nearly all false, including `core/gate.yml` for
+the sentence "That is MD12's collect-then-run machinery", because `D12` is a
+substring of `MD12`.
 
 ## The local stack — `templates/compose/`
 
@@ -477,8 +373,7 @@ you between Monday and Tuesday is not a stack you reviewed.
 there exists on exactly one machine — the laptop of whoever ran `bin/dev pin`
 last — and on no CI runner and no teammate's checkout. `kit.ref` is in the diff,
 so the bump is reviewed like any other change to the dev loop, and
-`tests/fleet_check.py` reads it to decide whether your repository runs a pin at
-all.
+and a reviewer sees the bump rather than trusting one laptop's `.env`.
 
 `KIT_STACK_REF` still works, **from the environment only**, as a one-run override
 for someone working on kit itself:
@@ -580,8 +475,8 @@ migration. Measured on a cluster built from kit's own `initdb/10-cluster.sh`:
 
 If it is the cluster's own identity you are changing, the variables are
 `KIT_POSTGRES_USER`, `KIT_POSTGRES_DB` and `KIT_POSTGRES_PASSWORD`, and they
-are already declared in the compose file. `tests/fleet_check.py` fails a service
-that sets any of the three, for the reasons above.
+are already declared in the compose file. Setting any of the three in your own
+file takes the choice away from the services sharing the cluster.
 
 One thing about the `.env` line: `docker-entrypoint-initdb.d` runs **once per
 volume**, so after adding your name you need `bin/dev down -v && bin/dev up`.
@@ -593,70 +488,6 @@ pinned to an exact tag, and every service has a healthcheck so `up --wait` can
 mean something. A service joins by writing an **override** file — its own image,
 its own port, its own service entry — which `bin/dev` merges with the fetched
 stack.
-
-### The gate on adoption, and the adoption ceiling
-
-`tests/fleet_check.py` reads the **sibling repositories**, not kit's own files,
-because the failure this packet exists to catch is in the callers and not in the
-callee. Four claims, one check each:
-
-| claim | the defect it catches |
-|---|---|
-| no stale copy | the service runs its own `postgres` rather than joining kit's |
-| no weakened boundary | the service re-points the collector's config mount — the redaction allowlist, derived from core — or overrides `POSTGRES_*` on the shared cluster |
-| no dead config | an `otel-collector.yml` that nothing mounts, so editing it changes nothing |
-| every ref pinned | a `kit.ref` holding a branch |
-
-**Measured against the current fleet: six repositories declare local
-infrastructure, 13 findings.** Five carry their own copy of the shared stack
-(billing, courier, darkroom, identity, muse), six have no `kit.ref` at all, and
-two publish a port on a service kit already ships. This is the same shape as D4:
-three repositories not spelling their gate the same way is invisible to any check
-that reads only one of them, so kit's gate reads all of them.
-
-#### The ceiling, and why it is not a softening
-
-| | a repository **with** a `kit.ref` | a repository **without** one |
-|---|---|---|
-| stale copy · weakened boundary · dead config · published port · bad pin | **FAIL** | **WARN**, naming the adoption path |
-
-Same four checks, same predicates, same messages. **The strictness moves to
-where adoption exists; it does not disappear.** The judgement is about **who owns
-the debt**, not about how bad it is: a repository that has adopted and still runs
-its own `postgres:17-alpine` has made a promise it is breaking, and one that has
-adopted nothing has not made a promise yet.
-
-All six repositories in scope are currently **warnings and no failures**, because
-not one of them has adopted. That is a deliberate, temporary, named state and it
-is a *wave*, not a discount: commit the one line and your own findings become
-failures, with no change to this repository and no re-review. Because the FAIL
-side is therefore unexercised by any real repository today, it is proved against
-a fixture instead: the identical mutation once unadopted (must stay green and
-must name the finding) and once adopted (must go red).
-
-```sh
-git -C ../kit rev-parse HEAD > kit.ref    # the only thing that decides which kit you run
-```
-
-**A warning is a debt with a name.** A gate that has been red for thirteen
-findings no repository has agreed to fix stops being read within one release, and
-a gate nobody reads catches nothing — which is how the state this packet exists to
-remove survived a full round of CI the first time.
-
-The check is keyed on the **image**, not the service name, and reads the set of
-images out of kit's own compose file rather than a hand-kept list. Five of the six
-copies name their database `db` rather than `postgres`, so a name-keyed check would
-report the fleet clean while five copies of the platform stood right there — and a
-list that must be edited every time kit adds a service is a list that gets skipped.
-
-A clone of kit with no siblings **skips loudly**. "No fleet was found" is not "the
-fleet is clean", and a gate that reports the second when it means the first is a
-gate that gets muted.
-
-`bin/dev` is idempotent — run it twice and nothing changes — and it fails loudly
-rather than half-starting: if the stack does not become healthy it prints what is
-unhealthy and its logs, and stops *before* migrating, so a failed `up` cannot
-leave a half-migrated database behind.
 
 ### Telemetry is on by default; the stores to read it back from are not
 

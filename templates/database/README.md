@@ -312,8 +312,8 @@ built from this directory's `initdb/10-cluster.sh`:
 every role on the cluster is handed, so one service's file would choose it for
 all the others. The cluster's own identity and credential are
 `KIT_POSTGRES_USER` / `KIT_POSTGRES_DB` / `KIT_POSTGRES_PASSWORD`, all declared
-in `templates/compose/docker-compose.yml`. `tests/fleet_check.py` fails an
-adopting service that sets any of the three on the shared cluster.
+in `templates/compose/docker-compose.yml`. Setting any of the three in your own
+compose file takes the choice away from the services sharing the cluster.
 
 **Step 2 is the one to read twice, because it prints a `REVOKE` and the revoke
 is the boundary.** A database created outside the init script gets Postgres's

@@ -50,8 +50,7 @@ kit/
     ├── bootstrap.sh                      # the gate installs its own tools
     ├── classify.py  rules.json           # the change classifier, failing closed
     ├── staleness.py  artifacts.json      # the staleness reporter, and WHAT it measures
-    ├── core_fanout_check.py              # structural checks on core/vendir, core/renovate
-    └── gate_declaration_check.py         # no adopter carries a D12/D13 workaround
+    └── core_fanout_check.py              # structural checks on core/vendir, core/renovate
 
 templates/ holds everything a service adopts, and it is split by **how a thing
 reaches a service**, not by subject:
@@ -180,7 +179,7 @@ and the `uses:` job produces **no job, no check-run and no log line**. Measured 
   direction **after normalising `ref` and `github.ref` to the same token**,
   because `core` writes the short form and a byte comparison would have called
   the one repository that spelled it differently clean. It is deliberately **not**
-  a fleet sweep: `fleet_check.py` already reads the repositories beside this one.
+  a sweep over the repositories beside this one: kit grades this tree and no other.
 - Breakages **105 / 105b / 105c** prove the two branches and the normalisation
   separately, and **105 is deliberately not the historical revert** — in kit's own
   tree that spelling also collides with `ci.yml`, so it satisfies both branches
@@ -571,35 +570,6 @@ assemble the canary, do not commit it.**
     for that shape. A `printf … | grep` that only **prints** diagnostics is fine,
     where a truncated line costs nothing — and that difference is the whole test
     for which is which.
-- **No adopter carries a workaround for a fixed core defect.** `core`'s gate
-  checker had two defects that forced adopting repositories into local
-  workarounds — D12 (`RUN_KEY` could not see a one-line `run:`, core `63fd319`)
-  and D13 (a proof matched against bytes still carrying ANSI colour, core
-  `c63af27`). Both are fixed, so a workaround for either is a second, local,
-  unversioned copy of a decision that now lives in core, and D13's is *weaker*
-  than the declaration it replaced. `tests/gate_declaration_check.py` sweeps the
-  adopting repositories for the three shapes those workarounds actually take and
-  is wired into the gate as `adopting repositories (no workaround for a fixed
-  core defect)`.
-  - **Every one of its three rules is structural, and that is the lesson.** The
-    first version was a keyword scan over comments — `cannot see`, `only
-    matches`, `D12` — and against the real fleet it reported 4 repositories and
-    24 findings, nearly all false: `core/gate.yml` for "That is MD12's
-    collect-then-run machinery" (`D12` is a substring of `MD12`), and `caf`'s
-    declaration for comments arguing a workaround is now *unnecessary*. A check
-    that fires on correct work teaches the reader to ignore it, and it had
-    taught on the first repository scanned. When a check over this fleet is
-    noisy, the fix is to make it measure something.
-  - It does **not** prescribe a `run:` spelling. It would be a second copy of a
-    decision core owns, and `courier`'s block scalar is correct for three real
-    reasons. `core`'s own `gate.ci-disagrees` checks invocation; this checks
-    duplication.
-  - The fleet root is discovered beside the repository, with a **reported SKIP**
-    when there is none. `../..` is deliberately NOT searched: it found a fleet
-    once, in a leftover copy of a cafaye repository in a shared temp directory
-    whose branch still carried the retired workaround, and the gate went red on
-    a tree with nothing wrong with it. A sweep that reaches further than it owns
-    is worse than no sweep.
 - **THE FLEET IS FOUND BESIDE THIS REPOSITORY, and never further.** The checks
   that read service trees glob `$ROOT/..`, so they reach exactly one level of
   siblings and no more. `../..` is deliberately NOT searched: it found a fleet
@@ -1010,22 +980,6 @@ that is usually true:
 - **The pin is `kit.ref`, not `.env`.** `.env` is git-ignored, so a pin there
   exists on one machine and on no CI runner — which turns "one command, always
   current" into "one command, whatever this checkout last fetched".
-- **`tests/fleet_check.py` reads the CALLERS, not this repository.** A defect in
-  the standard is invisible to a gate that only reads the standard, which is the
-  same argument as D4. As measured: six repositories declare local
-  infrastructure, **five** carry their own copy of the shared stack (billing,
-  courier, darkroom, identity, muse), **all six** have no `kit.ref`, and **two**
-  publish a port on a service kit already ships — 13 findings, and the gate names
-  every one of them. **All six are currently WARNINGS and none is a FAIL**, because
-  the ceiling keys on adoption and not one of them has adopted. That is the state
-  to beat, and it is a state the gate is now *about to be able to leave*: the
-  first repository to commit `kit.ref` finds its own two or three findings are
-  failures, with no change to this repository.
-
-  Do not soften the checks to make this repository green. Do not raise the
-  ceiling either — a repository that HAS adopted is judged strictly, and nothing
-  checks that ceiling stays strict any more, which is the argument for leaving it
-  exactly where it is. Report the findings; name the repositories.
 
 `README.md` carries the override rules, and one of them is a trap worth knowing
 before you write a service compose file: **a second file's `ports:` list is
@@ -1128,75 +1082,17 @@ See `DECISIONS.md` (MD26, MD27).
     output**, because a committed report is the "generated output" this rule
     forbids and the kind of file that rots. If a third program is proposed, the
     default answer is no.
-  - **`tests/gate_declaration_check.py` and `tests/core_fanout_check.py` are the
-    same carve-out, used twice, and a fourth is still a fourth.**
-    **`tests/generated_stack_check.py` is a third use of it, and the argument
-    for it is not that it is also a parser — it is not.** It parses no file
-    type at all: it asks GIT two questions (`check-ignore`, `ls-files`) about
-    whether `caf.dev.compose.yaml` is ignored and whether it is tracked, in
-    every repository beside this one that has a `cafaye.yml`. It is here
-    because the alternative is worse than a fourth program: re-implementing
-    gitignore semantics in Python is wrong on `!` negation, on anchored
-    paths, on `**`, and on a `core.excludesFile` in one developer's global
-    config, and it would disagree with git on every case that matters. It is
-    stdlib for the same reason the others are, it is named in the
-    `carve-out boundary` check's list in the same commit that added it, and
-    its population is read off the filesystem rather than written down. It also
-    reads ONE file — `MVP-SCOPE.md`, the fleet's scope decision, beside the
-    fleet and in no repository — for the set of repositories held frozen, and
-    **that read is a scope decision and not an allowlist**: the out-of-scope
-    list is the only exemption, a repository it does not name is blocking, and
-    a decision that cannot be read exempts nothing and says so with a
-    `SCOPE-ABSENT:` marker. A hardcoded frozen list would have the same defect
-    as the hand-written dirty list this check was written to replace, with the
-    opposite polarity: it goes stale silently, and the day the scope lifts the
-    exemptions outlive the decision that granted them.
-    `fleet_check.py` would have been the wrong home for it on two counts and
-    both are argued at the top of that file: its scope predicate is "declares
-    local infrastructure", which EXCLUDES `core` — the repository that had
-    this file committed — and its adoption ceiling would have made a hard FAIL
-    a WARN in every repository, forever, on the grounds that none of them has
-    adopted `kit.ref`. That defect has no adopter. They are
-    real parsers over real file types, and inlining either into the 4,000-line
-    `validate.sh` would bury the failure modes. The boundary they hold to is the
-    classifier's: nothing imports them, and neither is installable. The one
-    thing that changed is that they import PyYAML, which `tests/requirements.txt`
-    already carries and the gate already bootstraps — so this is the existing
-    carve-out rather than a widened one.
-  - **`tests/account_scope_fleet_check.py` is a FOURTH program, and the rule
-    above says the default answer is no. It got a yes for one reason, stated
-    here so a reader can disagree with it.**
-    Six services declare their account-scoped surface in an `account_scope.yml`.
-    `core/harness/account_scope_check.py` is what decides whether a declaration
-    still describes its code. Measured at the time of writing, **not one of the
-    six ran it against itself** — the only references in the fleet were
-    declarations *mentioning* the tool and `core`'s CI running its own self-test
-    over its own fixtures. So the contract was continuous in nobody's build: a
-    service could add a route, widen a declaration, or delete
-    `account_scope.yml` entirely and its own gate stayed green. `DEBT.md` D18's
-    shape, one level up from where D18 had been looking.
-    The argument for a program rather than an inline block is the same one the
-    third use makes, at one more remove: it has to run **in CI**, and CI has no
-    fleet beside the repository, so the step has to assemble one, name it, and
-    invoke a program that is not the 620,000-line gate. Inlining it would mean
-    either a second copy for the CI job or a `validate.sh` flag that changes
-    what the gate is, and both of those are the mechanism this packet exists
-    against. It is not a fifth: it is the same shape, and the boundary is
-    unchanged — **standard library plus `yaml` (PyYAML, which
-    `tests/requirements.txt` already carries and the gate already bootstraps) and
-    `hashlib`, and nothing imports it.**
-    A **fifth** program is still refused, and this paragraph is not a precedent.
-  - **The allowed-import list is ENFORCED, not aspirational.**
-    `difflib` and `glob` arrived with the templates half of the staleness
-    reporter — the first counts the lines two copies differ by, the second
-    resolves a `{lang}` source — and `urllib` was already there and already
-    unnamed, so the sentence was out of date before anybody checked it.
-    `tests/validate.sh`'s `carve-out boundary` check walks the **AST** of both
-    programs, not their text, so a function-local import is read the same as a
-    top-level one, and it asserts that every module it finds is named in **this
-    paragraph**. Widening the list is a deliberate, diffable act in this file
-    *and* a red gate until the check agrees with it. A list that grows by a later
-    commit is not a control — the same argument `advisoryOps` rests on.
+  - **Every program in `tests/` is stdlib-only, and that list is a reader's
+    rather than the gate's.** `difflib` and `glob` arrived with the templates
+    half of the staleness reporter — the first counts the lines two copies
+    differ by, the second resolves a `{lang}` source — and `urllib` was already
+    there and already unnamed. There was a `carve-out boundary` check that
+    walked the AST of the fleet programs named above and asserted every module
+    it found was named in this paragraph; it went with them, and this paragraph
+    outlived it. So the rule is now a convention rather than a control, and the
+    honest description of that is that nothing enforces it. That is a defensible
+    trade only because the population is small and entirely stdlib — a reader
+    adding a fifth program is trusted to have read this bullet.
 - **Callers override, they never fork.** Anything that differs per service —
   versions, thresholds, names — is an input or a build arg, never a copy of a
   file. Six repos each holding their own workflow is the drift this repo

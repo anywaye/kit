@@ -136,8 +136,9 @@
 #         The way to get a database is the variable three lines below:
 #         `KIT_POSTGRES_DATABASES`, in `.env`. That is how a service gets a role,
 #         a database it owns, and the boundary, and it costs no compose file at
-#         all. `tests/fleet_check.py` fails a service that sets any of the three,
-#         and `templates/database/README.md`'s "Adopting this" is the procedure.
+#         all. A service that sets any of the three has broken the cluster it
+#         shares, and `templates/database/README.md`'s "Adopting this" is the
+#         procedure that keeps it out.
 #   MAY NOT — set `allow_all_keys`, or add an exporter, by any route. Same
 #         reason, and it is the same check that already fails on kit's own file.
 #
