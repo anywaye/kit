@@ -45,6 +45,7 @@
 // ---------------------------------------------------------------------------
 
 import { context, propagation, SpanStatusCode, trace } from "@opentelemetry/api";
+import type { TextMapGetter } from "@opentelemetry/api";
 import { logs, SeverityNumber } from "@opentelemetry/api-logs";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -223,6 +224,52 @@ export async function shutdownTelemetry(): Promise<void> {
 }
 
 /**
+ * A TextMapGetter for a WHATWG `Headers`, passed to every `extract` below.
+ *
+ * ---------------------------------------------------------------------------
+ * WITHOUT THIS, INBOUND PROPAGATION IS A SILENT TOTAL FAILURE
+ * ---------------------------------------------------------------------------
+ * `@opentelemetry/api`'s DEFAULT getter is plain property access:
+ *
+ *     get(carrier, key) { return carrier[key] }    // PLAIN PROPERTY ACCESS
+ *
+ * A `Headers` object stores its entries in an internal list and exposes them
+ * through `.get()`, so `carrier["traceparent"]` is `undefined` for every key.
+ * `propagation.extract(ctx, headers)` then returns the context UNCHANGED: every
+ * inbound `traceparent` is ignored and every request starts a fresh trace.
+ *
+ * Nothing throws. Nothing logs. Every span is still exported with the right
+ * `service.name`, and the trace view shows a healthy pile of unrelated
+ * single-span traces — which is indistinguishable from a service that simply
+ * receives no traffic from an instrumented caller. A test that only asserts "a
+ * span was exported" passes while this is broken; the assertion that catches it
+ * is `spanContext().traceId === theInboundTraceId`, and it lives in
+ * `traceparent.test.mjs`, which runs the same carrier through both shapes.
+ *
+ * MEASURED in the fleet on 2026-09-30, not anticipated: parlor, which had
+ * adopted an earlier revision of this snippet, exported spans from every request
+ * and continued no trace at all.
+ *
+ * `keys()` is implemented as well as `get()` because the getter is a TWO-method
+ * interface, and a one-method stub is a carrier whose full contents cannot be
+ * enumerated.
+ *
+ * The OUTBOUND direction was already correct and is deliberately left alone:
+ * `tracedFetch` passes `{ set: (k, v) => headers.set(k, v) }`, which IS a
+ * well-formed `TextMapSetter` and is why inject works while extract did not.
+ */
+const headersGetter: TextMapGetter<Headers> = {
+  get(carrier, key) {
+    return carrier.get(key) ?? undefined;
+  },
+  keys(carrier) {
+    const keys: string[] = [];
+    carrier.forEach((_value, key) => keys.push(key));
+    return keys;
+  },
+};
+
+/**
  * Middleware: continue the caller's trace, or start a new one.
  *
  * extract() on a malformed header returns the context UNCHANGED and a null
@@ -234,7 +281,10 @@ export function traceMiddleware() {
   const tracer = trace.getTracer(SERVICE_NAME);
 
   return async (c: Context, next: Next) => {
-    const extracted = propagation.extract(context.active(), c.req.raw.headers);
+    // headersGetter, NEVER the default. Passing `c.req.raw.headers` on its own
+    // is the silent total failure above: the extract succeeds, returns the
+    // context unchanged, and every request becomes its own root span.
+    const extracted = propagation.extract(context.active(), c.req.raw.headers, headersGetter);
 
     // The fleet's span name: <service>.<operation>, the same shape as an event
     // type. NOT `${method} ${path}`, which is the OTel HTTP convention's form

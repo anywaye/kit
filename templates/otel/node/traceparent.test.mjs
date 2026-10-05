@@ -22,9 +22,23 @@
 // imported here — kit has no dependencies and this suite must run without one.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { newSpanId, newTraceId, parseTraceparent, serverHop } from "./traceparent.mjs";
+
+/**
+ * Strip JS comments, so a check over a source file cannot be satisfied by prose.
+ *
+ * Both forms, and not just one: a `/* … *\/` block can hide a whole explanation
+ * that names the very identifier the check looks for, and a `// …` line can hide
+ * the call itself. Strings are not parsed — the snippet under test contains no
+ * string literal with a `//` in it, and a hand-rolled string scanner here would be
+ * a second parser to get wrong.
+ */
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+}
 
 const KNOWN_HEADER = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const KNOWN_TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -188,6 +202,128 @@ test("trace-flags are a bit field", () => {
   assert.ok(
     hop.outboundHeaders.traceparent.endsWith("-01"),
     "reserved bits must be zeroed on the way out (§3.2.2.5.2)",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// THE CARRIER DEFECT CLASS — four assertions, and they are here because a
+// comment did not stop it happening.
+//
+// A WHATWG `Headers` stores its entries in an internal list and exposes them
+// through `.get()`. It has no own enumerable properties. So EVERY carrier read
+// written as plain property access — `carrier[key]`, `Object.entries(carrier)` —
+// returns nothing for every key on a `Headers`, and the caller quietly starts a
+// new trace while exporting spans that look completely healthy. Nothing throws,
+// nothing logs, and `service.name` is still right.
+//
+// This is not hypothetical: it is a shape that shipped in the fleet's own
+// node template. `@opentelemetry/api`'s DEFAULT text-map getter is
+// `get(carrier, key) { return carrier[key] }`, so
+// `propagation.extract(ctx, request.headers)` returned the context unchanged for
+// every request in every service that took it. The assertion that caught it is
+// the trace-id one below — an assertion that "a span was exported" is blind to
+// it by construction, because the span is exported. It is exported WRONGLY.
+// ---------------------------------------------------------------------------
+
+test("inbound traceparent on a WHATWG Headers is CONTINUED, not restarted", () => {
+  // The headline promise, through the carrier a real Hono/Bun request hands you:
+  // `c.req.raw.headers` is a `Headers`, never a plain object. Before
+  // `header()` learned to read one, this returned a NEW trace id and reported
+  // `continued: false` while passing every other assertion in this file.
+  const inbound = new Headers({ traceparent: KNOWN_HEADER, tracestate: "vendor=1" });
+  const hop = serverHop(inbound, FIXED_SPAN);
+
+  assert.equal(
+    hop.traceId,
+    KNOWN_TRACE,
+    "a Headers carrier must yield the INBOUND trace id; a fresh one means the carrier was never read",
+  );
+  assert.ok(hop.continued, "a valid inbound traceparent on a Headers must be continued");
+  assert.equal(hop.spanId, FIXED_SPAN);
+  assert.equal(hop.sampled, true, "the sampled flag must survive the hop (§3.2.2.5.1)");
+  assert.equal(hop.outboundHeaders.traceparent, `00-${KNOWN_TRACE}-${FIXED_SPAN}-01`);
+});
+
+test("a malformed traceparent on a Headers starts a NEW trace and never throws", () => {
+  // §3.2.2.3 and §4.2, on the carrier that made the good case fail. A request
+  // is not a 4xx because its trace header was garbage.
+  for (const [name, value] of Object.entries(BAD_HEADERS)) {
+    const hop = serverHop(new Headers({ traceparent: value }), FIXED_SPAN);
+    assert.notEqual(hop.traceId, KNOWN_TRACE, `malformed "${name}" must not be adopted`);
+    assert.equal(hop.continued, false, `malformed "${name}" must start a new trace`);
+    assert.equal(hop.spanId, FIXED_SPAN, `malformed "${name}" must still get this hop's span id`);
+  }
+});
+
+test("the OTel default getter's shape CANNOT read a Headers — which is the whole defect", () => {
+  // Executed rather than described, because the reason this defect survived a
+  // whole wave of emission work is that it is invisible to every other kind of
+  // check. Both shapes below are run against the SAME real `Headers`; only the
+  // read differs.
+  //
+  // `defaultTextMapGetter.get` from @opentelemetry/api, transcribed verbatim:
+  //
+  //     get(carrier, key) { return carrier[key] }
+  //
+  // and the explicit getter the snippet now passes, verbatim:
+  //
+  //     get(carrier, key) { return carrier.get(key) ?? undefined }
+  //
+  // If the SDK ever changes its default so that it DOES read a Headers, the first
+  // assertion here goes red and this comment is what a reader has to revisit.
+  const carrier = new Headers({ traceparent: KNOWN_HEADER });
+  const defaultShape = (c, key) => c[key];
+  const explicitShape = (c, key) => c.get(key) ?? undefined;
+
+  assert.equal(
+    defaultShape(carrier, "traceparent"),
+    undefined,
+    "plain property access on a Headers is always undefined — if this passes, the SDK changed",
+  );
+  assert.equal(
+    explicitShape(carrier, "traceparent"),
+    KNOWN_HEADER,
+    "the explicit getter is the only shape that reads a Headers",
+  );
+  // And the consequence, stated as the assertion it is: the default shape reads
+  // nothing, so an extract built on it leaves the context unchanged and every
+  // request becomes its own root span.
+  const continued = defaultShape(carrier, "traceparent") === KNOWN_HEADER;
+  assert.equal(continued, false, "the default shape continues nothing; a fresh trace id is the symptom");
+});
+
+test("hono.ts.snippet passes the explicit getter, and never hands extract a raw Headers", () => {
+  // The SOURCE of the defect is this template, so the template asserts its own
+  // shape. Read with comments STRIPPED: a check that a comment can satisfy is
+  // not a check, and this file explains the getter in eleven comment lines
+  // naming `headersGetter` — which is exactly how a naive grep would pass on the
+  // broken snippet that shipped.
+  const source = readFileSync(new URL("./hono.ts.snippet", import.meta.url), "utf8");
+  const code = stripComments(source);
+
+  const extracts = [...code.matchAll(/propagation\.extract\(([^;]*?)\);/gs)];
+  assert.ok(extracts.length > 0, "the snippet must call propagation.extract at all");
+  for (const call of extracts) {
+    assert.match(
+      call[1],
+      /headersGetter/,
+      "every propagation.extract must pass the explicit Headers getter: the default getter " +
+        "cannot read a WHATWG Headers and inbound propagation fails silently",
+    );
+  }
+
+  assert.match(
+    code,
+    /const\s+headersGetter[^=]*=\s*\{[^}]*get\s*\(/s,
+    "the snippet must DEFINE a TextMapGetter that calls carrier.get()",
+  );
+
+  // The counterpart that was always right, asserted so nobody "fixes" it into
+  // the broken form: inject's carrier is a real object literal with `set`.
+  assert.match(
+    code,
+    /propagation\.inject\([^;]*\{[^}]*set\s*\([^)]*\)[^}]*\}/s,
+    "propagation.inject must receive a setter that writes into the Headers it will fetch with",
   );
 });
 

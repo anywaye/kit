@@ -2204,6 +2204,50 @@ SNIPPETS
   fi
 
   # -------------------------------------------------------------------------
+  # The node conformance suite, EXECUTED — not parsed, not greped.
+  #
+  # Why this is here rather than only in `ci.reusable.yml`'s opt-in `telemetry`
+  # job: that job runs the suite in a repository that ADOPTED the template, and
+  # kit itself calls the workflow with `language: none` and no `telemetry`
+  # input. So on kit's own commits the suite ran nowhere. The parse check above
+  # asks "is this valid TypeScript", which every revision of the snippet that
+  # shipped has been; the assertion that matters asks "does this continue an
+  # inbound trace", which is the question the defect class below is about.
+  #
+  # WHAT IT GATES, and why a paragraph was not enough. `@opentelemetry/api`'s
+  # default text-map getter is `get(carrier, key) { return carrier[key] }` —
+  # plain property access — and a WHATWG `Headers` keeps its entries in an
+  # internal list, so that read is `undefined` for every key. Handing a `Headers`
+  # to `propagation.extract` therefore returns the context UNCHANGED: every
+  # inbound `traceparent` is dropped, every request becomes its own root span,
+  # nothing throws, nothing logs, and every span is still exported with the right
+  # `service.name`. A trace view then shows a healthy pile of unrelated
+  # single-span traces, which is indistinguishable from a service receiving no
+  # instrumented traffic. Measured in the fleet, not anticipated.
+  #
+  # The suite asserts the INBOUND TRACE ID, which is the only assertion that can
+  # see it: "a span was exported" is blind to it by construction, because the
+  # span IS exported — wrongly.
+  #
+  # `have node` rather than a floor check, for the reason the five other
+  # languages get: node's own type stripper is already the parser above, so a node
+  # too old to run this suite is a node that could not have got here.
+  #
+  # NOT FATAL ON A SKIP, unlike the lint phase. This is a claim about
+  # propagation; the claim under test in the lint phase is "kit's configs work".
+  # A machine with no node is a normal machine, and the skip is reported and
+  # counted rather than swallowed.
+  if have node; then
+    node_suite_check() {
+      node --test "$ROOT/templates/otel/node/traceparent.test.mjs" 2>&1
+    }
+    check 'templates/otel/node  (the traceparent suite, executed — inbound trace id asserted)' \
+      node_suite_check
+  else
+    report SKIP 'templates/otel/node  (node not installed — the conformance suite ran nothing)'
+  fi
+
+  # -------------------------------------------------------------------------
   # The seven Dockerfiles.
   #
   # These are one of the four artifacts every adopting service inherits, and
