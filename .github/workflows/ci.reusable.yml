@@ -1300,28 +1300,63 @@ jobs:
       - name: install rust
         if: ${{ matrix.language == 'rust' }}
         uses: dtolnay/rust-toolchain@stable
-      # Kit's own tree, for the fallback suite below. `uses:` a checkout rather
-      # than reading `$GITHUB_ACTION_PATH`, and the reason is the same one the
+      # Kit's own tree, for the fallback suite below. Fetched by a NAME and never
+      # read out of `$GITHUB_ACTION_PATH`, and the reason is the same one the
       # language jobs use: GitHub documents `GITHUB_ACTION_PATH` as
       # composite-action-only, so inside a REUSABLE WORKFLOW it is not set and
       # `${GITHUB_ACTION_PATH}/…` expands to nothing. Under `set -euo pipefail`
       # that is not a missing optional path — it is `unbound variable` and the
       # step dies on its first line. See the `kit-gate-tree` comment block at the
-      # top of the `secrets` job.
+      # top of the `secrets` job, which is where the whole of that argument is.
       #
-      # `$RUNNER_TEMP` and NOT `.kit` inside the workspace, for a reason specific
-      # to this job's neighbour: `secrets` runs a history scan rooted at
-      # `$GITHUB_WORKSPACE`, and a second git repository inside the tree it scans
-      # is a nested-repo question nobody should have to answer.
+      # WHY `run:` AND NOT `uses: actions/checkout`, which is the SECOND fatal on
+      # this line and the reason `secrets` has still never been green. The action
+      # REFUSES a `path:` outside the workspace, from its own source at v7
+      # `src/input-helper.ts`:
+      #
+      #   result.repositoryPath = path.resolve(githubWorkspacePath, path)
+      #   if (!(result.repositoryPath + path.sep).startsWith(githubWorkspacePath + path.sep))
+      #     throw new Error(`Repository path '…' is not under '…'`)
+      #
+      # It is a guard rather than a quirk — the action cleans up after itself and
+      # persists credentials relative to the workspace — and NO input relaxes it.
+      # Measured in `cafaye/parlor` run 37249271580, job `ci (kit, node) /
+      # secrets`:
+      #
+      #   ##[error]Repository path '/home/runner/work/_temp/kit' is not under
+      #             '/home/runner/work/parlor/parlor'
+      #
+      # So a `git clone` into `$RUNNER_TEMP` sidesteps the guard entirely and
+      # writes wherever it likes, which is the only place this tree may go (see
+      # below). `tests/validate.sh`'s `checkout_path_check` now fails on any
+      # `actions/checkout` in this directory whose `path:` is not under the
+      # workspace, so the shape cannot come back by accident.
+      #
+      # WHY `$RUNNER_TEMP` AND NOT `.kit` INSIDE THE WORKSPACE, unchanged. The
+      # `secrets` job scans `$GITHUB_WORKSPACE`, and a second git repository
+      # inside the tree being scanned is a nested-repo question with no good
+      # answer. `$RUNNER_TEMP` is per-job scratch space, emptied at the end of the
+      # job, which is exactly the lifetime this file needs and no more.
+      #
+      # CREDENTIALS. `cafaye/kit` is PUBLIC, so this clone needs no token — which
+      # is a stronger position than the `persist-credentials: false` the action
+      # was given, because nothing is written to `.git/config` to be cleaned up.
+      # `GIT_TERMINAL_PROMPT=0` is set so a future private repo fails instead of
+      # hanging on a prompt that cannot be answered in CI.
       - name: kit (conformance fallback)
-        uses: actions/checkout@v7
-        with:
-          repository: cafaye/kit
-          ref: ${{ inputs.kit-lint-ref }}
-          path: ${{ runner.temp }}/kit
-          sparse-checkout: templates/otel
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        env:
+          KIT_REF: ${{ inputs.kit-lint-ref }}
+          KIT_SPARSE: templates/otel
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          KIT_TREE_DIR="$RUNNER_TEMP/kit"
+          git init --quiet "$KIT_TREE_DIR"
+          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
+          git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
+          git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
+          git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
+          echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
       - name: conformance suite
         # The suite the repo copied, not the one in kit: a service that has
         # patched its own middleware runs its own tests. Falls back to kit's
@@ -1330,7 +1365,6 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         env:
           KIT_TELEMETRY_DIR: ${{ inputs.working-dir }}/templates/otel/${{ matrix.language }}
-          KIT_TREE_DIR: ${{ runner.temp }}/kit
         run: |
           set -euo pipefail
           dir="$KIT_TELEMETRY_DIR"
@@ -1399,7 +1433,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # =========================================================================
-      # `kit-gate-tree` — WHY THIS STEP, AND WHY IT IS A `uses:` CHECKOUT
+      # `kit-gate-tree` — WHY THIS STEP, AND WHY IT IS A HAND-ROLLED `git` FETCH
       #
       # This job needs two files that live in kit's tree and in no other:
       # `tests/bootstrap.sh` and `tests/gitleaks_gate.sh`. Until 2026-10-05 it
@@ -1422,42 +1456,97 @@ jobs:
       # The `kit-lint-ref` input is what makes one exist: the tree is FETCHED by
       # a name, so the fetch is the mechanism and the name is the pin.
       #
-      # `$RUNNER_TEMP` and NOT `<working-dir>/.kit`, deliberately. The scan below
-      # is rooted at `$GITHUB_WORKSPACE` and reads the repository's full git
-      # history, so putting a second git repository inside the tree it scans is
-      # a nested-repository question with no good answer — kit's own history
-      # would become part of the caller's scan. `$RUNNER_TEMP` is per-job scratch
-      # space that is emptied at the end of the job, which is exactly the
-      # lifetime this file needs and no more.
+      # WHY NOT `uses: actions/checkout`, WHICH IS THE SECOND FATAL ON THIS LINE
+      # AND THE REASON THIS JOB HAS STILL NEVER BEEN GREEN. The fix for the
+      # variable replaced five reads of `$GITHUB_ACTION_PATH` with three explicit
+      # `actions/checkout` steps, and the action REFUSES a `path:` outside the
+      # workspace. From its own source, v7 `src/input-helper.ts`:
       #
-      # `sparse-checkout: tests` because the other half of this job's rationale —
-      # not scanning a service's committed `.gitleaks.toml` twice, not shipping
+      #   result.repositoryPath = core.getInput('path') || '.'
+      #   result.repositoryPath = path.resolve(githubWorkspacePath, result.repositoryPath)
+      #   if (!(result.repositoryPath + path.sep).startsWith(githubWorkspacePath + path.sep))
+      #     throw new Error(`Repository path '…' is not under '…'`)
+      #
+      # That is a GUARD and not a quirk: the action cleans up after itself and
+      # persists credentials relative to the workspace, so a path outside it is
+      # one it will not write to, and there is NO input that relaxes it. Measured
+      # in `cafaye/parlor` run 37249271580, on this job:
+      #
+      #   ##[error]Repository path '/home/runner/work/_temp/kit' is not under
+      #             '/home/runner/work/parlor/parlor'
+      #
+      # So this job went from `GITHUB_ACTION_PATH: unbound variable` to
+      # `Repository path … is not under …`, both fatal and both on its FIRST
+      # checkout. A `git` clone is not subject to the guard, and it is the only
+      # way to write to the one place this tree is allowed to go.
+      #
+      # `$RUNNER_TEMP` and NOT `<workspace>/.kit`, deliberately, and unchanged.
+      # The scan below is rooted at `$GITHUB_WORKSPACE` and reads the
+      # repository's full git history, so putting a second git repository inside
+      # the tree it scans is a nested-repository question with no good answer.
+      # `$RUNNER_TEMP` is per-job scratch space that is emptied at the end of the
+      # job, which is exactly the lifetime this file needs and no more.
+      #
+      # MEASURED, because the paragraph above says the nested repository would
+      # join the caller's scan and it is worth knowing whether that is true. A
+      # clone at `<caller>/.kit`, a `ghp_…` planted in a commit of KIT's history,
+      # nothing staged in the caller, scanned through `tests/gitleaks_gate.sh`
+      # rooted at the caller: `1 commits scanned … no leaks found`. gitleaks
+      # reads the OUTER repository's history, and an untracked directory carrying
+      # its own `.git` is not in it. (Staging it makes it a gitlink — also not
+      # scanned, but that is git complaining rather than a design.) So the hazard
+      # is LATENT rather than immediate, which is an argument for `$RUNNER_TEMP`
+      # and not against it: the whole difference between the two is that
+      # `$RUNNER_TEMP` cannot become the caller's problem at all, and a reason
+      # that is not currently firing is not a reason to move towards it.
+      #
+      # `KIT_SPARSE: tests` because the other half of this job's rationale — not
+      # scanning a service's committed `.gitleaks.toml` twice, not shipping
       # kit's `templates/` into a caller's build — is already in the script. What
-      # is read out of this checkout is `tests/`, and a full clone of kit on
-      # every push of every repository is a cost paid for files nobody opens.
+      # is read out of this clone is `tests/`, and a full clone of kit on every
+      # push of every repository is a cost paid for files nobody opens.
+      #
+      # CREDENTIALS, DELIBERATELY. Hand-rolling the fetch gives up the action's
+      # credential hygiene, and that cost is real — but it is only paid by a
+      # repository that needs a token, and `cafaye/kit` is PUBLIC: measured
+      # `HTTP 200` unauthenticated, and the clone writes nothing to
+      # `.git/config`, so there is no credential to persist and none to clean up.
+      # That is a STRONGER position than `persist-credentials: false`, which
+      # suppresses the write and still depends on a post-step that removes it.
+      # `GIT_TERMINAL_PROMPT=0` is set so that if kit is ever made private this
+      # fails legibly instead of hanging on a prompt CI cannot answer.
+      # `checkout_path_check` in tests/validate.sh fails on any
+      # `actions/checkout` in this directory whose `path:` is not under the
+      # workspace, so the shape that shipped here cannot come back by accident.
       # =========================================================================
       - name: kit (gate scripts)
-        uses: actions/checkout@v7
-        with:
-          repository: cafaye/kit
-          ref: ${{ inputs.kit-lint-ref }}
-          path: ${{ runner.temp }}/kit
-          sparse-checkout: tests
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        env:
+          KIT_REF: ${{ inputs.kit-lint-ref }}
+          KIT_SPARSE: tests
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          KIT_TREE_DIR="$RUNNER_TEMP/kit"
+          git init --quiet "$KIT_TREE_DIR"
+          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
+          git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
+          git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
+          git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
+          echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
       - name: install gitleaks (pinned release, sha256-verified)
         # kit's own bootstrap, not a third-party action. Two reasons, and both
         # of them are properties this repository already holds hadolint to: the
         # version and the hash are one edit in a file we ship, and the scan
         # cannot be quietly swapped for another scanner by a dependency bump.
         #
-        # `KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`. See the step above, which
-        # is where the whole of that argument is; this is the fourth place the
-        # same mistake was made and the reason `kit_gate_tree_check` in
-        # tests/validate.sh now asserts on the absence of the variable rather
-        # than on this file happening to be correct today.
-        env:
-          KIT_TREE_DIR: ${{ runner.temp }}/kit
+        # `KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`, and never a
+        # literal path. See the step above, which is where the whole of that
+        # argument is; this is the fourth place the same mistake was made and the
+        # reason `kit_gate_tree_check` in tests/validate.sh asserts on the
+        # ABSENCE of the variable and on the presence of the fetch above it,
+        # rather than on this file happening to be correct today. Not re-declared
+        # per step: the fetch exports it through `$GITHUB_ENV`, so the directory
+        # is written once.
         run: |
           set -euo pipefail
           . "$KIT_TREE_DIR/tests/bootstrap.sh"
@@ -1483,8 +1572,9 @@ jobs:
         # `$KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`. See the `kit (gate
         # scripts)` step above this job's other two; the short version is that
         # the variable is composite-action-only and this is a reusable workflow.
-        env:
-          KIT_TREE_DIR: ${{ runner.temp }}/kit
+        # It is not re-declared per step: the fetch step above exports it through
+        # `$GITHUB_ENV`, so the directory is written once and every step that
+        # reads it cannot disagree about where that is.
         run: bash "$KIT_TREE_DIR/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"
 
   # ------------------------------------------------------------------ zizmor
@@ -1523,7 +1613,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check 'zizmor==1.30.1'
-      # Kit's own tree, for `tests/zizmor_gate.sh`. `uses:` a checkout, never
+      # Kit's own tree, for `tests/zizmor_gate.sh`. Fetched by a NAME, never
       # `$GITHUB_ACTION_PATH` — the variable is documented as composite-action-only
       # and this is a reusable workflow, so it is not set here and reading it
       # under `set -euo pipefail` is a fatal on the step's first line. The full
@@ -1531,15 +1621,30 @@ jobs:
       # `kit (gate scripts)` step; this job is the SECOND one that had the defect
       # and the reason `kit_gate_tree_check` asserts on the variable's absence
       # rather than on either file happening to be correct today.
+      #
+      # Hand-rolled `git` rather than `uses: actions/checkout`, and this is the
+      # THIRD job that carried the same latent fatal: the action refuses a `path:`
+      # outside the workspace, and this step pointed one at the runner's scratch
+      # directory. It had simply never fired, because this job is opt-in and
+      # `secrets` — the job with no opt-in — failed first. All three copies are
+      # fixed together for the reason AGENTS.md records about the
+      # `REUSABLE_WORKFLOWS` list: a fix that leaves two armed is a fix that has
+      # not landed, and "nobody has seen it fail" is a fact about which job runs
+      # first, not about whether it fails.
       - name: kit (gate scripts)
-        uses: actions/checkout@v7
-        with:
-          repository: cafaye/kit
-          ref: ${{ inputs.kit-lint-ref }}
-          path: ${{ runner.temp }}/kit
-          sparse-checkout: tests
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        env:
+          KIT_REF: ${{ inputs.kit-lint-ref }}
+          KIT_SPARSE: tests
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          KIT_TREE_DIR="$RUNNER_TEMP/kit"
+          git init --quiet "$KIT_TREE_DIR"
+          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
+          git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
+          git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
+          git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
+          echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
       - name: zizmor (unpinned-uses recorded, everything else fatal)
         # `PY` is exported as well as `KIT_TREE_DIR`, and that is a SECOND defect
         # in this job rather than a detail of the first: `tests/zizmor_gate.sh`
@@ -1549,7 +1654,9 @@ jobs:
         # has no such call, so the script reached its own last line and died on
         # `PY: unbound variable`. Both are the same shape — a script written to
         # be called by one caller, run by another that had not been read.
+        #
+        # `KIT_TREE_DIR` is not re-declared here: the fetch step above exports it
+        # through `$GITHUB_ENV`. `PY` still has to be, because no step exports it.
         env:
-          KIT_TREE_DIR: ${{ runner.temp }}/kit
           PY: python3
         run: bash "$KIT_TREE_DIR/tests/zizmor_gate.sh" "$GITHUB_WORKSPACE" "$(command -v zizmor)"
