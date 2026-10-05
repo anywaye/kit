@@ -5213,7 +5213,7 @@ edit "$base106/.github/workflows/ci.reusable.yml" \
   'run: bash "$KIT_TREE_DIR/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"' \
   'run: bash "${GITHUB_ACTION_PATH}/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"'
 expect_red_check 'breakage 106: a run step reads GITHUB_ACTION_PATH again, which a reusable workflow never sets' \
-  "$base106" "reach kit's tree only through a checkout" --static-only
+  "$base106" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
 
 # 106b. THE OBVIOUS FIX, refused. Deleting the five lines that read the variable
 # turns a fatal on line 2 into `bash: no such file or directory` — the same red
@@ -5232,7 +5232,7 @@ edit "$base106b/.github/workflows/ci.reusable.yml" \
           set -euo pipefail
           . "$GITHUB_WORKSPACE/tests/bootstrap.sh"'
 expect_red_check 'breakage 106b: a step reads the fetched tree with nothing in the job that ever fetched it' \
-  "$base106b" "reach kit's tree only through a checkout" --static-only
+  "$base106b" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
 
 # 106c. THE PIN. `kit_gate_tree_check` asserts that every `cafaye/kit` checkout is
 # pinned by `inputs.kit-lint-ref`, because a checkout with no `ref` follows the
@@ -5268,7 +5268,7 @@ for i, line in enumerate(lines):
 open(path, "w", encoding="utf-8").write("\n".join(out))
 PYK
 expect_red_check 'breakage 106c: a kit checkout loses its pin, so the gate scripts follow the default branch' \
-  "$base106c" "reach kit's tree only through a checkout" --static-only
+  "$base106c" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
 
 # 106d. THE LITERAL, and it is the branch whose absence this check would not have
 # been able to report. `ref: master` is exactly what `inputs.kit-lint-ref`
@@ -5285,7 +5285,7 @@ edit "$base106d/.github/workflows/ci.reusable.yml" \
           ref: master
           path: ${{ runner.temp }}/kit'
 expect_red_check 'breakage 106d: a kit checkout is pinned to a literal ref instead of to the input, so a caller pinning `uses:` gets a different policy' \
-  "$base106d" "reach kit's tree only through a checkout" --static-only
+  "$base106d" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
 
 # 106e. THE GREEN CONTROL, and it is load-bearing in a way the four above are
 # not. This check FAILED ITS FIRST VERSION ON SEVEN JOBS THAT WERE CORRECT: it
@@ -5325,7 +5325,7 @@ jobs:
           bash tests/validate.sh
 YML
 expect_green_check 'breakage 106e: a job names kit paths in prose and fetches nothing — the seven jobs the first version of this check failed' \
-  "$base106e" "reach kit's tree only through a checkout" --static-only
+  "$base106e" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
 
 # ---------------------------------------------------------------------------
 # 107, 107b, 107c: EVERY LINTED FILE GETS TYPE INFORMATION.
@@ -5362,7 +5362,7 @@ edit "$base107/lint/eslint.config.mjs" \
   "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
   "files: ['**/*.{js,mjs,cjs,ts,tsx}'],"
 expect_red_check 'breakage 107: the files glob stops covering what recommendedTypeChecked can lint, so a .mts file gets the rules and never the type information' \
-  "$base107" "every linted file is given type information" --static-only
+  "$base107" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
 
 # 107b. THE OTHER DIRECTION, which is the one that is tempting. Adding `.jsx` is
 # a one-word edit that reads like making the check stricter, and it would turn
@@ -5376,7 +5376,7 @@ edit "$base107b/lint/eslint.config.mjs" \
   "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
   "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts,jsx}'],"
 expect_red_check 'breakage 107b: the files glob widens to an extension nothing lints and nobody has a tsconfig for' \
-  "$base107b" "every linted file is given type information" --static-only
+  "$base107b" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
 
 # 107c. `tsconfigRootDir` named kit's directory. Not the reported cause, and a
 # separate assertion for exactly that reason — a recipe that fired on both would
@@ -5386,7 +5386,7 @@ edit "$base107c/lint/eslint.config.mjs" \
   'tsconfigRootDir: process.cwd()' \
   'tsconfigRootDir: import.meta.dirname'
 expect_red_check 'breakage 107c: tsconfigRootDir names kits own directory, so the first allowDefaultProject entry would resolve to .kit/lint and match nothing' \
-  "$base107c" "every linted file is given type information" --static-only
+  "$base107c" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
 
 # ---------------------------------------------------------------------------
 # 104b: THE CONTROL, and it is the one this check cannot afford to lose.
