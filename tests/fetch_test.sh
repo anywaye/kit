@@ -9,7 +9,7 @@
 #   an *offline run not touching the network*. None of that is a static property
 #   of a file, and all of it is a property of a real subprocess talking to a
 #   real remote. So it is executed, the same way `classify_test.sh` and
-#   `staleness_test.sh` are, and for the same reason: a check that only parsed
+#   `fingerprint_test.sh` are, and for the same reason: a check that only parsed
 #   `bin/dev` would pass on a script that fetches nothing.
 #
 # THE REMOTE IS LOCAL

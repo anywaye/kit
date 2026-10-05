@@ -272,7 +272,7 @@ Two consequences worth stating:
   regardless, so a per-service grant would only have governed who pays the disk
   cost.
 
-`templates/parity-allowlist` and `DECISIONS.md` carry the rest.
+`DECISIONS.md` carries the rest.
 
 ## Adopting this
 

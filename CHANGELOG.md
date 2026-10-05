@@ -32,6 +32,40 @@
   up is kit noticing when a service stops obeying — recorded in MD36 rather than
   discovered later.
 
+- **The rest of it, so the claim above is true rather than aspirational.** The
+  first pass kept `tests/staleness.py` and the lint-drift check as "the next
+  candidates", on the grounds that both were narrower and the first had 26
+  assertions. Both claims were about the *program* rather than about what it
+  *read*, which is the mistake MD36 exists to correct, applied inside MD36.
+
+  Gone with them: `tests/staleness.py` (1414 lines) and its suite
+  `tests/staleness_test.sh` — `--scope templates` takes `--repos-dir ..` and
+  grades *each service's* copy of a template, so it never graded kit, and its 26
+  assertions proved the reporter's output format against a synthetic fleet rather
+  than any property of this repository. `lint_drift_check` and `fleet_repos()` in
+  `tests/validate.sh` (~446 lines), which walked `../*` for a `.github/workflows`
+  directory and took the SKIP branch on every CI run of every commit — plus its
+  allowlist `lint/drift-allowlist`, whose 59 lines assigned dated debts in *other
+  people's repositories* with an `owner=` field. And `tests/core_fanout_check.py`
+  (338 lines), which had zero callers and a docstring claiming it was run by
+  `validate.sh` under a name that appears nowhere in the repository.
+
+- **Two files that existed only to serve those checks.** `tests/artifacts.json`
+  (314 lines) declared what kit ships and where a service puts it;
+  `templates/parity-allowlist` held 80 entries recording why a given service's
+  copy was not kit's bytes. The staleness reporter was their only reader, so
+  neither had a consumer the moment it went. Leaving a check's data behind is how
+  a repository grows a second unwatched copy of the truth — the next reader
+  assumes something grades it. Neither had any other reader in any language.
+
+- **`tests/tenant_isolation/cross_tenant_harness.sh` now requires
+  `KIT_SERVICE_REPO` and searches for nothing.** It used to guess by trying
+  `$ROOT/../courier` then `$ROOT/../../courier` — the same failure mode as the
+  fleet checks, finding a checkout named `courier` wherever one happened to be,
+  including a leftover in a shared temp directory, and reporting on that. No CI
+  job and no gate check runs this harness, so naming the service costs nothing
+  and is the honest reading of what it is.
+
 - **The committed-history secret scanner, and the job that ran it.** `gitleaks`,
   `.gitleaks.toml`, `tests/gitleaks_gate.sh`, the `secrets` job in
   `ci.reusable.yml`, the `KIT_GITLEAKS_VERSION` / `KIT_GITLEAKS_SHA256S` pins in

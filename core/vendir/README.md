@@ -81,8 +81,11 @@ both the tag and the sha:
   path: .
 ```
 
-The sha is the machine-readable form and `tests/staleness.py` compares it, so a
-tag that moved after the fact is still detectable.
+The sha is the machine-readable form, and pinning it is what makes a tag that
+moved after the fact detectable at all. Nothing in kit compares it any more — the
+reporter that did read the fleet's pins and was removed with the cross-repo
+surface (MD36) — so the sha is now what a lockfile diff shows you, rather than
+something a gate asserts.
 
 ### An `http:` source is not updatable, and an `ssh://` URL is invisible
 

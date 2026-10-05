@@ -29,13 +29,11 @@ kit/
 ├── lint/                                 # configs services RUN, not copy
 │   ├── yamllint.yml  golangci.yml
 │   ├── rubocop.yml   eslint.config.mjs
-│   ├── drift-allowlist                   # owned service configs that differ
 │   └── hadolint.yaml                      # argues the one rule it ignores
 ├── docker/                               # Dockerfile.<lang> templates
 ├── core/                                 # the cafaye/core fan-out standard
 │   ├── tier/skip-allowlist               # one file for the fleet; four hygiene rules
 │   ├── tier/README.md                    # the format, the rules, and the limits
-│   ├── parity-allowlist                  # WHY each service's copy is not kit's bytes
 │   ├── secrets/                          # runtime credential-leak canary
 │   │   ├── README.md                       # the CONTRACT, language-neutral
 │   │   └── go/                            # the Go adapter + its five vectors
@@ -49,8 +47,8 @@ kit/
     ├── zizmor_gate.sh                    # the one zizmor split, ditto
     ├── bootstrap.sh                      # the gate installs its own tools
     ├── classify.py  rules.json           # the change classifier, failing closed
-    ├── staleness.py  artifacts.json      # the staleness reporter, and WHAT it measures
-    └── core_fanout_check.py              # structural checks on core/vendir, core/renovate
+    ├── fingerprint.py                     # the skip record, and whether it can be WRONG
+    └── profile_report.py                  # reads a profile.tsv, prints a table
 
 templates/ holds everything a service adopts, and it is split by **how a thing
 reaches a service**, not by subject:
@@ -385,7 +383,7 @@ Six phases, and all six must pass:
   printing its own red proof. Stdlib only and offline on purpose. If they ever
   need the network, a template has grown a dependency and kit has stopped being
   config-only.
-- **classifier + staleness** — both **executed**, not parsed, and deliberately
+- **classifier + fingerprint** — both **executed**, not parsed, and deliberately
   outside the `RUN_STATIC` guard: a check that only parsed those two files would
   pass on a classifier that waves every change through.
 
@@ -452,7 +450,7 @@ assemble the canary, do not commit it.**
   real Postgres rather than a real collector, and they live in this phase for the
   same reason: a security property that nothing executes is worth nothing. They
   SKIP loudly without docker — never pass silently.
-- **classifier + staleness** — the change classifier and the staleness reporter
+- **classifier + fingerprint** — the change classifier and the fingerprint record
   are *executed*, not parsed, and deliberately **outside** the `RUN_STATIC`
   guard: a check that only parsed those two files would pass on a classifier
   that waves every change through. They stay runnable when static analysis is
@@ -579,12 +577,12 @@ assemble the canary, do not commit it.**
   worse than no sweep**, and the same argument now covers the self-test copies
   this repository used to make: a copy has no fleet beside it, which is a limit
   to report and not one to route around.
-- **A MUTATION MUST ASSERT ITS OWN PREMISE BEFORE IT MUTATES.** Two of kit-14's
-  recipes were wrong and the suite caught both: one named an artefact id that
-  `artifacts.json` really declares, so the mutation broke nothing, and one
-  asserted that a check would go red when no such check exists in this
-  repository. A mutation that has silently stopped breaking the thing it names is
-  a proof of nothing. The harness that taught this is retired; the rule is not.
+- **A MUTATION MUST ASSERT ITS OWN PREMISE BEFORE IT MUTATES.** kit-14 had two
+  wrong recipes and the suite caught both: one named an artefact id the declared
+  table did not actually carry, so the mutation broke nothing, and one asserted
+  that a check would go red when no such check existed here. A mutation that has
+  silently stopped breaking the thing it names is a proof of nothing. The harness
+  that taught this is retired, and so is the table; the rule is not.
 - Tests are written **first** and watched fail before the artifacts exist. A
   config written from documentation instead of from the pinned image is a config
   that breaks on the first `bin/dev up`: Tempo, Loki and Mimir all reject keys
@@ -715,56 +713,32 @@ So:
   those two keywords as sets. Each had to argue for itself. Widening the list is
   a deliberate, diffable act in one file.
 
-## The reporter fails closed too, and so does a copy that is missing
+## The reporter is gone, and the vocabulary went with it
 
-`tests/staleness.py` has two scopes. `--scope core` measures a **pin**; the one
-kit already had. `--scope templates` measures a **file**, and a file has a state
-a pin does not have: it is not there. `templates/` has drifted furthest and the
-commonest state in the fleet is `absent` — 0 of 9 services hold the collector,
-1 of 9 holds `bin/dev` — so the reporter needed a word for it before anything
-else could be said.
+`tests/staleness.py` had two scopes. `--scope core` measured a **pin**; the one
+kit already had. `--scope templates` measured a **file**, and a file has a state a
+pin does not have: it is not there. Five states, and the vocabulary was the whole
+design — `current`, `diverged`, `absent`, `unknown`, `n/a` — with `absent` there
+because the commonest state in the fleet was a service holding nothing.
 
-Five states, and the vocabulary is the whole design:
+**Both scopes read repositories beside this one**, so both went with MD36. So did
+the two files that existed only to serve them: `tests/artifacts.json`, the table
+of what kit ships and where a service puts it, and `templates/parity-allowlist`,
+which carried eighty entries each naming a divergence in a repository kit cannot
+see. Between them they were the largest remaining piece of kit reading other
+people's trees, and neither had a consumer left once the reporter did.
 
-| state | meaning | needs a pin? |
-| --- | --- | --- |
-| `current` | byte-identical to what kit ships, at the declared path | no |
-| `diverged` | present, and not byte-identical | **yes** |
-| `absent` | kit ships one and the service holds nothing there | **yes** |
-| `unknown` | it could not be measured | **yes** |
-| `n/a` | kit ships no variant of this artefact for this service's language | no |
+What is worth keeping from that work is not the reporter. It is the sentence
+underneath it: **never infer a copy from its content.** There is no similarity
+threshold, no percentage, no "closest match", and no search for a file that hashes
+to kit's artefact. That was the tempting alternative — a `quick_ratio() > 0.99`
+score is the shape a helpful contributor reaches for — and the reason it is wrong
+is that it is unfalsifiable by the thing it is measuring: a ratio that says "close"
+cannot be argued with about what close means. If a check like that is ever written
+again, in kit or in a service, that is the sentence to read first.
 
-`unknown` inherits the rule above rather than copying it. A service that
-declares no `language`, a symlink where a copy should be, an unreadable file, an
-artefact kit has stopped shipping — each is a finding, because the cheap answer
-in every one of those cases is a guess, and a guess reported as a measurement is
-the fail-open direction. `n/a` exists so that `unknown` can stay honest: a Go
-service has no `.rubocop.yml` because it is not a Ruby service, and calling that
-unmeasured would put three permanent, unfixable findings on every service in the
-fleet.
-
-**Never infer a copy from its content.** There is no similarity threshold, no
-percentage, no "closest match", and no search for a file that hashes to kit's
-artefact. A copy is `current` when the bytes at the declared path are equal and
-the path is a real file in the service's own tree, and at no other time. One
-appended byte makes it `diverged`, and `diverged` needs a pin. The tempting
-alternative was a `quick_ratio() > 0.99` similarity score, because that is the
-shape a helpful contributor reaches for — and the reason it is wrong is that it
-is unfalsifiable by the thing it is measuring: a ratio that says "close" cannot
-be argued with about what close means.
-
-**`templates/parity-allowlist` is the same dialect as
-`templates/tier/skip-allowlist`: the same four rules, in the same words, one
-entry per line.** Two dialects of "record why" is how one of them goes stale. It
-adds one rule the tier file does not need — **an unpinned divergence or absence
-is a failure** — because its entries name copies in repositories the gate cannot
-read, so the file is a *record of the fleet*, and a record that silently omits a
-cell is worse than no record: it reads as "handled".
-
-The count is printed on PASS and it is a measurement, not a ledger to shrink.
-It is currently **80**, which is a bad number, and the way to move it is to
-re-copy an artefact and delete the entry — never to delete an entry, which the
-dead-entry rule turns red.
+The rest is now advice rather than a control, and the honest description of that
+is that nothing enforces it.
 
 ## One cluster, and the database is the boundary
 
@@ -1057,8 +1031,8 @@ finding: **they are not the same mechanism.**
 is the weaker half both enforce, which is the one that matters when a service's
 copy outlives the decision: **a retired name stays retired.** The deprecation
 half does not port either — a comment in a copied YAML file is a comment in the
-copy, and kit has no registry to hold one (`templates/parity-allowlist` already
-carries that half).
+copy, and kit has no registry to hold one — the file that used to, recording
+eighty fleet-wide deprecations, went with the reporter it served.
 
 **The fourth hygiene rule is INVERTED here.** In a skip allowlist, an entry
 matching nothing is a ratchet that only turns one way. For a tombstone the dead
@@ -1071,28 +1045,28 @@ See `DECISIONS.md` (MD26, MD27).
 - **Config only.** No runtime code, no dependencies, no generated output. If
   kit grows a dependency it has stopped being conventions.
   - **The one carve-out, and why it is a carve-out rather than a precedent.**
-    `core/` ships a change classifier and a staleness reporter, which are
-    programs rather than configuration. They are here because a standard
-    without a thing that enforces it is a standard enforced by whoever reads
-    it. They stay inside the boundary deliberately: **standard library only,
-    no import outside `json`/`os`/`re`/`sys`/`argparse`/`subprocess`/`difflib`/`glob`/`urllib`/`hashlib`/`__future__`**,
-    no installable dependency, and **nothing imports them** — the real test of
-    this rule is that nothing here is a library, and a classifier is not. The
-    reporter prints a table for a scheduled job and **never commits its
-    output**, because a committed report is the "generated output" this rule
-    forbids and the kind of file that rots. If a third program is proposed, the
-    default answer is no.
-  - **Every program in `tests/` is stdlib-only, and that list is a reader's
-    rather than the gate's.** `difflib` and `glob` arrived with the templates
-    half of the staleness reporter — the first counts the lines two copies
-    differ by, the second resolves a `{lang}` source — and `urllib` was already
-    there and already unnamed. There was a `carve-out boundary` check that
-    walked the AST of the fleet programs named above and asserted every module
-    it found was named in this paragraph; it went with them, and this paragraph
-    outlived it. So the rule is now a convention rather than a control, and the
-    honest description of that is that nothing enforces it. That is a defensible
-    trade only because the population is small and entirely stdlib — a reader
-    adding a fifth program is trusted to have read this bullet.
+    `core/` ships a change classifier, which is a program rather than
+    configuration. It is here because a standard without a thing that enforces
+    it is a standard enforced by whoever reads it. It stays inside the boundary
+    deliberately: **standard library only, no installable dependency**, and
+    **nothing imports it** — the real test of this rule is that nothing here is
+    a library, and a classifier is not. If a second program is proposed, the
+    default answer is no. The other two that were here, a staleness reporter
+    and a fingerprint record, no longer are: both read repositories beside this
+    one, and a program whose subject is somebody else's tree is not this
+    repository's business whatever else it is.
+  - **Every program in `tests/` is stdlib-only, and that is now a convention
+    rather than a control.** Three remain — `classify.py`, `fingerprint.py` and
+    `profile_report.py` — and between them they import `argparse`, `glob`,
+    `hashlib`, `json`, `os`, `sys`, `time` and `__future__`. There was a
+    `carve-out boundary` check that walked the AST of every Python file here and
+    asserted each module it found was named in this paragraph; it went with the
+    cross-repo programs, and this paragraph outlived it, which is the failure
+    mode this repository keeps warning about in other places. So nothing
+    enforces the list now, and the honest description of that is that nothing
+    enforces it. That is defensible only because the population is three files
+    and every import is stdlib: a reader adding a fourth is trusted to have read
+    this bullet.
 - **Callers override, they never fork.** Anything that differs per service —
   versions, thresholds, names — is an input or a build arg, never a copy of a
   file. Six repos each holding their own workflow is the drift this repo

@@ -12,6 +12,13 @@ what is still unproven about it.
 Before designing anything, the fleet was measured. The design below was built for
 the problem that is there, not the one in the packet.
 
+**This section is a record of a measurement, not a live check.** It was taken by
+`tests/staleness.py --scope core`, and that reporter read repositories beside
+this one, so it went with the rest of the cross-repo surface (MD36). The table
+below is what it found on that date and nothing re-runs it. Reading it as current
+would be reading a stale claim as a live guarantee — the exact failure this
+repository keeps documenting elsewhere — so it is labelled here instead.
+
 ```
 core master: 39acaed6f1e25a895b0410e0689fe68d523b1b63
 
@@ -23,8 +30,6 @@ pantry      -             none          ?  undeclared
 caf         -             none          ?  undeclared
 (…)
 ```
-
-(`tests/staleness.py --repos-dir …`, run against the real working tree.)
 
 **One repository declares a core pin, and it is nineteen commits behind.** That is
 not twelve copies of a hand-bump, and the difference matters:
@@ -42,8 +47,8 @@ Three findings that changed the plan:
 1. **`caf` and `pantry` hold vendored bytes with no recorded origin at all.** The
    packet's own literature says 4.3% of vendored copies record a recoverable
    origin; these two are in that 4.3%, inside our own fleet, today. The
-   staleness reporter reports them `undeclared`, which is a different statement
-   from `current` and is the only honest thing to say.
+   reporter called them `undeclared`, which is a different statement from
+   `current` and was the only honest thing to say.
 2. **`billing` and `gateway` fetch core at test time on purpose, and say so in
    comments.** `gateway`'s reads: *"The schema is fetched rather than vendored so
    this tracks what core publishes today instead of freezing a copy that silently

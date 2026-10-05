@@ -38,8 +38,11 @@ kit has retired, kept dead. Both are below, and both are in `DECISIONS.md`
 
 ## What the fleet actually adopted
 
-Measured on 2026-09-30 against `41f8bcb`, by `tests/staleness.py --scope
-templates --repos-dir …`, over the nine services (the fleet the packet counts;
+**A dated measurement, not a live one.** It was taken on 2026-09-30 against
+`41f8bcb` by `tests/staleness.py --scope templates`, which read the nine services
+beside this repository and has since been removed along with the rest of the
+cross-repo surface (MD36). Nothing re-runs it, so read the numbers below as what
+was true on that date. Over those nine services (the fleet the packet counts;
 `docs` and `cafaye-{py,rb,ts}` are toolchain repos, not services, and
 `pantry` is a registry that has not called kit's workflow). **Nine of 108 cells are
 byte-identical.** One of them, `gateway/bin/prime`, is the only copy in the fleet
@@ -98,11 +101,11 @@ was built:
    and reports the member breakdown; it does not claim the stack is broken,
    because comparing bytes cannot tell those two situations apart.
 
-`templates/parity-allowlist` carries all 80 findings — every diverged copy,
+`templates/parity-allowlist` carried all 80 findings — every diverged copy,
 every absence and every unmeasurable cell — as one line each, with a reason, an
-owner, a `since` and an `until`. **80 is a bad number and it is meant to be
-read as one.** The way to shrink the file is to re-copy an artefact and delete
-the entry; deleting the entry to shrink the file is a hard failure of its own.
+owner, a `since` and an `until`. **80 was a bad number and it was meant to be
+read as one.** It is gone with the reporter, so the count is now history rather
+than something a green run prints.
 
 ## What is in here
 
@@ -118,7 +121,6 @@ the entry; deleting the entry to shrink the file is a hard failure of its own.
 | `docker/Dockerfile.<lang>` | Seven multi-stage templates. All run non-root. All start through **`docker/entrypoint.sh`, which applies the service's migrations and `exec`s the service** — so a failed migration is a failed container, and the "service is up, the schema is not" cold-start class is gone. `go` and `rust` finish on `debian:*-slim` rather than distroless, because **no distroless variant ships a shell** (measured: `bin/` is empty in both) and a script needs one; the file says so and gives the escape hatch. Linted by `hadolint -c lint/hadolint.yaml`, plus a non-root/no-`:latest`/no-`ADD` check the linter does not cover. | Every service |
 | `docker/entrypoint.sh` | The one entrypoint, shared by all seven templates. POSIX sh, parameterised by environment rather than by copy: resolve the migration command → prove `DATABASE_URL` → migrate → `exec "$@"`. `KIT_MIGRATE=auto\|required\|off`, `KIT_MIGRATE_CMD`, and `KIT_MIGRATE_ADVISORY_LOCK` (a Postgres **session**-level `pg_advisory_lock`, opt-in because it needs `psql`). It does **not** serialize replicas by default and says so on every boot. | Copied with the Dockerfile |
 | `lint/hadolint.yaml` | hadolint config, with the two ignored rules (DL3008, DL3067) argued rather than assumed. | Any repo that ships a Dockerfile |
-| `lint/drift-allowlist` | Known, owned service configs that disagree with kit's: reason, owner, since, until. An entry that expires, duplicates, or stops describing a real difference is a failure. | kit's gate only |
 | `templates/bin-prime/<lang>.sh` | The worktree primer: one script per language, exit 0 only when the tree is genuinely ready. | Every service, as `bin/prime` |
 | `templates/bin/dev.sh` | The local developer loop: **fetch** the stack from a pinned kit ref, bring it up, wait for health, migrate, seed an admin, print the URLs. Idempotent, fails loudly, works offline. | Every service, as `bin/dev` |
 | `templates/compose/docker-compose.yml` | Postgres, NATS+JetStream, Redis, the OTel collector, and the four LGTM backing services. Every port parameterized inside kit's claimed `15000-15999` block, every image pinned, every service healthchecked and memory-bounded. **One cluster for all services**, with the database as the isolation boundary. | **Fetched** by `bin/dev` — never copied |
@@ -148,13 +150,10 @@ the entry; deleting the entry to shrink the file is a hard failure of its own.
 | `templates/tier/<lang>/` | The **declared tier**, per language — the tests that need a real dependency, declared in the test source and read by the runner's own collector. Never grepped for a sentinel: a sentinel fails open. | Every service, per language |
 | `templates/tier/skip-allowlist` | One file for the fleet. Four hygiene rules — reason, owner, `since`, `until` — and **an entry matching nothing is a failure**. | Every service; the file itself lives here |
 | `templates/tier/README.md` | The normalised result format, the allowlist rules, and what a tier gate **cannot** catch. | Every service |
-| `templates/parity-allowlist` | Why each service's copy of a kit template is **not** kit's bytes. Same four rules, same one-line dialect, and it adds the rule the tier file does not need: **an unpinned divergence or absence is a failure too**. The count is printed on every green run. | The whole fleet; the file itself lives here |
 | `templates/mise.toml` | Toolchain pins, one per language, commented. | Every service, as `mise.toml` |
 | `templates/AGENTS.md` | Skeleton repo-conventions file. | Every service, as `AGENTS.md` |
 | `core/` | The `cafaye/core` fan-out: a `vendir.yml` per consuming repo, the one shared Renovate policy, and what `core` needs to publish semver tags. | Any repo that consumes core's schemas |
 | `tests/classify.py` | Classifies a change to a vendored schema set into `FILE`/`PACKAGE`/`WIRE_JSON`/`WIRE`, and **fails closed** on anything `tests/rules.json` does not name. Stdlib only. | Any repo that vendors core |
-| `tests/staleness.py` | Two scopes. `--scope core` reads every consuming repo's recorded pin and prints the distance. `--scope templates` reports whether each service's copy of a kit template is `current`, `diverged`, **`absent`**, `unknown` or `n/a`, and whether the reason for it is recorded. | Scheduled, fleet-wide |
-| `tests/artifacts.json` | The ONE place kit says what it ships and where a service puts it. Read by the reporter *and* by the gate — a table written down twice is a table that is right in one of the two places. | kit |
 | `tests/validate.sh` | kit's own suite — the gate. | kit |
 | `tests/zizmor_gate.sh` | The one zizmor split: `unpinned-uses` recorded, every other audit fatal. | Every service, copied verbatim |
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
@@ -207,46 +206,34 @@ purpose.
 
 Everything in `templates/`, `lint/` and `docker/` is adopted **by copy**, which
 means a fix in kit reaches a service only when somebody copies the file again.
-Nothing in the fleet made that happen, and the reporter that now measures it is
-`tests/staleness.py --scope templates`.
+Nothing in the fleet made that happen.
 
-```sh
-tests/staleness.py --repos-dir .. --scope templates
-```
+**kit used to measure it and no longer does.** `tests/staleness.py` reported each
+service's copy of a template as `current`, `diverged`, `absent`, `unknown` or
+`n/a`, and `templates/parity-allowlist` recorded eighty reasons why a given copy
+was not kit's bytes. Both read repositories beside this one, so both went with the
+rest of the cross-repo surface (MD36). The rule that survives is the one worth
+having, because it is a rule about how to reason rather than about what to read:
 
-A **pin** is a record that a copy is deliberately not kit's bytes. Without one,
-a divergence is not "fine", it is **unproven** — and an unproven cell is a
-finding, the same way an undeclared `core` pin is. `templates/parity-allowlist`
-is the file those records live in, and it uses the tier skip-allowlist's format
-exactly:
+**a copy is never inferred from content.** There is no similarity threshold, no
+percentage, no "closest match", and no search for a file that hashes to kit's. A
+copy is `current` when the bytes at the declared path are equal and the path is a
+real file in the service's own tree, and at no other time — one appended byte
+makes it `diverged`, and a symlink to an identical file is `unknown` rather than
+`current`, because the bytes are right today and the arrangement is a bet that the
+target never moves.
 
-```
-<verb> <repo> <artefact-id> reason="…" owner=… since=YYYY-MM-DD until=YYYY-MM-DD
-```
+The tempting relaxation was a `quick_ratio() > 0.99` score, because that is the
+shape a helpful contributor reaches for, and the reason it is wrong is that it is
+unfalsifiable by the thing it is measuring: a ratio that says "close" cannot be
+argued with about what close means. If a check like that is ever written again, in
+kit or in a service, that is the paragraph to read first.
 
-with three verbs — `diverged` (held, and different), `absent` (kit ships it,
-the service holds nothing) and `unknown` (kit cannot say what the service would
-have copied). **The verb is checked against what the reporter measured**, so an
-entry cannot excuse a different finding than the one that exists.
-
-Two directions, and the tier allowlist only needs one:
-
-- **an entry that matches nothing is a failure** — ESLint's
-  `reportUnusedDisableDirectives` shape. The artefact is now byte-identical, or
-  the entry names an artefact kit does not ship, or a repository that is gone.
-- **an unpinned cell is a failure** — the reverse. `pantry`'s
-  `ci.reusable.yml` is the example that pays for the rule: it is a real design
-  decision (its CI is a workspace-drift job over thirteen repositories, not a
-  per-language service build) and it is invisible to every reader of that
-  repository until it is written down somewhere.
-
-**A copy is never inferred from content.** There is no similarity threshold and
-no search for a file that hashes to kit's: a copy is `current` when the bytes
-at the declared path are equal and the path is a real file in the service's own
-tree, and at no other time. A symlink to an identical file is `unknown`, not
-`current` — the bytes are right today and the arrangement is a bet that the
-target never moves. The tempting relaxation was a similarity score, and the rule
-has to be tried to be believed rather than argued.
+What is lost is real and worth naming: kit no longer knows which services are
+behind, so a template fixed here can sit un-copied indefinitely. That is a cost
+this repository accepted deliberately, and MD36 records why. Consent to be checked
+does not make it this repository's job — a red there lands on whoever maintains
+the service that drifted, which is the wrong owner for a check written down here.
 
 Two things worth knowing before you read any of it, because both were found by
 running the tools rather than by reading about them:
@@ -254,17 +241,22 @@ running the tools rather than by reading about them:
 - **`includePaths` nested under `git:` is silently ignored.** vendir drops keys
   its schema does not declare, the filter ends up empty, and `vendir sync`
   vendors the *entire* upstream repository while exiting **0**. It reads
-  correctly. `tests/validate.sh` has a check for exactly this shape.
+  correctly. `tests/core_fanout_check.py` asserted this shape and eight others
+  against `core/vendir/` and `core/renovate/`; it had no caller and claimed one
+  in its own docstring, so it is gone. **Nothing checks these files now** —
+  `core/vendir/README.md` is the only place the rule is written, and a reader
+  editing a `vendir.yml` is the only thing standing between them and the whole
+  upstream tree.
 - **`renovate.json5` uses `constraints.vendir`, not `installTools`.** The first is
   what the vendir manager actually reads; the second is scoped to
   `postUpgradeTasks` and is *also* wrong in shape — it is an object keyed by tool
   name, not an array. Both checked in Renovate's source; see the comments in the
   file.
 
-The change classifier and the staleness reporter are the two things here that
-are programs rather than configuration, and they are the reason the standard is
-enforceable. Both are standard-library only and neither is imported by anything.
-Their conventions are in [`AGENTS.md`](AGENTS.md#the-classifier-fails-closed-and-that-is-a-rule-about-code).
+The change classifier is the one thing here that is a program rather than
+configuration, and it is the reason the standard is enforceable. It is
+standard-library only and it is not imported by anything. Its conventions are in
+[`AGENTS.md`](AGENTS.md#the-classifier-fails-closed-and-that-is-a-rule-about-code).
 
 ## The gate declaration, and the two workarounds that are now illegal
 
@@ -1167,8 +1159,9 @@ bash <kit>/tests/validate.sh
 `lint/` is 249 lines of golangci, rubocop, eslint, yamllint and hadolint
 configuration, and until now it was distributed by `cp`. **No service in the fleet
 had ever copied it** — the one repository that carries its own golangci config
-wrote that file itself, for its own reason, and the difference matters (it is
-recorded in `lint/drift-allowlist`). The three mechanisms kit ships are not
+wrote that file itself, for its own reason, and the difference matters — it was
+recorded in a fleet-wide allowlist that no longer exists. The three mechanisms kit
+ships are not
 equivalent, and the adoption numbers say so:
 
 | mechanism | live? | adoption |
@@ -1315,45 +1308,35 @@ One input, and it is deliberately narrow:
   service gets it for free.
 
 A repo that wants a stricter *rule* rather than a stricter *flag* has no seam, and
-that is the intended pressure: the rule belongs in kit, where nine services get
-it and one written-down entry in `lint/drift-allowlist` is replaced by a change
-everyone receives.
+that is the intended pressure: the rule belongs in kit, where a change to it
+reaches every service that calls the reusable workflow, rather than in each copy.
 
-### The gate that catches a service drifting back
+### The gate that caught a service drifting back, and does not any more
 
-`lint drift` in `tests/validate.sh` reads **both** files and reports the
-**difference**, linter by linter, rather than demanding the file be absent. A
-service whose `.golangci.yml` agrees with kit's passes; one that disagrees is told
-exactly which linters it dropped or added.
+This used to exist and it was a good check, which is worth saying before the
+detail of why it is gone.
 
-Banning the file was the first version and it is worse than the drift it prevents.
-A config that matches kit's has reached the same policy by another route, and
-failing it teaches the lesson that kit's config is a thing you get shouted at for
-having — which is how a standard stops being adopted. An agreeing copy must
-**pass**: a check that can be satisfied by deleting the file is not a check.
+`lint drift` in `tests/validate.sh` read **both** files and reported the
+**difference** between a service's `.golangci.yml` and kit's, linter by linter,
+rather than demanding the file be absent. Banning the file was the first version
+and it is worse than the drift it prevents: a config that matches kit's has
+reached the same policy by another route, and failing it teaches the lesson that
+kit's config is a thing you get shouted at for having. An agreeing copy had to
+**pass**.
 
-A difference you cannot delete yet goes in `lint/drift-allowlist` with a reason,
-an owner, `since` and `until`. Four rules, and the fourth is the one that earns
-the other three:
+It is gone for the reason every other fleet check is gone. It found services by
+walking `../*` for a `.github/workflows` directory containing a `uses:
+cafaye/kit/...` line, so a clone of kit — which is what a CI runner is — found
+none and reported SKIP on every run of every commit. `lint/drift-allowlist` held
+its dated divergences with an `owner=` field naming who was supposed to fix each
+one: a file in this repository assigning work to people in other repositories,
+which is the fleet boundary in its purest form.
 
-1. reason, owner, `since` and `until` are all required;
-2. an **expired** entry fails on the day it expires;
-3. a duplicate `(repo, path, key)` fails — one of the two is dead;
-4. **an entry that no longer describes a real difference fails.**
-
-Rule 4 is modelled on ESLint's `reportUnusedDisableDirectives`. Without it an
-allowlist is a ratchet that only turns one way: the repository gets fixed, the
-entry stays, and within two quarters the file lists every repository the fleet has
-ever had. One entry is live today — `identity`, whose `.golangci.yml` enables no
-linter at all and exists only to exclude one generated file.
-
-Rule 4 is scoped to repositories the run actually looked at, and that scoping is
-the correctness of the rule rather than a softening of it: an entry naming a
-repository that is not in this checkout's fleet is reported as **unverified**,
-never as a pass and never as a failure. A copy of kit checked out on its own has
-no fleet beside it, and a rule that reported every entry as unused there would be
-red on a correct tree.
-
+What replaces it is nothing, and the gap is real: kit no longer knows when a
+service's lint config drifts away from the one it ships. If that matters to you,
+the check belongs in the **adopting** repository, where the finding lands on
+whoever can act on it. That is the whole argument of `DECISIONS.md` MD36, stated
+here as a recommendation rather than a justification.
 ## Test tiers — `templates/tier/`
 
 A **tier** is a class of test that needs a real dependency to mean anything: a

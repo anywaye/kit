@@ -101,25 +101,25 @@ die() {
 # --------------------------------------------------------------------------
 # Locating the service under test.
 #
-# Beside this repository, and at most one level up. `../..` is deliberately NOT
-# searched: a sweep that reaches further than it owns is worse than no sweep, and
-# kit's own gate learned that by finding a fleet in a leftover copy of a cafaye
-# repository in a shared temp directory. `KIT_SERVICE_REPO` is the override.
+# `KIT_SERVICE_REPO` is REQUIRED and there is no search. It used to default to
+# `$ROOT/../courier` then `$ROOT/../../courier`, and that guess was a cross-repo
+# reader in the same shape as the fleet checks that went with MD36: kit deciding,
+# without being told, which repository it was grading. The failure it invited is
+# the one kit's gate already learned the hard way -- a sweep that reaches
+# further than it owns finds a checkout in a shared temp directory and reports
+# on a copy, which is a finding about nobody.
+#
+# Naming the service is also the honest reading of what this harness is. It is
+# not part of `tests/validate.sh` and no CI job runs it, because the thing it
+# proves -- one service's query layer cannot see another tenant -- is only
+# true of a service somebody chose. So the choice is stated rather than inferred.
 # --------------------------------------------------------------------------
 find_service() {
-  local candidate
-  if [ -n "${KIT_SERVICE_REPO:-}" ]; then
-    [ -d "$KIT_SERVICE_REPO" ] || die "KIT_SERVICE_REPO=$KIT_SERVICE_REPO is not a directory."
-    ( cd "$KIT_SERVICE_REPO" && pwd )
-    return 0
+  if [ -z "${KIT_SERVICE_REPO:-}" ]; then
+    die "KIT_SERVICE_REPO is not set. This harness grades a service you name, and there is no default: point it at the checkout, e.g. KIT_SERVICE_REPO=../courier $0 up. Exiting 2: nothing was proven, which is not the same as having passed."
   fi
-  for candidate in "$ROOT/../courier" "$ROOT/../../courier"; do
-    if [ -d "$candidate" ]; then
-      ( cd "$candidate" && pwd )
-      return 0
-    fi
-  done
-  return 1
+  [ -d "$KIT_SERVICE_REPO" ] || die "KIT_SERVICE_REPO=$KIT_SERVICE_REPO is not a directory."
+  ( cd "$KIT_SERVICE_REPO" && pwd )
 }
 
 load_adapter() {
@@ -139,7 +139,7 @@ tenant_harness_up() {
   command -v "$(adapter_language_tool)" >/dev/null 2>&1 || die "'$(adapter_language_tool)' is not on PATH, and it is the only way this harness can execute the service's query layer."
 
   local service
-  service="$(find_service)" || die "no courier checkout beside this repository. Point KIT_SERVICE_REPO at one. Exiting 2: nothing was proven, which is not the same as having passed."
+  service="$(find_service)"
 
   local project="kit-tenant-iso-$SESSION"
 
@@ -293,8 +293,8 @@ database with two accounts seeded, and assert on what came back.
 Environment:
   KIT_TENANT_SESSION       one session for up/run/down. Default: this shell's pid.
                            A caller making three invocations must export it.
-  KIT_SERVICE_REPO         the service checkout. Default: ../courier, then
-                           ../../courier.
+  KIT_SERVICE_REPO         the service checkout. REQUIRED -- there is no
+                           default, and no search for one.
   KIT_TENANT_ADAPTER       the adapter. Default: adapters/elixir.sh.
 USAGE
     exit 2

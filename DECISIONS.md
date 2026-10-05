@@ -719,8 +719,11 @@ outlives the decision: **a retired name stays retired.**
 **Why the deprecation half does not port either.** A comment in a copied YAML
 file is a comment in a copy — the adopter's file never learns it. And kit has no
 registry a deprecation could live in, since an artefact is fetched by ref or
-copied by hand. `templates/parity-allowlist` already carries that half for the
-fleet.
+copied by hand. It used to: `templates/parity-allowlist` recorded fleet-wide
+deprecations, and it went with the cross-repo surface (MD36). So the weaker half
+that transfers — *a retired name stays retired* — is now carried by `RESERVED`
+alone, which is kit's own tree, and an adopting service inherits the file rather
+than the finding.
 
 **Why the fourth hygiene rule is INVERTED here.** In a skip allowlist, an entry
 matching nothing is a ratchet that only turns one way. For a tombstone the dead
@@ -1330,21 +1333,74 @@ sibling's history. Three reasons, in the order they actually decided it:
    (who is affected?). Consent to be checked does not make it this repository's
    job.
 
-**What is kept, and why it is not a contradiction.** `tests/staleness.py` reads
-repositories, and it stays: it has 26 assertions in `tests/staleness_test.sh`,
-and its other job — grading this repository's own `templates/` against what it
-ships — is squarely kit's own behaviour. A check with a test and a subject that
-is this tree is exactly the thing the rule keeps. The remaining cross-repo reader
-is the lint-drift check in `validate.sh`, which compares a *service's* lint
-config to kit's for services that call the reusable workflow; it is narrower
-than anything removed here (a machine-checkable opt-in) and it is the next
-candidate if this line is drawn further.
+**Nothing is kept, and that is the amendment.** The first version of this entry
+named two survivors: `tests/staleness.py`, on the grounds that it had 26
+assertions and "its other job — grading this repository's own `templates/` —
+is squarely kit's own behaviour", and the lint-drift check in `validate.sh`, as
+narrow enough to be the next candidate rather than this one. **Both claims were
+about the program rather than about what it read**, which is the mistake this
+entry exists to correct, applied inside itself.
 
-**What this costs, written down rather than discovered.** Three rules that were
+`--scope templates` takes `--repos-dir ..` and grades *each service's copy* of a
+template against kit's. It never grades kit. Its 26 assertions were real and they
+proved the reporter worked — on a synthetic fleet the test built in a temp
+directory, which is a test of the reporter's output format rather than of anything
+in this repository. So the test was not evidence of a kit-shaped subject. Removing
+it took `tests/staleness_test.sh` with it, and that is correct: a suite proving a
+cross-repo reporter parses correctly is a suite about the reporter.
+
+The lint-drift check went for the reason its neighbours did. It discovered
+services by walking `../*` for a `.github/workflows` directory containing a
+`uses: cafaye/kit/...` line, and compared each one's `.golangci.yml` to kit's. A
+clone of kit has no siblings, so it took the SKIP branch on every CI run of every
+commit — the same unreachable-green as `fleet_check.py`. Its allowlist,
+`lint/drift-allowlist`, held dated debts **in other people's repositories**, with
+an `owner=` field naming whoever was supposed to fix each one. A file in this
+tree that assigns work to a stranger is the fleet boundary in its purest form, so
+both are gone.
+
+**Two orphans went with them, and that is the part worth recording.**
+`tests/artifacts.json` (314 lines) declared what kit ships and where a service
+puts each artefact; `templates/parity-allowlist` (80 entries) recorded why a given
+service's copy was not kit's bytes. Their only reader was the reporter, so neither
+had a consumer the moment it went — and both were *about* the fleet rather than
+about kit. Removing a check and leaving its data behind is how a repository
+accumulates a second, unwatched copy of the truth: the next person reads
+`artifacts.json`, reasonably assumes something grades it, and builds on that.
+Neither file had any other reader in any language; both are deleted.
+
+**Also gone, for the same reason but found by a sweep rather than by argument:**
+`tests/core_fanout_check.py` (338 lines) had **zero callers** and a docstring
+claiming *"Run by `tests/validate.sh` as `core_fanout_check`"* — a name that
+appears nowhere in this repository, in any workflow, or in any test. Its eight
+checks were about `core/vendir/` and `core/renovate/`, which is kit's own tree and
+would have been legitimate. It was deleted anyway, because the honest description
+of a file nothing runs and whose documentation claims otherwise is that it is
+misleading rather than merely unused, and because a stale claim about enforcement
+is the specific failure this repository documents more often than any other. What
+it checked is written down in `core/vendir/README.md`, and README says plainly
+that nothing enforces it now.
+
+And one reader that was not a gate: `tests/tenant_isolation/cross_tenant_harness.sh`
+guessed which service to grade by trying `$ROOT/../courier` and `$ROOT/../../courier`
+in turn. It now **requires** `KIT_SERVICE_REPO` and searches for nothing. The
+harness is not run by `tests/validate.sh` or any CI job — it proves that one
+service's query layer cannot see another tenant, which is only true of a service
+somebody chose, so naming it is the honest reading rather than an inconvenience.
+The old guess had the failure mode `fleet_check.py` had: it found a checkout
+named `courier` wherever one happened to be, including a leftover copy in a shared
+temp directory, and reported on that.
+
+**What this costs, written down rather than discovered.** Four rules that were
 mechanically enforced are now advice: no adopter carries a D12/D13 workaround;
 no service sets `POSTGRES_USER`/`POSTGRES_DB`/`POSTGRES_PASSWORD` on the shared
-cluster; a service's `.golangci.yml` and `.rubocop.yml` match kit's. Each is a
-real rule that caught real defects. The trade is deliberate and the mitigation is
-`core`: the first two are owned and fixed there, and a service that wants them
-checked runs the check itself. What is given up is kit noticing when a service
-stops obeying.
+cluster; a service's `.golangci.yml` and `.rubocop.yml` match kit's; and a
+service's copy of a kit template is `current`. Each is a real rule that caught
+real defects. The trade is deliberate and the mitigation is `core`: the first two
+are owned and fixed there, and a service that wants them checked runs the check
+itself. What is given up is kit noticing when a service stops obeying — and the
+fourth is the sharpest version of that, because it is the one where a template
+fixed here can sit un-copied indefinitely with nothing anywhere recording the
+distance. **Whoever wants that back should put it in the adopting repository**,
+where the finding lands on the person who can fix it, which is the whole argument
+of this entry stated as a recommendation rather than as a justification.
