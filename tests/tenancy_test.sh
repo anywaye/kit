@@ -656,10 +656,15 @@ if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
 fi
 say "   installed: cafaye.advisor_findings(p_schemas text[])"
 
-# Two tables, created exactly as a service's migrations create them: an
-# account-scoped one, and a credential one. The second is the whole point — it is
-# the only table in this fixture that gets a fifth policy, and it is what
-# `multiple_permissive_policies` is going to be asked about.
+# Two tables, created exactly as a service's migrations create them: a
+# membership one, and a credential one. The second is the whole point — it is
+# the only table in this fixture that gets a fifth policy for a DIGEST, and
+# `multiple_permissive_policies` is going to be asked about it. The first is the
+# same shape for the CALLER, and `account_users` is deliberately the real fleet
+# name rather than a generic one: it is the table whose missing user scope made
+# `GET /v1/accounts` answer `[]` to an owner, and a fixture with a different name
+# would let a future reader assume the mechanism had been proven against a
+# generic stand-in.
 psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
   drop table if exists public.api_keys;
@@ -667,28 +672,31 @@ psql_in "$ALPHA" "$ALPHA" "
   create table public.account_users (
     id bigint generated always as identity primary key,
     account_id uuid not null,
+    user_id uuid not null,
     email text not null);
   create table public.api_keys (
     id bigint generated always as identity primary key,
     account_id uuid not null,
     token_digest text not null);
 " >/dev/null
-psql_in "$ALPHA" "$ALPHA" \
-  "set client_min_messages = warning; select cafaye.protect_table('public.account_users')" >/dev/null
+psql_in "$ALPHA" "$ALPHA" "
+  set client_min_messages = warning;
+  select cafaye.protect_membership_table('public.account_users', 'user_id')" >/dev/null
 psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
   select cafaye.protect_credential_table('public.api_keys', 'token_digest')" >/dev/null
 
-# Four from protect_table and five from protect_credential_table. Counted, because
-# everything below is a claim about those nine policies and a fixture that had
-# silently installed eight would still produce a clean advisor run.
+# Five from protect_membership_table and five from protect_credential_table, each
+# being four from protect_table plus one of its own. Counted, because everything
+# below is a claim about those ten policies and a fixture that had silently
+# installed nine would still produce a clean advisor run.
 policies_now="$(psql_in "$ALPHA" "$ALPHA" "
   select count(*) from pg_policy p
     join pg_class c on c.oid = p.polrelid
     join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'public'")"
-[ "$policies_now" = "9" ] \
-  || fail "expected 9 policies on the substrate's two tables (4 + 5); found $policies_now. The advisor is about to be asked about tables that are not the ones a service would build."
+[ "$policies_now" = "10" ] \
+  || fail "expected 10 policies on the substrate's two tables (5 + 5); found $policies_now. The advisor is about to be asked about tables that are not the ones a service would build."
 
 scoped="$(psql_in "$ALPHA" "$ALPHA" "
   select coalesce(array_agg(distinct n.nspname), '{}'::name[])::text
@@ -734,11 +742,16 @@ if [ -n "$adv_bad" ]; then
   fail "the substrate does not pass the substrate's own advisor"
 fi
 say "   zero ERROR and zero WARN findings against account_users and api_keys."
-say "   api_keys carries FIVE policies (4 from protect_table, 1 from"
-say "   protect_credential_table), so (api_keys, alpha, SELECT) holds two permissive"
-say "   policies and multiple_permissive_policies was asked about it directly."
+say "   BOTH of them carry FIVE policies (4 from protect_table, 1 from the"
+say "   mechanism that owns them — protect_credential_table, protect_membership_table),"
+say "   so (api_keys, alpha, SELECT) and (account_users, alpha, SELECT) each hold"
+say "   two permissive policies and multiple_permissive_policies was asked about"
+say "   both directly."
 say "   It stayed silent because the group is all substrate-written — which is the"
-say "   rule's own exemption semantics."
+say "   rule's own exemption semantics. That is now checked against BOTH exemptions:"
+say "   the fifth policy that reads a digest and the fifth that reads a caller are"
+say "   different claims, and a rule exempting only the one it was written for would"
+say "   report the other as a finding on the substrate's own table."
 
 # ---------------------------------------------------------------------------
 # ASSERTION 6b — THE EXEMPTION'S OWN CONTROL, and it is the MD24 question rather
@@ -1464,6 +1477,94 @@ say "   and the audit above is identical for both anyway. That is the whole"
 say "   assertion: the function no longer reads the text that differs."
 
 # ---------------------------------------------------------------------------
+# ASSERTION 8b — THE SAME CLAIM ABOUT THE SECOND AUDIT, and it is repeated rather
+# than generalised because `membership_tables()` is a SEPARATE function rather
+# than a parameter of `credential_tables()`. That separation is deliberate (one
+# query answering both would report a membership table as resolvable by anybody
+# who guesses a digest), and a deliberate separation of two functions that
+# already worked is exactly the shape a later change quietly un-proves: someone
+# reads `pg_get_expr` rather than `pg_depend` in the new one and it is correct
+# on every cluster where the admin role happens not to be named after a schema.
+#
+# `public.account_users` is the fixture, and it is the same table identity's
+# `GET /v1/accounts` reads — which is the point: the second audit's answer has to
+# hold for the table whose user scope was missing, not for a stand-in.
+say ""
+say "== assertion 8b: the membership audit reports the same tables to every role"
+
+m_deparse="select coalesce(pg_get_expr(polqual, polrelid), '')
+                   from pg_policy
+                  where polrelid = 'public.account_users'::regclass
+                    and polname = 'account_users_cafaye_members'"
+m_rows="select coalesce(string_agg(table_schema || '.' || table_name || ' -> ' || user_column,
+                                   ', ' order by table_name),
+                          '(no rows)')
+         from cafaye.membership_tables()"
+
+m_alpha_deparse="$(psql_in "$ALPHA" "$ALPHA" "$m_deparse")"
+m_admin_deparse="$(psql_in cafaye "$ALPHA" "$m_deparse")"
+m_alpha_rows="$(psql_in "$ALPHA" "$ALPHA" "$m_rows")"
+m_admin_rows="$(psql_in cafaye "$ALPHA" "$m_rows")"
+m_login_rows="$(psql_in "${ALPHA}_app" "$ALPHA" "$m_rows")"
+
+say "   as $ALPHA (owner, \"\$user\" schema does not exist):"
+say "     policy reads   : $m_alpha_deparse"
+say "     the audit says : $m_alpha_rows"
+say "   as cafaye (cluster admin, \"\$user\" schema IS cafaye):"
+say "     policy reads   : $m_admin_deparse"
+say "     the audit says : $m_admin_rows"
+say "   as ${ALPHA}_app (non-owner LOGIN, owns nothing):"
+say "     the audit says : $m_login_rows"
+
+case "$m_admin_rows" in
+  '(no rows)') say ""; say "FAIL: cafaye.membership_tables() returned NOTHING to the cluster's admin role."
+    say "      The same reading assertion 8 exists to prevent, reached by a different"
+    say "      function. An admin auditing discoverability is told this database has no"
+    say "      caller-scoped read path at all, which is false for every service that"
+    say "      has adopted protect_membership_table. The fix is in substrate.sql — read"
+    say "      membership_tables()'s comment — not in this file."
+    fail "the membership audit answers one role and not another" ;;
+esac
+[ "$m_alpha_rows" = "$m_admin_rows" ] || {
+  say ""; say "FAIL: the membership audit disagrees with itself about the same database."
+  say "      as $ALPHA: $m_alpha_rows"
+  say "      as cafaye: $m_admin_rows"
+  fail "the membership audit depends on the role reading it"
+}
+[ "$m_alpha_rows" = "$m_login_rows" ] || {
+  say ""; say "FAIL: the membership audit disagrees with the non-owner LOGIN role."
+  say "      as $ALPHA:     $m_alpha_rows"
+  say "      as ${ALPHA}_app: $m_login_rows"
+  fail "the membership audit depends on the role reading it"
+}
+
+# THE CONTROL, again, and it is a separate control rather than a shared one
+# because the two policies could stop differing independently: `membership_tables`
+# could be rewritten to read text while `credential_tables` kept reading
+# dependencies, and every other row here would still pass.
+case "$m_admin_deparse" in
+  *cafaye.current_user_id*) m_admin_qualified=1 ;;
+  *) m_admin_qualified=0 ;;
+esac
+case "$m_alpha_deparse" in
+  *cafaye.current_user_id*) m_alpha_qualified=1 ;;
+  *) m_alpha_qualified=0 ;;
+esac
+if [ "$m_alpha_qualified" = "$m_admin_qualified" ]; then
+  say ""
+  say "FAIL: the control for assertion 8b did not fire. The membership policy deparses"
+  say "      the SAME way for both roles, so half A above is asserting nothing about"
+  say "      the mechanism it names — either Postgres changed how it qualifies a name"
+  say "      a reader can resolve, or the fixture is not the policy it claims to be."
+  say "      as cafaye: qualified=$m_admin_qualified   as $ALPHA: qualified=$m_alpha_qualified"
+  fail "the reader-dependence control cannot fire for the membership audit"
+fi
+say "   three roles, one answer — and not the empty answer."
+say "   control: the trap is live here too, on this cluster, for this policy:"
+say "     as cafaye: $m_admin_deparse     (qualified=$m_admin_qualified)"
+say "     as $ALPHA: $m_alpha_deparse   (qualified=$m_alpha_qualified)"
+
+# ---------------------------------------------------------------------------
 say ""
 say "PASS: kit's account boundary is enforced by Postgres, and the enforcement is"
 say "      proven able to fail."
@@ -1477,3 +1578,4 @@ say "      a hand-written permissive policy on api_keys: the exemption released 
 say "      all 10 rules, each fired on a fixture built to trip it, each naming its object."
 say "      security_definer_view's 6 negatives: silent, for 6 different reasons."
 say "      the credential audit, read as three roles: one answer, and not an empty one."
+say "      the membership audit, read as three roles: one answer, and not an empty one."

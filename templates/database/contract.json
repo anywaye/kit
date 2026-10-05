@@ -109,6 +109,22 @@
         {
           "token": "not c.relforcerowsecurity",
           "why": "The sweep reads pg_class itself rather than trusting that protect_table ran. A sweep that only knew about tables it had created itself would be satisfied by a sweep that creates nothing."
+        },
+        {
+          "token": "create or replace function cafaye.protect_membership_table",
+          "why": "THE MEMBERSHIP ENTRY POINT, and the reason it sits beside the credential one rather than being folded into `protect_table`. A membership table is read two ways and the ordinary predicate can only do one of them: `protect_table` answers \"which rows belong to the account I am standing in\", which is true, useless, and exactly wrong for \"which accounts am I in\" — a query that runs before any account is being stood in. Measured against a real `account_users` under identity's 00016, that query returned an empty list while every policy read as correctly installed: a green suite and an empty product screen. The policy added here is `for select` only, so a caller can discover where it belongs without gaining the ability to change who is there, and that difference is what `membership/discovery-cannot-write` exists to hold."
+        },
+        {
+          "token": "create or replace function cafaye.begin_user",
+          "why": "THE THIRD TRANSACTION-LOCAL GUC, and the reason the substrate needed one at all. Naming the CALLER is what makes a user-scoped predicate expressible; the alternatives were a SECURITY DEFINER bypass (already dead for credentials in MD24, for the same reason) or a policy that cannot say WHICH caller is asking and therefore reads every membership in the fleet. Same `is_local = true` argument as `begin_account/1`, and it inherits its cost: outside an explicit transaction the setting expires at the end of the statement that set it, so a caller that forgets the transaction reads zero memberships rather than somebody else’s."
+        },
+        {
+          "token": "(select cafaye.current_user_id())",
+          "why": "The `(select ...)` wrapping on the discover policy too, for the same measured reason as the four account policies and the credential policy: one evaluation per statement against one per candidate row. Required as a string because the correct spelling is one literal in one function, and a rule about parsing rendered policy qualifiers would be a second parser for a value this repository already owns."
+        },
+        {
+          "token": "create or replace function cafaye.membership_tables",
+          "why": "THE SECOND AUDIT, and its being SEPARATE from `credential_tables` is the point rather than duplication. There are now two ways a policy can stop requiring an account, so one query could no longer answer \"can anything here be read without an account\" — and merging them would report a membership table as resolvable by anybody who guesses a digest, which is the same conflation this repository keeps refusing elsewhere. Both read the POLICIES rather than a list, and both read them through pg_depend rather than pg_get_expr, so the answer does not depend on the reader’s search_path."
         }
       ],
       "forbidden": [
@@ -132,7 +148,8 @@
         "cafaye.begin_account",
         "cafaye.unprotected_tables()",
         "pg_temp.cafaye_assert",
-        "cafaye.begin_credential"
+        "cafaye.begin_credential",
+        "cafaye.begin_user"
       ],
       "requiredWhy": [
         "`set local role` is how the two halves of the assertion set are reached — the login role and the owner — and both halves are load-bearing and neither is obvious. Without the LOCAL form the role change refuses to run at all. Inside a transaction it is undone by any `exception` block it was issued from, which is a harness that silently tests the wrong role and reports a green proof; the first version of this file made exactly that mistake, by wrapping the refusals in a SECURITY DEFINER recorder that ran them as the OWNER and so succeeded at disabling the boundary it was asserting nobody could disable.",
@@ -141,6 +158,8 @@
         "`pg_temp.cafaye_assert` is the file's own recorder. Required by name because the results are collected by a function this file defines in `pg_temp`, and a proof whose results are collected by something else is a proof whose result format is whatever that something else produces — which is precisely what the six drivers would then have to know about."
         ,
         "`cafaye.begin_credential` is the credential seam being USED, and it is in this list because the credential half of the assertion set is meaningless as prose without it: with no digest open, every credential read is denied and the twelve rows that prove a resolution works would pass for the same wrong reason the first four would. Every read denial in this file is a claim about what a session MAY do AFTER it opens a context, and the context is the part that is easiest to leave out."
+        ,
+        "`cafaye.begin_user` is the caller seam being USED, and it is in this list for a reason the other two do not share. Those two are guards against a harness that forgets to OPEN a context and then calls every row a denial. This one guards against the opposite and quieter failure: the membership half's first row is satisfied by a substrate with no mechanism at all — which is exactly the state identity shipped in, where every assertion was green and `GET /v1/accounts` answered `[]` to an owner. So the twelve rows that prove a discovery works have to name a caller to be about anything."
       ],
       "spine": [
         "login/no-identity-reads-no-rows",

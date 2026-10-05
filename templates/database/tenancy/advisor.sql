@@ -243,11 +243,21 @@
 -- policy NAMES (`%_cafaye_resolve`) is a ratchet: a service that renames a
 -- policy gets a red it cannot fix, and a service that adds a THIRD permissive
 -- policy next to the exempt two still passes. Under this exemption the substrate
--- writes `account_users`'s four policies and `api_keys`'s five, all recognised,
--- group exempt — and the moment a service hand-writes a second permissive SELECT
+-- writes FIVE policies on both of the suite's fixture tables — four from
+-- `protect_table` plus the mechanism's own, all recognised, group exempt — and
+-- the moment a service hand-writes a second permissive SELECT
 -- on `api_keys`, the group is no longer all-of and the rule fires, naming the
 -- hand-written one. That is the shape this file has to be able to reach, and the
 -- fixture in `tests/tenancy_test.sh` reaches it.
+--
+-- There are now TWO fifth policies rather than one, and the second is the
+-- membership discover policy `protect_membership_table` writes. That is the cost
+-- of an all-of exemption stated honestly: every new substrate predicate has to be
+-- taught to this rule, and the failure when it is not is a red against the
+-- substrate's own fixture. The alternative — an allowlist of policy NAMES — has
+-- the opposite failure, which is silent: a renamed policy stops being exempt and
+-- nobody notices, or a hand-written policy borrows a substrate's name and is
+-- exempt for ever. Recognising three FORMS is the cheaper of the two mistakes.
 
 create or replace function cafaye.advisor_findings(
   p_schemas text[] default null
@@ -393,22 +403,35 @@ policy_cmds as (
   ) as act(cmd)
 ),
 
--- (6) WHICH POLICIES THE SUBSTRATE WROTE, and it is two shapes:
+-- (6) WHICH POLICIES THE SUBSTRATE WROTE, and it is three shapes:
 --
 --       the account predicate  `account_id = ( select cafaye.current_account_id()`
 --       the credential predicate  `<column> = ( select cafaye.current_credential_digest()`
+--       the membership predicate  `<column> = ( select cafaye.current_user_id()`
 --
 --     Inlined rather than delegated to `cafaye.credential_tables()` — see the
 --     block above: an advisor that only exists where the substrate has been
---     installed cannot find the service that has not installed it. The second
---     shape is `protect_credential_table`'s, and it is checked against the
---     DIGEST FORM rather than against the digest COLUMN, because the column is
---     the adopter's choice and the form is the substrate's. Both shapes carry
---     `(cafaye\.)?` for the `search_path` reason recorded above.
+--     installed cannot find the service that has not installed it. The second and
+--     third shapes are checked against the FUNCTION FORM rather than against the
+--     COLUMN, because the column is the adopter's choice and the form is the
+--     substrate's. All three carry `(cafaye\.)?` for the `search_path` reason
+--     recorded above.
+--
+--     THE THIRD ARM EXISTS BECAUSE THE EXEMPTION IS AN ALL-OF CONDITION, and that
+--     is the mechanism by which a substrate function this file did not know about
+--     becomes a finding against the substrate itself. When `protect_membership_table`
+--     added `account_users`'s fifth policy, every group on that table stopped being
+--     all-of and rule 5 reported the substrate's OWN policy as hand-written — on the
+--     substrate's own fixture, in the suite whose subject is the substrate. The
+--     arm is spelled as the third shape of the same test rather than as an
+--     allowlist of policy names, so a service that hand-writes a policy whose
+--     predicate merely MENTIONS `current_user_id` still trips the rule: the
+--     recognition is of the form, not of the function name alone.
 substrate_written as (
   select pc.*,
          (pc.qual ~* '^\s*\(?account_id = \(\s*select (cafaye\.)?current_account_id\(\)'
-            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (cafaye\.)?current_credential_digest\(\)') as substrate_written
+            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (cafaye\.)?current_credential_digest\(\)'
+            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (cafaye\.)?current_user_id\(\)') as substrate_written
   from policy_cmds pc
 ),
 

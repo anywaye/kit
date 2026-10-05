@@ -188,6 +188,16 @@ language sql immutable as $fn$ select '11111111-1111-1111-1111-111111111111'::uu
 create or replace function pg_temp.cafaye_beta() returns uuid
 language sql immutable as $fn$ select '22222222-2222-2222-2222-222222222222'::uuid $fn$;
 
+-- Two MEMBERS, as constants for the same reason the two tenants are. They are
+-- not tenants — a person belongs to accounts rather than being one — and the
+-- distinction is load-bearing in the block below: the assertions there are about
+-- a query that must read across the account boundary, not inside it.
+create or replace function pg_temp.cafaye_member_one() returns uuid
+language sql immutable as $fn$ select 'aaaaaaaa-1111-1111-1111-111111111111'::uuid $fn$;
+
+create or replace function pg_temp.cafaye_member_two() returns uuid
+language sql immutable as $fn$ select 'bbbbbbbb-2222-2222-2222-222222222222'::uuid $fn$;
+
 create temp table pg_temp.cafaye_probe_result (
   assertion text primary key,
   expected text not null,
@@ -247,6 +257,43 @@ insert into cafaye_probe_credentials (account_id, token_digest) values
   (pg_temp.cafaye_beta(),  'probe_digest_beta');
 
 select cafaye.protect_credential_table('pg_temp.cafaye_probe_credentials', 'token_digest');
+
+-- The MEMBERSHIP fixture. The third access path, and the one this directory
+-- could not previously express at all.
+--
+-- The credential fixture is a table whose account is DISCOVERED from a value the
+-- caller presents. This one is a table that MAPS persons to accounts, and its
+-- subject is the caller rather than any row: "which accounts is this person in"
+-- is the first query a product issues after a sign-in, and it runs before any
+-- account exists to stand in. Under `protect_table` alone that query returns
+-- nothing, the policy is present, and nothing anywhere reports a denial — so the
+-- defect is a green suite and an empty product screen. Measured on a real
+-- `account_users` under identity's 00016: the membership row was present and
+-- `GET /v1/accounts` answered `[]`.
+--
+-- THREE ROWS ACROSS TWO TENANTS AND TWO MEMBERS, and the spread is the one that
+-- does the work. One membership each would let `membership-discovery-cannot-
+-- browse` be satisfied by a policy reading the whole table, because "my
+-- memberships" and "the table" would be the same set. So MEMBER ONE is in BOTH
+-- accounts — so an unqualified read has two correct rows to return where the
+-- table holds three — while MEMBER TWO is only in beta, which is what makes the
+-- mirror assertion below fail for the right reason. The roles are consistent with
+-- that spread: MEMBER ONE owns alpha and is a member of beta, MEMBER TWO owns
+-- beta, and the two roles for MEMBER ONE are not a contradiction because they are
+-- in DIFFERENT accounts.
+create temp table cafaye_probe_memberships (
+  id uuid primary key default gen_random_uuid(),
+  account_id uuid not null,
+  user_id uuid not null,
+  role text not null
+) on commit drop;
+
+insert into cafaye_probe_memberships (account_id, user_id, role) values
+  (pg_temp.cafaye_alpha(), pg_temp.cafaye_member_one(), 'owner'),
+  (pg_temp.cafaye_beta(),  pg_temp.cafaye_member_one(), 'member'),
+  (pg_temp.cafaye_beta(),  pg_temp.cafaye_member_two(), 'owner');
+
+select cafaye.protect_membership_table('pg_temp.cafaye_probe_memberships', 'user_id');
 
 -- ===========================================================================
 -- THE SPINE. Three denials and one allowance, per role.
@@ -479,6 +526,167 @@ select pg_temp.cafaye_assert(
               ' ', ''), E'\n', ''), E'\t', ''),
             '(select') = 0),
   'the credential resolve policy must wrap the digest call in (select …) like every other policy here, for the reason the account policies do: one evaluation per statement against one per candidate row'
+);
+
+-- ===========================================================================
+-- THE MEMBERSHIP HALF. The same dual-role shape, over the one table whose subject
+-- is the CALLER rather than a row.
+--
+-- WHY THIS BLOCK EXISTS, and it is the opposite reason from the credential half.
+-- `protect_credential_table` opens a path that would otherwise be closed and
+-- had to be closed. `protect_membership_table` does not open anything the
+-- substrate permitted: before it, `protect_membership_table`'s table was closed
+-- CORRECTLY, and "which accounts am I in" had no way to be asked. Nothing denied
+-- it, so no denial was ever reported. The three scopes are not three versions of
+-- one mechanism; they are three answers to three different questions, and only
+-- two of them are denials.
+--
+-- Its honest semantics, and every row below is one clause of it:
+--
+--     A caller may read exactly the membership rows naming them, with no account
+--     identity, and nothing else in the database.
+--
+-- SIX ASSERTIONS PER ROLE, mirroring the credential block deliberately: the same
+-- loop, the same order, the same fail-closed first row. Two are the ones a
+-- permissive implementation fails. `discovery-cannot-browse` is satisfied by
+-- nothing except a policy carrying the user predicate — one that merely
+-- permitted the select would return THREE rows where two are correct, and hand a
+-- signed-in person the membership table of the whole fleet. And
+-- `discovery-cannot-write` is the half that keeps this from being an
+-- authorisation: knowing WHICH accounts you are in is not the ability to change
+-- who is in them.
+-- ===========================================================================
+do $membership$
+declare
+  r text;
+  seen text;
+begin
+  foreach r in array array['login', 'owner'] loop
+    if r = 'login' then
+      perform pg_temp.cafaye_as(current_user || '_app');
+    else
+      perform pg_temp.cafaye_as(current_user);
+    end if;
+
+    -- (1) NO CALLER CONTEXT READS NOTHING. The fail-closed default, and what a
+    --     substrate with `protect_table` alone already satisfies — which is why
+    --     the defect this block exists for produced no red anywhere.
+    perform cafaye.begin_account(null);
+    perform cafaye.begin_user(null);
+    perform pg_temp.cafaye_assert(
+      r || '/membership-no-user-context-reads-no-rows', '0',
+      (select count(*)::text from pg_temp.cafaye_probe_memberships
+        where user_id = pg_temp.cafaye_member_one()),
+      'a request that has named no user must read no membership rows at all, by user id or otherwise. This is the state `identity` was in for every caller, and the reason the product screen said "you are not a member of any account"'
+    );
+
+    -- (2) A DISCOVERY, WITH NO ACCOUNT IDENTITY. The assertion that does not
+    --     exist anywhere else in this file, and the one whose absence is the
+    --     whole bug: the account is what this query is FOR, so it cannot also be
+    --     what the query is scoped by.
+    perform cafaye.begin_user(pg_temp.cafaye_member_one());
+    perform pg_temp.cafaye_assert(
+      r || '/membership-discovers-accounts-with-no-account-identity', '2',
+      (select count(*)::text from pg_temp.cafaye_probe_memberships
+        where user_id = pg_temp.cafaye_member_one()),
+      'a signed-in person must be able to find the accounts they belong to with NO account identity set, because they are not standing in an account yet — that is what makes them a caller rather than a tenant. This is the assertion that does not exist anywhere else in this file'
+    );
+
+    -- (3) AND IT CANNOT BROWSE. The clause that makes the mechanism a discovery
+    --     rather than a bypass. Member one is in TWO accounts on purpose: with
+    --     one membership each, "my rows" and "the table" would be the same set
+    --     and this assertion would be satisfied by a table-wide SELECT.
+    perform pg_temp.cafaye_assert(
+      r || '/membership-discovery-cannot-browse', '2',
+      (select count(*)::text from pg_temp.cafaye_probe_memberships),
+      'an UNQUALIFIED read inside a discovery must return the two rows naming this caller and not the third, which names somebody else. Policies combine permissively, so a policy that merely permitted the select would return all three and hand a signed-in person every membership in the database'
+    );
+
+    -- (4) SOMEBODY ELSE'S MEMBERSHIPS RESOLVE NOTHING. The mirror of 3, because
+    --     one direction can be an accident: a context that leaked the whole table
+    --     would also pass a check that only looked at the rows you asked for.
+    perform cafaye.begin_user(pg_temp.cafaye_member_two());
+    perform pg_temp.cafaye_assert(
+      r || '/membership-another-user-resolves-nothing', '0',
+      (select count(*)::text from pg_temp.cafaye_probe_memberships
+        where user_id = pg_temp.cafaye_member_one()),
+      'a caller named by MEMBER TWO must not read MEMBER ONE''s memberships. Discovery is scoped by the identity the caller was resolved to, not by the fact that a discovery happened — which is what a predicate of the form "a user context may select this table" would get wrong'
+    );
+
+    -- (5) IT DOES NOT OPEN ANOTHER TABLE. The other half of "not a general
+    --     bypass", and the assertion a BYPASSRLS role or a table-wide predicate
+    --     fails while every other row in this block passes.
+    perform pg_temp.cafaye_assert(
+      r || '/membership-discovery-does-not-open-another-table', '0',
+      (select count(*)::text from pg_temp.cafaye_probe_things),
+      'a discovery session must read ZERO rows from every other protected table. The mechanism is a policy on ONE named table; if naming the caller also opened `assets` or `api_keys`, it would be the ambient bypass this directory exists to prevent, wearing a membership-shaped name'
+    );
+
+    -- (6) AND IT STILL CANNOT WRITE. The half that keeps discovery from being
+    --     authorisation. The discover policy is `for select` and no write
+    --     counterpart exists, so an insert still meets the ordinary `with
+    --     check` — and the account identity is null here on purpose, because the
+    --     failure this guards against is a service that begins a transaction,
+    --     names the user to get its accounts list, and then assumes the table is
+    --     open.
+    --
+    --     Measured as 42501 by `cafaye_observed` rather than asserted as a
+    --     shape, for the reason the credential half's row 6 gives. Run last in
+    --     the loop so the row it makes cannot perturb a count not yet taken.
+    seen := pg_temp.cafaye_observed(
+      'insert into pg_temp.cafaye_probe_memberships (account_id, user_id, role) values ('''
+      || pg_temp.cafaye_alpha()::text || ''', '''
+      || pg_temp.cafaye_member_one()::text || ''', ''owner'')');
+    perform pg_temp.cafaye_assert(
+      r || '/membership-discovery-cannot-write', '42501', seen,
+      'naming yourself must not let you add yourself to an account. The discover policy is `for select` with no write counterpart, so the insert meets the ordinary `with check` and a NULL account identity is refused. Being able to see which accounts you are in is not the ability to change who is in them'
+    );
+
+    reset role;
+  end loop;
+end
+$membership$;
+
+-- The AUDIT, once, as the session's own role: which tables in this database can
+-- be read with no account because of WHO IS ASKING, and by which column. A
+-- discovery path whose scope is only knowable by reading the source is an ambient
+-- path with a good name — and there are now two exemptions, so one query could no
+-- longer answer "can anything here be read without an account".
+select pg_temp.cafaye_assert(
+  'membership/the-mechanism-is-auditable', 'cafaye_probe_memberships:user_id',
+  (select string_agg(table_name || ':' || user_column, ',' order by table_name)
+     from cafaye.membership_tables()),
+  'cafaye.membership_tables() must name every table carrying a caller-discovery path, and the column each one discovers by. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing, and it is deliberately NOT cafaye.credential_tables(): the two exemptions are different claims, and one query answering both would report a membership table as resolvable by anybody who guesses a digest'
+);
+
+-- The discover policy is written like every other policy in this file, and neither
+-- property is visible in what it returns.
+select pg_temp.cafaye_assert(
+  'membership/discover-policy-names-the-roles', '0',
+  (select count(*)::text
+     from pg_policy p
+    where p.polrelid = 'pg_temp.cafaye_probe_memberships'::regclass
+      and p.polname = 'cafaye_probe_memberships_cafaye_members'
+      and (p.polroles = '{0}'::oid[]
+           or not (p.polroles @> ARRAY[
+                 (select oid from pg_roles where rolname = current_user || '_app')::oid,
+                 (select oid from pg_roles where rolname = current_user)::oid
+               ]::oid[]))),
+  'the membership discover policy must name the login role and the owner explicitly, exactly as the four account policies and the credential resolve policy do. A policy left at the default is TO PUBLIC, which evaluates it for every role on the cluster'
+);
+
+select pg_temp.cafaye_assert(
+  'membership/discover-policy-is-written-for-the-init-plan', '0',
+  (select count(*)::text
+     from pg_policy p
+    where p.polrelid = 'pg_temp.cafaye_probe_memberships'::regclass
+      and p.polname = 'cafaye_probe_memberships_cafaye_members'
+      and strpos(
+            replace(replace(replace(
+              lower(coalesce(pg_get_expr(p.polqual, p.polrelid), '')),
+              ' ', ''), E'\n', ''), E'\t', ''),
+            '(select') = 0),
+  'the membership discover policy must wrap the user call in (select …) like every other policy here, for the reason the account policies do: one evaluation per statement against one per candidate row'
 );
 
 -- ===========================================================================

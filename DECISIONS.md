@@ -1404,3 +1404,104 @@ fixed here can sit un-copied indefinitely with nothing anywhere recording the
 distance. **Whoever wants that back should put it in the adopting repository**,
 where the finding lands on the person who can fix it, which is the whole argument
 of this entry stated as a recommendation rather than as a justification.
+
+## MD37 — **the CALLER is a third scope, not a fourth policy and not a bypass**
+
+**The problem this exists for.** A membership table — `account_users`, anything
+shaped like "which people belong to this account" — is an ordinary account-scoped
+table, and it is the one table whose most important query is *not* about an
+account. `protect_table`'s predicate answers "which of this table's rows belong to
+the account I am standing in", which is true, useless, and exactly wrong for the
+first question a product asks a signed-in person: **which accounts am I in?**
+
+Measured against identity's real `account_users`, as the OWNER, with the
+membership row present:
+
+| | rows seen |
+|---|---|
+| **no account identity — the state every caller is actually in** | **0** |
+| identity = one of that person's own accounts | 1 |
+
+**Why this is not MD24's failure.** MD24's query is scoped by something the
+*caller presents* and the account is what it computes. This one is scoped by
+nothing at all: the account is what is being discovered, so it cannot also be the
+scope. They look alike and they are not. MD24's failure is **loud** — 401, and a
+scoped-token test goes red. This one is **silent**: the query succeeds, the join
+is correct, the row is in the database, and the answer is `[]`. `GET /v1/accounts`
+returned an empty list to a user who owned an account, and the product rendered
+"you are not a member of any account". Every assertion in identity's suite was
+green while it did this, because a green suite of denials cannot see a question
+that was never expressible.
+
+**The trade.** A membership table gets **one extra `for select` policy**, and the
+qualifier of that policy is *who is asking*:
+
+```sql
+select cafaye.protect_membership_table('account_users', 'user_id');
+```
+
+```sql
+create policy account_users_cafaye_members on account_users
+  for select to <owner>, <service>_app
+  using (user_id = (select cafaye.current_user_id()));
+```
+
+and the caller names itself the way it names an account — which means the
+substrate needed a **third transaction-local GUC**, `cafaye.begin_user/1`, and
+that is the part of this decision that is not a copy of MD24.
+
+**Why a third scope and not a looser policy.** Every alternative was a way of
+saying something false:
+
+- **A predicate of the form "a caller may read their own memberships".** The
+  policy still cannot say WHICH caller is asking, so this reads every membership
+  row in the database. It is the credential bug's shape with the digest removed.
+- **A `SECURITY DEFINER` reader.** `FORCE` applies to the definer — MD24 already
+  recorded this as dead, and it is dead here for the identical reason.
+- **Dropping `FORCE`, or exempting the login role.** Not an account boundary any
+  more, a convention.
+- **Putting the user id in the session GUC the service already sets.** That GUC is
+  account-scoped, transaction-local, and written by `begin_account/1` inside a
+  middleware that runs *after* authentication — and a caller scope written by a
+  path that runs before the user is resolved is a caller scope chosen by
+  whatever authenticated it. A third seam with one caller keeps the value equal to
+  the `users.id` the service already resolved.
+
+**The cost, all of it, so none of it is a surprise.**
+
+1. **A third GUC and a third reader.** `begin_user/1` and `current_user_id()` are
+   `begin_account/1`'s twins, including the property that makes them safe on a
+   pool (`is_local = true`) and the cost that comes with it (outside an explicit
+   transaction the setting expires at the end of the statement that set it).
+2. **Forgetting `begin_user` is quieter than forgetting `begin_account`.** This is
+   the asymmetry that matters operationally. Forgetting the account scope makes
+   reads empty everywhere, which is loud and immediate. Forgetting the caller
+   scope makes **one screen** empty — the accounts list — while every other query
+   on the same connection keeps working, because the account scope is unaffected.
+   A service can run a long time in that state and the only symptom is a list that
+   is always empty. It looks exactly like a permission nobody granted, and nothing
+   in a log fails.
+3. **A second audit.** `cafaye.membership_tables()`, deliberately a separate
+   function from `cafaye.credential_tables()`. There are now two ways a policy can
+   stop requiring an account, so one query can no longer answer "can anything here
+   be read without an account" — and merging them would report a membership table
+   as resolvable by anybody who guesses a digest, which is the same conflation MD24
+   exists to refuse. Both read the policies through `pg_depend` for the search_path
+   reason `credential_tables()` carries, and `tests/tenancy_test.sh` measures all
+   three roles on each audit with a live control proving the reader-dependent
+   rendering is still present on the cluster being tested.
+4. **The advisor learned a third substrate predicate.** Rule
+   `multiple_permissive_policies` exempts a (table, role, command) group when
+   *every* policy in it was substrate-written, which it decides by recognising
+   three predicate FORMS. When `protect_membership_table` shipped its fifth
+   policy, the advisor reported the substrate's **own** policy as hand-written,
+   against the substrate's own fixture, in the suite whose subject is the
+   substrate. That is the cost of the all-of exemption stated honestly: every new
+   substrate predicate has to be taught to the rule. The alternative — an
+   allowlist of policy NAMES — has the opposite failure, which is silent. See
+   MD24 for why the exemption is all-of rather than a name list.
+5. **Fifteen assertions.** Twelve over the new table, three over the mechanism,
+   and every one of them is in `assertions.txt` so the six drivers require them by
+   name. `membership/no-user-context-reads-no-rows` is satisfied by a substrate
+   with no mechanism at all — which is precisely the state identity shipped in, and
+   is why the eleven beside it are the ones that carry the weight.
