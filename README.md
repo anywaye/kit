@@ -1414,8 +1414,33 @@ the linter rejects it — plus a control that must answer differently.
 |---|---|---|
 | **golangci-lint** | `--config=<repo>/.kit/lint/golangci.yml` | With no config present it does **not** fail and does **not** run nothing: it falls back to its own five-linter default set (`errcheck govet ineffassign staticcheck unused`) and **exits 0 on a file kit's config rejects**. `GOLANGCI_LINT_CONFIG` is **not** read by v2 — set it, and the run proceeds on that same default set (measured on 2.6.2). |
 | **RuboCop** | `--config=<repo>/.kit/lint/rubocop.yml` | Same shape. Measured: a 13-line method is **green** under kit (`Max: 15`) and **red** on RuboCop's defaults (`Max: 10`), so the flag is what makes the two differ. |
-| **ESLint** | `--config=<repo>/.kit/lint/eslint.config.mjs` | Works, and **only because kit is checked out inside the repo**. Node resolves an ESM import from the *config file's* directory upward; a config sitting beside the repository finds no `@eslint/js` and the run dies with `ERR_MODULE_NOT_FOUND` — a red build that has linted nothing. |
+| **ESLint** | `--config=<repo>/.kit/lint/eslint.config.mjs` | Works, and **only because kit is checked out inside the repo**. Node resolves an ESM import from the *config file's* directory upward; a config sitting beside the repository finds no `@eslint/js` and the run dies with `ERR_MODULE_NOT_FOUND` — a red build that has linted nothing. It also needs every linted file inside a tsconfig, and `recommendedTypeChecked` is **unscoped** — see below. |
 | **yamllint** | `yamllint -c <repo>/.kit/lint/yamllint.yml --strict` | The one that behaves the way the other three are assumed to. `--strict` is load-bearing: both of kit's retuned rules are warnings by default, so without it `yamllint -c kit's` and plain `yamllint` agree on the exit code and disagree on everything a human reads. |
+
+### Every linted file must be inside a tsconfig, and `files` is load-bearing
+
+A service that adopts kit's ESLint config and has a `.mts` or `.cts` file — which
+is what every Vite or Vitest project has, and both `site` and `parlor` have three
+at the repo root — used to get a red build before ESLint reported anything:
+
+```
+Error: Error while loading rule '@typescript-eslint/await-thenable':
+You have used a rule which requires type information, but don't have
+parserOptions set to generate type information for this file.
+```
+
+`tseslint.configs.recommendedTypeChecked` is **unscoped**, and one config inside it
+(`typescript-eslint/eslint-recommended`) declares
+`files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']` — which *adds* `.mts` and
+`.cts` to the set of files ESLint will lint. The `files` glob that supplies
+`parserOptions` — the only source of type information — was narrower than that, so
+those files were linted, were given the type-aware rules, and were never given the
+type information the rules require.
+
+**If you add a new extension to your service, add it to your `tsconfig.json`'s
+`include`.** That is the whole instruction, and it is not kit's to enforce: kit
+cannot see your tree. A file outside `include` is reported as `was not found by
+the project service`, which names the file and the fix.
 
 **`--config` wins over a local config, in both linters that have one.** This is
 measured, and it corrected a claim this repository made before it ran anything:
