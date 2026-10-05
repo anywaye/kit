@@ -105,3 +105,38 @@ owner/credential-cannot-write-in-a-resolution-context
 credential/the-mechanism-is-auditable
 credential/resolve-policy-names-the-roles
 credential/resolve-policy-is-written-for-the-init-plan
+
+# --- THE MEMBERSHIP HALF. The one table whose SUBJECT IS THE CALLER: which
+# --- accounts is this person in, asked before any account exists to stand in.
+# --- It is here for the OPPOSITE reason to the credential half — the credential
+# --- half proves a path that would otherwise be closed was not left closed; this
+# --- one proves that a query which was correctly closed was not left
+# --- inexpressible. `no-user-context-reads-no-rows` alone is satisfied by a
+# --- substrate with no mechanism at all, and that is precisely the state
+# --- `identity` shipped in: every denial green, `GET /v1/accounts` answering
+# --- `[]` to an owner. Six per role, and the two a permissive implementation
+# --- fails are `discovery-cannot-browse` — which needs a fixture where the
+# --- caller's rows and the table's rows are different sets — and
+# --- `discovery-cannot-write`, which is what keeps discovery from being an
+# --- authorisation.
+login/membership-no-user-context-reads-no-rows
+login/membership-discovers-accounts-with-no-account-identity
+login/membership-discovery-cannot-browse
+login/membership-another-user-resolves-nothing
+login/membership-discovery-does-not-open-another-table
+login/membership-discovery-cannot-write
+owner/membership-no-user-context-reads-no-rows
+owner/membership-discovers-accounts-with-no-account-identity
+owner/membership-discovery-cannot-browse
+owner/membership-another-user-resolves-nothing
+owner/membership-discovery-does-not-open-another-table
+owner/membership-discovery-cannot-write
+
+# --- the membership mechanism's own three, for the reason the credential
+# --- mechanism's three are here: and it is a SEPARATE audit rather than a
+# --- fourth row of `credential_tables`, because the two exemptions are different
+# --- claims. One query answering both would report a membership table as
+# --- resolvable by anybody who guesses a digest.
+membership/the-mechanism-is-auditable
+membership/discover-policy-names-the-roles
+membership/discover-policy-is-written-for-the-init-plan

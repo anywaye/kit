@@ -67,8 +67,14 @@ holds many accounts has two boundaries, and the inner one was the one nobody had
    select cafaye.protect_table('assets');
    ```
 
-   That is the only call. There is no second, weaker entry point, because a
-   template that offers one is a template the weaker one gets chosen from.
+   That is the only call **for an ordinary account-scoped table**. There are two
+   others and neither is a weaker version of this one — each protects a table
+   whose access path this predicate cannot express, and each has its own step
+   below: `protect_credential_table` (step 6) for a table resolved by an
+   unguessable value, and `protect_membership_table` (step 7) for a table that
+   MAPS people to accounts. There is no fourth, and in particular no
+   `protect_table_lite`: a template that offers one is a template the weaker one
+   gets chosen from.
 
 2. Point your application at the **`<service>_app`** role rather than
    `<service>`. `templates/compose/postgres/initdb/10-cluster.sh` provisions both
@@ -107,6 +113,16 @@ holds many accounts has two boundaries, and the inner one was the one nobody had
    scoped credential in the service authenticates as 401 "not found". Read
    [the section below](#the-third-trap-a-credential-table-cannot-be-scoped-by-an-account-it-does-not-have-yet)
    first, including the list of what it cannot do.
+
+7. **If a table maps people to accounts** — a membership table, `account_users` —
+   call `cafaye.protect_membership_table('<table>', '<user_column>')` *instead of*
+   `protect_table`, and open the caller with `cafaye.begin_user($1)` in the same
+   transaction as the lookup. Same size, same shape, same protections; the only
+   thing it adds is a fifth `for select` policy predicated on the CALLER rather
+   than on an account. Read
+   [the section below](#the-fourth-trap-a-membership-table-cannot-be-scoped-by-an-account-the-caller-is-not-yet-in)
+   first, because "nothing here breaks, it just always returns empty" is not a
+   failure any test in your suite will notice.
 
 ## THE THIRD TRAP: a credential table cannot be scoped by an account it does not have yet
 
@@ -229,6 +245,104 @@ Every other table reads zero rows.
   holding every machine credential.
 - **Leaving `api_keys` unprotected.** The boundary stops covering credentials.
 
+## THE FOURTH TRAP: a membership table cannot be scoped by an account the caller is not yet in
+
+A **membership table** — `account_users`, anything shaped like "which people
+belong to this account" — is an ordinary account-scoped table and it is the one
+table whose most important query is *not* about an account. `protect_table`'s
+predicate answers "which of this table's rows belong to the account I am standing
+in". That is true, useless, and exactly wrong for the first question a product
+asks a signed-in person:
+
+> **which accounts am I in?**
+
+Measured against identity's real `account_users`, as the OWNER, with the
+membership row present:
+
+| | rows seen |
+|---|---|
+| **no account identity — the state every caller is actually in** | **0** |
+| identity = one of that person's own accounts | 1 |
+
+The first line is the finding, and it is worse than the credential one rather than
+the same. Nothing is denied: the query succeeds, the join is correct, the
+membership row is in the database, and the answer is an **empty list**. The
+product then renders "you are not a member of any account" to a user who owns one.
+`GET /v1/accounts` returned `[]` while every assertion in the suite was green —
+the credential trap is loud (a 401) and this one is silent, because "denied" and
+"you have nothing" are the same HTTP response and the same empty state.
+
+### The mechanism: one policy whose qualifier is who is asking
+
+```sql
+select cafaye.protect_membership_table('account_users', 'user_id');
+```
+
+and, in the same transaction, before the query:
+
+```sql
+select cafaye.begin_user($1);   -- the users.id your session resolved to
+```
+
+One call, the same size as `protect_table`'s. It protects the table exactly as
+`protect_table` does — same four policies, same `ENABLE`, same `FORCE`, same
+`account_id` index, same role check — and then adds a fifth `for select` policy
+whose qualifier is the caller:
+
+```sql
+create policy account_users_cafaye_members on account_users
+  for select to identity, identity_app
+  using (user_id = (select cafaye.current_user_id()));
+```
+
+So the table answers both questions it has: *your account's members* (the four
+account policies, and a caller standing in an account has one) and *your
+memberships* (this one, and a caller who has not chosen an account yet does not).
+
+### What it cannot do — all three
+
+1. **It does not let you write.** The fifth policy is `for select` and nothing
+   else. An insert still meets the ordinary `with check`, which demands an account
+   identity, so naming yourself is not the ability to add yourself to an account.
+   `membership/discovery-cannot-write` asserts this on every run, as both roles.
+2. **It does not read another table.** A fifth policy on ONE named table is the
+   whole mechanism. `membership/discovery-does-not-open-another-table` asserts
+   that a discovery session reads zero rows from every other protected table —
+   the ambient-bypass check, and the assertion a `BYPASSRLS` role or a
+   table-wide predicate fails while the other eleven pass.
+3. **It does not make you a member of anything.** `user_id = current_user_id()`
+   is a filter, not a grant: it answers "is this row mine", never "may I have this
+   row". Every write still goes through the account policies, which is where the
+   account's own membership rules live.
+
+### It is a second audit, and deliberately not an extension of the first
+
+`cafaye.membership_tables()` answers "which tables in this database can be read
+with no account because of WHO IS ASKING", and it is a separate function rather
+than a parameter of `cafaye.credential_tables()`. One query answering both would
+report a membership table as resolvable by anybody who guesses a digest, and that
+is the same conflation this directory refuses everywhere else — two different
+exemptions are two different claims about who may read what.
+
+Both audits read the **policies** rather than a list (so a mechanism that records
+nothing cannot satisfy them) and read them through `pg_depend` rather than
+`pg_get_expr` (so the answer does not depend on the reader's `search_path` —
+`tests/tenancy_test.sh` measures all three roles and requires the answers to be
+equal *and* non-empty, for each audit, with a control proving the reader-dependent
+rendering is still live on this cluster).
+
+### What it was instead of, and why
+
+- **A `SECURITY DEFINER` reader.** `FORCE` applies to the definer, so this does
+  not work either — and it would be the same bypass MD24 already rejected, with a
+  membership-shaped hat.
+- **Dropping `FORCE`, or exempting the login role.** Not an account boundary any
+  more, a convention.
+- **A predicate of the form "a caller may read their own memberships"** — with no
+  way to say WHICH caller. That reads every membership row in the fleet, which is
+  the reason the scope had to be a third transaction-local GUC rather than a
+  fourth boolean.
+
 ## THE TRAP: `FORCE ROW LEVEL SECURITY`
 
 Postgres exempts a table's **owner** from its own row-level-security policies.
@@ -311,6 +425,25 @@ open another table**, and it **cannot write** — plus three that no denial can 
 which are the audit query naming the table, the resolve policy naming its roles,
 and the resolve policy being written wrapped.
 
+And **fifteen more for the membership half**, which is the same dual-role shape
+over the one table whose subject is the CALLER rather than a row: six per role —
+no caller context reads nothing, a discovery works **with no account identity at
+all**, the discovery **cannot browse**, somebody else's memberships resolve
+nothing, it **does not open another table**, and it **cannot write** — plus three
+that no denial can see, which are the audit query naming the table, the discover
+policy naming its roles, and the discover policy being written wrapped.
+
+That half is here for the **opposite** reason to the credential one. The
+credential half proves a path that would otherwise be closed was not left closed;
+the membership half proves that a query which was correctly closed was not left
+**inexpressible**. Its first row is satisfied by a substrate with no mechanism at
+all — which is exactly the state `identity` shipped in, where every denial was
+green and `GET /v1/accounts` answered `[]` to an owner. Two of its rows are the
+ones a permissive implementation fails: `discovery-cannot-browse` needs a fixture
+where the caller's rows and the table's rows are different sets, and
+`discovery-cannot-write` is what keeps the mechanism a discovery rather than an
+authorisation.
+
 Two of those fifteen are the ones a permissive implementation fails.
 `resolution-cannot-browse` is satisfied by nothing except a policy carrying the
 digest predicate, and it needs a credential fixture with **two** rows: with one,
@@ -320,8 +453,8 @@ scoped to one table — a `BYPASSRLS` role returns `probe_things`' rows from ins
 resolution session, which is the ambient bypass this directory exists to prevent.
 
 `assertions.txt` is the manifest, and every driver compares the names it got back
-against it **in both directions**. A count would not do: 39 is compatible with 39
-of the wrong 39.
+against it **in both directions**. A count would not do: 54 is compatible with 54
+of the wrong 54.
 
 ## Cross-tenant access is absence, not refusal
 
