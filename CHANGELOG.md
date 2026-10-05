@@ -1,5 +1,49 @@
 ## Unreleased
 
+### Fixed
+
+- **`templates/otel/node` dropped every inbound traceparent, silently.**
+  `propagation.extract(ctx, headers)` with a WHATWG `Headers` returns the context
+  unchanged, because `@opentelemetry/api`'s default text-map getter is plain
+  property access (`carrier[key]`) and a `Headers` keeps its entries behind
+  `.get()`. Nothing throws and every span is still exported with the right
+  `service.name`; the trace view shows a healthy pile of unrelated single-span
+  traces. `hono.ts.snippet` now passes an explicit `TextMapGetter<Headers>`, and
+  `traceparent.mjs`'s `header()` learned the same — the stdlib codec's README
+  hands readers `c.req.raw.headers`, which is a `Headers`. Four assertions in
+  `traceparent.test.mjs`, and **the node suite is now executed by
+  `tests/validate.sh`**, which it was not: it only ever ran in
+  `ci.reusable.yml`'s opt-in `telemetry` job, and kit calls that workflow with
+  `language: none`, so on kit's own commits it ran nowhere.
+
+- **`pins.md` named a package set that cannot be installed.** Two rows named
+  versions that do not exist (`@opentelemetry/api@2.0.0` — there is no 2.x;
+  `@opentelemetry/sdk-trace-node@0.57.0` — that package is at 2.x) and the rest
+  could not be satisfied by one, since every SDK package peers
+  `api >=1.3.0 <1.10.0`. Go rows said 1.34.0 while the three Go services in the
+  fleet all run 1.46.0. Every row is now a version resolved by a service in this
+  fleet against the real registry or module proxy, and every row names the
+  repository it came from. The rust row is marked as the one thing **not**
+  fleet-verified, because no service in the fleet is written in rust.
+
+- **The Go snippet's exporter default dialled a port with no gRPC server on it.**
+  `otelhttp.go.snippet` installs `otlptracegrpc` and defaulted to
+  `http://otel-collector:4318`, which is the HTTP receiver's port; 4317 is the
+  gRPC one. Both halves are now named together so neither is "fixed" alone.
+
+### Changed
+
+- **`templates/otel/go/README.md` documents both measured exporter defects** so
+  no service rediscovers them: `WithEndpointURL` does not append `/v1/traces`
+  (an HTTP defect), and `otlptracegrpc` defaults to TLS against a plaintext
+  collector (a gRPC defect). Both produce a service that opens a socket to the
+  collector and records nothing, with nothing thrown and nothing logged. Stated
+  as a table with the choice of gRPC/4317 or HTTP/4318 as a legitimate one, and
+  with which option you hold deciding which bug you have — the same `otlpconfig`
+  lines set `Insecure` from the scheme, so `WithEndpointURL("http://…")` is
+  already plaintext and only bare `WithEndpoint("host:port")` produces the TLS
+  defect.
+
 ### Removed
 
 - **Every check that read a repository other than this one.** `tests/fleet_check.py`

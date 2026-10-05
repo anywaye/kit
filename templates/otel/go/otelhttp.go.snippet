@@ -89,7 +89,24 @@ const ServiceName = "caf"
 // developer with no configuration exports into a collector on their own
 // machine, and a self-hoster who already runs a backend sets the variable and
 // this address goes quiet.
-const defaultEndpoint = "http://otel-collector:4318"
+//
+// PORT 4317, NOT 4318, and the pairing with the exporter below is the whole
+// point of writing it here. This file installs `otlptracegrpc`, which speaks
+// OTLP over gRPC; 4317 is that receiver. It previously defaulted to
+// `http://otel-collector:4318`, which is the HTTP receiver's port — so the
+// exporter dialled a port whose gRPC server does not exist, and every export
+// failed. Nothing threw and nothing logged, which is the shape of both exporter
+// defects documented in README.md.
+//
+// The two defaults in this file disagreed: the endpoint said 4318 and the
+// transport was gRPC. Fixing either alone leaves the service exporting nowhere,
+// so both are named together here.
+//
+// Read README.md §"The two exporter defects" before changing either half. The
+// scheme `http://` is load-bearing, not decoration: it is what makes
+// `WithEndpointURL` set `Insecure` (see the SDK's otlpconfig), so the gRPC dial
+// is plaintext against the plaintext collector.
+const defaultEndpoint = "http://otel-collector:4317"
 
 // Endpoint is the ONLY contract, and it is deliberately the smallest possible
 // amount of logic (core D16).
@@ -208,6 +225,25 @@ func Install(ctx context.Context, serviceName, serviceVersion string) (Shutdown,
 
 	endpoint := Endpoint()
 
+	// `WithEndpointURL`, and both exporter defects documented in README.md turn
+	// on this one line:
+	//
+	//   * It reads the SCHEME. `cfg.Traces.Insecure = u.Scheme != "https"`, so
+	//     the `http://` in defaultEndpoint is what makes this gRPC dial
+	//     PLAINTEXT against the plaintext collector. Swapping in
+	//     `WithEndpoint("host:4317")` — bare, no scheme to read — leaves
+	//     `Insecure` at its default of `false` and the handshake never
+	//     completes. That is the bug caf shipped, and it exported nothing at all
+	//     while looking perfectly healthy.
+	//   * It does NOT append a signal path — but for gRPC that is CORRECT, and
+	//     the SDK says so itself: `URLPath` is ignored by gRPC exporters, because
+	//     the protocol carries the signal in the method name. Do not "fix" this
+	//     by joining `/v1/traces` onto the endpoint. The OTLP/HTTP exporter is
+	//     the one that needs the append, and README.md explains why.
+	//
+	// Order matters and is documented in both options: if `WithEndpoint` and
+	// `WithEndpointURL` are both passed, the LAST one wins. There is only one
+	// here on purpose.
 	spanExporter, err := otlptrace.New(ctx, otlptrace.WithEndpointURL(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("otlp trace exporter: %w", err)

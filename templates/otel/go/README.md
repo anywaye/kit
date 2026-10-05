@@ -172,6 +172,21 @@ So:
   bug**, and it is why a service reading the scheme must keep the scheme long
   enough to decide.
 
+**Re-measured against v1.46.0, in both directions, because a one-directional
+test cannot tell a scheme-aware exporter from one that is simply always
+plaintext** — which is a different bug with the same symptom for a self-hoster.
+Against a plaintext listener, reading the first bytes off the socket (a plaintext
+gRPC client opens with the HTTP/2 preface `PRI * HTTP/2.0`; a TLS client opens
+with a ClientHello record):
+
+```
+WithEndpointURL("http://127.0.0.1:PORT")   -> plaintext gRPC client, preface confirmed
+WithEndpointURL("https://127.0.0.1:PORT")  -> TLS attempted, "authentication handshake failed"
+```
+
+The second line is the CONTROL. Without it, the first is satisfied by an exporter
+that ignores the scheme entirely.
+
 **The rule that covers both shapes: decide TLS from the SCHEME, before you strip
 it.** Only `https` is secure. `http`, `grpc` and a bare `host:port` are all
 plaintext — and the bare form must be plaintext, because it is what a
