@@ -1,8 +1,8 @@
 # Local test aid for tests/validate.sh (see tests/requirements.txt).
 .venv/
-# Scanners the gate fetches: hadolint and gitleaks. Inside the tree rather than
-# in .venv, because tests/self_test.sh copies the tree twenty-odd times and a
-# binary in a gitignored venv would be fetched once per copy. See
+# Scanners the gate fetches: hadolint. It is fetched into the tree rather
+# than into .venv, so `tests/bootstrap.sh` owns one install location for it
+# whether it is bootstrapping into this tree or another. See
 # tests/bootstrap.sh.
 tests/.bin/
 __pycache__/

@@ -10,7 +10,7 @@ Two scanners, and they do not overlap.
 
 | Question | Answered by | Does it catch a runtime leak? |
 |---|---|---|
-| Was a credential **committed**? | `gitleaks`, over the full history | no |
+| Was a credential **committed**? | a committed-history scanner | no |
 | Does a credential **leave the process** while the tests run? | **nothing off the shelf** | — |
 
 The second column is a finding, not a gap in the search. Measured:
@@ -38,9 +38,9 @@ property, not a style one. A committed 46-character `cafaye_canary_…` is, to
 every scanner in the world, a high-entropy credential-shaped string — it is
 exactly what this repository's own `secrets` job is built to report, and
 allowlisting it would be the precise failure the allowlist's
-reason-per-entry rule exists to prevent. Because it is built, `.gitleaks.toml`
+reason-per-entry rule exists to prevent. Because it is built, no allowlist
 needs **no entry** for it. `TestCanaryIsSafe` asserts the absence directly, and
-the tree-wide gitleaks scan being green is the second half of that proof.
+the tree-wide `canary_literal_check` in `tests/validate.sh` is the second half.
 
 A harness must also be safe to point at a **real** credential, so no report,
 failure message, or log line in this directory ever contains the planted value.

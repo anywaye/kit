@@ -98,8 +98,6 @@ WORKFLOW='.github/workflows/ci.reusable.yml'
 # Paths as variables for the same reason WORKFLOW is: the path being wrong is the
 # class of defect this file exists to catch, and a literal repeated in a dozen
 # heredocs is a dozen chances to spell it three ways.
-GITLEAKS_CONFIG='.gitleaks.toml'
-GITLEAKS_GATE='tests/gitleaks_gate.sh'
 # literal in two places is two chances to spell it three ways.
 
 # The one `language` option that is not a language. `none` means "this
@@ -324,18 +322,14 @@ if [ ! -r "$ROOT/tests/bootstrap.sh" ]; then
 fi
 # shellcheck source=tests/bootstrap.sh
 . "$ROOT/tests/bootstrap.sh"
+# Before the interpreter, not after: on a machine whose only python is a
+# mise-managed one, this is what puts it on PATH for step 3 of the resolution
+# order below. See kit_activate_mise for why the gate resolves this at all.
+kit_activate_mise
 kit_bootstrap_python "$ROOT"
 export KIT_PYTHON="$PY"
 
 kit_phase "00 bootstrap: resolve the interpreter and install deps"
-
-# gitleaks' pinned version, for the check messages below. Read from bootstrap.sh
-# rather than re-declared, because two places holding a version number is how the
-# binary that gets sha256-verified and the version the gate claims to have run
-# stop being the same one. `:-unknown` so the gate still runs against a
-# bootstrap.sh older than the secret-scanner checks, rather than dying on an
-# unbound variable in its own bookkeeping.
-KIT_GITLEAKS_VERSION="${KIT_GITLEAKS_VERSION:-unknown}"
 
 # ---------------------------------------------------------------------------
 # static helpers
@@ -1772,14 +1766,10 @@ PY
   # Every script kit hands out is executable. `chmod -x bin/dev` in a commit is
   # a one-character diff that silently breaks six repos the next they adopt.
   #
-  # tests/ is in this list and not an afterthought: tests/gitleaks_gate.sh and
-  # tests/zizmor_gate.sh are run BY the reusable workflow, from a service's
-  # repository, against that service's tree. A gate script that is not executable
-  # is a `secrets` job that dies at the first step in thirteen repos.
-  # The two gate scripts are in this list and not an afterthought: they are run
-  # BY the reusable workflow, from a service's repository, against that service's
-  # tree. A gate script that is not executable is a `secrets` job that dies at
-  # its first step in thirteen repos.
+  # `tests/zizmor_gate.sh` is in this list because the reusable workflow runs it
+  # from a service's repository, against that service's tree. A gate script that
+  # is not executable is a job that dies at its first step in every repo that
+  # adopts it.
   #
   # `tests/bootstrap.sh` is deliberately NOT in the list: it is sourced, never
   # executed, and it says so at the top. A check that required it to be
@@ -1799,7 +1789,7 @@ PY
   for f in "$ROOT"/templates/bin-prime/* "$ROOT"/templates/bin/* \
     "$ROOT"/templates/kamal/drill.sh \
     "$ROOT"/docker/entrypoint.sh \
-    "$ROOT/$GITLEAKS_GATE" "$ROOT/tests/zizmor_gate.sh"; do
+    "$ROOT"/tests/zizmor_gate.sh; do
     [ -f "$f" ] || continue
     path="${f#"$ROOT"/}"
     if [ -x "$f" ]; then
@@ -4190,308 +4180,6 @@ PY
   fi
 
   # -------------------------------------------------------------------------
-  # Secrets. Two scanners and two different questions, and this section is the
-  # part of the gate that proves both of them can fail.
-  #
-  # gitleaks answers "was a secret committed"; the canary harness answers "does
-  # one leave the process while the tests run". Neither is a substitute for the
-  # other, and the second has no off-the-shelf implementation at all — see
-  # templates/secrets/README.md for the measurement behind that.
-  #
-  # The scanner runs in `secrets` / `zizmor`-style jobs in the reusable workflow,
-  # and ALSO here, because a check that only runs in a CI runner is a check whose
-  # first execution is on a stranger's commit. `bash tests/validate.sh` is the
-  # whole procedure on a clean clone, and this is part of it.
-  # The gitleaks config check needs tomllib (python 3.11+). Resolved ONCE, here,
-  # so that a machine without it gets one honest FAIL that names the cause rather
-  # than five separate "could not parse" failures that read as five defects.
-  HAVE_TOMLLIB=1
-  if ! "$PY" -c 'import tomllib' >/dev/null 2>&1; then
-    HAVE_TOMLLIB=0
-  fi
-
-  section 'static: secrets — the scanner is present, configured, and can fail'
-
-  # The scanner is RESOLVED FIRST, before any check that executes it.
-  #
-  # Ordering, and it is not cosmetic: the behavioural check below runs the scan
-  # against a throwaway repository, so it needs a binary. Resolving afterwards
-  # meant the check read an unset variable and reported "unbound variable" —
-  # which is a FAIL for the wrong reason, and a FAIL nobody can act on.
-  #
-  # A FAIL and not a SKIP when gitleaks cannot be installed, for the reason the
-  # hadolint check gives: a gate that reports "I could not check" and exits 0 is
-  # the exact shape PLAN.md §1 calls a gate that is not green. It is also the
-  # shape that let seven Dockerfiles go unlinted.
-  GITLEAKS_BIN=''
-  if [ -n "${KIT_GITLEAKS:-}" ]; then
-    GITLEAKS_BIN="$KIT_GITLEAKS"
-  elif kit_bootstrap_binary gitleaks \
-    "https://github.com/gitleaks/gitleaks/releases/download/v${KIT_GITLEAKS_VERSION}" \
-    "$KIT_GITLEAKS_SHA256S" "$ROOT" \
-    "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@rax@.tar.gz" gitleaks; then
-    GITLEAKS_BIN="$BIN"
-    # Exported so a re-run on the same machine reuses this binary instead of
-    # downloading its own 15MB archive. Same reasoning as KIT_PYTHON, one level
-    # down: a second download is a second chance to fail for a reason that has
-    # nothing to do with the tree.
-    export KIT_GITLEAKS="$BIN"
-  else
-    report FAIL 'gitleaks (required: could not be installed — see the note above)'
-  fi
-
-  gitleaks_config() {
-    "$PY" - "$ROOT" "$GITLEAKS_CONFIG" "$HAVE_TOMLLIB" <<'PY'
-import os
-import sys
-
-root, rel, have_tomllib = sys.argv[1], sys.argv[2], sys.argv[3]
-path = os.path.join(root, rel)
-problems = []
-
-if not os.path.isfile(path):
-    sys.exit(
-        f"{rel} does not exist. gitleaks then runs on its DEFAULT rules with no "
-        f"cafaye allowlist, which is a scan that looks configured and is not — "
-        f"and the allowlist is the only part of it anyone wrote"
-    )
-
-# Parsed as TOML, not grepped. Resolved by the caller so a machine without
-# tomllib gets one honest message instead of several that read as several
-# defects — and a config nobody parsed is a config nobody is reading.
-if have_tomllib != "1":
-    sys.exit(
-        f"{rel} could not be parsed: this python has no tomllib (3.11+). The file "
-        f"exists and gitleaks will read it, but nothing in this gate has, and a "
-        f"secret-scanner allowlist that no tool ever parses is not an allowlist"
-    )
-import tomllib
-
-with open(path, "rb") as fh:
-    try:
-        doc = tomllib.load(fh)
-    except Exception as exc:
-        sys.exit(f"{rel} is not valid TOML: {exc}")
-
-# The rules must be gitleaks' own. A repo that redefines a rule has taken
-# responsibility for the regex, and the reason kit can be thirty lines instead of
-# six thousand is that it does not.
-if "rules" in doc:
-    problems.append(
-        f"{rel} defines its own [[rules]]. kit extends gitleaks' defaults "
-        f"(extend.useDefault) so a new provider detection reaches thirteen repos "
-        f"the day gitleaks ships it. A vendored rule set is a rule set that stops "
-        f"receiving providers, which is a secret scanner that has stopped working"
-    )
-
-extend = doc.get("extend") or {}
-if extend.get("useDefault") is not True:
-    problems.append(
-        f"{rel} does not set extend.useDefault = true, so the rules it runs are "
-        f"whatever this file happens to declare — which is none of them"
-    )
-
-# R3: every allowlist entry carries a reason, and an entry with no reason is a
-# failure. This is the ESLint reportUnusedDisableDirectives property and it is
-# the load-bearing one: an allowlist that grows monotonically and is never pruned
-# is not an allowlist, it is a deferred disclosure.
-#
-# A VAGUE reason fails too, and the minimum length is the whole mechanism. The
-# failure mode this rule exists to prevent is not "someone forgot" — it is
-# "someone typed `false positive` and moved on", and a presence check accepts
-# that without noticing. 40 characters is short enough that every honest reason
-# clears it and long enough that every non-reason does not.
-MIN_REASON = 40
-allowlists = doc.get("allowlists") or []
-if not isinstance(allowlists, list):
-    problems.append(f"{rel}: `allowlists` is not a list of tables")
-    allowlists = []
-
-for i, entry in enumerate(allowlists, 1):
-    desc = (entry or {}).get("description") or ""
-    if not desc.strip():
-        problems.append(
-            f"{rel}: allowlist entry #{i} has no description. Every entry is a "
-            f"decision to accept that a scanner will keep reporting something, and "
-            f"the decision needs a name on it — otherwise the next reader cannot "
-            f"tell an accepted false positive from an accepted secret"
-        )
-    elif len(desc.strip()) < MIN_REASON:
-        problems.append(
-            f"{rel}: allowlist entry #{i} has a description of {len(desc.strip())} "
-            f"characters, which is not a reason. State what is allowed AND why, in "
-            f"at least {MIN_REASON} characters. `false positive` is not a reason: "
-            f"it is the absence of one, and a presence check accepts it silently"
-        )
-    # An entry with nothing to allowlist is a no-op that reads like a decision.
-    has_scope = any(
-        entry.get(k) for k in ("paths", "pathsRegex", "regexes", "commits", "stopwords", "targetRules")
-    )
-    if not has_scope:
-        problems.append(
-            f"{rel}: allowlist entry #{i} has a description but no paths, "
-            f"regexes, commits or stopwords — it allows nothing and says why, "
-            f"which is the shape of a comment that will be mistaken for a rule"
-        )
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
-  check "$GITLEAKS_CONFIG  (allowlist only, every entry reasoned)" gitleaks_config
-
-  # R3's other half: an allowlist that also exists inline is an allowlist
-  # nobody reviews. gitleaks takes `-i <file>`, and .gitleaksignore is the file
-  # it reads. Neither may exist in the tree, because a scanner finding in a
-  # throwaway copy would be silenced by a file the reviewer never saw.
-  gitleaks_ignore_check() {
-    "$PY" - "$ROOT" <<'PY'
-import os
-import sys
-
-root = sys.argv[1]
-found = []
-for dirpath, dirnames, filenames in os.walk(root):
-    dirnames[:] = [d for d in dirnames if d not in (".git", ".venv", "__pycache__")]
-    for name in filenames:
-        if name == ".gitleaksignore":
-            found.append(os.path.relpath(os.path.join(dirpath, name), root))
-if found:
-    sys.exit(
-        f"a .gitleaksignore exists at {found}. That is the inline allowlist: it "
-        f"lives beside the scanner rather than in {os.path.basename(sys.argv[0])}'s "
-        f"committed config, so it is invisible in review, unversioned, and gone the "
-        f"next time someone runs the scanner by hand. Entries go in the committed "
-        f"config, one per finding, each with a reason"
-    )
-PY
-  }
-  check 'no .gitleaksignore  (the allowlist is the committed config)' gitleaks_ignore_check
-
-  scan_behaviour_check() {
-    "$PY" - "$ROOT" "$GITLEAKS_GATE" "${GITLEAKS_BIN:-}" <<'PY'
-import os
-import subprocess
-import sys
-import tempfile
-
-root, gate, gitleaks = sys.argv[1], sys.argv[2], sys.argv[3]
-problems = []
-
-if not gitleaks or not os.access(gitleaks, os.X_OK):
-    # Resolved above; reported there as its own FAIL. Nothing to add here, and
-    # saying so is better than a second message about the same missing file.
-    sys.exit(0)
-
-work = tempfile.mkdtemp(prefix="kit-redact-")
-try:
-    # A throwaway git repository, because the history requirement needs one and a
-    # directory scan would not exercise the same code path.
-    def run(*cmd, **kw):
-        return subprocess.run(cmd, capture_output=True, text=True, **kw)
-
-    run("git", "init", "-q", work)
-    run("git", "-C", work, "config", "user.email", "t@example.invalid")
-    run("git", "-C", work, "config", "user.name", "t")
-
-    secret = "glpat-" + "ABC123def456GHI789jkl012"
-    with open(os.path.join(work, "config.toml"), "w", encoding="utf-8") as fh:
-        fh.write('private_token = "%s"\n' % secret)
-    run("git", "-C", work, "add", "-A")
-    run("git", "-C", work, "commit", "-qm", "add")
-
-    # The scan, exactly as the gate runs it, plus --verbose.
-    #
-    # --verbose is here for one reason: gitleaks names the rule that fired only
-    # in verbose output, and a check that cannot say WHICH rule fired cannot
-    # distinguish "the scanner works" from "the scanner failed for a reason
-    # nobody has diagnosed yet". It is also the more dangerous output — verbose
-    # prints the finding, the fingerprint and the entropy — so it is the right
-    # place to prove that --redact holds when there is the most to redact.
-    def scan():
-        return run(
-            "bash", os.path.join(root, gate), work, gitleaks, "--verbose"
-        )
-
-    res = scan()
-    combined = res.stdout + res.stderr
-
-    # 1. It must FIND the secret. Without this, everything below is vacuous: a
-    #    scanner that finds nothing would pass a redaction assertion.
-    if res.returncode == 0:
-        problems.append(
-            "the scan over a tree containing a GitLab-PAT-shaped string exited 0, "
-            "so it did not detect it. The redaction assertions below would then be "
-            "satisfied by a scanner that scans nothing"
-        )
-    if "gitlab-pat" not in combined:
-        problems.append(
-            "the scan exited non-zero but did not name the gitlab-pat rule. A scan "
-            "that fails for an unstated reason is a scan whose next failure will be "
-            "a mystery"
-        )
-
-    # 2. It must NOT PRINT it. This is the property. The exit code says the
-    #    secret was found; the absence of the secret from the output says the
-    #    report is safe to paste into an issue.
-    if secret in combined:
-        problems.append(
-            "THE SCAN PRINTED THE SECRET IT FOUND. --redact is not being applied: "
-            "a CI log is a place secrets go to be read, and the scanner finding a "
-            "credential must never be the reason the credential is printed. The "
-            "value is a format sample, not a live credential, so this run proves "
-            "the mechanism and not a disclosure"
-        )
-    # And the verbose output specifically, which is where gitleaks prints the
-    # finding and the fingerprint and would print the value if redaction were off.
-    if "Secret:" in combined and "REDACTED" not in combined:
-        problems.append(
-            "the verbose scan printed a `Secret:` line with no REDACTED marker on "
-            "it. --redact is meant to replace the value, not merely suppress the "
-            "summary line"
-        )
-
-    # 3. It must read the FULL HISTORY. A secret that was committed and then
-    #    deleted is the case that matters, and it is invisible to a HEAD-only or
-    #    shallow scan.
-    os.remove(os.path.join(work, "config.toml"))
-    run("git", "-C", work, "add", "-A")
-    run("git", "-C", work, "commit", "-qm", "remove")
-    res = scan()
-    combined = res.stdout + res.stderr
-    if res.returncode == 0:
-        problems.append(
-            "after the credential was committed and then DELETED, the scan exited "
-            "0. It is not reading history, or is reading only the last commit. A "
-            "secret that was added and removed in one PR is still in the history "
-            "and still on every fork — that is the finding that matters most"
-        )
-    if secret in combined:
-        problems.append("the history scan printed the secret it found; --redact is not applied")
-finally:
-    subprocess.run(["rm", "-rf", work], capture_output=True)
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
-  check "$GITLEAKS_GATE  (finds a real secret, never prints it, reads history)" \
-    scan_behaviour_check
-
-  # The scanner itself, executed over kit's own tree and full history. The
-  # behaviour is asserted by the check above; this is the real scan of the real
-  # repository, which is the only one that can report a secret that is actually
-  # in this repository's history.
-  if [ -n "$GITLEAKS_BIN" ]; then
-    if out=$(bash "$ROOT/$GITLEAKS_GATE" "$ROOT" "$GITLEAKS_BIN" 2>&1); then
-      report PASS "gitleaks  ($KIT_GITLEAKS_VERSION, full history, --redact)"
-    else
-      report FAIL "gitleaks  ($KIT_GITLEAKS_VERSION, full history, --redact)"
-      printf '%s\n' "$out" | sed 's/^/       /'
-    fi
-  fi
-
-  # -------------------------------------------------------------------------
   # The canary harness: the artifacts, and the contract they implement.
   section 'static: the canary harness — contract, adapter, and every artifact'
 
@@ -4545,14 +4233,11 @@ PY
 
   # The canary is safe to commit, which means it must never be a plausible real
   # credential. The prefix is the first half of that; this is the second, and it
-  # is checked against the scanner itself rather than against a regex: if
-  # gitleaks does not flag it, it is not a plausible real credential as far as
-  # anything in this repository is concerned.
+  # is asserted structurally rather than by scoring the value against something.
   canary_safety_check() {
-    "$PY" - "$ROOT" "$KIT_GITLEAKS_VERSION" <<'PY'
+    "$PY" - "$ROOT" <<'PY'
 import sys
 
-version = sys.argv[1]
 prefix = "cafaye_canary_"
 canary = prefix + ("notarealsecret" * 3)[:32]
 
@@ -4592,7 +4277,7 @@ if canary[len(prefix):] != body_expected:
         "indistinguishable from a real credential to any detector that scores "
         "entropy, which is most of them"
     )
-print(f"gitleaks {version}: the canary is prefixed, low-entropy, and self-describing")
+print("the canary is prefixed, low-entropy, and self-describing")
 PY
   }
   check 'the canary  (unmistakably fake: prefixed, low-entropy, self-describing)' \

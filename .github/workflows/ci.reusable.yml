@@ -49,11 +49,8 @@
 #     outlives the job for no reason, and every job here runs `upload-artifact`
 #     — which is the combination zizmor's `artipacked` audit exists to catch.
 #   - Every step that can run offline does. Nothing here reaches a cafaye
-#     service, so this workflow needs no secrets. The `secrets` job's scanner is
-#     a static binary that reads a repository and matches regexes: it makes no
-#     network call, which is why it is gitleaks and not trufflehog.
-#   - The `secrets` job is the only job here with no opt-in, on purpose. It is
-#     the one job that must not be something a repo has to remember to ask for.
+#     service, so this workflow needs no secrets of its own and consumes none
+#     from the caller.
 name: ci
 on:
   workflow_call:
@@ -98,19 +95,18 @@ on:
       # input. Defaulting it to `master` matches every caller in the fleet,
       # which is written `uses: cafaye/kit/...@master`.
       #
-      # THIS PARAGRAPH WAS RIGHT AND FOUR `run:` BODIES CONTRADICTED IT. The
-      # `secrets`, `zizmor` and `telemetry` jobs all reached into kit's tree with
+      # THIS PARAGRAPH WAS RIGHT AND EVERY `run:` BODY CONTRADICTED IT. The
+      # `zizmor` and `telemetry` jobs reached into kit's tree with
       # `${GITHUB_ACTION_PATH}` — the variable this comment names as unavailable —
       # and did so under `set -euo pipefail`, where an unset variable is not an
-      # empty path but a fatal on the step's first line. Measured in `cafaye/site`
-      # run 37236386666 and `cafaye/parlor` run 37230458669: the `secrets` job
-      # failed four days after the concurrency fix in ad3e320 released the jobs
-      # that had never run. The reasoning above was applied to the lint configs
-      # and not to these five lines, which is the whole of it: a rule written
-      # down once, obeyed in one place, and contradicted in another by nobody
-      # reading the other place. `kit_gate_tree_check` in tests/validate.sh now
-      # asserts the variable appears in no `run:` body in this file, so the
-      # paragraph and the code cannot disagree again.
+      # empty path but a fatal on the step's first line. Measured in
+      # `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669. The
+      # reasoning above was applied to the lint configs and not to those run:
+      # bodies, which is the whole of it: a rule written down once, obeyed in
+      # one place, and contradicted in another by nobody reading the other
+      # place. `kit_gate_tree_check` in tests/validate.sh now asserts the
+      # variable appears in no `run:` body in this file, so the paragraph and
+      # the code cannot disagree again.
       #
       # Raise it to a SHA when you pin the `uses:` line to one. It is NOT a
       # second, independent pin: a caller who pins the workflow to a SHA and
@@ -367,7 +363,7 @@ jobs:
   # SILENTLY: every language job is gated on `inputs.language == '<name>'`, so a
   # caller who wrote `language: golang` — or `Go`, or `nodejs`, or a trailing
   # space — matched no job, ran no toolchain, and got a run whose only steps
-  # were telemetry, secrets and zizmor. Those three can be green on a
+  # were telemetry and zizmor. Those two can be green on a
   # repository that has never been compiled. The header above says "Every job
   # is gated on `inputs.language`, so exactly one runs per call", and nothing
   # verified that one did.
@@ -1306,13 +1302,12 @@ jobs:
       # composite-action-only, so inside a REUSABLE WORKFLOW it is not set and
       # `${GITHUB_ACTION_PATH}/…` expands to nothing. Under `set -euo pipefail`
       # that is not a missing optional path — it is `unbound variable` and the
-      # step dies on its first line. See the `kit-gate-tree` comment block at the
-      # top of the `secrets` job, which is where the whole of that argument is.
+      # step dies on its first line. The whole of that argument is in the
+      # `kit-gate-tree` comment block on the `zizmor` job's fetch step below.
       #
       # WHY `run:` AND NOT `uses: actions/checkout`, which is the SECOND fatal on
-      # this line and the reason `secrets` has still never been green. The action
-      # REFUSES a `path:` outside the workspace, from its own source at v7
-      # `src/input-helper.ts`:
+      # this line. The action REFUSES a `path:` outside the workspace, from its own
+      # source at v7 `src/input-helper.ts`:
       #
       #   result.repositoryPath = path.resolve(githubWorkspacePath, path)
       #   if (!(result.repositoryPath + path.sep).startsWith(githubWorkspacePath + path.sep))
@@ -1332,11 +1327,11 @@ jobs:
       # `actions/checkout` in this directory whose `path:` is not under the
       # workspace, so the shape cannot come back by accident.
       #
-      # WHY `$RUNNER_TEMP` AND NOT `.kit` INSIDE THE WORKSPACE, unchanged. The
-      # `secrets` job scans `$GITHUB_WORKSPACE`, and a second git repository
-      # inside the tree being scanned is a nested-repo question with no good
-      # answer. `$RUNNER_TEMP` is per-job scratch space, emptied at the end of the
-      # job, which is exactly the lifetime this file needs and no more.
+      # WHY `$RUNNER_TEMP` AND NOT `.kit` INSIDE THE WORKSPACE. A second git
+      # repository nested inside the one under test is a nested-repo question
+      # with no good answer: its files are swept by the artifact upload and by
+      # any gate step that walks the tree. `$RUNNER_TEMP` is per-job scratch
+      # space, emptied when the job ends — the lifetime this file needs.
       #
       # CREDENTIALS. `cafaye/kit` is PUBLIC, so this clone needs no token — which
       # is a stronger position than the `persist-credentials: false` the action
@@ -1388,203 +1383,14 @@ jobs:
               "$RUNNER_TEMP/kit-telemetry" ;;
           esac
 
-  # ------------------------------------------------------------------ secrets
-  # The one job here with no opt-in, and the only one a repository cannot
-  # choose to not run.
-  #
-  # WHY NO OPT-IN
-  #   Every other job in this file is gated because a new job that can go red
-  #   must not turn thirteen green repositories red on the day it lands — the
-  #   repo has to ask for it by name. A secret scanner is the exception, and
-  #   the exception is the ruling (DECISIONS.md, MD10): a secret scanner that
-  #   only warns is a report. An opt-in control is not a control.
-  #
-  #   The cost of that choice is real and is written down rather than
-  #   discovered: a repository that adopts kit and has a secret anywhere in its
-  #   history gets a red build on its first run. That red build is the scanner
-  #   working. What to do about it is in README.md — rotate first, then
-  #   allowlist with a reason if it was a false positive. Do not reach for
-  #   `continue-on-error`, which is the only setting on this job that would
-  #   make it a report instead of a gate, and which tests/validate.sh fails on.
-  #
-  # WHY THIS RUNS ON `pull_request` AND NEVER `pull_request_target`
-  #   `pull_request_target` runs in the context of the BASE repository with the
-  #   repository's secrets and a writable token, executing code proposed by a
-  #   FORK. Any job under that trigger is a credential-theft primitive waiting
-  #   for a reason. The scanner is the job that most obviously invites "let me
-  #   just pull the base branch in so the scan sees the real history" — and that
-  #   edit is how a secret scanner becomes the way secrets are taken. So the
-  #   reusable workflow declares no dangerous trigger at all, and
-  #   tests/validate.sh fails if the string ever appears.
-  #
-  # WHY fetch-depth: 0
-  #   The default checkout is a shallow clone: one commit. A shallow scan cannot
-  #   see a secret that was committed and deleted, which is the finding that
-  #   matters most — it is on every fork, and it is in the packfile of anyone
-  #   who cloned. Full history is the requirement; the default is not.
-  secrets:
-    name: secrets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # Full history. See above: a shallow scan is a diff scan with extra
-          # steps, and a diff scan cannot see a deleted secret.
-          fetch-depth: 0
-          persist-credentials: false
-      # =========================================================================
-      # `kit-gate-tree` — WHY THIS STEP, AND WHY IT IS A HAND-ROLLED `git` FETCH
-      #
-      # This job needs two files that live in kit's tree and in no other:
-      # `tests/bootstrap.sh` and `tests/gitleaks_gate.sh`. Until 2026-10-05 it
-      # reached for them with `${GITHUB_ACTION_PATH}`, and that is the variable
-      # GitHub documents as **composite-action-only**. This file is a REUSABLE
-      # WORKFLOW, so the variable is not set, and under `set -euo pipefail` an
-      # unset one is not an empty path — it is a fatal:
-      #
-      #   …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
-      #   ##[error]Process completed with exit code 1.
-      #
-      # Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run
-      # 37230458669, on the `secrets` job, on its second line.
-      #
-      # The reason this survived for four days across eleven repositories is the
-      # reason half this file's history survived: every check in kit PARSES the
-      # YAML, and a variable that expands to nothing parses. A reusable workflow
-      # has no way to know its own location — `github.workflow_ref` is the
-      # CALLER's workflow — so there was no path to check and nothing to assert.
-      # The `kit-lint-ref` input is what makes one exist: the tree is FETCHED by
-      # a name, so the fetch is the mechanism and the name is the pin.
-      #
-      # WHY NOT `uses: actions/checkout`, WHICH IS THE SECOND FATAL ON THIS LINE
-      # AND THE REASON THIS JOB HAS STILL NEVER BEEN GREEN. The fix for the
-      # variable replaced five reads of `$GITHUB_ACTION_PATH` with three explicit
-      # `actions/checkout` steps, and the action REFUSES a `path:` outside the
-      # workspace. From its own source, v7 `src/input-helper.ts`:
-      #
-      #   result.repositoryPath = core.getInput('path') || '.'
-      #   result.repositoryPath = path.resolve(githubWorkspacePath, result.repositoryPath)
-      #   if (!(result.repositoryPath + path.sep).startsWith(githubWorkspacePath + path.sep))
-      #     throw new Error(`Repository path '…' is not under '…'`)
-      #
-      # That is a GUARD and not a quirk: the action cleans up after itself and
-      # persists credentials relative to the workspace, so a path outside it is
-      # one it will not write to, and there is NO input that relaxes it. Measured
-      # in `cafaye/parlor` run 37249271580, on this job:
-      #
-      #   ##[error]Repository path '/home/runner/work/_temp/kit' is not under
-      #             '/home/runner/work/parlor/parlor'
-      #
-      # So this job went from `GITHUB_ACTION_PATH: unbound variable` to
-      # `Repository path … is not under …`, both fatal and both on its FIRST
-      # checkout. A `git` clone is not subject to the guard, and it is the only
-      # way to write to the one place this tree is allowed to go.
-      #
-      # `$RUNNER_TEMP` and NOT `<workspace>/.kit`, deliberately, and unchanged.
-      # The scan below is rooted at `$GITHUB_WORKSPACE` and reads the
-      # repository's full git history, so putting a second git repository inside
-      # the tree it scans is a nested-repository question with no good answer.
-      # `$RUNNER_TEMP` is per-job scratch space that is emptied at the end of the
-      # job, which is exactly the lifetime this file needs and no more.
-      #
-      # MEASURED, because the paragraph above says the nested repository would
-      # join the caller's scan and it is worth knowing whether that is true. A
-      # clone at `<caller>/.kit`, a `ghp_…` planted in a commit of KIT's history,
-      # nothing staged in the caller, scanned through `tests/gitleaks_gate.sh`
-      # rooted at the caller: `1 commits scanned … no leaks found`. gitleaks
-      # reads the OUTER repository's history, and an untracked directory carrying
-      # its own `.git` is not in it. (Staging it makes it a gitlink — also not
-      # scanned, but that is git complaining rather than a design.) So the hazard
-      # is LATENT rather than immediate, which is an argument for `$RUNNER_TEMP`
-      # and not against it: the whole difference between the two is that
-      # `$RUNNER_TEMP` cannot become the caller's problem at all, and a reason
-      # that is not currently firing is not a reason to move towards it.
-      #
-      # `KIT_SPARSE: tests` because the other half of this job's rationale — not
-      # scanning a service's committed `.gitleaks.toml` twice, not shipping
-      # kit's `templates/` into a caller's build — is already in the script. What
-      # is read out of this clone is `tests/`, and a full clone of kit on every
-      # push of every repository is a cost paid for files nobody opens.
-      #
-      # CREDENTIALS, DELIBERATELY. Hand-rolling the fetch gives up the action's
-      # credential hygiene, and that cost is real — but it is only paid by a
-      # repository that needs a token, and `cafaye/kit` is PUBLIC: measured
-      # `HTTP 200` unauthenticated, and the clone writes nothing to
-      # `.git/config`, so there is no credential to persist and none to clean up.
-      # That is a STRONGER position than `persist-credentials: false`, which
-      # suppresses the write and still depends on a post-step that removes it.
-      # `GIT_TERMINAL_PROMPT=0` is set so that if kit is ever made private this
-      # fails legibly instead of hanging on a prompt CI cannot answer.
-      # `checkout_path_check` in tests/validate.sh fails on any
-      # `actions/checkout` in this directory whose `path:` is not under the
-      # workspace, so the shape that shipped here cannot come back by accident.
-      # =========================================================================
-      - name: kit (gate scripts)
-        env:
-          KIT_REF: ${{ inputs.kit-lint-ref }}
-          KIT_SPARSE: tests
-        run: |
-          set -euo pipefail
-          export GIT_TERMINAL_PROMPT=0
-          KIT_TREE_DIR="$RUNNER_TEMP/kit"
-          git init --quiet "$KIT_TREE_DIR"
-          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
-          git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
-          git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
-          git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
-          echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
-      - name: install gitleaks (pinned release, sha256-verified)
-        # kit's own bootstrap, not a third-party action. Two reasons, and both
-        # of them are properties this repository already holds hadolint to: the
-        # version and the hash are one edit in a file we ship, and the scan
-        # cannot be quietly swapped for another scanner by a dependency bump.
-        #
-        # `KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`, and never a
-        # literal path. See the step above, which is where the whole of that
-        # argument is; this is the fourth place the same mistake was made and the
-        # reason `kit_gate_tree_check` in tests/validate.sh asserts on the
-        # ABSENCE of the variable and on the presence of the fetch above it,
-        # rather than on this file happening to be correct today. Not re-declared
-        # per step: the fetch exports it through `$GITHUB_ENV`, so the directory
-        # is written once.
-        run: |
-          set -euo pipefail
-          . "$KIT_TREE_DIR/tests/bootstrap.sh"
-          kit_bootstrap_binary gitleaks \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${KIT_GITLEAKS_VERSION}" \
-            "$KIT_GITLEAKS_SHA256S" "$KIT_TREE_DIR" \
-            "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@rax@.tar.gz" gitleaks
-          echo "GITLEAKS=$BIN" >> "$GITHUB_ENV"
-      - name: gitleaks (full history, redacted)
-        # kit's own script, so this invocation and `bash tests/validate.sh` on a
-        # laptop are the same scan. --redact is inside that script and cannot be
-        # turned off from here: a CI log is a place secrets go to be read, and
-        # the scanner finding a secret must never be why the secret is printed.
-        #
-        # The runner does have network access — GitHub-hosted runners always do
-        # and there is no per-step way to remove it. What is offline is the
-        # scan: gitleaks is a static binary that reads a repository and matches
-        # regexes. That is the whole reason it is gitleaks and not trufflehog,
-        # which would use this network access to verify a live credential
-        # against its issuer — a scanner that can reach the internet is a
-        # scanner that can be made to exfiltrate.
-        #
-        # `$KIT_TREE_DIR`, never `$GITHUB_ACTION_PATH`. See the `kit (gate
-        # scripts)` step above this job's other two; the short version is that
-        # the variable is composite-action-only and this is a reusable workflow.
-        # It is not re-declared per step: the fetch step above exports it through
-        # `$GITHUB_ENV`, so the directory is written once and every step that
-        # reads it cannot disagree about where that is.
-        run: bash "$KIT_TREE_DIR/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"
-
   # ------------------------------------------------------------------ zizmor
   # GitHub Actions' own security audit, run on the adopting repository's own
-  # workflows. It is a separate job rather than a step in `secrets` because they
-  # answer different questions: gitleaks looks at content, zizmor looks at the
-  # workflow's own shape — who can write, what is pinned, what persists a
-  # credential.
+  # workflows. It is a separate job because it needs kit's own tree to run in,
+  # and a language job's matrix has no use for a whole extra checkout. The
+  # audit looks at the workflow's own shape — who can write, what is pinned,
+  # what persists a credential.
   #
-  # It ships with the same opt-out as `secrets` and for a different reason. The
+  # It ships with an opt-in, for a reason. The
   # audit's output depends entirely on the adopting repository's workflows,
   # which kit does not control and did not write, so making it fatal on day one
   # would mean a repo inherits a red build for a finding kit introduced. A repo
@@ -1607,7 +1413,7 @@ jobs:
       - name: install zizmor (pinned)
         # From PyPI, not a release archive: zizmor publishes no checksums file,
         # so pinning its archives would mean pinning hashes we computed
-        # ourselves, which is a weaker claim than hadolint's and gitleaks'.
+        # ourselves, which is a weaker claim than hadolint's published one.
         # The version is exact because an audit whose findings change when the
         # tool is upgraded is an audit nobody can reason about.
         run: |
@@ -1617,7 +1423,7 @@ jobs:
       # `$GITHUB_ACTION_PATH` — the variable is documented as composite-action-only
       # and this is a reusable workflow, so it is not set here and reading it
       # under `set -euo pipefail` is a fatal on the step's first line. The full
-      # argument, with the two runs that show it, is on the `secrets` job's
+      # argument is in the `kit (gate scripts)` step of every language job;
       # `kit (gate scripts)` step; this job is the SECOND one that had the defect
       # and the reason `kit_gate_tree_check` asserts on the variable's absence
       # rather than on either file happening to be correct today.
@@ -1626,7 +1432,7 @@ jobs:
       # THIRD job that carried the same latent fatal: the action refuses a `path:`
       # outside the workspace, and this step pointed one at the runner's scratch
       # directory. It had simply never fired, because this job is opt-in and
-      # `secrets` — the job with no opt-in — failed first. All three copies are
+      # opt-in job failed first. All three copies are
       # fixed together for the reason AGENTS.md records about the
       # `REUSABLE_WORKFLOWS` list: a fix that leaves two armed is a fix that has
       # not landed, and "nobody has seen it fail" is a fact about which job runs

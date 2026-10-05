@@ -39,6 +39,54 @@
 # Steps 2 and 3 matter for speed and step 4 for correctness, in that order: a
 # warm .venv means a normal gate run never touches the network.
 
+# kit_activate_mise — put mise-managed toolchains on PATH when the invoking
+# shell did not. No-op when mise is absent or already active.
+#
+# WHY THIS EXISTS, and it is the same reason kit_bootstrap_python exists below.
+# That function stopped the gate from assuming a python it had not resolved.
+# Everything ELSE in the gate still assumed a `command -v` would find go, node,
+# gofmt, ruby, elixir and rustc, and that assumption is false in every shell
+# that is not interactive: `zsh -c` and `bash -c` do not read `.zshrc`, and a CI
+# runner has no rc files at all. On this repository's own machine the tools were
+# installed the whole time, mise-managed, and the gate still reported
+# `gofmt: command not found` and skipped three snippet checks and the canary
+# suite. A check that goes red because of how the gate was launched is not a
+# check, and a lint gate that escalates a skip into a failure ("a skipped lint
+# proof is not a proof") turns a missing PATH entry into a red build.
+#
+# WHY mise AND NOT A KIT mise.toml.
+#   mise owns version selection; this file only asks it what the environment
+#   would have been. Which versions that is depends on config in scope at the
+#   time — a repo mise.toml, the user's global one, or none. Pinning kit's own
+#   toolchain here would be a second source of truth that CI cannot honour (a
+#   runner that has no mise config would resolve to nothing), and kit ships a
+#   template for exactly this decision rather than making it for every service.
+#
+# `mise hook-env` is mise's own supported mechanism for handing a shell that was
+# not activated the environment it would otherwise have had — the same call
+# `eval "$(mise activate bash)"` makes, minus the per-command hook cost. It is
+# safe to eval here for the same reason your .zshrc already evals `mise
+# activate zsh`: the output is mise describing its own resolved state.
+kit_activate_mise() {
+  # Already activated. mise exports MISE_SHELL and __MISE_DIFF into every shell
+  # it has set up, so this is the cheap check for "someone else's shell config
+  # already did this". Re-deriving would discard a deliberate PATH ordering.
+  if [ -n "${MISE_SHELL:-}" ] || [ -n "${__MISE_DIFF:-}" ]; then
+    return 0
+  fi
+
+  local mise_bin hook
+  mise_bin="$(command -v mise 2>/dev/null || true)"
+  if [ -z "$mise_bin" ]; then
+    return 0
+  fi
+
+  hook="$("$mise_bin" hook-env -s bash 2>/dev/null || true)"
+  if [ -n "$hook" ]; then
+    eval "$hook"
+  fi
+}
+
 # kit_bootstrap_python — sets $PY, or exits 1 with one paste-able command.
 #
 # Sets a variable rather than echoing a path because every caller wants it as a
@@ -164,41 +212,26 @@ MSG
 # block is one `HADOLINT_VERSION=` edit away from being updated.
 #
 # Keyed by asset filename, not by `macos-arm64`. See kit_bootstrap_binary.
+
+# Both read by tests/validate.sh, which sources this file and passes them
+# to kit_bootstrap_binary; SC2034 cannot see across a source boundary, for
+# the same reason kit_bootstrap_python carries a directive above. One
+# directive per statement because that is shellcheck's unit of scope.
+# shellcheck disable=SC2034
 KIT_HADOLINT_VERSION='2.15.1'
+# shellcheck disable=SC2034
 KIT_HADOLINT_SHA256S='hadolint-macos-arm64 5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2
 hadolint-macos-x86_64 ffe9bb18b23d5ed1eae50237aecdbb523d016e96da0bd4e7aa432040acfc3fde
 hadolint-linux-arm64 f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d
 hadolint-linux-x86_64 c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507'
 
-# The pinned release of gitleaks, and the sha256 of the archive for the four
-# platforms kit's developers and CI actually run on.
-#
-# MIT, a single static binary, and it needs no network to scan — which is the
-# whole reason it was chosen over trufflehog (AGPL-3.0, and the only candidate
-# that verifies live credentials against the issuer's API, which is exactly
-# wrong for a fleet whose CI has network access). See DECISIONS.md.
-#
-# The values are gitleaks 8.30.1's published `checksums.txt` from the release
-# itself, so this is the publisher's hash and not one we computed.
-KIT_GITLEAKS_VERSION='8.30.1'
-#
-# The asset names are the release's own, which is why the caller passes an
-# explicit template. hadolint's are `hadolint-<os>-<arch>` and gitleaks' are
-# `gitleaks_<version>_<os>_<arch>.tar.gz` — two conventions, one function, and
-# the default template covers the first because a caller who does not care
-# should not have to think about it.
-KIT_GITLEAKS_SHA256S='gitleaks_8.30.1_darwin_arm64.tar.gz b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5
-gitleaks_8.30.1_darwin_x64.tar.gz dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709
-gitleaks_8.30.1_linux_arm64.tar.gz e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
-gitleaks_8.30.1_linux_x64.tar.gz 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
-
 # `PATH_SWEEP_DIRS` — directories a scanner bootstrap walks when looking for an
 # already-installed tool, on top of `$PATH`.
 #
-# Set by the caller to the tree it wants searched, because a throwaway copy of
-# the tree in self_test has its own tests/ and the binary in the ORIGINAL tree's
-# tests/.bin/. Without it each of the twenty-odd copies downloads its own copy of
-# every binary, and a 90-second suite becomes a twenty-minute one.
+# Set by the caller to the tree it wants searched, so one bootstrap can serve a
+# tree other than the one it is running inside. It is empty by default, which is
+# the right default: a caller without that problem should not have to think
+# about it.
 #
 # A directory, rather than a direct path to the binary, because the lookup
 # mirrors what `command -v` does: a name that resolves to something executable.
@@ -208,7 +241,7 @@ PATH_SWEEP_DIRS=""
 # kit_bootstrap_binary <name> <release-url-prefix> <sha256-table> <root> [asset-template] [inner-path]
 #
 # Sets $BIN, or returns 1 with an explanation. Used for the tools that are a
-# single static binary rather than a python package: hadolint and gitleaks.
+# single static binary rather than a python package: hadolint.
 #
 # <sha256-table> is keyed by the EXACT ASSET FILENAME, not by an os/arch pair.
 # It used to be keyed by `macos-arm64`, which forced every caller's asset name
@@ -219,7 +252,7 @@ PATH_SWEEP_DIRS=""
 #
 # <asset-template> may contain @os@ (macos|linux), @ros@ (darwin|linux), @arch@
 # (arm64|x86_64) and @triple@ (e.g. aarch64-apple-darwin), and defaults to
-# `<name>-@os@-@arch@`. The three OS spellings are spelled out above because two
+# `<name>-@os@-@arch@`. The three OS spellings are spelled out above because upstream
 # upstreams disagree about the same fact. <inner-path> is the executable inside
 # a `.tar.gz`; when it is given, the asset is fetched, verified, unpacked, and
 # the inner file is what gets installed.
@@ -271,12 +304,11 @@ kit_bootstrap_binary() {
   #
   #   `uname -s`            says Darwin
   #   hadolint's assets     say macos
-  #   gitleaks' assets      say darwin
   #   Rust-style triples    say apple-darwin
   #
   # Getting any of them wrong is a 404, not a clear error, so all three are
   # spelled out here and the template picks. `@os@` is the macos/linux spelling
-  # (hadolint's, and the default), `@ros@` is the darwin/linux one (gitleaks'),
+  # (hadolint's, and the default), `@ros@` is the darwin/linux one,
   # and `@triple@` is the Rust-style quadruple.
   #
   # A caller that does not care should not have to think about it, which is why
@@ -304,21 +336,12 @@ kit_bootstrap_binary() {
       triple_arch=aarch64
       ;;
     x86_64 | amd64)
-      # `x86_64` and `x64` because they are two different SPELLINGS and gitleaks
-      # uses the short one. Measured: the 8.30.1 release publishes
-      # `gitleaks_8.30.1_linux_x64.tar.gz` and 404s on `…_linux_x86_64.tar.gz`,
-      # while hadolint publishes `hadolint-linux-x86_64`. Both tables in this
-      # file are correct; the template is what has to pick, exactly as `@os@`
-      # and `@ros@` already do for the OS.
-      #
-      # Before this, `@arch@` was `x86_64` and the `secrets` job failed on
-      # ubuntu-latest with `no recorded sha256 for
-      # gitleaks_8.30.1_linux_x86_64.tar.gz` — the sha256 was RIGHT THERE in
-      # the table, filed under the name the release actually uses. A missing
-      # entry and a mismatched name read identically, which is why the message
-      # says "no recorded sha256" when the truth is "recorded under another
-      # name". `@rax@` is the short spelling; `@arch@` stays the long one that
-      # hadolint needs.
+      # `@rax@` is the short spelling and `@arch@` the long one, because
+      # `x64` and `x86_64` are two different SPELLINGS of the same
+      # architecture and a release that wants one 404s on the other. A
+      # missing sha256 entry and a mismatched asset name read identically,
+      # which is why the table is keyed on the exact filename and the
+      # template picks the spelling.
       arch=x86_64
       arch_x64=x64
       triple_arch=x86_64
@@ -345,11 +368,9 @@ kit_bootstrap_binary() {
   printf 'note: fetching %s for %s (first run)\n' "$name" "$asset" >&2
   # The install dir is `<root>/tests/.bin`, not `<root>/.venv/bin`.
   #
-  # It used to be `.venv/bin`, which is a gitignored venv the gate builds for its
-  # PYTHON packages — a throwaway copy in self_test has no `.venv`, so a binary
-  # fetched there was invisible to every copy that came after, and each of them
-  # fetched its own. `tests/.bin` sits inside the tree that fresh_copy actually
-  # copies, so a fetched binary is visible to every copy and is fetched once.
+  # A binary in a gitignored venv is invisible to any caller that bootstraps
+  # into a different root, so the tool would be fetched again for every such
+  # tree. `tests/.bin` is one location this owns, and `root` says which tree.
   #
   # `.bin` is gitignored (see .gitignore) for the same reason `.venv` is.
   mkdir -p "$dir" "$root/tests/.bin"

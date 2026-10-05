@@ -1,9 +1,9 @@
 # kit's test suite needs a python with PyYAML (yaml.safe_load over every YAML),
 # yamllint (dogfoods lint/yamllint.yml against our own files) and zizmor (the
 # GitHub Actions security audit the `zizmor` job and the gate's own workflow
-# check run). gitleaks is NOT here: it is a static binary, and a binary in a
+# check run). hadolint is NOT here: it is a static binary, and a binary in a
 # wheel index is a hash we computed ourselves rather than one the publisher
-# vouched for. It is bootstrapped from its signed release, like hadolint — see
+# vouched for. It is bootstrapped from its signed release instead — see
 # tests/bootstrap.sh.
 # shellcheck and node are used when present on PATH; both are optional.
 #

@@ -69,6 +69,10 @@ if [ ! -r "$ROOT/tests/bootstrap.sh" ]; then
 fi
 # shellcheck source=tests/bootstrap.sh
 . "$ROOT/tests/bootstrap.sh"
+# This script is runnable on its own (`bash tests/lint_test.sh`), so it cannot
+# inherit validate.sh's environment — it has to put mise-managed linters on PATH
+# for itself. See kit_activate_mise in tests/bootstrap.sh.
+kit_activate_mise
 kit_bootstrap_python "$ROOT"
 export KIT_PYTHON="$PY"
 

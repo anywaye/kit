@@ -1,6 +1,64 @@
 ## Unreleased
 
+### Removed
+
+- **The committed-history secret scanner, and the job that ran it.** `gitleaks`,
+  `.gitleaks.toml`, `tests/gitleaks_gate.sh`, the `secrets` job in
+  `ci.reusable.yml`, the `KIT_GITLEAKS_VERSION` / `KIT_GITLEAKS_SHA256S` pins in
+  `tests/bootstrap.sh`, and the three gate checks that policed them
+  (`gitleaks_config`, `gitleaks_ignore`, `scan_behaviour`) are all gone.
+
+  The argument is `DECISIONS.md` MD34, and it is one sentence: **a control whose
+  subject is somebody else's repository is not one kit owns.** Every other job in
+  `ci.reusable.yml` checks kit's own behaviour. This one scanned the adopting
+  service's full git history, so when it went red the finding landed on whoever
+  pushed kit rather than on the person who could fix it — and it was the one job
+  no service could opt out of, so the first repository to adopt kit with an old
+  credential in its history inherited a red build on day one. It was also already
+  red: `gitleaks (required: could not be installed)` had been failing in CI while
+  the gate's local copy of the same scan ran, which is the drift MD13 was written
+  to prevent.
+
+  What replaces it is `templates/secrets/` — the runtime canary — which was
+  already the half that answers the question a history scan cannot: not *was a
+  secret committed* but *does a secret reach an exporter*. That stays, and
+  `canary_literal_check` still proves a canary value never appears as a literal.
+  The committed-history half is now the host's push protection, which catches the
+  credential on the push that introduces it and attributes it to the author.
+
+  MD13 (one scanner, invoked two ways) is marked superseded; its principle is
+  unchanged and now governs `tests/zizmor_gate.sh`, which still has both callers.
+
 ### Fixed
+
+- **The gate resolved python properly and assumed every other toolchain was
+  already on `PATH`.** `tests/bootstrap.sh` had a deliberate resolution order
+  for the interpreter — `$KIT_PYTHON`, then `.venv`, then a `python3` that
+  already imports yaml, then bootstrap — and `have()` in `tests/validate.sh`
+  and `tests/lint_test.sh` was a bare `command -v` for everything else. That
+  asymmetry is invisible in an interactive shell and fatal in a non-interactive
+  one, because mise is configured in `~/.zshrc` and `~/.zprofile` and a gate
+  launched as `bash tests/validate.sh` reads neither. On a machine with go,
+  gofmt, node, ruby, elixir, golangci-lint and rubocop all mise-managed and
+  installed, the gate reported `gofmt: command not found`, skipped three snippet
+  checks and the canary suite, and failed the lint phase — because that phase is
+  fatal on a skip, on the grounds that a skipped lint proof is not a proof. A
+  fully equipped machine was reported as a missing-toolchain one.
+
+  `kit_activate_mise` now runs before anything resolves an interpreter. It is
+  `eval "$(mise hook-env -s bash)"` — mise's supported way to hand a shell that
+  was never activated the environment it would otherwise have had — and it is a
+  no-op when mise is absent, when the shell is already mise-activated
+  (`$MISE_SHELL`/`$__MISE_DIFF`), or when mise has nothing configured, which is
+  the CI case. It costs about 70ms. Both entry points call it, because
+  `tests/lint_test.sh` is runnable on its own and cannot inherit
+  `validate.sh`'s environment.
+
+  kit still ships no `mise.toml` of its own, deliberately: pinning kit's
+  toolchain here would be a second source of truth that a runner with no mise
+  config cannot honour, and `templates/mise.toml` is already where that decision
+  is made, per service. mise owns the versions; the gate asks it what the
+  environment was.
 
 - **A reusable workflow has no location of its own, and four `run:` bodies in
   `ci.reusable.yml` were reading one anyway.** `GITHUB_ACTION_PATH` is

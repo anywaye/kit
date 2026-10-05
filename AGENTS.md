@@ -21,7 +21,6 @@ kit/
 ├── DECISIONS.md                          # the trades this repo has NOT made
 ├── VERSION                               # the version, and the ONLY place it is written
 ├── RESERVED                              # tombstones: a retired name stays dead
-├── .gitleaks.toml                        # the allowlist, and nothing else
 ├── .github/
 │   ├── workflows/
 │   │   ├── ci.reusable.yml               # the workflow six repos call
@@ -47,7 +46,6 @@ kit/
     ├── lint_test.sh                      # the linters RUN, against fixtures
     ├── isolation_test.sh                 # the cluster, RUN; A cannot reach B's database
     ├── tenancy_test.sh                   # the account boundary, RUN; and its FORCE control
-    ├── gitleaks_gate.sh                  # the one secret scan, for CI and here
     ├── zizmor_gate.sh                    # the one zizmor split, ditto
     ├── bootstrap.sh                      # the gate installs its own tools
     ├── classify.py  rules.json           # the change classifier, failing closed
@@ -199,7 +197,7 @@ not an empty path, it is a fatal on the step's **first line**:
 ```
 
 Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669, on
-the `secrets` job — the one job with no opt-in. `ad3e320` fixed the collision
+a job that had never run once.
 that had stopped those jobs being created, and two jobs that had **never run
 once** were broken: this one could not start at all, and the `node` job crashed on
 its first `.mts` file. Four days, eleven repositories, two red jobs and a red run
@@ -213,8 +211,8 @@ that said nothing about why.
   nobody reading the other place.
 - The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
   `inputs.kit-lint-ref`, into **`$RUNNER_TEMP`** and not `<working-dir>/.kit`:
-  `secrets` runs a full-history git scan rooted at `$GITHUB_WORKSPACE`, and a
-  second git repository inside the tree being scanned is a question with no good
+  a second git repository nested inside the one under test is a question with no good
+  answer, and `$RUNNER_TEMP` is per-job scratch that is emptied when the job ends.
   answer.
 - **The second job had a second defect.** `tests/zizmor_gate.sh` ends by piping
   zizmor's report through `"$PY" - …`, which in kit's own gate comes from
@@ -380,10 +378,9 @@ Six phases, and all six must pass:
   here too, and **an entry matching nothing is a failure** — modelled on
   ESLint's `reportUnusedDisableDirectives`, because without that rule an
   allowlist is a ratchet that only turns one way.
-  Plus the secret scanner: the allowlist is an allowlist and nothing else, every
-  entry has a reason, no `.gitleaksignore` exists, the scan redacts and reads
-  full history, no workflow declares a dangerous trigger, and the `secrets` job
-  is neither advisory nor opt-in.
+  Plus the workflow-shape half of that audit: no workflow declares a dangerous
+  trigger, read off the parsed trigger keys so the comment explaining why is not
+  itself a violation.
 - **telemetry** — the six W3C traceparent suites are **executed**, one per
   language, and the canary harness is **executed** with all five vectors, each
   printing its own red proof. Stdlib only and offline on purpose. If they ever
@@ -395,31 +392,23 @@ Six phases, and all six must pass:
 
 ## Secrets
 
-**`bash tests/validate.sh` scans this repository's full history, and so does
-`bash tests/gitleaks_gate.sh`.** They are the same script, because they are the
-same scan — a scanner whose CI invocation and its local invocation have drifted
-is two scanners, and the one that goes red is whichever nobody runs.
+**kit does not scan committed history, of this repository or anyone else's.** It used
+to: a full-history secret scan ran as a `secrets` job that no service could opt out
+of. `DECISIONS.md` MD34 records why it is gone — a control whose subject is somebody
+else's repository is not one kit owns — and what replaces it, which is the host's
+push protection catching the credential on the push that introduced it.
 
-Four things about it that are not negotiable, and each has a check that fails
-without them:
+What kit still asserts about CI shape is one rule, and it is checked here:
 
-- **Full history, not the diff.** A secret committed and deleted in one PR is
-  still in the history and still on every fork. The default checkout is a
-  *shallow clone*; `fetch-depth: 0` is in the `secrets` job for that reason.
-- **`--redact`, unconditionally.** A CI log is a place secrets go to be read. The
-  scanner finding a secret must never be why the secret is printed. There is no
-  flag to turn it off. The check `scan_behaviour_check` plants a credential in
-  a **throwaway ~4 KB git repo** and runs this very script against it, asserting
-  the value is found, is named by rule, and does **not** appear in the output —
-  with `--redact` removed, the same fixture makes it print the secret.
-- **The allowlist is `.gitleaks.toml` and nothing else.** No `-i` flags, no
-  `.gitleaksignore`, and every `[[allowlists]]` entry carries a `description` of
-  at least 40 characters. `extend.useDefault = true` means the rules stay
-  gitleaks'; a repo that redefines a rule has taken responsibility for the regex.
-- **No `pull_request_target`, anywhere.** It runs with the base repository's
-  secrets and a writable token on a *fork's* code. The scanner is the job that
-  most invites "just pull the base branch in so the scan sees the real history",
-  and that edit is how a secret scanner becomes the way secrets are taken.
+- **No `pull_request_target`, `workflow_run` or `issue_comment`, anywhere.** Each
+  runs with the base repository's secrets and a writable token on a *fork's* code,
+  and each is the edit that turns a CI check into a credential-theft primitive. It
+  is read off the **parsed trigger keys**, so the comment explaining why the rule
+  exists is not itself a violation of it.
+
+The `--redact` and `fetch-depth: 0` properties went with the scanner. `zizmor` and
+the trigger check are what remain, and both are about the workflow a service already
+wrote rather than about a neighbour's history.
 
 **`DECISIONS.md` records a trade this repository has NOT made.** zizmor's
 `unpinned-uses` fires thirty-three times and is **not** baselined: it is counted
@@ -428,8 +417,9 @@ and printed on every run, and `tests/validate.sh` fails if anyone adds it to
 file that looks like routine configuration. If you add *any* zizmor ignore
 entry, it needs a reason in a comment beside it, and the gate checks.
 
-**`templates/secrets/` is the other half, and it is not gitleaks.** gitleaks
-answers "was a secret committed". Nothing off the shelf answers "does a secret
+**`templates/secrets/` answers the question nothing off the shelf answers: does a
+secret leave the process while the tests run.** gosec, Bandit, Brakeman and Semgrep
+were all checked first, and none of them does:
 leave the process while the tests run" — gosec's `credentials.Match` has no
 `*ast.CallExpr` case, Bandit matches `ast.Constant` only, Brakeman's check is
 off by default, and of 268 Semgrep taint rules zero intersect CWE-532. So the
@@ -443,19 +433,17 @@ which is what this repository's own scanner reports, and allowlisting it teaches
 the next reader that allowlisting a credential is normal. Two checks enforce it:
 one inside the Go suite, one over the whole tree.
 
-**`.gitleaks.toml` now has one entry, and it is not that.** kit-16's deploy suite
+**Why the canary is assembled rather than written out.** kit-16's deploy suite
 proves the redactor scrubs a JWT **by shape** — a value the filter cannot know by
-name, which is the only canary that can fail — so that token is committed and the
-`jwt` rule fires on it. The entry is scoped to `targetRules = ["jwt"]` **and**
-`paths = ['''^tests/deploy_test\.sh$''']`, measured in both directions: a
-`generic-api-key` in that same file and a `jwt` in a different file are both still
-reported. The distinguishing property is not the scoping, it is that the string is
-a **fixture whose name says so** (`JWT_CANARY`, and its own comment says a value
-the redactor cannot know by name is half the test) rather than a credential-shaped
-blob wearing a descriptive variable name. `templates/secrets/`'s canary does not
-have that option: a redactor can be taught nothing and still be defeated by a
-string it does not recognise, but a leaked credential does not become safe because
-a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
+name, which is the only canary that can fail — so that token is committed and it is
+credential-shaped. The distinguishing property is not that it is scoped somewhere;
+it is that the string is a **fixture whose name says so** (`JWT_CANARY`, and its own
+comment says a value the redactor cannot know by name is half the test) rather than
+a credential-shaped blob wearing a descriptive variable name.
+`templates/secrets/`'s canary does not have that option: a redactor can be taught
+nothing and still be defeated by a string it does not recognise, but a leaked
+credential does not become safe because a test asserts on it. **The rule stays:
+assemble the canary, do not commit it.**
 
 - **observability** — the claims that are worth nothing unexercised: a canary
   secret in ten leak shapes reaches no exporter (and the allowed data survives),
@@ -641,7 +629,7 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
 - **PyYAML, yamllint, zizmor and hadolint are required and are bootstrapped, not
   required of you.** `tests/bootstrap.sh` resolves an interpreter, builds
   `.venv`, pip installs `tests/requirements.txt`, and fetches pinned hadolint
-  and gitleaks releases verified against their published checksums. zizmor is
+  and the pinned hadolint release verified against its published checksums.
   pinned in `requirements.txt` and comes from PyPI, because it publishes no
   checksums file and pinning its archives would mean pinning hashes we computed
   ourselves. Resolve
@@ -651,6 +639,22 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   A required check whose tool path is hardcoded to a directory the resolver may
   have skipped is a gate that fails on arrival; that is a bug this file has
   already had once.
+- **The language toolchains are found through mise, not assumed to be on PATH.**
+  `kit_activate_mise` runs before anything resolves an interpreter. It is
+  `eval "$(mise hook-env -s bash)"` — mise's own supported way to hand a shell
+  that was never activated the environment it would otherwise have had — and it
+  is a no-op when mise is absent, when the shell is already mise-activated, or
+  when mise has nothing configured, which is the CI case. This is the same class
+  of fix as the interpreter resolution above and it was needed for the same
+  reason: `.zshrc` and `.zprofile` put mise on PATH for *interactive* and *login*
+  shells, so `bash tests/validate.sh` — which is neither — saw no `gofmt`, no
+  `go`, and no `rubocop`, and reported a machine that was fully equipped as one
+  that was missing three toolchains. A skip that is really "you launched me wrong"
+  is a false negative, and this gate is fatal on lint skips, so it was a red
+  build too. mise owns the versions; the gate only asks it what the environment
+  was. kit deliberately ships no `mise.toml` of its own: pinning kit's
+  toolchain here would be a second source of truth a runner with no mise config
+  could not honour, and `templates/mise.toml` is where that decision belongs.
 - **Four counts, because they are four different claims.** `PASS` and `FAIL`
   are verdicts about the tree. `SKIP` is a verdict about the **environment** —
   no docker, no toolchain, nothing ran. `BOUND` is a verdict about the **run** —
@@ -985,8 +989,8 @@ shape** — a JWT, an AWS key, a PEM header — which kamal-backup's `Redactor` 
 not (it knows env values whose *key* looks secret, and URL credentials, and
 nothing else). Removing the distribution would also delete
 `tests/deploy_test.sh`, which is where kit-16's live proof that the redactor
-catches a JWT by shape lives, and which `.gitleaks.toml`'s only allowlist entry
-is scoped to. That is a larger decision than this packet, it is recorded in
+catches a JWT by shape lives. That is a larger decision than this packet,
+it is recorded in
 `REPORT-kit-20.md` §"not removed", and it is not resolved here.
 
 ## The stack is FETCHED, and the pin is the only thing that decides what it is

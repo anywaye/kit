@@ -9,8 +9,8 @@
 //	optional and off. Of 268 Semgrep taint rules, zero intersect CWE-532.
 //
 //	That is a finding, not a gap in the search, and it is why this file exists.
-//	gitleaks answers "was a secret committed". Nothing answers "does a secret
-//	leave the process while the tests run".
+//	A committed-history scanner answers "was a secret committed". Nothing
+//	answers "does a secret leave the process while the tests run".
 //
 // THE CANARY
 //
@@ -22,13 +22,12 @@
 //	It is BUILT, not written out, and that is a security property rather than a
 //	style one. A committed 46-character `cafaye_canary_…` literal is, to every
 //	scanner in the world, a high-entropy string with a credential-ish prefix —
-//	it is exactly the thing this repository's own gitleaks job is built to
-//	report, and adding one to an allowlist to make it go away would be the
-//	exact failure the allowlist's reason-per-entry rule exists to prevent. So
+//	it is exactly the thing a secret scanner is built to report, and adding
+//	one to an allowlist to make it go away would be the exact failure the
+//	allowlist's reason-per-entry rule exists to prevent. So
 //	the value is assembled at run time, the full string never appears in any
-//	committed file, and `.gitleaks.toml` needs no entry for it. `TestCanaryIsSafe`
-//	asserts the absence directly, and the tree-wide gitleaks scan being green
-//	is the second half of the proof.
+//	committed file, and no allowlist needs an entry for it. `TestCanaryIsSafe`
+//	asserts the absence directly, over this template's own sources.
 //
 // THE CONTRACT
 //

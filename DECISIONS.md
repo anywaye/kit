@@ -60,7 +60,7 @@ when the documented `uses:` string and the file's real location disagree.
 
 ---
 
-## MD13 — one secret scanner, invoked two ways
+## MD13 — one secret scanner, invoked two ways (superseded by MD34)
 
 **Not made:** a CI-only invocation with a local convenience wrapper that drifted
 from it.
@@ -68,8 +68,11 @@ from it.
 **What it costs:** nothing measurable.
 
 **Why not:** a scanner whose CI invocation and local invocation have drifted is
-two scanners, and the one that goes red is whichever nobody runs. `tests/
-validate.sh` and `tests/gitleaks_gate.sh` are the same script for this reason.
+two scanners, and the one that goes red is whichever nobody runs.
+
+Superseded by MD34, which deletes the scanner this decision was about. The
+principle is unchanged and now governs `tests/zizmor_gate.sh`, which has the
+same two callers: the `zizmor` job and this repository's own gate.
 
 ---
 
@@ -1180,3 +1183,104 @@ only in a passing sentence or a code fence satisfies it — the same weakness
 table row, which is a different check with a different failure mode. The honest
 description of what this asserts is that **the tree is CLOSED**, not that the
 prose is good.
+
+---
+
+## MD34 — **no committed-history secret scanner, and kit asserts only its own behaviour**
+
+**Not made:** a scanner over the adopting repository's full git history, wired as
+a job no service can opt out of. That was `gitleaks`, `.gitleaks.toml` and the
+`secrets` job in `ci.reusable.yml`.
+
+**What it costs:** a secret committed and later deleted is no longer found by
+kit. It is still in the packfile of everyone who cloned, and GitHub's own
+push-protection and the adopting repository's platform account scanning cover
+the case a fleet-wide CI job was duplicating.
+
+**Why not:**
+
+1. *A control that runs against someone else's repository is not a control kit
+   owns.* The job's subject is the adopting service's history. When it goes red,
+   the person who pushed kit learns that a repository they do not maintain
+   contains something they cannot fix from where they are standing. Every other
+   job in the file checks kit's own behaviour; this one checked a neighbour's.
+2. *The one job with no opt-in is the one that cannot be right for everyone.* It
+   was made non-optional precisely because a scanner that can be turned off is a
+   report — which is true, and also means the first repository to adopt kit with
+   an unrelated finding in an old commit inherits a red build on day one. The
+   cost of that choice was written down rather than discovered, and the answer
+   recorded in README.md was "rotate first, then allowlist". That is a support
+   burden kit had not accepted on purpose; it had accumulated.
+3. *It was the slowest job in the file for the least kit-shaped finding.*
+   `fetch-depth: 0` on every run, a full-history regex sweep of a repository
+   that is not kit, and a bootstrap that fetched a second pinned binary per
+   platform on every runner.
+4. *It was already red.* `gitleaks (required: could not be installed)` had been
+   failing in CI while the gate's own copy of the same scan ran locally, which
+   is the failure mode MD13 was written to prevent and the clearest evidence the
+   two-caller arrangement had not held.
+
+**What replaces it.** `templates/secrets/` — the runtime canary — was already the
+half that answers the question gitleaks could not: not *was a secret committed*
+but *does a secret reach an exporter*. That stays, and `canary_test.sh` still
+proves a planted value appears in no output. The committed-history half is now
+the adopting repository's own platform feature, which is where a credential
+should be caught: on the push that introduces it, attributed to the author.
+
+**Enforced by:** nothing in kit, deliberately. There is no check here that the
+scanner came back, because the argument above is about whether it belongs, and a
+check asserting its absence is the same mistake one layer down.
+
+---
+
+## MD35 — the gate asks mise for the toolchain, and kit pins none of its own
+
+**Decision.** `tests/bootstrap.sh` gained `kit_activate_mise`, which runs before
+anything resolves an interpreter and is `eval "$(mise hook-env -s bash)"`
+guarded by three no-op conditions (mise absent, shell already activated,
+nothing configured). Both entry points call it. kit does **not** gain a
+`mise.toml` of its own.
+
+**The defect it fixes is an asymmetry, not a missing tool.** `kit_bootstrap_python`
+has always resolved the interpreter through a four-step order with an explicit
+override that is treated as a promise, and `have()` — used for docker, elixir,
+go, gofmt, kamal, node, python3, ruby, rustc, shellcheck, golangci-lint,
+rubocop, eslint — has always been a bare `command -v`. One language was
+resolved; the rest were assumed. That assumption holds in an interactive shell
+and fails in a non-interactive one, because mise is configured in `~/.zshrc` and
+`~/.zprofile` and `bash tests/validate.sh` reads neither. The result was a gate
+reporting `gofmt: command not found` and skipping three snippet checks and the
+canary suite on a machine where every one of those tools was installed — and
+because the lint phase is fatal on a skip ("a skipped lint proof is not a
+proof"), a red build. The general form: *a skip that is really "you launched me
+wrong" is a false negative, and this gate treats skips as claims about the
+environment.*
+
+**Why mise rather than pinning.** Pinning kit's own toolchain would be a second
+source of truth that a CI runner with no mise config cannot honour — it would
+resolve to nothing, which is the same "fails on arrival" failure the venv was
+built to remove, reached from the other direction. The useful property of mise
+here is not its pins but its resolution: it answers *what would this environment
+have been*, which is a question kit can ask without owning an answer. Which
+versions that is depends on config in scope at the time — a repo `mise.toml`,
+the user's global one, or none — and kit deliberately stays out of that
+decision.
+
+**Why not `.zshenv` or a documented export.** Both push the problem onto the
+caller. A gate that only works from a shell someone configured is a gate with an
+undocumented prerequisite step, which is the exact property MD13-era bootstrap
+work removed for python and which is written down in README.md as the reason
+`.venv` exists.
+
+**Cost.** About 70ms per entry point, on a suite that runs in minutes. Three
+conditions that must stay no-ops, or CI and any machine without mise break: no
+`mise` on PATH, `$MISE_SHELL`/`$__MISE_DIFF` already set, and empty output from
+`mise hook-env`.
+
+**What it does not fix.** Three rust checks still SKIP with `rustc not
+installed`, and that is honest rather than resolved: rust 1.95.0 and 1.99.0 are
+mise-installed on this machine but absent from `~/.config/mise/config.toml`, so
+mise does not export it. kit has no business editing a developer's global tool
+config to turn three skips green — and a skip that is reported is the gate
+working as designed. A developer who wants rustc in the gate adds one line to
+their own mise config.

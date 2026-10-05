@@ -85,9 +85,9 @@ func TestCanaryIsSafe(t *testing.T) {
 	// suppressing it needs an allowlist entry, and an allowlist entry teaches
 	// the next person that allowlisting a credential is a normal thing to do.
 	//
-	// The second half of that proof is outside this file: the tree-wide gitleaks
-	// scan in tests/validate.sh is green over this same tree. If this test
-	// passes and that one fails, a canary literal has crept in.
+	// The second half of that proof is outside this file: the tree-wide
+	//	`canary_literal_check` in tests/validate.sh greps this same tree. If this
+	//	test passes and that one fails, a canary literal has crept in.
 	if hits, err := canaryLiteralsOnDisk(t); err != nil {
 		t.Fatalf("could not read this template's own sources: %v", err)
 	} else if len(hits) > 0 {

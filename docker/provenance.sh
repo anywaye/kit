@@ -107,7 +107,7 @@
 #     extend when they add the next field.
 #
 # Measured consequences, each refused BY SHAPE and not by keyword (a keyword
-# denylist is what gitleaks is, and what lets the next novel shape through):
+# denylist is what a secret scanner is, and what lets the next novel shape through):
 #
 #   kaka@cafaye.com            an email. No grammar in the set admits `@`.
 #   a branch name              ASYMMETRIC, and stated rather than papered over.

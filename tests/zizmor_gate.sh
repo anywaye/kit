@@ -5,9 +5,8 @@
 #   bash tests/zizmor_gate.sh [ROOT] [ZIZMOR]
 #
 # ONE definition, two callers: the `zizmor` job in .github/workflows/
-# ci.reusable.yml, and this repository's own gate. Same reasoning as
-# gitleaks_gate.sh — a policy that is expressed twice is expressed once in CI
-# and once in someone's head.
+# ci.reusable.yml, and this repository's own gate. A policy that is expressed
+# twice is expressed once in CI and once in someone's head.
 #
 # WHAT THIS SCRIPT DOES THAT A PLAIN `zizmor` DOES NOT
 #

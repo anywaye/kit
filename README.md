@@ -108,9 +108,8 @@ the entry; deleting the entry to shrink the file is a hard failure of its own.
 
 | Path | What it is | Who uses it |
 |------|-----------|-------------|
-| `.github/workflows/ci.reusable.yml` | One reusable GitHub Actions workflow. Input `language` picks one of seven jobs — install, lint, test, coverage gate. Opt-in `telemetry` input adds the traceparent conformance job; opt-in `required-tier` demands a tier by gate-variable name. **Plus two security jobs: `secrets` (no opt-in) and `zizmor` (opt-in).** No job builds or pushes an image — that is the other file. | Every service, via a 6-line `.github/workflows/ci.yml` |
+| `.github/workflows/ci.reusable.yml` | One reusable GitHub Actions workflow. Input `language` picks one of seven jobs — install, lint, test, coverage gate. Opt-in `telemetry` input adds the traceparent conformance job; opt-in `required-tier` demands a tier by gate-variable name. **Plus one opt-in security job: `zizmor`.** No job builds or pushes an image — that is the other file. | Every service, via a 6-line `.github/workflows/ci.yml` |
 | `.github/workflows/image.reusable.yml` | **The second reusable workflow**, and it exists because `ci.reusable.yml` deliberately does not build an artifact: it is the gate, and a gate that publishes is a gate whose failure is a rollback. It builds the service image and publishes it to ghcr.io, and **the caller grants `packages: write`** — a reusable workflow cannot grant itself a permission. "One file per standard" means two files here, not one: `REUSABLE_WORKFLOWS` in `tests/validate.sh` is the list of what a caller may reach, and the gate fails on a file declaring `workflow_call` that is not on it *and* on a duplicate of one that is. | A service that ships a deployable artifact, via a 9-line `publish.yml` |
-| `.gitleaks.toml` | The secret-scanner allowlist, and nothing else. `extend.useDefault = true`, so the rules stay gitleaks'. Every entry carries a `description`. One entry is here for kit's own test fixture — **delete it when you copy this file**. | Copied verbatim by every service |
 | `.github/zizmor.yml` | zizmor's reasoned baselines. One entry. `unpinned-uses` is deliberately **absent** — see `DECISIONS.md`. | Every service, copied verbatim |
 | `lint/yamllint.yml` | YAML style, with the three rules Actions forces us to retune. Read at run time via `yamllint -c`, never copied. | Any repo that lints its own YAML; kit's gate uses it on itself |
 | `lint/golangci.yml` | golangci-lint v2, correctness linters on, `errcheck` excluded only for `Close`/`Flush`. Read at run time via `--config`, never copied. | Go services |
@@ -159,44 +158,26 @@ the entry; deleting the entry to shrink the file is a hard failure of its own.
 | `tests/staleness.py` | Two scopes. `--scope core` reads every consuming repo's recorded pin and prints the distance. `--scope templates` reports whether each service's copy of a kit template is `current`, `diverged`, **`absent`**, `unknown` or `n/a`, and whether the reason for it is recorded. | Scheduled, fleet-wide |
 | `tests/artifacts.json` | The ONE place kit says what it ships and where a service puts it. Read by the reporter *and* by the gate — a table written down twice is a table that is right in one of the two places. | kit |
 | `tests/validate.sh` | kit's own suite — the gate. | kit |
-| `tests/gitleaks_gate.sh` | The one secret scan. Run by the `secrets` job **and** by the gate. | Every service, copied verbatim |
 | `tests/zizmor_gate.sh` | The one zizmor split: `unpinned-uses` recorded, every other audit fatal. | Every service, copied verbatim |
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
 | `RESERVED` | **Tombstones: a retired name stays dead.** In the `skip-allowlist` dialect, and the fourth hygiene rule is **inverted** — a reserved path that exists in the tree is the failure. buf's `reserved` and k8s's `+k8s:deprecated` are *not* the same mechanism (a wire tombstone vs a lifecycle marker on a still-present field); kit has no encoding, so only the shared weaker half transfers. See `DECISIONS.md` (MD27). | kit's gate; read before reintroducing any path |
 | `LICENSE` | **kit's own grant: MIT.** The whole grant — kit has no package manifest, so there is no metadata field that could disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
 
-## Secrets — two scanners, two questions
-
-Neither of these substitutes for the other, and the second one has no
-off-the-shelf implementation at all.
-
-**`secrets` (no opt-in).** gitleaks over the **full history** of the adopting
-repo, with `--redact`. It answers *was a credential committed*.
-
-Why gitleaks and not trufflehog: trufflehog is **AGPL-3.0**, which is a
-licensing decision with teeth for a product that sells code, and it is the only
-candidate that verifies live credentials against the issuer's API — exactly the
-wrong behaviour for a fleet whose CI has network access. gitleaks is MIT, a
-single static binary, needs no network, and `--redact` is mandatory so CI never
-prints the secret it just found.
-
-It is the one job in the workflow with **no opt-in**, and that is deliberate: an
-opt-in security control is not a control. `continue-on-error` is the one setting
-that would turn it into a report, and `tests/validate.sh` fails if it appears.
-
-> **Adopting this may make your first build red.** If your repository has a
-> credential anywhere in its history, the scanner will find it. That is the
-> scanner working. **Rotate the credential first** — a scan finding a secret is
-> not a plan for it. Then, if it was a false positive, add an entry to your
-> `.gitleaks.toml` with a `description` explaining why. Do not add
-> `continue-on-error`, and do not add a `.gitleaksignore`: both fail the gate.
+## Secrets — what kit checks, and what it does not
 
 **`zizmor` (opt-in).** The GitHub Actions security audit, on your own workflows.
 It answers *what is the shape of your CI*. Off by default because it reads
 workflows kit did not write, and a red build for someone else's finding is not a
 fair day one.
 
-**`templates/secrets/`** answers the question neither of them does: *does a
+**Was a credential committed?** kit used to answer this with a full-history scan
+of the adopting repository, as a job no service could opt out of. It does not any
+more, and `DECISIONS.md` MD34 says why: a control whose subject is somebody
+else's repository is not one kit owns, and the finding lands on whoever pushed kit
+rather than on the person who can fix it. Your host's push protection catches it at
+the push that introduces it, which is the moment it is cheapest to fix.
+
+**`templates/secrets/`** answers the question zizmor does not: *does a
 credential leave the process while the tests run?* It plants a fake credential
 — `cafaye_canary_` plus 32 bytes, assembled at run time so it is safe to commit
 — and sweeps five vectors: log/stdout/stderr, unknown serialisation fields, the
@@ -1090,35 +1071,16 @@ and the only credential is the workflow's own `GITHUB_TOKEN` — no PAT, no
 a registry of launch artifacts that cannot be audited afterwards is not one you
 want to be holding those artifacts in.
 
-**Your first build may be red, and it is probably the secret scanner.** The
-`secrets` job has no opt-in, and it reads the **full history** of your
-repository. If a credential has ever been committed — even one you deleted in
-the same PR — it will find it. That is the scanner working, and it is the reason
-the scan is not diff-only: a deleted secret is still in the packfile of anyone
-who cloned, and still on every fork.
+**Credential in your history? Rotate it.** A credential that was committed and
+later deleted is still in the packfile of everyone who cloned, and on every fork.
+kit no longer runs a history scanner against your repository — your host's push
+protection is where that is caught, on the push that introduces it and attributed
+to the author.
 
-In order:
-
-1. **Treat the credential as compromised and rotate it.** A scanner finding a
-   secret is not a plan for it, and nothing below is a substitute for rotating.
-2. If it was a false positive, copy `.gitleaks.toml` into your repo root and add
-   one `[[allowlists]]` entry with a `description` saying what is allowed and
-   why. A description under 40 characters fails the check, and an entry with
-   none fails harder: an allowlist that grows and is never pruned is not an
-   allowlist, it is a deferred disclosure.
-   - **Delete the entry kit's file already carries.** kit's own allowlist has one
-     entry, for a JWT-shaped test fixture at `tests/deploy_test.sh` — a path your
-     repository does not have. An allowlist that matches nothing excuses nothing,
-     so leaving it cannot weaken your scan, but it is a justification written about
-     somebody else's file, and that is the thing to not copy. Write yours for what
-     *your* finding actually is.
-   - Scope it as narrowly as gitleaks allows: `targetRules` to name the one rule,
-     `paths` to name the one file, and `condition = "AND"` **written out** —
-     gitleaks' default is `OR`, so an entry with two criteria silently becomes a
-     union the day a second one is added.
-3. **Never** add `continue-on-error` to the `secrets` job, and **never** create a
-   `.gitleaksignore`. Both fail `tests/validate.sh`, and both are the two ways a
-   security job becomes a report while the badge stays green.
+**If you hold credentials, copy `templates/secrets/<lang>/` with its suite.** The
+canary plants a fake credential and the gate proves the value never appears in any
+exporter's output. That is a runtime property, so it holds regardless of what is in
+the history.
 
 The `zizmor` job is opt-in, and it is the one to turn on once your own
 workflows are clean:
@@ -1363,8 +1325,7 @@ bash <kit>/tests/validate.sh
 - [ ] If you have a tier: `templates/tier/<lang>/` copied, `REQUIRED_<TIER>=1` honoured,
       `required-tier` named in the caller
 - [ ] No `actions/cache` step caches a test report
-- [ ] **The `secrets` job ran, and anything it found has been ROTATED**
-- [ ] `.gitleaks.toml` copied to your repo root if you need an allowlist entry
+- [ ] **Any credential you have ever committed has been ROTATED**, not just deleted
 - [ ] `zizmor: 'true'` set, if your own workflows are clean
 - [ ] If you hold credentials: `templates/secrets/<lang>/` copied **with its suite**
 - [ ] `CHANGELOG.md` has an entry
@@ -1660,7 +1621,7 @@ bash tests/validate.sh
 
 That is the entire procedure on a clean clone. The gate installs its own
 dependencies into gitignored directories on first run and prints a `note:` line
-saying so — PyYAML, yamllint and zizmor into `.venv/`, and hadolint and gitleaks
+saying so — PyYAML, yamllint and zizmor into `.venv/`, and hadolint
 into `tests/.bin/`. There is no prerequisite step, because a prerequisite that is
 documented rather than automated is one that gets skipped by exactly the machine
 you most wanted to hear from.
@@ -1673,6 +1634,18 @@ CI job this repository now runs on itself.
 The binaries go in `tests/.bin/` rather than `.venv/bin/` so that a checkout's
 own tool directory is where a tool lands, and a second run on the same machine
 reuses it.
+
+The *language* toolchains are found the same way, one step further: if `mise` is
+installed, the gate asks it for the environment this shell would have had, so a
+`mise`-managed `go`, `gofmt`, `node`, `ruby`, `elixir`, `golangci-lint` or
+`rubocop` is found whether or not the shell that launched the gate was
+mise-activated. Without that, `bash tests/validate.sh` — which is neither an
+interactive nor a login shell, and so reads no `.zshrc` or `.zprofile` — reported
+`gofmt: command not found` on a machine where `gofmt` was installed, and since
+the lint phase is fatal on a skip, that was a red build rather than a warning.
+There is nothing to install and nothing to export: no `mise` on the box, a shell
+that mise has already set up, and mise with nothing configured are all no-ops,
+the last of which is exactly the CI case.
 
 `tests/validate.sh` runs in three phases and prints one line per check.
 
@@ -1720,22 +1693,9 @@ we wrote them down to be:
   `until`** — and **an entry matching nothing is a failure**. The total is
   printed on every run, green included
 - no `actions/cache` step may cache a test report
-- the `secrets` job must exist, must not be `continue-on-error`, must not be
-  opt-in, and must check out with `fetch-depth: 0` — the runner default is a
-  *shallow clone*, and a shallow scan cannot see a deleted secret
 - no workflow may declare `pull_request_target`, `workflow_run` or
   `issue_comment`, read off the **parsed trigger keys** so the comment explaining
   why is not itself a violation
-- `.gitleaks.toml` must extend gitleaks' defaults rather than redefine rules, and
-  every `[[allowlists]]` entry must carry a `description` of at least 40
-  characters. An entry with no reason is a deferred disclosure
-- no `.gitleaksignore` may exist — the allowlist is the committed config
-- **the scanner's behaviour, executed**: over a throwaway git repository
-  containing a detectable credential, the scan must find it, must name the rule
-  that fired, must not print the value, and must still find it after the file is
-  deleted. This is a behavioural check, not a `grep`, because a `grep
-  -- --redact` is satisfied by the comment that explains why the flag is
-  mandatory
 - `.github/zizmor.yml` must not ignore or disable `unpinned-uses`, must not carry
   a blanket `ignore: "*"`, and every ignore entry must carry a reason beside it
 - the canary must never appear as a literal anywhere in the tree, and must be
@@ -1776,13 +1736,12 @@ a ~4 KB git repo for the secret scan, a service-shaped tree for the linters, a
 schema substrate for the tenancy proof. It never contains this repository, and
 nothing runs the gate against a modified version of itself.
 
-**The eight behaviours the self-test existed to protect are all still
-protected, and every one was proved able to go RED without a copy:**
+**The behaviours the self-test existed to protect are all still protected, and
+every one was proved able to go RED without a copy:**
 
 | behaviour | how it is proven now | red proof |
 |---|---|---|
-| the secret scan finds a planted secret and never prints it | a ~4 KB throwaway git repo, one planted credential, the real `gitleaks_gate.sh` | `--redact` off makes the same scan print the value |
-| the canary is never committed as a literal | greps the real tree | the same scan, pointed at a one-file fixture, names it and exits 1 |
+| the canary is never committed as a literal | greps the real tree | a planted literal, assembled at runtime so the fixture holds no contiguous string; red on the real tree |
 | the canary suite never prints what it planted | runs the real Go suite, sweeps all its output | a runtime-assembled `t.Log` in the suite; red on the real tree |
 | the Postgres tag agreement | a direct read of `.env.example` and compose | `17` -> `16.6`, the defect that shipped |
 | cluster topology and the connection budget | direct reads of compose and `.env.example` | delete the initdb mount; drop the budget to `4` |
@@ -1794,12 +1753,12 @@ protected, and every one was proved able to go RED without a copy:**
 
 **The honest gap, stated rather than buried:** nothing can now prove the gate is
 *able* to fail. A check nobody has ever seen go red is a claim in a comment. The
-eight behaviours above are what stands in that space, and the price of adding a
+behaviours above are what stands in that space, and the price of adding a
 check from here is that you are the one who has to try to break it.
 
 
 Any `FAIL` exits 1. A `SKIP` is always reported in the summary, never hidden.
-PyYAML, yamllint, zizmor, hadolint and gitleaks are required and are
+PyYAML, yamllint, zizmor and hadolint are required and are
 **bootstrapped by the gate itself**; the seven language toolchains and
 `shellcheck` run when present.
 
