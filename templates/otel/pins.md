@@ -42,6 +42,7 @@ making: see *Why these were checked rather than chosen* below.
 | python | `opentelemetry-instrumentation-fastapi` | 0.65b0 |
 | node / bun | `@opentelemetry/api` | 1.9.1 |
 | node / bun | `@opentelemetry/core`, `.../resources`, `.../sdk-trace-base` | 2.11.0 |
+| node / bun | `@opentelemetry/context-async-hooks` | 2.11.0 |
 | node / bun | `@opentelemetry/semantic-conventions` | 1.38.0 |
 | node / bun | `@opentelemetry/sdk-trace-node` | 2.11.0 |
 | node / bun | `@opentelemetry/exporter-trace-otlp-proto` | 0.222.0 |
@@ -56,7 +57,9 @@ than trust this table:
 | ruby | `billing/Gemfile.lock` (resolved, not the `~>` floor) |
 | elixir | `courier/mix.lock` |
 | python | `muse/uv.lock` |
-| node / bun | `parlor/package.json` |
+| node / bun | `parlor/package.json`, plus `sdk-trace-node@2.11.0`'s own
+  `dependencies`, which pin `@opentelemetry/context-async-hooks` at `2.11.0`
+  exactly |
 | rust | no service in the fleet runs rust yet; the row is the crate's own published version and is **unverified against a real install** — see the caveat below |
 
 ## Why these were checked rather than chosen
@@ -119,6 +122,32 @@ What is *not* a placeholder is the rule each version encodes:
 - **Batch processors, never simple ones, in any production path.** One export
   per span makes the collector the bottleneck and drops spans on a slow
   network.
+- **A 2.x SDK is not the 1.x SDK with a bigger number, and the removals are the
+  reason this file is a table rather than a comment.** Three calls the 1.x docs
+  teach do not exist on these versions, and **two of the three fail silently
+  rather than loudly**, which is what makes them worth a row each:
+
+  | removed in 2.x | replacement | how it fails |
+  |---|---|---|
+  | `provider.addSpanProcessor(p)` | `spanProcessors: [p]` in the constructor | TypeError at boot — loud |
+  | `provider.register({...})` | `trace.setGlobalTracerProvider`, `propagation.setGlobalPropagator`, `context.setGlobalContextManager` | TypeError at boot — loud |
+  | `new BatchSpanProcessor({ exporter })` | `new BatchSpanProcessor(exporter)` | **silently**, on the first export |
+  | `loggerProvider.addLogRecordProcessor(p)` | `processors: [p]` in the constructor | TypeError at boot — loud |
+
+  The `BatchSpanProcessor` row is the one to read twice, because it is the only
+  one that is not a compile error and because it is **not** symmetrical:
+  `BatchLogRecordProcessor` in `sdk-logs@0.222.0` still takes an options object
+  with an `exporter:` property. Read out of the published packages on
+  2026-10-06, not from memory — see *What the gate checks* for how far the gate
+  reaches on this.
+- **A 1.x `register()` installed a context manager as a SIDE EFFECT, so dropping
+  the call without replacing it is a defect nobody sees.** Without a global
+  context manager `context.active()` is `ROOT_CONTEXT` for the life of the
+  process, `context.with()` is a no-op that still runs its callback, and every
+  span started under it is a **root** span: a fresh trace id, no parent, and a
+  correctly-populated span in the trace view. That is
+  `@opentelemetry/context-async-hooks`'s whole job, and it is a row here for
+  that reason rather than because a snippet happened to import it.
 - **Check that a version EXISTS before you write it down.** Every fiction in the
   previous table was plausible to type and wrong to install. `curl -o /dev/null
   -w '%{http_code}' https://registry.npmjs.org/<pkg>/<version>` answering `404`
@@ -132,6 +161,24 @@ What is *not* a placeholder is the rule each version encodes:
 - it contains at least one install line naming a version — a snippet with no
   `go get` / `bun add` etc. is a snippet nobody can install, and
 - it never contains a floating `@latest` or a bare `^`/`~` with no version.
+
+**And, for node specifically, `templates/otel/node/traceparent.test.mjs` asserts
+that `hono.ts.snippet` calls none of the four APIs the table above lists as
+removed.** It reads the snippet's source, strips comments first, and fails on
+any of them — plus it requires the two globals and the context manager to be
+present. That test is EXECUTED by `tests/validate.sh` in the static phase, so it
+runs under both `--static-only` and `--language=node`.
+
+**What that check can and cannot do, stated plainly:** it is a check on the
+SNIPPET'S SOURCE SHAPE, not on the behaviour of an installed SDK. kit vendors no
+OTel tree and installs nothing, so the strongest form of this assertion —
+compile the snippet against the pinned versions and run it — is not available to
+this repository without giving it a network dependency and a lockfile the next
+paragraph explains is deliberate. What a source-shape check does buy is the
+property that matters: every one of these four calls is a **spelling**, and a
+spelling cannot come back by accident. A *new* removal in a later SDK release
+will not be caught until a row is added here, which is the same one-row cost as
+adding a row to the version table above.
 
 **What the gate cannot check, stated plainly rather than implied:** it does not
 resolve these versions against a registry or a module proxy, because that would

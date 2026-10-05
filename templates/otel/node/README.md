@@ -77,6 +77,23 @@ bun test traceparent.test.mjs
 
 `node:test`, `node:assert` and `node:crypto` are all stdlib. Both runners pass on the same `.mjs` with no build step, which is why gateway and parlor (bun) and every node service share one implementation instead of two.
 
+### This suite also gates the snippet
+
+It asserts something about `hono.ts.snippet` as well as about `traceparent.mjs`:
+that the snippet calls **none** of the APIs SDK 2.x removed, and that it sets the
+tracer provider, the W3C propagator and an **enabled** context manager
+explicitly. Those are the calls a service copies without ever compiling them —
+`provider.addSpanProcessor(`, `new BatchSpanProcessor({ exporter })`,
+`loggerProvider.addLogRecordProcessor(`, `provider.register(` — and three of the
+four used to be in the snippet this repository ships.
+
+The check reads the snippet's **source**, with comments stripped first, so a
+`//` line explaining the removed call cannot satisfy it. That is a real limit and
+it is the reason the forbidden list is a small table in the test file: adding a
+row is how a future SDK removal gets covered. See [../pins.md](../pins.md) for
+what each row is, and why `context.setGlobalContextManager` is the one that
+matters most.
+
 The suite needs **no dependencies and no network** — that is the point of the
 codec. If it ever needs a `go mod download` or a `bundle install`, this
 template has grown a dependency and kit has stopped being config-only.

@@ -2,6 +2,37 @@
 
 ### Fixed
 
+- **`templates/otel/node/hono.ts.snippet` called four APIs the versions
+  `pins.md` pins have removed, and one of them failed in total silence.**
+  `provider.addSpanProcessor(...)` and `loggerProvider.addLogRecordProcessor(...)`
+  do not exist in SDK 2.x (processors go in the constructor, as `spanProcessors:`
+  on the traces side and `processors:` on the logs side); `new
+  BatchSpanProcessor({ exporter })` is not that package's constructor at all,
+  which is `(exporter, config)` — read as JavaScript it builds a processor whose
+  `_exporter` is an object and dies on the first export rather than at boot;
+  and `provider.register({ propagator })` is `NodeTracerProvider`'s method, not
+  `BasicTracerProvider`'s. **The expensive one is the last:** `register()` used
+  to install a context manager as a side effect, so the snippet installed none,
+  which made every `context.with(...)` in its request path a no-op that still
+  runs its callback. The span is exported with the right `service.name`, nothing
+  downstream attributes to the request, and a service copying this template
+  emits spans that look entirely healthy and carry no trace context. The snippet
+  now sets the three globals explicitly and installs
+  `AsyncLocalStorageContextManager().enable()` — hence
+  `@opentelemetry/context-async-hooks@2.11.0` as a new `pins.md` row, and hence
+  no `@opentelemetry/sdk-trace-node`, whose `register()` this no longer uses.
+
+- **The SDK-2.x removal class is now GATED, not just fixed.** Three new tests in
+  `traceparent.test.mjs` read `hono.ts.snippet`'s source with comments stripped
+  and fail on any of the removed spellings, require the three globals and an
+  **enabled** context manager, and assert `register()` on a receiver *derived*
+  from the snippet's own `new BasicTracerProvider(` assignment rather than a
+  hardcoded name. The forbidden list is a table so a fifth removal is one row,
+  and a fourth test runs a planted 1.x call against every pattern so a row whose
+  regex cannot fire is caught as decoration rather than passing forever. The
+  suite is executed by `tests/validate.sh` in the static phase, so this runs
+  under both `--static-only` and `--language=node`.
+
 - **`templates/otel/node` dropped every inbound traceparent, silently.**
   `propagation.extract(ctx, headers)` with a WHATWG `Headers` returns the context
   unchanged, because `@opentelemetry/api`'s default text-map getter is plain
