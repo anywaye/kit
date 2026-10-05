@@ -269,11 +269,26 @@ export function forwardTracestate(value) {
  * raw keys will not, and being strict here breaks traces in production for no
  * reason.
  *
- * @param {Record<string, string>} headers
+ * A WHATWG `Headers` IS ALSO ACCEPTED, and the reason is measured rather than
+ * defensive. `Headers` keeps its entries in an internal list and exposes them
+ * through `.get()`; `Object.entries(new Headers())` is `[]` and
+ * `headers["traceparent"]` is `undefined`. So the property walk below returns
+ * `null` for EVERY key on a `Headers`, and the caller starts a brand new trace
+ * while every span it exports looks perfectly healthy. The same shape of bug is
+ * in `@opentelemetry/api`'s default text-map getter, which is
+ * `get(carrier, key) { return carrier[key] }` — see the `headersGetter` beside
+ * this file in `hono.ts.snippet`, and the assertion in `traceparent.test.mjs`
+ * that runs both shapes against a real `Headers`.
+ *
+ * The `.get` branch is therefore FIRST: an object carrying a callable `get` is
+ * read through it, and only a carrier without one falls to the property walk.
+ *
+ * @param {Record<string, string> | { get(name: string): string | null }} headers
  * @param {string} name
  * @returns {string | null}
  */
 export function header(headers, name) {
+  if (typeof headers?.get === "function") return headers.get(name) ?? null;
   const direct = headers[name];
   if (direct !== undefined) return direct;
   const lowered = name.toLowerCase();
