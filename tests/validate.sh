@@ -302,7 +302,6 @@ kit_total() {
     "$((ms / 1000))" "$((ms % 1000))" "$_pf_tag" >>"$_PROFILE"
 }
 
-
 # The gate installs its own dependencies. Not `shellcheck` and not `node` —
 # those stay optional and reported as SKIPs when absent — but PyYAML, without
 # which not one check in this file can run, and yamllint, which kit's own
@@ -913,7 +912,6 @@ version_at_least() {
   return 0
 }
 
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # the fingerprint cache — P0-3 and P0-4, wired to one real tier
@@ -1304,7 +1302,6 @@ if [ "$RUN_STATIC" -eq 1 ]; then
     printf '%s' "$rendered" | "$PY" -c 'import sys, yaml; yaml.safe_load(sys.stdin.read())'
   }
 
-
   # Dockerfile rules hadolint does not cover. Defined here rather than inline so
   # the section above reads as a list of assertions.
   docker_rules() {
@@ -1370,61 +1367,6 @@ for name in sorted(os.listdir(docker_dir)):
     for i, ln in enumerate(lines, 1):
         if re.match(r"^\s*ADD\s", ln, re.I):
             problems.append(f"{rel}:{i}: ADD — use COPY, which cannot fetch a URL")
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
-
-  # Every template's STRICTNESS NOTES must state the non-root guarantee, in the
-  # final stage, in the file itself. Parsed as the leading comment block rather
-  # than grepped for a keyword: all seven files mention "root" somewhere in
-  # prose, so a grep was satisfied by a line about root-owned directories while
-  # the actual guarantee went unstated.
-  docker_notes() {
-    "$PY" - "$ROOT" <<'PY'
-import os
-import re
-import sys
-
-root = sys.argv[1]
-docker_dir = os.path.join(root, "docker")
-
-problems = []
-for name in sorted(os.listdir(docker_dir)):
-    if not name.startswith("Dockerfile."):
-        continue
-    rel = f"docker/{name}"
-    lines = open(os.path.join(docker_dir, name), encoding="utf-8").read().splitlines()
-
-    # The leading comment block, stopping at the first instruction.
-    head = []
-    for ln in lines:
-        if not ln.lstrip().startswith("#"):
-            break
-        head.append(ln)
-
-    if not head:
-        problems.append(f"{rel}: no STRICTNESS NOTES header comment")
-        continue
-
-    body = "\n".join(head).lower()
-    # `non-root`, `nonroot`, or `uid 1000`-style: the claim is that the process
-    # is not uid 0, however the file happens to word it. What it must NOT accept
-    # is a note that only talks about root-owned files.
-    claims_non_root = re.search(r"non-?root", body) is not None
-    if not claims_non_root:
-        problems.append(
-            f"{rel}: its STRICTNESS NOTES do not state that the final stage runs "
-            f"non-root. Every one of these templates does run non-root (the check "
-            f"above proves it), but a reader deciding whether to adopt the file "
-            f"reads the notes, not the gate"
-        )
-    if "strictness" not in body:
-        problems.append(
-            f"{rel}: the header comment has no STRICTNESS NOTES block, so a future "
-            f"contributor has nothing saying what is enforced and why"
-        )
 
 if problems:
     sys.exit("; ".join(problems))
@@ -1515,7 +1457,6 @@ if problems:
     sys.exit("; ".join(problems))
 PY
   }
-
 
   section 'static: every artifact parses'
 
@@ -1959,7 +1900,6 @@ python|traceparent.py|test_traceparent.py|fastapi.py.snippet|README.md
 node|traceparent.mjs|traceparent.test.mjs|hono.ts.snippet|README.md
 OTEL
 
-
   # -------------------------------------------------------------------------
   section 'static: templates/database/tenancy — every artifact is present'
   # The account boundary is five files and six drivers, and the six are the reason
@@ -2080,68 +2020,6 @@ OTEL
   else
     report SKIP 'kamal + kamal-backup + ruby not installed  (the generated config was validated by nothing)'
   fi
-
-  # A snippet that names no version is a snippet nobody can install: the reader
-  # copies a floating major, gets three minors of drift, and files a bug
-  # against a version they chose. And a snippet that vendors is a snippet that
-  # has turned kit into a dependency — the rule AGENTS.md states as "no
-  # dependencies, ever", checked rather than trusted.
-  snippet_check() {
-    "$PY" - "$ROOT" <<'PY'
-import os
-import re
-import sys
-
-root = sys.argv[1]
-snippets = {
-    "go": "otelhttp.go.snippet",
-    "ruby": "rack_middleware.rb.snippet",
-    "elixir": "phoenix_telemetry.ex.snippet",
-    "rust": "otel_client.rs.snippet",
-    "python": "fastapi.py.snippet",
-    "node": "hono.ts.snippet",
-}
-
-# Each language names its installer in a different verb; the point is that one
-# of them appears, not which.
-install = re.compile(
-    r"\b(go get|bun add|npm add|yarn add|bundle add|mix deps\.get"
-    r"|pip install|uv add|cargo add)\b"
-)
-# A version is a digit. `@latest`, `^1.2.3` and a bare `^` are all rejected
-# below for different reasons, but all of them fail this.
-versioned = re.compile(r"[=<>@~^ ]\s*v?\d+\.\d+")
-
-problems = []
-for lang, name in snippets.items():
-    path = os.path.join(root, "templates", "otel", lang, name)
-    if not os.path.isfile(path):
-        continue  # absence is the artifact-presence check's job, not a second failure
-    body = open(path, encoding="utf-8").read()
-
-    if not install.search(body):
-        problems.append(f"otel/{lang}/{name}: no install line — a reader cannot install from this")
-
-    # Floating-version scan runs over COMMENT LINES INCLUDED, unlike the
-    # composer's no-literal-URL rule. A snippet puts its install commands in a
-    # comment block precisely so a reader copies one line and the file is still
-    # valid in a repo with no OTel dep; stripping comments first would have
-    # thrown those away and the check would have passed a snippet with no
-    # install line at all — which is what it did on its first run.
-    for lineno, line in enumerate(body.splitlines(), 1):
-        if "@latest" in line or "@main" in line or "@master" in line:
-            problems.append(f"otel/{lang}/{name}:{lineno}: floating ref: {line.strip()[:60]}")
-
-    # A version is a digit somewhere in the body. Prose mentioning "no
-    # dependencies" must not satisfy it, so the match is anchored to the
-    # characters that actually introduce a version.
-    if not versioned.search(body):
-        problems.append(f"otel/{lang}/{name}: no versioned dependency anywhere")
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
 
   # -------------------------------------------------------------------------
   # The canary harness's Go sources must PARSE, and must parse in Go's own
@@ -2278,7 +2156,6 @@ SNIPPETS
     report SKIP 'otel/node/hono.ts.snippet  (node not installed)'
   fi
 
-
   # -------------------------------------------------------------------------
   # The seven Dockerfiles.
   #
@@ -2335,7 +2212,6 @@ SNIPPETS
   section 'static: every Dockerfile runs non-root on a pinned base'
   check 'docker/Dockerfile.*  (non-root final stage, no :latest, no ADD)' docker_rules
 
-
   # -------------------------------------------------------------------------
   # Every image starts through the entrypoint, and this asserts the WIRING rather
   # than the presence of the file.
@@ -2377,10 +2253,10 @@ SNIPPETS
   # until the other three artifacts exist.
   section 'static: every language ships all four artifacts'
   kit_languages() {
-    # Kept in step with ci_check's `languages` list below. Both read the CI
-    # workflow's `language` gate job -- the case statement that rejects an
-    # unrecognised value -- so there is exactly one place to add a language and
-    # the workflow cannot claim one the tree does not have.
+    # The one list of languages: it reads the CI workflow's `language` gate job
+    # -- the case statement that rejects an unrecognised value -- so there is
+    # exactly one place to add a language and the workflow cannot claim one the
+    # tree does not have.
     #
     # It USED to read the `options:` list under the input. That key is not
     # legal under `workflow_call`; GitHub rejected the whole file, and every
@@ -2449,408 +2325,8 @@ PY
     done <<<"$_kit_langs"
   fi
 
-
   # -------------------------------------------------------------------------
   section 'static: compose — the observability chokepoint'
-
-  # -------------------------------------------------------------------------
-  # THE REDACTION BOUNDARY, DERIVED FROM core's SCHEMAS.
-  #
-  # This is the check that makes "kit's collector is the enforcement point" a
-  # fact rather than an intention. core owns the allowlist
-  # (schemas/telemetry/traces.schema.json, metrics.schema.json, logs.schema.json
-  # and redaction.schema.json); this repo's collector config is supposed to be a
-  # projection of it. A projection that disagrees is not a style difference: it
-  # is either an attribute core says may not be recorded, shipping anyway, or an
-  # attribute a service is allowed to record being dropped on the floor.
-  #
-  # The comparison is BIDIRECTIONAL on purpose, and that is the part worth
-  # defending:
-  #
-  #   core -> kit   every attribute name core allows on a signal appears in that
-  #                 signal's `redaction/*` allowed_keys. A missing one is a
-  #                 silently-attribute-less span, which is the failure nobody
-  #                 notices because the span still arrives.
-  #   kit -> core   every name in allowed_keys is either on core's list for that
-  #                 signal or on core's fleet-wide redaction allowlist, and
-  #                 carries no word core's schema forbids. An extra one is a
-  #                 leak with a check attached to it.
-  #
-  # One direction would be a check that passes on an empty allowlist. Both
-  # directions together is a check that fails on a wrong one.
-  #
-  # A DERIVED rather than a hand-maintained claim: the comparison is computed
-  # from core's files on disk at gate time, so the day core changes an allowlist
-  # the gate goes red here and names the name. The resolved core commit is
-  # printed, because "it passed" against a spec from six weeks ago is not the
-  # same statement as "it passed".
-  #
-  # core is a sibling checkout, not a vendored copy (AGENTS.md: `../core` is a
-  # read-only reference; kit does not depend on it). When it is absent this
-  # check SKIPs loudly and the summary says so — a security check that is
-  # silently absent is worse than one that is loudly absent, and hiding the skip
-  # is what makes it silently absent.
-  core_repo() {
-    local cand
-    if [ -n "${KIT_CORE:-}" ]; then
-      printf '%s' "$KIT_CORE"
-      return 0
-    fi
-    for cand in "$ROOT/../core" "$ROOT/../../core" "$ROOT/../cafaye/core"; do
-      if [ -f "$cand/schemas/telemetry/traces.schema.json" ]; then
-        (cd "$cand" && pwd)
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  core_check() {
-    local core
-    core="$(core_repo)" || {
-      echo "core not found: set KIT_CORE=<path to a core checkout>"
-      return 1
-    }
-    "$PY" - "$ROOT" "$core" <<'PY'
-import json
-import os
-import re
-import subprocess
-import sys
-
-root, core = sys.argv[1], sys.argv[2]
-
-def load(path):
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def core_commit(path):
-    try:
-        return subprocess.run(
-            ["git", "-C", path, "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except Exception:
-        return "unknown"
-
-
-sch = f"{core}/schemas/telemetry"
-traces = load(f"{sch}/traces.schema.json")
-metrics = load(f"{sch}/metrics.schema.json")
-logs = load(f"{sch}/logs.schema.json")
-redaction = load(f"{core}/examples/valid/telemetry/redaction.json")
-
-# core's per-signal attribute sets, read out of the schemas rather than
-# transcribed here. A transcription is a second copy of a contract, and the
-# whole point of this check is that there is only one.
-core_traces = set(traces["$defs"]["tracesAttributes"]["properties"])
-core_metrics = set(metrics["$defs"]["measurementAttributes"]["properties"])
-core_logs = set(logs["$defs"]["logsAttributes"]["properties"])
-core_resource = set(traces["$defs"]["resource"]["properties"])
-core_fleet = set(redaction["allowed"])
-core_prohibited = set(redaction.get("prohibited", []))
-# The content-word vocabulary is a `not.pattern` list inside
-# redaction.schema.json, not prose. Read it out of the schema itself so the
-# vocabulary this check enforces is core's and cannot drift from it.
-rs = load(f"{sch}/redaction.schema.json")
-# core writes each pattern as `(?i)word`. Concatenated as-is they would be
-# `(?i)a|(?i)b`, and Python rejects a global flag anywhere but position 0 — so
-# the flag is stripped and applied once, which is also what it means.
-core_content_words = [
-    re.sub(r"^\(\?i\)", "", p["pattern"])
-    for p in rs["properties"]["allowed"]["items"]["not"]["anyOf"]
-    if "pattern" in p
-]
-content_re = re.compile("|".join(f"(?:{w})" for w in core_content_words), re.I)
-
-import yaml
-
-with open(f"{root}/templates/compose/otel-collector.yml", encoding="utf-8") as fh:
-    col = yaml.safe_load(fh)
-
-problems = []
-# The per-signal allowlists, and the pipelines that carry each signal.
-allowed = {
-    name.rsplit("/", 1)[-1].replace("cafaye_", ""): set(cfg.get("allowed_keys") or [])
-    for name, cfg in (col.get("processors") or {}).items()
-    if name.startswith("redaction/")
-}
-expected = {"traces": core_traces, "metrics": core_metrics, "logs": core_logs}
-for signal, core_set in expected.items():
-    got = allowed.get(signal)
-    if got is None:
-        problems.append(f"no redaction/cafaye_{signal} processor: signal is not allowlisted")
-        continue
-    missing = sorted(core_set - got)
-    if missing:
-        problems.append(
-            f"redaction/cafaye_{signal} drops attributes core allows on {signal}: "
-            + ", ".join(missing)
-        )
-    extra = sorted(got - core_set)
-    if extra:
-        # An extra name is only legitimate if core's fleet-wide redaction
-        # allowlist carries it — that is the `llm.*` half, which core's
-        # redaction schema allows and whose absence from the per-signal schema
-        # is core's own gap (raised in kit's report as a DECISION NEEDED).
-        unbacked = [n for n in extra if n not in core_fleet]
-        if unbacked:
-            problems.append(
-                f"redaction/cafaye_{signal} allows attributes core does not: "
-                + ", ".join(unbacked)
-            )
-    for name in sorted(got):
-        if content_re.search(name):
-            problems.append(
-                f"redaction/cafaye_{signal} allows {name!r}, whose name contains a "
-                f"word core's redaction schema forbids on an allowed name"
-            )
-    for name in sorted(got & core_prohibited):
-        problems.append(
-            f"redaction/cafaye_{signal} allows {name!r}, which core's redaction "
-            f"schema names as prohibited"
-        )
-
-# The three signals must all be present. Two of three is a partial boundary and
-# a partial boundary reads as a whole one.
-if sorted(allowed) != ["logs", "metrics", "traces"]:
-    problems.append(f"redaction processors are {sorted(allowed)}; a signal with no boundary reads as one with")
-
-# `allow_all_keys: true` disables the allowlist entirely while still looking
-# configured. It is the single most dangerous line in the file and it is worth
-# its own check rather than a footnote.
-for name, cfg in (col.get("processors") or {}).items():
-    if name.startswith("redaction/") and cfg.get("allow_all_keys") is not False:
-        problems.append(
-            f"{name}: allow_all_keys must be explicitly false — true disables the "
-            f"allowlist while still looking configured"
-        )
-
-# A resource attribute is NOT a span attribute. core's whole cardinality
-# argument is that identity lives on the resource and is exempt from the 2000
-# cap; a resource name smuggled into allowed_keys is identity moved back onto
-# the measurement. core asserts the two lists are disjoint, and so does this.
-resource_leaks = sorted((allowed.get("metrics") or set()) & core_resource)
-if resource_leaks:
-    problems.append(
-        "redaction/cafaye_metrics allows resource attributes as measurement "
-        "attributes: " + ", ".join(resource_leaks)
-    )
-
-# THE RESOURCE EXEMPTION, and this check is the reason the config carries a
-# stash/restore pair at all.
-#
-# The redaction processor's `allowed_keys` and `ignored_keys` are BOTH flat
-# lists, and they are applied to resource attributes and measurement attributes
-# by the same rule - so `ignored_keys: [tenant_id]` exempts the resource AND
-# every data point, and the data point is exactly what core's metrics schema
-# prohibits. Verified against the pinned image rather than assumed, because this
-# is the one place an assumption is completely invisible: the pipeline runs, the
-# dashboard renders, and the breakdown quietly undercounts.
-#
-# WHICH resource attributes can safely go in `ignored_keys` is DERIVED from
-# core, not declared here. A name is safe exactly when core does not also list it
-# on a signal's allowlist. `service.name` qualifies: it is never a measurement
-# attribute, so exempting it cannot weaken the metrics boundary. `tenant_id` and
-# `account_id` are the names core puts in BOTH places, and they are the ones
-# that have to go through the stash.
-#
-# Four things are asserted, and (2) and (3) are the ones that stop the exemption
-# being the bug:
-#   1. every resource attribute core defines is either safely ignorable or
-#      stashed - otherwise it is stripped and the per-tenant totals are lost;
-#   2. no name core lists on BOTH a resource and a signal allowlist appears in
-#      ignored_keys - that single entry is what exempts a data point too;
-#   3. an ignored name core does not define anywhere is reported, because an
-#      exemption nobody reasoned about is how a prohibited identifier gets back
-#      onto a measurement in six months;
-#   4. the stash/restore bracket the redaction processor, positionally.
-pipelines = (col.get("service") or {}).get("pipelines") or {}
-
-# The names that are BOTH a resource attribute and PROHIBITED on a measurement,
-# read out of the `not` clause core already wrote for exactly this purpose.
-#
-# The first version derived this as "appears in the resource schema AND in any
-# signal's allowlist", and that put `service.name` in the set — because core's
-# log schema permits `service.name` as an ATTRIBUTE (a log store fanning several
-# services into one stream needs it as a label). Which is not the hazard at all.
-# The hazard is a name core REFUSES on a measurement, and core refuses those by
-# name in a `not` clause: tenant_id, user_id, account_id, request_id, trace_id,
-# span_id, session_id, message_id, notification_id, email, error.message,
-# error.stacktrace, url.full, url.path. Read from there, so the answer is core's
-# list rather than an inference from file layout.
-prohibited_on_measurement = set()
-for clause in metrics["$defs"]["measurementAttributes"]["not"]["anyOf"]:
-    for key in clause.get("required", []):
-        prohibited_on_measurement.add(key)
-both_places = core_resource & prohibited_on_measurement
-
-# The stash is read out of the config's OWN transform statements rather than
-# assumed to cover a fixed list, so a stash that stops handling `account_id`
-# fails here instead of quietly stripping it.
-stash_src = ""
-for cfg in (col.get("processors") or {}).values():
-    if not isinstance(cfg, dict):
-        continue
-    for key in ("trace_statements", "log_statements", "metric_statements"):
-        for group in cfg.get(key) or []:
-            stash_src += " ".join(str(s) for s in (group or {}).get("statements") or [])
-stashed = {name for name in both_places if f'attributes["{name}"]' in stash_src}
-# `cafaye.stashed.<name>` is a PRIVATE name this config invents, and it is the
-# one entry in ignored_keys that core has never heard of. It is allowed, and
-# only because the stash/restore pair is asserted to bracket the redaction
-# processor below and the restore deletes it — a private name that outlived the
-# restore would be an attribute in every export, and the unknown-ignored-keys
-# check below would otherwise (correctly) report it.
-private_stash = {f"cafaye.stashed.{n}" for n in both_places}
-
-for signal in ("traces", "metrics", "logs"):
-    proc = f"redaction/cafaye_{signal}"
-    cfg = (col.get("processors") or {}).get(proc) or {}
-    ignored = set(cfg.get("ignored_keys") or [])
-
-    missing = sorted(core_resource - ignored - stashed)
-    if missing:
-        problems.append(
-            f"{proc}: resource attributes core defines are neither ignored nor "
-            f"stashed, so they are stripped: {', '.join(missing)}. Strip "
-            f"service.name and the fleet dashboard has nothing to partition by; "
-            f"strip tenant_id and the per-tenant totals core requires are lost, "
-            f"silently."
-        )
-    if not stashed:
-        problems.append(
-            f"{proc}: no resource attribute core PROHIBITS on a measurement is "
-            f"stashed, so tenant_id/account_id are either stripped from every "
-            f"resource or exempted on every data point. core's metrics schema "
-            f"requires the first to happen not to and the second not to happen "
-            f"at all."
-        )
-    both_in_ignored = sorted(ignored & both_places)
-    if both_in_ignored:
-        problems.append(
-            f"{proc}: ignored_keys contains {', '.join(both_in_ignored)}, which "
-            f"core lists as a resource attribute AND as a prohibited measurement "
-            f"attribute. ignored_keys is one flat list applied to both, so this "
-            f"exempts the data point too - the cardinality bomb core's metrics "
-            f"schema exists to prevent. Use the stash/restore pair instead."
-        )
-    unknown = sorted(ignored - core_resource - private_stash)
-    if unknown:
-        problems.append(
-            f"{proc}: ignored_keys names {', '.join(unknown)}, which core's "
-            f"resource schema does not define. An exemption nobody reasoned "
-            f"about is how a prohibited identifier gets back onto a measurement."
-        )
-
-    # THE CARRIER HAS TO SURVIVE THE PROCESSOR THAT READS IT, and this is the
-    # check that says so. Being *stashed* is not the same as being *exempted*:
-    # the stash writes `cafaye.stashed.tenant_id`, the redaction processor
-    # deletes every attribute it does not exempt, and the restore then reads a
-    # name that no longer exists. The pipeline runs, the trace arrives, the
-    # dashboard renders — and every trace is missing the tenant_id on its
-    # resource, which is per-tenant totals core's metrics schema exists to
-    # produce.
-    #
-    # The three processors are one idea written out three times, and they had
-    # drifted: metrics carried the private names and traces and logs did not.
-    # The consequence was that the metric view had per-tenant totals and the
-    # trace and log views silently did not. Found by running the stack and
-    # reading a span back out of Tempo — every other check passed, because from
-    # the config alone `tenant_id` genuinely is stashed.
-    unexempted = sorted(private_stash - ignored)
-    if unexempted:
-        problems.append(
-            f"{proc}: ignored_keys is missing {', '.join(unexempted)}, which is "
-            f"the carrier the stash writes and the restore reads. The redaction "
-            f"processor DELETES every attribute it does not exempt, so the stash "
-            f"is undone before the restore can act on it: tenant_id and "
-            f"account_id arrive on no resource at all, silently, while the "
-            f"pipeline reports success."
-        )
-
-# ...and the three lists must agree, because three hand-copied lists are three
-# places for one of them to drift. Equality across all three, reported against
-# the union so the message names what is missing and what is extra without
-# having to first work out which of the three is the odd one out — and without
-# that subtlety, since picking a reference list to compare against is exactly
-# how a check like this comes to ignore the very case it was added for.
-_ignored_by_signal = {
-    signal: set(
-        ((col.get("processors") or {}).get(f"redaction/cafaye_{signal}") or {}).get(
-            "ignored_keys"
-        )
-        or []
-    )
-    for signal in ("traces", "metrics", "logs")
-}
-_union = set().union(*_ignored_by_signal.values())
-_intersection = set.intersection(*_ignored_by_signal.values())
-if _union != _intersection:
-    detail = "; ".join(
-        f"{signal} {'lacks' + repr(sorted(_union - keys)) if _union - keys else 'extras' + repr(sorted(keys - _union))}"
-        for signal, keys in sorted(_ignored_by_signal.items())
-        if keys != _union
-    )
-    problems.append(
-        f"the three redaction processors disagree on ignored_keys: {detail}. All "
-        "three signals get the same resource exemption; one of them drifting is "
-        "how a signal ends up quietly partitioned differently from the other two, "
-        "which is the bug this assertion was added for."
-    )
-
-# The stash and the restore must bracket the redaction processor in EVERY
-# pipeline, in that order. Checked positionally, because a pipeline that
-# restores first is a pipeline that exports the private name.
-for signal, pipe in pipelines.items():
-    procs = pipe.get("processors") or []
-    try:
-        stash = procs.index("transform/cafaye_resource_stash")
-        restore = procs.index("transform/cafaye_resource_restore")
-        # Named `boundary_at`, not `redaction`: `redaction` is the loaded
-        # core policy document, and shadowing it with an integer means the
-        # summary line at the end of this script dies with a TypeError on
-        # `redaction['version']` — after every check has already reported. A
-        # check whose failure mode is a traceback is a check that reports the
-        # wrong thing at the worst possible moment.
-        boundary_at = next(i for i, p in enumerate(procs) if p.startswith("redaction/"))
-    except (ValueError, StopIteration):
-        problems.append(
-            f"{signal} pipeline: the resource stash/restore pair is missing or "
-            f"incomplete — without it, tenant_id is stripped from the resource"
-        )
-        continue
-    if not (stash < boundary_at < restore):
-        problems.append(
-            f"{signal} pipeline: order is {procs}. It must be stash < redaction < "
-            f"restore; the other way round exports the private stash name instead "
-            f"of tenant_id."
-        )
-
-# Every spanmetrics dimension is a trace attribute the allowlist keeps. A
-# dimension the redaction processor has already stripped produces a metric with
-# an always-empty label: a dashboard column that is permanently blank, which
-# looks like "no traffic" and is really "your filter ran first".
-conn = (col.get("connectors") or {}).get("spanmetrics") or {}
-for dim in conn.get("dimensions") or []:
-    name = dim.get("name") if isinstance(dim, dict) else dim
-    if name not in (allowed.get("traces") or set()):
-        problems.append(
-            f"spanmetrics dimension {name!r} is not in redaction/cafaye_traces' "
-            f"allowed_keys, so the metric's label will always be empty"
-        )
-
-commit = core_commit(core)
-if problems:
-    sys.exit("; ".join(problems))
-print(f"derived from core@{commit} (spec {redaction['version']})")
-PY
-  }
-
-
 
   compose_check() {
     "$PY" - "$ROOT" <<'PY'
@@ -2875,11 +2351,9 @@ if not services:
 # PROFILE exists so a constrained machine can opt out, and the profile is the
 # explicit spelling rather than the default: `bin/dev up` alone brings up
 # postgres, nats, redis and the collector, and `KIT_DEV_PROFILES=observability
-# bin/dev up` brings up the stores too. The check that the profile and the
-# default AGREE is `dev_escape_hatch_check`, which executes bin/dev with the
-# variable empty; the one that the backends are inside the profile at all is
-# `backing_check` below. They are required HERE so that deleting a store cannot
-# be half-done: a service that adopts the stack and loses one of them finds out.
+# bin/dev up` brings up the stores too. They are required HERE so that deleting
+# a store cannot be half-done: a service that adopts the stack and loses one of
+# them finds out.
 #
 # It was four. There was a metrics backend here, and it cost 130s of readiness
 # budget per cold start against a 180s deadline for the whole stack, so it went
@@ -2950,89 +2424,6 @@ if problems:
 PY
   }
   check 'templates/compose/docker-compose.yml  (pinned, healthy, parameterized)' compose_check
-
-  # The backing services. Grafana, Loki and Tempo are AGPL-3.0 and are shipped
-  # UNMODIFIED, which is the condition the licence cares about and the one this
-  # check can actually hold: no `build:` (a build is a fork), no image from a
-  # cafaye-owned registry, no volume overlaying anything into the vendor's own
-  # tree. Configuration is fine and is what the flags are; a modified binary is
-  # not, and `build:` is the only way that gets here.
-  #
-  # It was four, and the fourth went because it cost 130s of readiness budget per
-  # cold start against a 180s deadline for the whole stack. A licence check that
-  # names a backend the tree does not ship is a check reporting on a container
-  # nobody can pull, so the name went with it rather than being left to fail.
-  #
-  # They are also bounded, because a dev machine running six services plus three
-  # more needs bounded memory or the whole thing gets killed and blamed on
-  # something else.
-  backing_check() {
-    "$PY" - "$ROOT" <<'PY'
-import sys
-
-import yaml
-
-root = sys.argv[1]
-with open(f"{root}/templates/compose/docker-compose.yml", encoding="utf-8") as fh:
-    doc = yaml.safe_load(fh)
-services = doc.get("services") or {}
-
-BACKING = {
-    "grafana": "grafana/grafana",
-    "loki": "grafana/loki",
-    "tempo": "grafana/tempo",
-}
-problems = []
-
-for name, upstream in BACKING.items():
-    svc = services.get(name)
-    if not isinstance(svc, dict):
-        problems.append(f"missing service: {name}")
-        continue
-    if "build" in svc:
-        problems.append(
-            f"{name}: has a build: stanza, which is a fork. AGPL-3.0 covers the "
-            f"Grafana SERVER; shipping it unmodified is the condition, and "
-            f"rebuilding the image is how that condition gets broken quietly."
-        )
-    image = svc.get("image") or ""
-    if not image.startswith(upstream + ":"):
-        problems.append(
-            f"{name}: image {image!r} is not an unmodified upstream {upstream} image"
-        )
-    if not svc.get("healthcheck"):
-        problems.append(f"{name}: no healthcheck, so `up --wait` cannot gate on it")
-    if not svc.get("mem_limit"):
-        problems.append(
-            f"{name}: no mem_limit. Six services plus three more on one laptop "
-            f"needs a bound, or the stack is killed and the cause is attributed "
-            f"to whatever was running when the machine ran out of memory."
-        )
-    profiles = svc.get("profiles") or []
-    if "observability" not in profiles:
-        problems.append(
-            f"{name}: not in the `observability` profile. The three backends are "
-            f"the expensive half of the stack, and an escape hatch that does not "
-            f"exist is not an escape hatch — but they must still be what the "
-            f"DEFAULT bin/dev path brings up, which is a property of bin/dev, "
-            f"not of the profile."
-        )
-
-# The collector is NOT in that profile, deliberately: it is the default value
-# of <SERVICE>_OTEL_ENDPOINT, so a service with nothing switched on has
-# somewhere to send. Without the collector running, a service's exporter has a
-# dead endpoint, and the collector is what makes that dead endpoint cheap.
-if "observability" in ((services.get("otel-collector") or {}).get("profiles") or []):
-    problems.append(
-        "otel-collector is in the `observability` profile, so a developer who "
-        "turns the backends off also loses the endpoint every service points at "
-        "by default"
-    )
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
 
   # The port range. kit-02 was moving the stack onto a high range so two
   # checkouts — or a developer's own postgres — do not collide; this check is
@@ -3175,76 +2566,6 @@ PY
   }
   check 'compose + bin/dev  (telemetry is never in a readiness path)' readiness_check
 
-
-
-
-
-  # The wiring check that YAML parsing cannot do, and the one that caught a real
-  # bug. otel-collector.yml interpolates ${env:NAME}, which the collector
-  # resolves from ITS OWN process environment. Docker Compose reads .env to
-  # expand ${KIT_*:default} in the compose file, and does NOT inject those into
-  # containers. So a collector config full of ${env:...} against a compose file
-  # with no `environment:` block parses perfectly, passes every check above, and
-  # then the collector exits at startup with an error naming a memory limiter
-  # rather than the missing environment.
-  #
-  # It did. That stack had never run. Asserting the wiring is cheaper than
-  # running docker in the gate, and it fails with a message that names the cause.
-  collector_wiring_check() {
-    "$PY" - "$ROOT" <<'PY'
-import re
-import sys
-
-import yaml
-
-root = sys.argv[1]
-with open(f"{root}/templates/compose/otel-collector.yml", encoding="utf-8") as fh:
-    yaml.safe_load(fh)
-with open(f"{root}/templates/compose/docker-compose.yml", encoding="utf-8") as fh:
-    compose = yaml.safe_load(fh)
-
-problems = []
-
-# Every env-substituted name the collector reads, over the whole document
-# rather than a fixed path: the value can sit at any depth (a processor arg, an
-# exporter's verbosity, an extension endpoint), and a check that only knew the
-# three it was written against would miss the fourth.
-#
-# Comment lines are excluded. A prose example of the syntax — which this file
-# needs, because the whole point of the rule is to state it — otherwise
-# registers as a variable the collector needs, and a check that fails on its own
-# documentation is a check people delete.
-raw = "\n".join(
-    line
-    for line in open(
-        f"{root}/templates/compose/otel-collector.yml", encoding="utf-8"
-    ).read().splitlines()
-    if not line.lstrip().startswith("#")
-)
-needed = set(re.findall(r"\$\{env:([A-Z0-9_]+)\}", raw))
-
-svc = (compose.get("services") or {}).get("otel-collector")
-if not isinstance(svc, dict):
-    problems.append("no otel-collector service to carry the environment")
-else:
-    provided = set(svc.get("environment") or {})
-    for name in sorted(needed - provided):
-        # Assembled rather than an f-string: `${env:NAME}` is not a valid Python
-        # f-string expression, and a check whose failure message raises is a
-        # check that reports the wrong thing at the exact moment it matters.
-        placeholder = "$" + "{env:" + name + "}"
-        problems.append(
-            f"otel-collector.yml reads {placeholder} but docker-compose.yml does "
-            f"not pass {name} into the container; it resolves empty and the "
-            f"collector refuses to start"
-        )
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
-
-
   # -------------------------------------------------------------------------
   # THE CONNECTION CONTRACT, ASSERTED AGAINST GENERATED OUTPUT, PER LANGUAGE.
   #
@@ -3272,7 +2593,7 @@ PY
   # driver's, and asserting them by running them would mean standing up a
   # cluster per language. What IS executed is the claim that would be cheap to
   # fake — that each snippet parses in its own language — which is the same split
-  # `snippet_check` and the otel parse loop already make.
+  # the otel and database parse loops already make.
   database_contract_check() {
     "$PY" - "$ROOT" <<'PY'
 import json
@@ -3289,7 +2610,6 @@ if not os.path.isfile(contract_path):
         "them in its own snippet and disagrees with the other five."
     )
 contract = json.load(open(contract_path, encoding="utf-8"))
-
 
 def strip_comments(src, lang):
     """`src` with its COMMENTS removed, per language.
@@ -3348,7 +2668,6 @@ def strip_comments(src, lang):
             # line was; only the comment text goes.
             out.append(line[:i].rstrip())
     return "\n".join(out)
-
 
 required = contract.get("requiredSettings") or []
 pool = contract.get("boundedPool") or {}
@@ -3519,7 +2838,6 @@ if not tenancy:
         "having checked nothing."
     )
 
-
 def strip_sql_comments(src):
     """`src` with its `--` comments removed, per LINE.
 
@@ -3542,13 +2860,11 @@ def strip_sql_comments(src):
             out.append(line[:i].rstrip())
     return "\n".join(out)
 
-
 def read(rel):
     path = os.path.join(root, rel)
     if not rel or not os.path.isfile(path):
         return None, f"{rel} does not exist"
     return open(path, encoding="utf-8").read(), ""
-
 
 problems = []
 
@@ -3834,8 +3150,6 @@ PY
   # -------------------------------------------------------------------------
   # DECISIONS.md EXISTS, AND EVERY REFERENCE TO IT RESOLVES.
 
-
-
   # -------------------------------------------------------------------------
   # THE POSTGRES TAG, IN BOTH DIRECTIONS.
   #
@@ -3937,8 +3251,8 @@ PY
   # THE CLUSTER'S TOPOLOGY, AND EVERY ${env:} IT DEPENDS ON HAS TO REACH THE
   # CONTAINER.
   #
-  # `collector_wiring_check` below holds that rule for the collector, and this is
-  # the same rule for postgres — with a sharper edge, because postgres's inputs
+  # The same rule the collector config is held to, applied to postgres — with a
+  # sharper edge, because postgres's inputs
   # are not endpoint URLs that fail loudly. `KIT_POSTGRES_DATABASES` unset does
   # not stop the container: the official entrypoint creates its default database
   # and reports ready, and the healthcheck passes. What is missing is the four
@@ -4013,7 +3327,7 @@ for name in sorted(read_vars - provided):
         f"the init script reads ${{{name}}} but docker-compose.yml does not pass "
         f"{name} into the container, so it resolves empty and the cluster "
         f"provisions whatever the script's default is rather than what the "
-        f"operator configured. This is the collector_wiring_check rule applied "
+        f"operator configured. This is the collector rule applied "
         f"where the failure is SILENT: postgres still starts, and the missing "
         f"thing is the databases."
     )
@@ -4064,7 +3378,6 @@ if problems:
 PY
   }
   check 'the cluster  (one database + role per service, wired end to end)' cluster_topology_check
-
 
   # -------------------------------------------------------------------------
   # THE CONNECTION BUDGET, AS AN ARITHMETIC IDENTITY rather than a comment.
@@ -4387,101 +3700,6 @@ DBSNIPPETS
   fi
 
   # -------------------------------------------------------------------------
-  # bin/dev's escape hatch must actually WORK, and "must work" is a claim only
-  # running it settles.
-  #
-  # `set -u` plus an empty array is a portable-shell trap: macOS ships bash 3.2,
-  # where `"${a[@]}"` on an empty array is an "unbound variable" ERROR rather
-  # than nothing. kit-03 shipped `local profile_args=()` and expanded it
-  # unconditionally, so `KIT_DEV_PROFILES= bin/dev up` — the DOCUMENTED way to
-  # run the stack without the observability backends — died on line one with
-  #
-  #   bin/dev: line 120: profile_args[@]: unbound variable
-  #
-  # The failure is spectacular precisely because the default path works, so
-  # nothing else in the suite noticed. Here the script is actually executed with
-  # the variable empty and is only required to get past argument parsing, which
-  # is where the trap bites; a stub `docker` on PATH keeps the test hermetic and
-  # fast, because what is under test is the shell, not compose.
-  dev_escape_hatch_check() {
-    local stub sandbox out ec=0 kitcheck
-    stub="$TMP/dev-hatch-stub"
-    sandbox="$TMP/dev-hatch"
-    # The stub KIT TREE, as a separate directory. The sandbox below is a service
-    # repository, and after this packet a service repository holds NONE of the
-    # stack: no docker-compose.yml of kit's, no otel-collector.yml, no vendor
-    # config directories. Everything `bin/dev` mounts comes from the tree it
-    # fetches, so the fixture has to have one — pointed at with `KIT_STACK_DIR`,
-    # which is a checkout a person named rather than one that was fetched.
-    # The stub kit tree, with exactly the directories a cheap-default run needs:
-    # the two config directories that are FETCHED, and NO metrics-store
-    # directory. That absence is the point of the fixture now. `stack_is_usable`
-    # used to require the metrics store's directory, and a fixture that carried
-    # it proved nothing about whether the check and the default agree — it
-    # passed for the same reason the old default passed. A fetched tree with only
-    # tempo/ and loki/ in it is what a cheap `bin/dev up` actually resolves, and
-    # this check requires the script to accept it.
-    kitcheck="$TMP/dev-hatch-kit"
-    rm -rf "$stub" "$sandbox" "$kitcheck"
-    mkdir -p "$stub" "$sandbox/bin"
-    mkdir -p "$kitcheck/templates/compose" "$kitcheck/templates/compose/tempo" \
-      "$kitcheck/templates/compose/loki" \
-      "$kitcheck/templates/compose/grafana/provisioning"
-    : >"$kitcheck/templates/compose/docker-compose.yml"
-    : >"$kitcheck/templates/compose/otel-collector.yml"
-    : >"$kitcheck/templates/compose/.env.example"
-    printf '%s\n' "0000000000000000000000000000000000000000" >"$sandbox/kit.ref"
-    cat >"$stub/docker" <<'STUB'
-#!/usr/bin/env bash
-# Reports readiness so `bin/dev up` believes the stack came up, and does
-# nothing else. What is under test is the SHELL, not compose.
-case "$*" in
-  *" version"*) echo "Docker Compose version v2.0.0"; exit 0 ;;
-esac
-case "$1" in
-  --profile) shift 2 ;;
-esac
-exit 0
-STUB
-    chmod +x "$stub/docker"
-    # The sandbox is a service repository and NOTHING ELSE: no compose file of
-    # kit's, no collector config, no `.env`. That is the shape this packet leaves
-    # behind, and the fixture has to be the shape or the check proves a world
-    # that no longer exists — the first version of this sandbox carried five
-    # empty files that `require_files` demanded, and the moment `require_files`
-    # went away the fixture stopped reaching `up` at all.
-    #
-    # `KIT_STACK_DIR` is how the escape hatch is exercised without a network: it
-    # is a checkout a person named on this run, which is source 1 of the four in
-    # `resolve_stack` and the only one that skips git entirely.
-    cp "$ROOT/templates/bin/dev.sh" "$sandbox/bin/dev"
-
-    # `KIT_DEV_PROFILES=''` and not `KIT_DEV_PROFILES=`: shellcheck reads the
-    # latter as a typo, and it is right to.
-    out="$(cd "$sandbox" && KIT_DEV_PROFILES='' KIT_STACK_DIR="$kitcheck" \
-      PATH="$stub:$PATH" bash ./bin/dev up 2>&1)" || ec=$?
-    case "$out" in
-      *"unbound variable"*)
-        echo "the documented escape hatch KIT_DEV_PROFILES= is broken:"
-        printf '%s\n' "$out" | head -3
-        return 1
-        ;;
-      # Both halves are asserted, and the second is not decoration. Reaching the
-      # migration step proves the profile expansion survived; that the run got
-      # all the way there on a sandbox with NO `.env` and no stack of its own
-      # proves the fetch path does not require either. A fixture that wrote a
-      # `.env` would pass the first and silently not be testing the second.
-      *"no migration command found"*) return 0 ;;
-      *)
-        echo "bin/dev with KIT_DEV_PROFILES= exited $ec without reaching the"
-        echo "migration step; expected the clean 'no migration command' exit."
-        printf '%s\n' "$out" | head -6
-        return 1
-        ;;
-    esac
-  }
-
-  # -------------------------------------------------------------------------
   # THE FLEET GATE, and it is RED on master. That is the point, and the shape is
   # the same as D4: three repositories that do not spell the same gate the same
   # way is invisible to any check that reads only one of them, so kit's gate
@@ -4564,672 +3782,30 @@ STUB
       ;;
   esac
 
-
-
-  # ------------------------------------------------------------------ core
-  # The fan-out standard: vendir templates, the shared Renovate policy, and the
-  # two runnable pieces (the change classifier and the staleness reporter).
-  #
-  # `core_fanout_check` is a real parser over four file types and its failure
-  # modes are specific enough to be worth reading in one place, so it lives in
-  # tests/core_fanout_check.py rather than inlined here.
-  section 'static: the core fan-out standard'
-  core_fanout_check() {
-    "$PY" "$ROOT/tests/core_fanout_check.py" "$ROOT"
-  }
-
-  # ------------------------------------------------------------------ fleet
-  # NO ADOPTER CARRIES A WORKAROUND FOR A FIXED CORE DEFECT.
-  #
-  # `core` shipped two checker defects that forced repositories which adopted
-  # `gate.yml` into local workarounds: D12 (`RUN_KEY` could not see a one-line
-  # `run:`, fixed in 63fd319) and D13 (proofs matched against bytes carrying
-  # ANSI colour, fixed in c63af27). Both are fixed. A workaround for a fixed
-  # defect is not neutral — it is a second, local, unpolicied copy of a
-  # decision that now lives in core, and it is the kind that rots. So a rule
-  # about it belongs here, in the thing that distributes the gate format, rather
-  # than in a report nobody re-reads.
-  #
-  # THE FLEET ROOT IS FOUND, NOT ASSUMED, and its absence is a reported SKIP
-  # rather than a pass — the same treatment the core-allowlist check above gets,
-  # for the same reason. A sweep that could not read a single declaration has
-  # not found the fleet.
-  #
-  # `$ROOT/..` is checked FIRST and it is where this repository's worktrees live
-  # during a packet, which is the whole point: the check has to see the state
-  # the fleet is in today, not the state on a CI runner that has no siblings.
-  # A CI runner legitimately reaches the SKIP, and the summary says so.
-  fleet_root() {
-    local cand
-    # `..` and `../cafaye`, and NOT `../..`. This was `../..` in the first
-    # version and it found a fleet: a leftover copy of a cafaye repository in a
-    # shared temp directory two levels up, whose branch still carried the D12
-    # workaround this check had just retired. The gate went red on a tree with
-    # nothing wrong with it, naming a file nobody had touched in weeks.
-    #
-    # A sweep that reaches further than it owns is worse than no sweep, so the
-    # search is exactly the two layouts this repository is actually cloned into:
-    # beside its siblings, or inside a directory of them.
-    for cand in "$ROOT/.." "$ROOT/../cafaye"; do
-      # At least one `gate.yml` under it, or it is not a fleet and pointing at
-      # it would report "no adopting repository found" — technically true and
-      # completely useless, which is why this tests for the file rather than the
-      # directory.
-      if [ -n "$(find "$cand" -maxdepth 2 -name gate.yml -not -path '*/.venv/*' 2>/dev/null | head -1)" ]; then
-        (cd "$cand" && pwd)
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  gate_workaround_check() {
-    local root
-    root="$(fleet_root)" || {
-      echo "no fleet root: no directory beside this one holds a gate.yml."
-      echo "set KIT_FLEET=<path> to point at one."
-      return 1
-    }
-    KIT_FLEET="$root" "$PY" "$ROOT/tests/gate_declaration_check.py" "$root"
-  }
-  # ------------------------------------------------- the account-scope contract
-  # SIX SERVICES DECLARE THEIR ACCOUNT-SCOPED SURFACE AND NOT ONE OF THEM RUNS
-  # THE CHECKER IN ITS OWN GATE. Measured, and the measurement is the whole
-  # reason this section exists:
-  #
-  #   cd /Users/kaka/Code/any/moon/cafaye && grep -rln "account_scope_check" \
-  #       --include="*.sh" --include="*.yml" --include="Makefile" --include="*.exs" . \
-  #     | grep -v "^./core/harness" | grep -v wt-m39
-  #     -> pantry/account_scope.yml
-  #        courier/account_scope.yml
-  #        gateway/account_scope.yml
-  #        core/.github/workflows/ci.yml
-  #        core/harness/tests/account_scope_self_test.sh
-  #
-  # Every hit is either a declaration MENTIONING the tool or `core` running its
-  # own self-test over its own fixtures. So the contract is continuous in nobody's
-  # build: a service can add a route, widen a declaration, or delete
-  # `account_scope.yml` entirely and its own gate stays green. That is D18's
-  # shape one level up from where D18 has been looking.
-  #
-  # `tests/account_scope_fleet_check.py` runs core's checker over every repository
-  # `MVP-SCOPE.md` puts in the MVP and compares the answer with what
-  # `tests/account_scope_fleet_ratchet.yml` records — in BOTH directions, so a
-  # repository that got better and whose row nobody retired is as red as one that
-  # got worse.
-  #
-  # WHY IT REPLACES THE FIVE-FUNCTION ADAPTER CONTRACT rather than extending it:
-  # `cross_tenant_harness.sh`'s `adapter_install_probe` / `adapter_language_tool`
-  # / `adapter_migrate` / `adapter_prepare` / `adapter_run` are five questions
-  # about RUNNING A SERVICE, four of them about a live Postgres. There is no
-  # service to run here and nothing to bring up or tear down, so the harness's
-  # `up`/`run`/`down` has no meaning over a declaration checker. The discipline
-  # that contract carries — a run that could not happen exits non-zero and never
-  # reports a pass — is kept, and it is the discipline this section is really
-  # about.
-  #
-  # THE FLEET ROOT IS FOUND, NOT ASSUMED, and its absence is a reported SKIP
-  # rather than a pass, for the same reason as the check above and with the same
-  # two candidate layouts. A CI runner legitimately reaches the SKIP, which is
-  # why the account-scope contract has its OWN job in `.github/workflows/ci.yml`
-  # that assembles a fleet and runs this runner for real: wiring a check only
-  # into a path that skips on every machine that runs it is the defect this
-  # packet is about, done one level down.
-  account_scope_fleet_root() {
-    local cand
-    for cand in "$ROOT/.." "$ROOT/../cafaye"; do
-      # A directory holding `core/harness/account_scope_check.py` and one of
-      # the in-scope services is a fleet this runner can measure. Testing for
-      # the INSTRUMENT rather than for the directory is the same instinct as
-      # the `gate.yml` probe above: pointing at something that is not a fleet
-      # reports "no repository checked" — technically true and useless.
-      if [ -f "$cand/core/harness/account_scope_check.py" ] \
-         && [ -n "$(find "$cand" -maxdepth 2 -name account_scope.yml -not -path '*/.venv/*' \
-                    2>/dev/null | head -1)" ]; then
-        (cd "$cand" && pwd)
-        return 0
-      fi
-    done
-    return 1
-  }
-
-  account_scope_contract_check() {
-    local root
-    root="$(account_scope_fleet_root)" || {
-      echo "no fleet root: no directory beside this one holds core's account-scope checker"
-      echo "and a service's account_scope.yml. set KIT_FLEET=<path> to point at one."
-      return "$SKIP_EXIT"
-    }
-    "$PY" "$ROOT/tests/account_scope_fleet_check.py" --repos-dir "$root"
-  }
-
-  # Dogfood lint/yamllint.yml on every YAML in the tree, not just the two
-  # compose templates. kit ships the config and a repo that copies it lints its
-  # own CI against it on day one, so a YAML that breaks the config is a YAML
-  # that greets the first adopting repo with a failure nobody authored.
-  #
-  # This also subsumes kit-03's own walk of `templates/compose`, which existed
-  # because the provisioning tree is three directories deep and a glob of
-  # `templates/compose/*` reaches none of it. `yamls_of_the_tree` below finds
-  # those files for the same reason and covers the rest of the repo too, so the
-  # narrower walk is gone rather than kept alongside: two loops over the same
-  # files report every problem twice and disagree about which is authoritative.
-  #
-  # Required, not optional: it is in tests/requirements.txt and the bootstrap
-  # above has already installed it, so a machine that reaches this line has
-  # yamllint. A SKIP here would hide a broken config behind a missing tool on
-  # exactly the machine that has not run the gate before.
-  #
-  # The check that used to skip when it was absent is now a FAIL, and says so —
-  # the absence is a defect in the environment, not a neutral fact, and it is
-  # the difference between "this YAML is bad" and "I did not look".
-  # The CI workflow gains a job; assert the job exists, is opt-in, and that the
-  # default call still runs exactly the six original jobs. A kit change that
-  # breaks every consumer's CI is a kit change that does not ship.
-  #
-  # The secrets and zizmor jobs are asserted separately, below, because they are
-  # the two jobs whose absence is silent in a way `option has no job` does not
-  # make silent: a repo without a secrets job has no secret scanning, and every
-  # other check in this file is still green.
-  ci_check() {
-    "$PY" - "$ROOT" "$CONFIG_ONLY" "$WORKFLOW" <<'PY'
-import re
-import sys
-
-import yaml
-
-config_only = sys.argv[2]
-with open(sys.argv[3], encoding="utf-8") as fh:
-    doc = yaml.safe_load(fh)
-
-problems = []
-
-# `on:` is read by PyYAML 1.1 as the boolean True.
-triggers = doc.get("on") or doc.get(True) or {}
-call = (triggers.get("workflow_call") or {}).get("inputs") or {}
-
-telemetry = call.get("telemetry")
-if not isinstance(telemetry, dict):
-    problems.append("no `telemetry` workflow_call input")
-else:
-    default = str(telemetry.get("default", ""))
-    if default not in ("false", "False"):
-        problems.append(f"telemetry input defaults to {default!r}; it must default to 'false'")
-    if str(telemetry.get("type")) != "string":
-        problems.append("telemetry input must be type: string (booleans coerce badly)")
-
-jobs = doc.get("jobs") or {}
-
-# One entry per language kit ships a Dockerfile, a bin/prime and a mise pin for.
-# The list lives here and nowhere else, so "add a language" is one line that
-# fails immediately until the other three artifacts exist — rather than a
-# language with a CI job and no primer.
-languages = ["go", "ruby", "elixir", "python", "node", "bun", "rust"]
-
-for lang in languages:
-    job = jobs.get(lang)
-    if not isinstance(job, dict):
-        problems.append(f"job {lang} disappeared")
-        continue
-    cond = job.get("if")
-    if cond is None or f"inputs.language == '{lang}'" not in cond:
-        problems.append(f"job {lang} is no longer gated on its language input")
-
-# A caller can pass anything, so the job that REJECTS an unknown value is what
-# makes "an option with no job" impossible. `workflow_call` has no `options:`
-# key -- that is a `workflow_dispatch` feature, and GitHub refuses the whole
-# file if you write it here -- so the enumeration kit used to declare and then
-# enforce has to be enforced by a job that runs instead.
-#
-# So the `language` job is the list now, and this is the check that it still
-# names every language the file has a job for. A language added to `languages`
-# above without a case arm there is a language a caller can ask for that runs
-# nothing.
-gate = jobs.get("language")
-if not isinstance(gate, dict):
-    problems.append(
-        "no `language` job: without it an unrecognised value skips every "
-        "language job's `if:` and leaves a green run that tested nothing"
-    )
-else:
-    script = "\n".join(
-        str(s.get("run") or "") for s in (gate.get("steps") or []) if isinstance(s, dict)
-    )
-    # Every language, plus `none`, must appear in the gate's case statement.
-    for name in languages + [config_only]:
-        if not re.search(rf"(^|[\s|(]){re.escape(name)}(\)|[\s|])", script, re.M):
-            problems.append(
-                f"the `language` job does not accept `{name}`: it is not one of "
-                f"the values its case statement handles"
-            )
-
-# `none` is what lets a repository with no service manifest adopt this
-# workflow at all, and kit is such a repository. It gets the same treatment as
-# every other option: a job, and a guard on the input. An option whose job has
-# no `if` would run in all thirteen consumer repos on day one.
-cjob = jobs.get(config_only)
-if not isinstance(cjob, dict):
-    problems.append(
-        f"job {config_only} disappeared: without it a repository with no service "
-        f"manifest cannot call this workflow, which is why kit never called its own"
-    )
-else:
-    cond = cjob.get("if")
-    if cond is None or f"inputs.language == '{config_only}'" not in cond:
-        problems.append(f"job {config_only} is not gated on its language input")
-
-tjob = jobs.get("telemetry")
-if not isinstance(tjob, dict):
-    problems.append("no `telemetry` job")
-else:
-    cond = tjob.get("if") or ""
-    if "inputs.telemetry" not in cond:
-        problems.append("telemetry job is not gated on the telemetry input: it would run by default")
-    matrix = ((tjob.get("strategy") or {}).get("matrix") or {}).get("language")
-    if not matrix:
-        problems.append("telemetry job has no language matrix: it must execute every language")
-    elif sorted(matrix) != sorted(["go", "ruby", "elixir", "python", "node", "rust"]):
-        problems.append(f"telemetry matrix does not cover the six languages: {matrix}")
-
-# A workflow that parses is not a workflow that runs. `if:` conditions and
-# `${{ }}` are opaque to yaml.safe_load, so the two ways this file has actually
-# broken in review — an expression that never resolves, and a `${{` that opens a
-# block it never closes — are caught by reading the source as text. A file
-# needing this check is a file that needed it.
-source = open(sys.argv[3], encoding="utf-8").read()
-for match in re.finditer(r"\$\{\{", source):
-    lineno = source[: match.start()].count("\n") + 1
-    tail = source[match.start() :]
-    line_end = tail.find("\n")
-    line = tail if line_end == -1 else tail[:line_end]
-    if "}}" not in line:
-        problems.append(f"line {lineno}: unclosed ${{{{ in an expression")
-        break
-
-# Every `uses:` is owner/repo[/path]@ref. A step with no ref resolves to
-# whatever that action's default branch says today, which is not a pin.
-for lineno, line in enumerate(source.splitlines(), 1):
-    stripped = line.strip()
-    if not stripped.startswith("uses:"):
-        continue
-    ref = stripped.split("uses:", 1)[1].strip().strip("'\"")
-    if ref.startswith("./") or ref.startswith("docker://"):
-        continue
-    if "@" not in ref:
-        problems.append(f"line {lineno}: `uses: {ref}` has no ref")
-    elif ref.endswith(("@master", "@main")):
-        problems.append(f"line {lineno}: `uses: {ref}` points at a branch, not a release")
-
-if problems:
-    sys.exit("; ".join(problems))
-PY
-  }
-
+  section 'static: lint configs a service carries are compared to kit, not forbidden'
   # -------------------------------------------------------------------------
-  # The tier convention. Three claims, three checks, split because they decay
-  # separately: the templates drift, the wiring drifts, the allowlist rots. One
-  # check covering all three would keep passing while two of them rotted.
-  # -------------------------------------------------------------------------
-  section 'static: every language declares a tier, and says how it is collected'
-
-
-
-  # -------------------------------------------------------------------------
-  # LINT RUNS FROM KIT, NOT FROM A COPY. Three claims, and they decay separately.
-  # -------------------------------------------------------------------------
+  # THE DRIFT CHECK. A service carrying a lint config INCONSISTENT with kit's is
+  # a failure invisible from both sides: kit cannot see the service's tree, and
+  # the service's CI goes green the whole time.
   #
-  # `lint/` shipped 249 lines of golangci/rubocop/eslint/yamllint/hadolint
-  # configuration and NOT ONE service in the fleet had ever copied it. Adoption
-  # correlated inversely with how much a file did: the small self-contained
-  # artifacts are universal, the large behavioural ones are at zero.
+  # WHY IT IS NOT "THE FILE MUST NOT EXIST". A service whose `.golangci.yml` is
+  # byte-identical to kit's has not drifted; it has arrived at the same policy by
+  # another route, and failing it teaches the lesson that kit's config is a
+  # thing you get shouted at for having. So this READS BOTH FILES and reports
+  # THE DIFFERENCE, linter by linter — the only information anyone can act on.
   #
-  # The reason is structural, and it is worth stating because it is what this
-  # check defends. `uses: cafaye/kit/...@master` is LIVE — change kit and every
-  # service gets it with no action. A copied config has NO propagation at all:
-  # it rots silently, and the file nobody chose still runs while the file nobody
-  # copies just decays. The measured numbers are in README.md; the mechanism
-  # that ends the rot is putting the config where the step already is.
+  # SCOPE: this reads the kit working tree plus whatever service checkouts are
+  # present beside it (`../<repo>`). With no sibling checkout it SKIPS loudly and
+  # names the environment variable that points at one. A drift check that could
+  # not have run and reported nothing is the same class of defect as a lint step
+  # that cannot fail.
   #
-  # This check reads the reusable workflow and asserts the three things that
-  # make the lint step a GATE rather than a report. Each has a self_test
-  # breakage, because a check with no counterexample is a claim in a comment.
-  lint_wiring_check() {
-    "$PY" - "$ROOT" "$WORKFLOW" <<'PY'
-import os
-import re
-import sys
-
-import yaml
-
-root, workflow_path = sys.argv[1], sys.argv[2]
-with open(workflow_path, encoding="utf-8") as fh:
-    doc = yaml.safe_load(fh)
-jobs = doc.get("jobs") or {}
-source = open(workflow_path, encoding="utf-8").read()
-
-problems = []
-
-
-def strip_shell_comments(src):
-    """`run:` bodies, with shell comments removed. See the identical helper in
-    the tier_demand check, and the reason it exists there: a check satisfied by
-    the sentence explaining a flag is not a check.
-
-    YAML comments are a second, separate problem here, and they are removed
-    FIRST: this file's own prose names every one of these flags while explaining
-    why each is load-bearing, so a naive substring test over the raw source is
-    satisfied by the documentation of the very step it is meant to police.
-    """
-    without_yaml = "\n".join(
-        ln for ln in src.splitlines() if not ln.lstrip().startswith("#")
-    )
-    out = []
-    for line in without_yaml.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("#"):
-            continue
-        quote, cut = None, None
-        for i, ch in enumerate(line):
-            if quote:
-                if ch == quote:
-                    quote = None
-                continue
-            if ch in ("'", '"'):
-                quote = ch
-            elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
-                cut = i
-                break
-        out.append(line if cut is None else line[:cut])
-    return "\n".join(out)
-
-
-def steps_of(lang):
-    return (jobs.get(lang) or {}).get("steps") or []
-
-
-def lint_step(lang):
-    """The step that runs the language's linter, or None.
-
-    Matched by NAME, not by scanning the job for a linter-shaped command: the
-    name is what a reviewer renames, and a check keyed on the thing being
-    checked cannot notice when the thing it names is gone.
-    """
-    for step in steps_of(lang):
-        if step.get("name") == "lint":
-            return step
-    return None
-
-
-# ---------------------------------------------------------------------------
-# 1. EVERY LANGUAGE JOB THAT LINTS, LINTS WITH KIT'S CONFIG.
-# ---------------------------------------------------------------------------
-#
-# The three languages, and the flag each one needs, are all different. That is
-# not a preference — each was measured on a fixture containing a violation only
-# that linter would catch, and the results are in tests/lint_test.sh. The
-# invariant is the SHAPE, and the shape is the thing that decays:
-#
-#     golangci-lint  `--config=<path>`   GOLANGCI_LINT_CONFIG is NOT read by
-#                                        v2 (measured: silently ignored, the
-#                                        run proceeds on the 5-linter default
-#                                        set, exit 0 on a file kit rejects).
-#     rubocop        `--config=<path>`   measured: a 13-line method is green
-#                                        under kit (Max 15) and red on RuboCop's
-#                                        default (Max 10).
-#     eslint         `--config=<path>`   and the path must be INSIDE the repo,
-#                                        because node resolves the config's own
-#                                        imports upward from the config file.
-#
-# `--config` is the only spelling all three accept, so it is what is asserted.
-# A per-language exception would be a second thing to keep in step, and the
-# measurement says there is nothing to gain by it.
-NEEDS_KIT_CONFIG = {
-    "go": ("golangci", "golangci-lint"),
-    "ruby": ("rubocop",),
-    "node": ("eslint",),
-}
-
-for lang, linters in NEEDS_KIT_CONFIG.items():
-    step = lint_step(lang)
-    if step is None:
-        problems.append(
-            f"job {lang} has no step named `lint`, so nothing checks that it "
-            f"still lints with kit's config. A renamed step is a lint step that "
-            f"stopped being policed, and this check is the only thing that would "
-            f"notice"
-        )
-        continue
-
-    # The run body, for `run:` steps, and the `with:` block, for action steps.
-    # Both are read, because the two mechanisms are different: the go job uses
-    # the golangci-lint ACTION (so the flag lives in `with:`) while ruby and
-    # node use `run:`. A check that only read `run:` would pass on a go job
-    # whose action had lost its args, and that job is the one whose default set
-    # is a plausible-looking five linters.
-    haystack = strip_shell_comments(step.get("run") or "")
-    with_block = step.get("with") or {}
-    haystack += "\n" + "\n".join(
-        f"{k}: {v}" for k, v in (with_block.items() if isinstance(with_block, dict) else [])
-    )
-
-    if not any(tool in haystack for tool in linters):
-        problems.append(
-            f"job {lang}: its `lint` step names none of {linters}, so it is not "
-            f"the linter kit configures. Every check in this file can be green "
-            f"while the step that was supposed to run the linter runs something "
-            f"else"
-        )
-        continue
-
-    if "--config" not in haystack:
-        problems.append(
-            f"job {lang}: its `lint` step does not pass `--config`. Measured: "
-            f"with no config in the repository, each of these linters falls back "
-            f"to its own DEFAULT policy rather than failing — golangci-lint to "
-            f"five linters, rubocop to MethodLength 10, eslint to no rules — so "
-            f"the step still runs, still passes, and is now on a policy nobody "
-            f"chose. This is the exact failure the check exists to end"
-        )
-
-    # The config has to be KIT's, and the only way to say that without a second
-    # copy of the path to rot is to require the path to go through the
-    # environment variable that names the checked-out kit. A path into the
-    # service's own tree is a copy, and a copy is the mechanism this packet
-    # replaces: it has no propagation, so it rots in silence.
-    #
-    # The variable is the seam, not a convenience: the three jobs spell the
-    # path differently (one interpolates `${{ github.workspace }}` and the env
-    # var, two use a shell `$VAR`), and requiring the variable rather than a
-    # literal is what lets them differ without the check having to know how.
-    if "KIT_LINT_DIR" not in haystack or "/lint/" not in haystack:
-        problems.append(
-            f"job {lang}: its `lint` step does not read the config out of the "
-            f"checked-out kit (`$KIT_LINT_DIR/lint/…`). A path inside the "
-            f"service's own tree is a copy, and a copy is the mechanism this "
-            f"packet replaces: it has no propagation, so it rots silently"
-        )
-
-# ---------------------------------------------------------------------------
-# 1b. THE KIT CHECKOUT THAT MAKES `$KIT_LINT_DIR` NAME SOMETHING.
-# ---------------------------------------------------------------------------
-#
-# The claim above is that each lint step reads its config out of a checked-out
-# kit. A step that references the variable perfectly well still reads nothing if
-# the checkout that fills it was deleted — and that is a one-line deletion in a
-# job with eight steps, it leaves the YAML valid, and every other check in this
-# file stays green. The lint step would then be a bare `eslint` with no config,
-# which is precisely the default-policy failure the check above is about.
-#
-# Asserted on the PARSED step rather than by grepping, so a `uses:` inside a
-# comment (this file has several, explaining exactly this mechanism) cannot
-# satisfy it. And `ref` is required to be the INPUT rather than a literal: a
-# checkout pinned to `master` in three places is three places to update, and a
-# ref that is not the input is a ref that disagrees with the caller's own pin
-# without anyone noticing.
-for lang in sorted(NEEDS_KIT_CONFIG):
-    steps = steps_of(lang)
-    kit_steps = [
-        s
-        for s in steps
-        if isinstance(s, dict)
-        and str(s.get("uses", "")).startswith("actions/checkout")
-        and (s.get("with") or {}).get("repository") == "cafaye/kit"
-    ]
-    if not kit_steps:
-        problems.append(
-            f"job {lang}: no step checks out cafaye/kit, so the path its `lint` "
-            f"step reads its config from does not exist. The lint step still runs, "
-            f"still passes, and is now on the linter's defaults — the exact "
-            f"failure this check exists to catch, reached by deleting one step"
-        )
-        continue
-    for step in kit_steps:
-        with_block = step.get("with") or {}
-        ref = str(with_block.get("ref", ""))
-        if "inputs.kit-lint-ref" not in ref:
-            problems.append(
-                f"job {lang}: its kit checkout pins `ref: {ref or '(none)'}`, not "
-                f"`inputs.kit-lint-ref`. A ref hardcoded here is a fourth place a "
-                f"pin lives, and it is the one place the caller cannot see"
-            )
-        # `persist-credentials: false` — the checkout leaves kit's token in a git
-        # config inside the tree the service's own later steps run in. Cheap to
-        # require and the cost of forgetting it is a credential outliving the
-        # step that fetched it.
-        if with_block.get("persist-credentials") is not False:
-            problems.append(
-                f"job {lang}: its kit checkout does not set `persist-credentials: "
-                f"false`, so kit's token is left in a git config inside the tree "
-                f"the service's later steps run in"
-            )
-
-# ---------------------------------------------------------------------------
-# 2. THE LINT STEPS ARE GATES, NOT REPORTS.
-# ---------------------------------------------------------------------------
-#
-# `continue-on-error: true` on a lint step is the single most likely way for
-# this whole packet to become decoration, and it is invisible: the step runs,
-# prints its findings, and the job is green. A linter that only warns is a
-# report. So the assertion is on the PARSED step, and it is a separate claim
-# from the one above — a step can pass kit's config perfectly and still be
-# advisory.
-#
-# `|| true` and `| head` in a run body are the same defect wearing shell
-# clothes, and both are caught by looking at the command rather than the
-# setting, because `set -euo pipefail` is already in force and a pipeline's
-# status is what decides.
-for lang in sorted(NEEDS_KIT_CONFIG):
-    step = lint_step(lang)
-    if not isinstance(step, dict):
-        continue
-    if step.get("continue-on-error") is True:
-        problems.append(
-            f"job {lang}: its `lint` step is `continue-on-error: true`. The step "
-            f"still runs and still prints its findings, and the job is green — a "
-            f"linter that only warns is a report. This is the breakage that "
-            f"matters most, which is why it is asserted on the parsed step rather "
-            f"than left to a reviewer"
-        )
-    body = strip_shell_comments(step.get("run") or "")
-    if re.search(r"\|\|\s*true\b", body):
-        problems.append(
-            f"job {lang}: its `lint` run body swallows the linter's exit status "
-            f"with `|| true`, which is continue-on-error in shell and reads as a "
-            f"deliberate choice to nobody"
-        )
-
-# ---------------------------------------------------------------------------
-# 3. KIT'S CONFIGS ARE STILL WHAT THEY WERE.
-# ---------------------------------------------------------------------------
-#
-# The workflow can point `--config` at `.kit/lint/golangci.yml` on every run and
-# the file can still have been emptied of every linter it enabled. Nothing
-# above notices: the step runs, the config parses, and the job is green on a
-# policy that is now five defaults. So the strictness decisions are asserted
-# ON THE FILES, by value.
-#
-# Read as YAML rather than grepped, so a linter name in a comment cannot satisfy
-# the check — the same rule AGENTS.md states for every other check here.
-REQUIRED_LINTERS = {
-    "golangci.yml": [
-        "bodyclose", "copyloopvar", "errorlint", "exhaustive",
-        "misspell", "noctx", "revive", "unconvert", "wastedassign",
-    ],
-}
-for filename, wanted in REQUIRED_LINTERS.items():
-    path = f"{root}/lint/{filename}"
-    if not os.path.isfile(path):
-        problems.append(f"lint/{filename} is missing")
-        continue
-    with open(path, encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh) or {}
-    enabled = ((cfg.get("linters") or {}).get("enable")) or []
-    missing = [name for name in wanted if name not in enabled]
-    if missing:
-        problems.append(
-            f"lint/{filename} no longer enables {missing}. The workflow points "
-            f"`--config` at this file on every run, so an emptied config is not a "
-            f"failed check — it is a green build on a policy nobody chose. The "
-            f"list is asserted BY VALUE because this is the file whose weakening "
-            f"is invisible from every other angle"
-        )
-
-# `formatters` is a separate key from `linters` in golangci-lint v2, and a
-# config that kept its linters and lost its formatters still parses. gofmt and
-# goimports are the formatting half of the Go strictness story and they live
-# there.
-with open(f"{root}/lint/golangci.yml", encoding="utf-8") as fh:
-    gcl = yaml.safe_load(fh) or {}
-formatters = ((gcl.get("formatters") or {}).get("enable")) or []
-for name in ("gofmt", "goimports"):
-    if name not in formatters:
-        problems.append(
-            f"lint/golangci.yml no longer enables the `{name}` formatter. "
-            f"`formatters` is a different key from `linters` in golangci-lint v2, "
-            f"so this one is lost without touching the linter list at all"
-        )
-
-if problems:
-    sys.exit("; ".join(problems))
-print(
-    "3 lint jobs pass --config at a checked-out kit; none is advisory; "
-    "the linter list is intact"
-)
-PY
-  }
-
-
-  # -------------------------------------------------------------------------
-  # THE DRIFT CHECK. A service that carries a lint config INCONSISTENT with
-  # kit's is the failure this packet exists to end, and it is invisible from
-  # both sides: kit cannot see the service's tree, and the service's CI goes
-  # green the whole time.
+  # WHICH REPOSITORIES COUNT. The fleet directories, one per line, that CALL the
+  # reusable workflow. A service repo is one that calls it: a repository that does
+  # not is not governed by kit's policy, and reporting drift in it would be noise
+  # that trains people to ignore this check.
   #
-  # WHY IT IS NOT "THE FILE MUST NOT EXIST". That version is easier to write and
-  # it is wrong in a way that costs more than the drift it prevents. A service
-  # whose `.golangci.yml` is byte-identical to kit's has not drifted; it has
-  # arrived at the same policy by another route, and failing it teaches the
-  # lesson that kit's config is a thing you get shouted at for having. The
-  # check a moment later asserts exactly this, as breakage 27b's GREEN control.
-  #
-  # So this READS BOTH FILES and reports THE DIFFERENCE, linter by linter. A
-  # reader of the failure message learns which linters the service turned off
-  # and which it added, which is the only information anyone can act on. A check
-  # that only said "unexpected file" would send someone to `diff` by hand.
-  #
-  # SCOPE, and it is a real limitation rather than a convenient one: this reads
-  # the kit working tree plus whatever service checkouts are present beside it
-  # (`../<repo>`), which is how every other fleet-shaped check in this file
-  # works — `core_repo()` above is the same shape. With no sibling checkout the
-  # check SKIPS loudly and says which environment variable points at one. It is
-  # never silently green, because a drift check that could not have run and
-  # reported nothing is the same class of defect as a lint step that cannot fail.
-  # The fleet directories, one per line, that CALL the reusable workflow. A
-  # service repo is one that calls it: a repository that does not is not
-  # governed by kit's policy, and reporting drift in it would be noise that
-  # trains people to ignore this check.
-  #
-  # Resolved in the same way as `core_repo()` above, and for the same reason: a
+  # Resolved the way every fleet-shaped check in this file resolves it: a
   # sibling checkout, or a loud skip. Never a silent pass.
   fleet_repos() {
     local base cand
@@ -5274,7 +3850,6 @@ kit_root = sys.argv[1]
 allowlist_path = sys.argv[-1]
 fleet_roots = sorted({os.path.realpath(p) for p in sys.argv[2:-1]})
 
-
 def is_worktree(path):
     """True when `path` is a git WORKTREE rather than its own repository.
 
@@ -5292,7 +3867,6 @@ def is_worktree(path):
             return fh.read(6).strip() == "gitdir"
     except OSError:
         return False
-
 
 # The service-side filenames this check READS. Two facts measured on
 # golangci-lint v2.6.2, and the first one corrected a claim this file made
@@ -5327,7 +3901,6 @@ def is_worktree(path):
 # legitimate thing to own, and this check is about copies of KIT's policy.
 SERVICE_CONFIGS = (".golangci.yml", ".golangci.yaml")
 
-
 def policy_of(doc):
     """The comparable part of a golangci config: what it turns on and off.
 
@@ -5345,11 +3918,9 @@ def policy_of(doc):
         "formatters": frozenset(((doc or {}).get("formatters") or {}).get("enable") or []),
     }
 
-
 def load(path):
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh)
-
 
 kit_policy_path = f"{kit_root}/lint/golangci.yml"
 if not os.path.isfile(kit_policy_path):
@@ -5625,359 +4196,6 @@ PY
     esac
   fi
 
-
-
-
-
-
-
-
-
-
-  # ---------------------------------------------------------------------------
-  # THE VERSION STRING IS THE PROMISE, AND IT IS DERIVED
-  # ---------------------------------------------------------------------------
-  #
-  # kit is adopted by COPY and by `uses:` at a ref, so "is 2.4.0 safe to take?"
-  # is the only question a consumer has, and until this check it was answered by
-  # a person reading a diff. kit also had no version at all: the changelog said
-  # so in its own first paragraph ("kit has no releases yet and no semver
-  # contract"), which is an honest sentence and an unusable one — the tier was
-  # documentation, so nothing could fail when the documentation was wrong.
-  #
-  # `VERSION` is one line and it is the ONLY place the version is written. Three
-  # tiers, derived from the two versions and never asserted anywhere:
-  #
-  #   breaking   MAJOR moved. A consumer must read what changed, and must be
-  #              given a MIGRATION, because "read the diff" is the thing this
-  #              whole mechanism exists to stop asking of people.
-  #   additive   MINOR moved. Something was added; nothing a consumer holds was
-  #              taken away.
-  #   invisible  PATCH moved. A consumer may take it without reading anything,
-  #              which is what "invisible" has to mean for it to be worth
-  #              deriving.
-  #
-  # WHY THESE THREE, AND NOT FOUR, AND NOT A BOOLEAN
-  #
-  # The rule of thumb is that the number you do NOT have to read is the size of
-  # the promise, so the tiers have to be the three sizes of change there are.
-  # A fourth tier would be a claim about something this repository cannot
-  # observe — the difference between "invisible" and "safe" is a difference
-  # about the CONSUMER's code, which kit does not have. And a boolean
-  # (`breaking: true|false`) is what cafaye has today and it is what the
-  # research calls the weakest form of this: it answers "did anything break?"
-  # with one bit, so it cannot say WHICH surface broke, so a consumer reading it
-  # still has to open the diff. The tier is derived from the number the consumer
-  # already has, which is the property that makes it checkable at all.
-  #
-  # WHY A VERSION STRING THIS CHECK REFUSES
-  #
-  # `2.4.0-rc1` and `v2.4.0` are BOTH refused rather than guessed at, and both
-  # refusals are deliberate:
-  #   * a prerelease suffix is exactly where "what tier is this" stops having an
-  #     answer — semver puts `2.4.0-rc1` BELOW `2.4.0`, which means the derived
-  #     tier would change meaning when the suffix is dropped, so the string stops
-  #     being the source of truth for its own promise. kit has no prerelease
-  #     story and a refused version string is the honest answer to "which tier is
-  #     rc1 in", where guessing is the expensive one.
-  #   * `v` is the TAG spelling, not the version spelling. `kit.ref` accepts
-  #     `v<semver>` because that is a git tag, and this file is not a git tag.
-  #     A `v` here means somebody pasted the tag where the version goes, which
-  #     is precisely the hand-written-number drift this replaces.
-  #
-  # Both surface as `unknown`, and `unknown` is a FAILURE. A string the
-  # function cannot place must not be given a tier, because a tier that is a
-  # guess is the fail-open direction and this repository's rule is to fail
-  # closed.
-  #
-  # WHY THE DERIVATION IS A FUNCTION AND NOT PROSE
-  #
-  # A table in this comment is a table somebody can read and nobody has to
-  # agree with. `stability_tier` is asserted against a published table by the
-  # check below it, so a change to the rule that is not a change to the table is
-  # a red gate — and that is the whole difference between a standard and a
-  # convention.
-  stability_tier() {
-    stability_parse "$1" || { printf 'unknown\n'; return 0; }
-    local _fm=$STAB_MAJOR _fm2=$STAB_MINOR _fp=$STAB_PATCH
-    stability_parse "$2" || { printf 'unknown\n'; return 0; }
-    if [ "$STAB_MAJOR" -lt "$_fm" ] ||
-      { [ "$STAB_MAJOR" -eq "$_fm" ] && [ "$STAB_MINOR" -lt "$_fm2" ]; } ||
-      {
-        [ "$STAB_MAJOR" -eq "$_fm" ] && [ "$STAB_MINOR" -eq "$_fm2" ] &&
-          [ "$STAB_PATCH" -lt "$_fp" ]
-      }; then
-      # A version that went backwards. Not a fourth tier: nothing about a
-      # consumer's risk changes, which is precisely why it is named separately
-      # and refused rather than folded into one of the three.
-      printf 'retracted\n'
-    elif [ "$STAB_MAJOR" -gt "$_fm" ]; then
-      printf 'breaking\n'
-    elif [ "$STAB_MINOR" -gt "$_fm2" ]; then
-      printf 'additive\n'
-    elif [ "$STAB_PATCH" -gt "$_fp" ]; then
-      printf 'invisible\n'
-    else
-      printf 'none\n'
-    fi
-  }
-
-  # stability_parse <string> — three whole-number components, and nothing else.
-  # Sets STAB_MAJOR/MINOR/PATCH on success. `10#` because `08` is a syntax error
-  # in arithmetic and a version is not a place where a leading zero is worth an
-  # octal surprise.
-  stability_parse() {
-    local s="${1:-}" a b c
-    unset STAB_MAJOR STAB_MINOR STAB_PATCH
-    case "$s" in
-      *[!0-9.]* | '') return 1 ;;
-    esac
-    IFS=. read -r a b c <<<"$s"
-    case "$a$b$c" in
-      '' | *[!0-9]*) return 1 ;;
-    esac
-    [ -n "$a" ] && [ -n "$b" ] && [ -n "$c" ] || return 1
-    # A leading zero is refused rather than read as a number. `01.4.0` and
-    # `1.4.0` are the same version to a comparator and two different strings to
-    # a consumer, so a string that means two things is not a source of truth.
-    # Per COMPONENT, not on the concatenation: `1.0.0` joined reads `1000` and a
-    # pattern over that matches a version that has no leading zero at all.
-    local comp
-    for comp in "$a" "$b" "$c"; do
-      if [ "${#comp}" -gt 1 ]; then
-        case "$comp" in
-          0[0-9]*) return 1 ;;
-        esac
-      fi
-    done
-    STAB_MAJOR=$((10#$a))
-    STAB_MINOR=$((10#$b))
-    STAB_PATCH=$((10#$c))
-    return 0
-  }
-
-
-
-
-
-
-
-
-  # -------------------------------------------------------------------------
-  # `eslint_typed_scope`: every linted file gets type information, or the
-  # type-aware rules cannot run at all.
-  #
-  # WHAT IT IS FOR. `lint/eslint.config.mjs` turned on
-  # `tseslint.configs.recommendedTypeChecked` and supplied `parserOptions` under
-  # a `files` glob of `**/*.{js,mjs,cjs,ts,tsx}`. Meanwhile one of the configs
-  # inside `recommendedTypeChecked` — `typescript-eslint/eslint-recommended` —
-  # declares `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS
-  # `.mts` and `.cts` to the set of files ESLint will lint. So every `.mts` file
-  # in a service was linted, was handed the type-aware rules, and was never
-  # handed the type information those rules require:
-  #
-  #   Error: Error while loading rule '@typescript-eslint/await-thenable':
-  #   You have used a rule which requires type information, but don't have
-  #   parserOptions set to generate type information for this file.
-  #
-  # Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669,
-  # on the `node` job, whose first real execution this was — the job had been
-  # suppressed for four days by the concurrency collision fixed in ad3e320. Both
-  # services carry three `.mts` files at the repo root (vitest.config.mts,
-  # vite.config.mts, vite.node.config.mts), so this was never marginal. The run
-  # dies at exit 2 before reporting a single finding.
-  #
-  # THE DIAGNOSIS THAT WAS WRONG, recorded because the wrong diagnosis is the
-  # more useful half. It was attributed to `tsconfigRootDir:
-  # import.meta.dirname` — kit's directory rather than the caller's — and that is
-  # a real misconfiguration which is also fixed. It is not what produced the
-  # error. Measured on eslint 9.39.5 / typescript-eslint 8: with
-  # `projectService: true`, setting `tsconfigRootDir` to `/nonexistent-root`, or
-  # deleting it, leaves the run byte-identical, because the project service walks
-  # UP from the linted FILE to find a tsconfig rather than searching from the
-  # root. A check written for the reported cause would have been green on the
-  # defect that actually shipped.
-  #
-  # WHY THIS IS A CHECK RATHER THAN A COMMENT. `files` is load-bearing in a way
-  # nothing else in this file's static phase can see, because ESLint 9 accepts a
-  # `files` glob that is narrower than the set of files its own inputs pull in,
-  # and there is no parse error and no warning: the run simply dies when the
-  # first type-aware rule is constructed. The only place this is observable is a
-  # real run against a real project — which is `tests/lint_test.sh`'s job, and
-  # which has an assertion for it. What THIS check does is hold the invariant the
-  # fix rests on, so a future edit to either list is caught here rather than in
-  # eleven services' CI.
-  #
-  # BOTH DIRECTIONS, because they are different mistakes with different costs.
-  # Too NARROW is the defect that shipped: a crash, exit 2, no findings. Too WIDE
-  # lints files kit never linted before — `.jsx` is the standing example, and
-  # adding it would turn every React service red with `was not found by the
-  # project service` since no `.jsx` file is in anyone's tsconfig. So the
-  # assertion is a superset-with-a-reason: every extension the recommended sets
-  # add must be present, and an extension nobody has a reason for is a finding.
-  eslint_typed_scope_check() {
-    "$PY" - "$ROOT" "$ESLINT_CONFIG" <<'PYE'
-import re
-import sys
-
-path = sys.argv[2]
-
-
-def strip_js_comments(src):
-    """Remove `//` and block comments, leaving string contents intact.
-
-    This exists because the first version of this check read its answer out of
-    the file's own COMMENT and went red on a config that is correct. `tsconfig-
-    RootDir` appears eleven times in the header above, explaining at length why
-    the value must be the caller's workspace, and the regex matched the first of
-    those rather than the `process.cwd()` on the last line.
-
-    That is AGENTS.md's rule arriving in a new place: "a check that can be
-    satisfied by a comment is not a check", and the mirror image is worse — a
-    check that can be FALSIFIED by one. The file documenting its own invariant
-    is the normal case, not an unlucky one, so any check reading a JS or shell
-    file has to strip comments first or it is reading the prose.
-
-    Strings are tracked because a `//` inside a quoted path is content: the
-    `paths` style glob in this very file is full of them.
-    """
-    out = []
-    i, n = 0, len(src)
-    while i < n:
-        ch = src[i]
-        if ch in ("'", '"', "`"):
-            quote = ch
-            out.append(ch)
-            i += 1
-            while i < n:
-                out.append(src[i])
-                if src[i] == "\\":
-                    if i + 1 < n:
-                        out.append(src[i + 1])
-                        i += 2
-                        continue
-                elif src[i] == quote:
-                    i += 1
-                    break
-                i += 1
-            continue
-        if ch == "/" and i + 1 < n and src[i + 1] == "/":
-            while i < n and src[i] != "\n":
-                i += 1
-            continue
-        if ch == "/" and i + 1 < n and src[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
-                if src[i] == "\n":
-                    out.append("\n")
-                i += 1
-            i += 2
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-src = strip_js_comments(open(path, encoding="utf-8").read())
-
-# The extensions `recommendedTypeChecked` can hand a type-aware rule. Held HERE
-# and asserted against kit's glob rather than read out of an installed
-# typescript-eslint, because this repository ships no node_modules and no
-# dependencies, and a check that could only run where a package was installed
-# would be a check that never runs in the one place it is needed. The value is
-# typescript-eslint 8's own `eslint-recommended` `files`, quoted in
-# lint/eslint.config.mjs's own header comment; if a future version changes it,
-# this list is the thing to update and the comment is where the reason lives.
-#
-# `.jsx` is deliberately NOT here and the comment says why; it is a plausible
-# addition to this tuple and one that would be wrong.
-REQUIRED = ("ts", "tsx", "mts", "cts")
-
-# kit's glob, read out of the file rather than restated. A restatement would be a
-# second copy of the same fact, and AGENTS.md's rule about `advisoryOps` and
-# `unrecognisedTier` is the general form of the point: a property stated in two
-# places is a property asserted zero times.
-m = re.search(r"files:\s*\[([^\]]*\*\.\{[^}]*\}[^\]]*)\]", src)
-if not m:
-    sys.exit(
-        f"{path}: could not find the brace-globbed `files` entry this check reads. "
-        f"The check has stopped being able to ask its question, and a check that "
-        f"cannot ask its question is not a check"
-    )
-present = set(re.findall(r"[a-z]+", m.group(1)))
-
-problems = []
-missing = [e for e in REQUIRED if e not in present]
-if missing:
-    problems.append(
-        f"{path}: the `files` glob covering `parserOptions` is missing {missing}. "
-        f"tseslint.configs.recommendedTypeChecked contains a config whose own "
-        f"`files` adds {list(REQUIRED)} to the set of files ESLint lints, and "
-        f"`recommendedTypeChecked` itself is UNSCOPED — so a linted file outside "
-        f"this glob is given the type-aware rules and never given the type "
-        f"information they require, and the run dies at exit 2 with `You have "
-        f"used a rule which requires type information` before reporting a single "
-        f"finding. This is the defect that shipped: cafaye/site run 37236386666 "
-        f"and cafaye/parlor run 37230458669, both of which carry three root-level "
-        f"`.mts` files"
-    )
-
-# And the other direction. `jsx` is the named example, and the reason is
-# measured: nothing above adds it to the linted set, so adding it here widens
-# kit's lint in every service in the fleet, and no `.jsx` file is in anyone's
-# tsconfig — so every one of them goes red with `was not found by the project
-# service`. A React service's components are `.tsx`.
-UNJUSTIFIED = ("jsx",)
-stray = [e for e in UNJUSTIFIED if e in present]
-if stray:
-    problems.append(
-        f"{path}: the `files` glob now covers {stray}. No recommended set adds "
-        f"those to the linted set, so this widens what kit lints in every service "
-        f"in the fleet, and a `.jsx` file is in nobody's tsconfig — so the cost is "
-        f"a red `was not found by the project service` in each of them. If this is "
-        f"wanted it is a decision about the fleet's lint policy and belongs in a "
-        f"comment here saying so"
-    )
-
-# `tsconfigRootDir` must be the CALLER's workspace. Not the reported cause of the
-# crash above, and still asserted: it is load-bearing in exactly one place, and
-# that place is `allowDefaultProject`, whose globs are matched RELATIVE TO IT
-# (`useProgramFromProjectService.js` does
-# `path.relative(parseSettings.tsconfigRootDir, filePathAbsolute)`). With kit's
-# own directory as the root, a pattern meant to cover the caller's root config
-# files resolves to `.kit/lint/*.mts` and matches nothing — the error says so:
-# `allowDefaultProject is set to ["*.mts"], which does not match '../../x.mts'`.
-# So the value is wrong in a way that is invisible until the first entry is added.
-tm = re.search(r"tsconfigRootDir:\s*([^,\n}]+)", src)
-if not tm:
-    problems.append(
-        f"{path}: no `tsconfigRootDir` is set. typescript-eslint then infers one, "
-        f"and the inference is a guess about a directory layout kit does not know"
-    )
-elif "import.meta.dirname" in tm.group(1):
-    problems.append(
-        f"{path}: `tsconfigRootDir` is `import.meta.dirname`, which is kit's own "
-        f"`lint/` directory rather than the caller's workspace. It is not the cause "
-        f"of the crash the header describes — with `projectService: true` the "
-        f"service walks up from the linted FILE, so this value is ignored for "
-        f"project lookup — but `allowDefaultProject` globs are matched relative to "
-        f"it, so the first entry added would resolve to `.kit/lint/` and match "
-        f"nothing. It must be the caller's workspace"
-    )
-
-if problems:
-    sys.exit("; ".join(problems))
-
-print(
-    f"every extension recommendedTypeChecked can lint ({', '.join(REQUIRED)}) is "
-    f"inside the `files` glob that supplies parserOptions, no extension is present "
-    f"without a reason, and tsconfigRootDir is the caller's workspace rather than "
-    f"kit's"
-)
-PYE
-  }
-
-
   # -------------------------------------------------------------------------
   # Secrets. Two scanners and two different questions, and this section is the
   # part of the gate that proves both of them can fail.
@@ -6157,7 +4375,6 @@ PY
   }
   check 'no .gitleaksignore  (the allowlist is the committed config)' gitleaks_ignore_check
 
-
   scan_behaviour_check() {
     "$PY" - "$ROOT" "$GITLEAKS_GATE" "${GITLEAKS_BIN:-}" <<'PY'
 import os
@@ -6267,9 +4484,6 @@ PY
   }
   check "$GITLEAKS_GATE  (finds a real secret, never prints it, reads history)" \
     scan_behaviour_check
-
-
-
 
   # The scanner itself, executed over kit's own tree and full history. The
   # behaviour is asserted by the check above; this is the real scan of the real
@@ -6546,7 +4760,6 @@ check 'tests/classify_test.sh  (19 cases, incl. the fail-closed property)' \
 check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version)' \
   bash "$ROOT/tests/fingerprint_test.sh"
 
-
 # The fetch is a claim about a REAL SUBPROCESS talking to a REAL REMOTE, and it is
 # the only proof that `bin/dev` can obtain the stack it runs at all. A check that
 # parsed bin/dev would pass on a script that fetches nothing, which is why this is
@@ -6667,609 +4880,6 @@ else
 fi
 
 # ===========================================================================
-# phase: docker_tier_project_name — one shared namespace per RUN
-# ===========================================================================
-#
-# It is a text scan over files in this directory, so it belongs with the static
-# checks and nowhere else. It shipped inside a phase guard that `--static-only`
-# turned off, which is the general shape worth remembering: a property that lives
-# inside a phase's own guard is a property that does not hold when the phase is
-# skipped.
-
-  # A DOCKER TIER MAY NOT HARDCODE A NAME IN A SHARED NAMESPACE.
-  #
-  # WHY THIS IS A CHECK AND NOT A CONVENTION. A compose project name is the
-  # namespace for a stack's containers, networks and volumes; a fixed one means
-  # two concurrent runs of kit's own tests are not two stacks but one stack with
-  # two owners. `tests/isolation_test.sh` and `tests/tenancy_test.sh` each wrote
-  # `kit-isolation` / `kit-tenancy` at two sites apiece and it survived review
-  # because nothing about either file looks wrong. Observed on this box rather
-  # than argued (reports/compose-collision/): the second run could not bring up a
-  # cluster at all, and the first died part way through its assertions with psql's
-  # exit code and NO FAIL LINE OF ITS OWN, because the other run's teardown took
-  # the project volume out from under it. Through this file's FAIL summary that
-  # reads as a database-boundary violation — which is the one claim those two
-  # tiers exist to make trustworthy. A copy-paste reintroduces it in one line, and
-  # the failure it causes is a red that blames the wrong subsystem, so it is
-  # worth a gate rather than a review habit.
-  #
-  # FOUR NAMESPACES, not one. The packet names only the project name, and fixing
-  # only that would have left the same defect wearing three other hats, so each
-  # is checked for the same reason and none is checked because it was named:
-  #
-  #   project    `docker compose -p X` / `--project-name X` — containers,
-  #              networks, volumes.
-  #   container  `docker run --name X` — `docker rm -f X` takes a bare name and
-  #              will delete a container belonging to a different run.
-  #   volume     `docker volume rm X` — same, and a leaked volume makes the NEXT
-  #              run reuse an already-provisioned cluster, which then fails on an
-  #              assertion about state a previous run created.
-  #   host port  `KIT_POSTGRES_PORT=N` — worse than the rest, because it collides
-  #              with the DEVELOPER'S OWN running stack, not merely with another
-  #              test run. Measured while fixing this: deriving the project name
-  #              alone left two concurrent runs red on `port is already
-  #              allocated`, so the collision had been relocated rather than
-  #              fixed.
-  #
-  # DERIVED, NOT LISTED, twice over — which is the whole design and the reason a
-  # sixth tier is covered on the day it lands. (1) The set of docker tiers is
-  # every script under tests/ that brings a container up, not an enumeration that
-  # can name a script that was renamed. (2) Within a tier, the set of names it
-  # OWNS is read out of the assignments that exist, and each is checked against
-  # its use sites — so a tier that derives its project but writes its control
-  # container literally is caught by the same rule that caught the project.
-  # This is the same move as `self_test_live_tier` reading the live set out of
-  # `live_check` calls and `self_test_no_version_literal` reading its file set
-  # out of the recipes, and for the same reason: a list written down separately
-  # is a list that goes stale.
-  #
-  # EMPTINESS IS A FINDING, as `self_test_no_version_literal` does it. A guard
-  # that covers nothing must say so rather than report nothing — a check that
-  # silently passes because its pattern stopped matching is worse than no check,
-  # because it is a green that costs a reader their trust in the red ones. Four
-  # separate emptiness findings, because the four can each fail alone: no tiers
-  # found, no names derived, no use sites examined, or a tier that brings a stack
-  # up without naming a project at all (compose would then derive one from the
-  # working directory, which is its own kind of collision).
-  docker_tier_project_name() {
-    "$PY" - "$ROOT/tests" <<'PY'
-import os
-import re
-import sys
-
-tests_dir = sys.argv[1]
-# `validate.sh` is excluded, and not by an accident of naming: it is this check's
-# own source, and this check's rule text contains `docker compose … up` written
-# out in prose. Without the exclusion the guard reads its own documentation as a
-# tier that brings a stack up without naming a project, and fails itself. A guard
-# that trips over the sentence explaining the guard is worse than useless — it
-# teaches the reader that the message is noise.
-# RECURSIVE, and the recursion is the point. This used to be `os.listdir(tests_dir)`,
-# which reads the top level only — so a docker tier placed in a subdirectory was
-# not merely unchecked, it was INVISIBLE: it was in neither `tiers` nor
-# `uncovered`, so the gate printed a count of tiers that did not include it and
-# said nothing about it at all.
-# `tests/tenant_isolation/cross_tenant_harness.sh` is that file: it brings a
-# container up, derives its container name and its host port from the session,
-# and would have carried on doing so with no rule pointed at any of it. The
-# finding this whole rule exists for is the same shape one level up — a check
-# whose scope is narrower than a reader believes costs its trust in the findings
-# it does report.
-#
-# The paths are RELATIVE to tests/, so the messages name a path a reader can open
-# rather than one relative to whatever directory the python happened to run in.
-_ti_root = os.path.abspath(tests_dir)
-scripts = sorted(
-    os.path.relpath(os.path.join(d, f), _ti_root)
-    for d, _subdirs, files in os.walk(_ti_root)
-    for f in files
-    if f.endswith(".sh") and not f.startswith("_") and f != "validate.sh"
-)
-
-# (1) THE DOCKER TIERS, derived: a script that brings a container up. A SEARCH
-# rather than an anchored match, for the same reason DOCKER_USE is one — the
-# bring-up sites are `if ! docker compose … up`, and anchoring at the start of
-# the line misses them.
-BRING_UP = re.compile(r"\bdocker\s+(?:compose\b.*\bup\b|run\b)")
-
-# …OR BRINGS ONE UP THROUGH A LOCAL WRAPPER, and that second arm is not an
-# optimisation. The first version of this rule was BRING_UP alone and it was
-# green on a tree carrying the exact defect the check exists to catch:
-#
-#     tests/canary_test.sh:82  compose() { docker compose -p "$PROJECT" -f "$WORK/compose.yml" "$@"; }
-#     tests/canary_test.sh:419 if compose up -d --wait --wait-timeout 120 sender …; then
-#
-# No single LOGICAL LINE contains both halves. `docker compose` is in the
-# wrapper's body; `up` arrives at the call site through `"$@"`. So the file was
-# dropped from `tiers` before any of the four rules ran, and nothing in the
-# output said so — not even the emptiness finding, which counts tiers and so
-# cannot see a tier that was never counted. Measured with the mutation asserted
-# BY TEXT: `PROJECT="kit-canary-$$"` → `PROJECT="kit-canary"`, guard exit 0,
-# zero findings. reports/wrapper-tier-scope/mutations.sh is the recipe; it
-# extracts this guard's own source out of validate.sh on every run, so it cannot
-# outlive it.
-#
-# THE DEFINITION, not the call sites, and that is not a matter of taste. A
-# call-site pattern has to know every spelling a pass-through can take
-# (`compose up`, `"$COMPOSE" up`, `dc -f x up`, a wrapper three files away), and
-# the sixth such idiom in a tree it has never seen is another blind spot. The
-# DEFINITION has exactly one shape — a function whose body invokes
-# `docker compose` — and it is on the same line as the `docker compose` it is
-# hiding. `stack_live_test.sh` is covered by the same arm for the same reason:
-# its `tempo_port() { docker compose -p "$PROJECT" port tempo 3200 …; }` is a
-# wrapper too.
-#
-# `[^{}]*` rather than `.*` so the body cannot run past this function's closing
-# brace and borrow the next one's `docker`. A wrapper pattern that swallows the
-# rest of the file is a pattern that matches more than it means to, and the tier
-# it invents is then a tier the four rules will report emptiness findings about.
-WRAPPER = re.compile(
-    r"^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{[^{}]*\bdocker\s+compose\b"
-)
-
-# A line whose first non-blank character is `#` is a comment. Everything read
-# here is CODE: these files explain the rule at length, and a check that fires on
-# a comment explaining why a literal is wrong is a check that fires on its own
-# documentation — the mistake `self_test_live_tier` records about itself.
-def code_lines(path):
-    with open(path, encoding="utf-8") as fh:
-        raw = fh.read().splitlines()
-    return [
-        (n, ln)
-        for n, ln in enumerate(raw, 1)
-        if ln.strip() and not ln.lstrip().startswith("#")
-    ]
-
-
-# A line that INVOKES a docker command, anywhere in it.
-#
-# Deliberately a SEARCH and not a statement starter. The first version of this
-# rule matched `^[ \t]*docker`, and that is wrong in the most expensive way
-# available here: the bring-up sites are `if ! docker compose … up`, so the
-# anchor never matched them and the guard was blind to precisely the line this
-# packet exists to protect. It passed on a tree with `--project-name
-# kit-isolation` hardcoded at the bring-up site, and the mutation suite is what
-# said so rather than the reading of the code.
-#
-# The price of searching instead of anchoring is that prose can match, which is
-# why COMMENTS ARE STRIPPED FIRST — the comments in these files quote this rule's
-# own examples, and a check that fires on the sentence explaining the rule is a
-# check that fires on its own documentation.
-DOCKER_USE = re.compile(r"\bdocker\s+(?:compose|run|rm|volume|network)\b")
-
-# WHERE A NAMESPACE CAN BE PASSED, which is wider than DOCKER_USE by exactly the
-# subcommands the newer rules read. It is used for ONE question only - "is this
-# variable handed to docker anywhere in this file" - and NOT for `examined`, which
-# stays on DOCKER_USE so the emptiness finding below keeps counting exactly what it
-# counted before.
-#
-# That asymmetry is measured rather than tidiness. With DOCKER_USE as the
-# declaration rule's predicate, `GOOD_IMAGE="kit-provenance-test-$$:good"` was not
-# fed to docker by the check's own reckoning, because `docker build` is not one of
-# DOCKER_USE's five subcommands - so removing the `$$` from it produced no finding,
-# and the mutation case written to catch exactly that reported NOT BITTEN. Widening
-# `examined` at the same time would have made the emptiness finding harder to fire,
-# which is the wrong direction to reach in.
-NAMES_IN_DOCKER = re.compile(
-    r"\bdocker\s+(?:compose|run|rm|volume|network|build|image|rmi|create|tag)\b"
-)
-
-# WHAT A SCRIPT *TOUCHES*, which is a WIDER question than what it brings up, and
-# it has to be wider or the emptiness finding below is dead code — a rule whose
-# predicate is the tier predicate cannot fire, and a rule that cannot fire is the
-# defect this whole packet chain exists to kill wearing a new hat.
-#
-# The five subcommands DOCKER_USE leaves out are `build`, `image`, `rmi`, `create`
-# and `tag`, and every one of them takes a name in a namespace that is shared by
-# every concurrent run on the machine. They are here because `tests/
-# provenance_test.sh` builds `-t kit-provenance-test:good` and tears it down with
-# `docker rmi -f`, and before this rule nothing named that file at all.
-#
-# `cp` is in the list for the same reason and is the one that costs nothing: it
-# names nothing, but a script that reads out of a container is a script whose
-# result depends on which run created it.
-TOUCHES_DOCKER = re.compile(
-    r"\bdocker\s+(?:compose|run|rm|volume|network|build|image|rmi|create|tag|cp)\b"
-)
-
-# `docker build -t NAME` / `--tag NAME` names an IMAGE, which is a fifth shared
-# namespace and not a sixth spelling of the first four: `docker rmi -f NAME` takes
-# a bare name, will delete an image another run is still building against, and
-# leaves that run's next assertion failing on a missing image rather than on
-# anything it did.
-#
-# SCOPED TO `docker build` ON PURPOSE. `-t` is also `--tty` to `docker run` and
-# `docker exec`, where the value is `true`/`false` and there is no image at all —
-# `tests/tenancy_test.sh:211` carries `psql -A -t -F'@'` on a line that also runs
-# `docker exec`. A flag taken across every docker subcommand would read that as a
-# literal image name, and a check that fires on correct code teaches a reader to
-# ignore it.
-IMAGE_TAG = re.compile(r"\bdocker\s+build\b[^\n]*?(?:\s-t\s+|\s--tag[=\s]+)(\S+)")
-
-# A COMMAND INSIDE A STRING IS NOT A COMMAND, and this rule is the only one here
-# whose pattern can match a whole one.
-#
-# `tests/deploy_test.sh:456` is `note "  docker build -t cafaye-kit16/courier:35c6a27
-# /path/to/courier"` — an example printed to a reader who has no image to hand. It
-# is not a comment, so `code_lines` keeps it, and IMAGE_TAG matched the whole
-# command inside the string and reported a hardcoded image tag that does not exist
-# anywhere. A check that fires on correct code teaches a reader to ignore it, which
-# is this repository's own recorded rule about `Naming/PredicateName` and about
-# keyword scans over comments, and it is the mistake `self_test_live_tier`
-# documents making and then backing out of.
-#
-# SCOPED TO THIS RULE RATHER THAN APPLIED TO EVERY LOGICAL LINE, and the reason is
-# a measurement rather than a preference: DOCKER_USE is a SEARCH whose result feeds
-# the `examined` emptiness finding, so destringing the lines it reads would change
-# how many use sites a tier appears to have, and that count is itself a check.
-# `docker` ITSELF has to lie outside the quoted run — not the command's arguments.
-# Blanking the quoted runs first, which was the first attempt, breaks the two lines
-# that matter most: `docker build --tag "$IMAGE_BAD"` becomes `docker build --tag
-#    ` and the pattern captures the NEXT flag as the image name (`-f`), and a
-# `\` continuation swallowed whole reports `-t` with the value `\` on its back. Both
-# are findings with a name in them, so both read as real defects and neither is.
-# The mask below answers the question the comment actually asks, and the captured
-# value is then taken from the UNTOUCHED body, where it is still `"$IMAGE_BAD"`.
-QUOTED = re.compile(r'"(?:\\.|[^"\\])*"|\'[^\']*\'')
-
-def outside_quotes(body):
-    """One character per character of `body`: '0' inside a quoted run, '1' outside."""
-    mask = ["1"] * len(body)
-    for m in QUOTED.finditer(body):
-        for i in range(m.start(), m.end()):
-            mask[i] = "0"
-    return "".join(mask)
-
-
-def command_positions(pattern, body):
-    """Every match of `pattern` in `body` whose first character is not inside a
-    quoted run. Yielded as the match objects so the caller still reads the value
-    out of the original body."""
-    mask = outside_quotes(body)
-    return [m for m in pattern.finditer(body) if mask[m.start()] == "1"]
-
-# (1c) A SCRIPT THAT NAMES A SHARED NAMESPACE IS A TIER EVEN IF IT STARTS
-# NOTHING.
-#
-# `tests/provenance_test.sh` builds `-t kit-provenance-test:good`, reads labels
-# back out of it, and tears it down with `docker rmi -f kit-provenance-test:good
-# kit-provenance-test:plain`. It never runs a container, so neither of the two
-# arms above sees it — and it is exactly the defect this check exists to catch, in
-# a namespace (the local image store) that `docker rmi -f` reaches by bare name
-# and that no `-p` has any say over. Two concurrent runs build over each other and
-# one run's teardown removes the image the other is still asserting against.
-#
-# This arm is why the tier set is a TIER SET and not a bring-up list. It also keeps
-# the emptiness finding below non-vacuous: `TAKES_A_SHARED_NAME` is a subset of
-# `TOUCHES_DOCKER`, so a script that runs docker without naming anything — `docker
-# ps`, `docker info` — is still outside the tier set and still has to be named by
-# the finding rather than silently dropped.
-TAKES_A_SHARED_NAME = re.compile(
-    r"\bdocker\s+(?:compose|run|volume|network|build|image|rmi|tag)\b[^\n]*?"
-    r"(?:\s(?:" + r"--project-name|--name|-p|-t|--tag|-v)[=\s])"
-)
-
-# The namespace-taking flags. `-p` and `--project-name` name a project, `--name`
-# names a container. `-v` is NOT here and the distinction is load-bearing: `docker
-# run -v host:container` publishes a PORT (a namespace) while `-v name:/path` is a
-# bind mount whose source is a path on this machine. Both spell `-v`, and
-# separating them by shape is cheaper than being wrong about one of them.
-NAMESPACE_FLAGS = r"(?:--project-name|--name|-p)"
-
-# Continuations are joined before scanning, so a flag on one line and its value on
-# the next are read together — `--name \` + newline + `  foo` is one command.
-def logical_lines(pairs):
-    out, cur = [], None
-    for n, ln in pairs:
-        if cur is None:
-            cur = (n, [ln])
-        else:
-            cur[1].append(ln)
-        if cur is not None and not ln.rstrip().endswith("\\"):
-            out.append(cur)
-            cur = None
-    if cur is not None:
-        out.append(cur)
-    return [(n, " ".join(b)) for n, b in out]
-
-
-# The assignment forms a derived name takes. `PROJECT="kit-x-$$"` and
-# `PROJECT=kit-x-$$` are the same declaration; `readonly PROJECT=...` is a third
-# and is included because a name that cannot be reassigned is a name a later
-# literal cannot quietly disagree with.
-ASSIGN = re.compile(
-    r"^\s*(?:readonly\s+|export\s+|local\s+)*"
-    r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
-    r'"?(?P<rhs>[^"\s][^"]*)"?\s*$'
-)
-
-# IS THIS WORD DERIVED PER RUN? The test is that it contains shell expansion of
-# ANY kind — `$PROJECT`, `${PROJECT}`, or an inline `$$`.
-#
-# `$$` counts, and an earlier version of this rule required the word to be
-# nothing BUT a variable reference. That was wrong in a way worth recording: it
-# fired on `tests/deploy_test.sh`'s `docker volume rm "kit16-not-ours-v-$$"`,
-# which is a decoy volume that IS unique to the run, because it inlines the pid
-# rather than naming a variable holding it. A check that fires on correct code
-# teaches a reader to ignore it, which is this repository's own recorded rule
-# about `Naming/PredicateName` and about keyword scans over comments — and it is
-# the mistake `self_test_live_tier` documents making and then backing out of.
-#
-# INLINING IS ACCEPTED DELIBERATELY, and the boundary is worth being exact about,
-# because "bind the name once" is the rule the fix was written to and this is the
-# place that could have quietly relaxed it. What actually breaks is two sites
-# DISAGREEING: one deriving `kit-isolation-$$` and one spelling `kit-isolation`
-# literal, so the tier queries a namespace it did not create. Two sites that both
-# inline the same `$$` agree, and two stacks do not collide. Spelling a name twice
-# is untidy; spelling two DIFFERENT names is the defect, and only the second is
-# this check's business.
-def is_derived(word):
-    return "$" in word
-
-
-problems = []
-tiers = []
-# Scripts that invoke docker and were not counted as a tier. Collected rather
-# than decided inline, because the finding that names them is about the tier SET
-# and is raised below the loop with the whole set in hand.
-uncovered = []
-
-for name in scripts:
-    path = os.path.join(tests_dir, name)
-    try:
-        pairs = code_lines(path)
-    except OSError:
-        continue
-    # Over LOGICAL LINES, not over single lines, and that detail is the whole
-    # reason this rule works at all. `if ! docker compose --project-name … \` on
-    # one line and `up -d --wait postgres` on the next is ONE command; a
-    # per-line test asks each half a question neither can answer, finds no bring-up
-    # anywhere, and quietly drops the tier out of scope. tenancy_test.sh was
-    # excluded that way while a literal sat in it, and the mutation suite is what
-    # said so.
-    logical = logical_lines(pairs)
-    if not any(
-        BRING_UP.search(b) or WRAPPER.search(b) or command_positions(TAKES_A_SHARED_NAME, b)
-        for _, b in logical
-    ):
-        if any(TOUCHES_DOCKER.search(b) for _, b in logical):
-            uncovered.append(name)
-        continue
-    tiers.append(name)
-
-    # (2) THE NAMES THIS TIER OWNS, derived from its own assignments. Restricted
-    # to names that LOOK like namespaces — they carry a `kit-` prefix, or a name
-    # ending in -control — so the rule does not trip over `failures=0` and the
-    # other ordinary counters these files are full of.
-    #
-    # AND ONLY THE ONES DOCKER ACTUALLY READS, which is a narrowing this packet
-    # forced rather than chose. Widening the tier set to wrapper tiers put
-    # `tests/stack_live_test.sh` in scope for the first time, and it immediately
-    # reported `KIT_POSTGRES_DATABASES="kit_probe"` as a literal namespace — a
-    # database name created INSIDE the stack this same file brings up under
-    # `PROJECT="kit-stack-$$"`. Two runs cannot collide on it, because the
-    # databases live in the container and the container is already per-run: the
-    # finding's own sentence, "every run of this tier shares it", is false there.
-    # A check whose message is false is worse than one that is absent, so the rule
-    # now asks the question the message asserts — does this variable reach a docker
-    # invocation in this file — and derives that from the file rather than from a
-    # list. `PROJECT` and every other real namespace is read by a `docker compose
-    # -p "$PROJECT"` line, so the load-bearing case is untouched; the measurement
-    # that says so is reports/wrapper-tier-scope/mutations.sh, whose six cases all
-    # still bite.
-    fed_to_docker = set()
-    for n, body in logical:
-        if not NAMES_IN_DOCKER.search(body):
-            continue
-        for var in re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", body):
-            fed_to_docker.add(var)
-    owned = {}
-    for n, ln in pairs:
-        m = ASSIGN.match(ln)
-        if not m:
-            continue
-        var, rhs = m.group("var"), m.group("rhs")
-        if re.fullmatch(r"[0-9]+", rhs):
-            continue
-        if not (re.match(r"\s*[\"']?kit[-_]", rhs) or re.search(r"-control", rhs)):
-            continue
-        if var not in fed_to_docker:
-            continue
-        owned[var] = (n, rhs)
-        # A literal in the ASSIGNMENT is the same defect as a literal at the use
-        # site, and it is the harder one to see: `"$CONTROL_C"` looks derived at
-        # every use, so a rule that reads use sites alone passes on a tier whose
-        # control container is `kit-isolation-control` for every run on the
-        # machine. The mutation suite called this one NOT BITTEN. So the
-        # declaration is checked as well as the call.
-        #
-        # `WORK="${TMPDIR:-/tmp}/kit-isolation.$$"` is fine and is the shape most
-        # of these take: it carries `$$`, so it is derived. A name with neither
-        # `$` nor `$$` in it is the same literal wearing a variable's clothes.
-        # THE ADVICE HAS TO SURVIVE BEING READ ON THE VARIABLE IT NAMES. The
-        # suggestion used to be `{var}="$PROJECT-…"`, and on the three wrapper
-        # tiers added by this packet that renders as `PROJECT="$PROJECT-…"` for the
-        # file whose variable is *named* `PROJECT` — an instruction to assign a
-        # variable from itself, on the very line a reader is trying to fix. It was
-        # unreachable while only the five original tiers were in scope and none of
-        # them names its project variable `PROJECT`, so widening the tier set is
-        # what made it visible. A finding whose remedy is wrong is half a finding.
-        advice = (
-            f"{var}=\"$RUN-…\""
-            if var == "PROJECT"
-            else f"{var}=\"$PROJECT-…\""
-        )
-        if not is_derived(rhs):
-            problems.append(
-                f"{name}:{n}: `{var}=\"{rhs}\"` assigns a namespace LITERALLY, so every "
-                f"run of this tier shares it — two concurrent runs are one stack with two "
-                f"owners. Put the run's own name in it (`{advice}`), which is "
-                f"what the use sites below already read."
-            )
-
-    # The rule itself, over USE SITES rather than over declarations. A tier is
-    # allowed to derive its names anywhere it likes; what it may not do is hand
-    # `docker` a literal in a shared namespace.
-    examined = 0
-    for n, body in logical:
-        if not DOCKER_USE.search(body):
-            continue
-        examined += 1
-        for m in re.finditer(r"(?:^|\s)(" + NAMESPACE_FLAGS + r")\s+(\S+)", body):
-            flag, word = m.group(1), m.group(2).strip("\"'")
-            if is_derived(word):
-                continue
-            problems.append(
-                f"{name}:{n}: `docker … {flag} {word}` names a project or container "
-                f"LITERALLY. Every run of this tier then shares one namespace, so two "
-                f"concurrent runs are one stack with two owners — and one run's teardown "
-                f"lands mid-assertion in the other, which reads as a failure of the thing "
-                f"this tier proves. Derive it from the run's own name; this file already "
-                f"derives {', '.join(sorted(owned)) or 'nothing yet'}."
-            )
-
-    # `docker volume rm X` takes a bare name and does not care which project made
-    # it, so a literal there is a teardown reaching outside its own namespace.
-    for n, body in logical:
-        m = re.search(r"\bdocker\s+volume\s+rm\s+(\S+)", body)
-        if not m:
-            continue
-        word = m.group(1).strip("\"'")
-        if is_derived(word) or word.startswith("--"):
-            continue
-        problems.append(
-            f"{name}:{n}: `docker volume rm {word}` removes a volume this run may not own. "
-            "Derive it, or delete the line if nothing in the tier creates that volume."
-        )
-
-    # THE HOST PORT, in the shape a compose tier actually moves it: the `.env`
-    # override. Checked on the code that writes it, not on the `.env.example` it
-    # overrides, and only when the value is a bare literal — a tier that writes
-    # `KIT_POSTGRES_PORT=$PGPORT` has derived it.
-    for n, body in logical:
-        m = re.search(r"KIT_POSTGRES_PORT=\"?\$?\{?([A-Za-z0-9_$-]+)\"?", body)
-        if not m:
-            continue
-        if not re.fullmatch(r"[0-9]+", m.group(1)):
-            continue
-        problems.append(
-            f"{name}:{n}: `KIT_POSTGRES_PORT={m.group(1)}` is a FIXED HOST PORT, and a "
-            "fixed host port is worse than a fixed project name — it collides with the "
-            "developer's own running stack, not merely with another test run. Measured "
-            "while fixing this: deriving the project name alone still left two concurrent "
-            "runs red on `port is already allocated`. Derive a free port the way "
-            "tests/stack_live_test.sh does."
-        )
-
-    # A tier that brings a stack up must NAME its project. Compose otherwise
-    # derives one from the working directory, which two runs in one checkout also
-    # share.
-    brings_up = any(
-        re.search(r"docker\s+compose\b.*\bup\b", body) for _, body in logical
-    )
-    if brings_up:
-        names_a_project = any(
-            re.search(r"docker\s+compose\b.*" + NAMESPACE_FLAGS, body)
-            for _, body in logical
-        )
-        if not names_a_project:
-            problems.append(
-                f"{name}: brings a stack up with `docker compose … up` and never names a "
-                "project. Compose derives one from the working directory, so two runs in one "
-                "checkout share it."
-            )
-    if examined == 0:
-        problems.append(
-            f"{name}: was counted as a docker tier because it brings a container up, but no "
-            "docker invocation could be read as a logical line. The pattern that finds the "
-            "names has stopped matching this file, so the rule is passing by not looking."
-        )
-
-# The IMAGE TAG, in the shape `docker build` actually takes it. A separate
-    # rule from the use-site scan above because `-t` means --tty to every other
-    # docker subcommand, and a flag that is only a namespace in one of them has to
-    # be matched only there.
-    for n, body in logical:
-        for m in command_positions(IMAGE_TAG, body):
-            word = m.group(1).strip("\"'")
-            if is_derived(word):
-                continue
-            problems.append(
-                f"{name}:{n}: `docker build -t {word}` names an IMAGE LITERALLY. An image "
-                "tag is a shared namespace in the same sense a project name is, and "
-                "`docker rmi -f` takes a bare one: two concurrent runs then build over "
-                "each other and one run's teardown removes the image the other is still "
-                "asserting against. Derive it from the run's own name."
-            )
-
-# (3) EMPTINESS IS A FINDING, five ways, each of which can fail alone.
-if not tiers:
-    problems.append(
-        "no docker tier found under tests/ — this check is asserting over nothing. Either the "
-        "tiers moved or the pattern has stopped matching them; both mean the rule is no longer "
-        "covering what it was written for."
-    )
-else:
-    derived = sum(
-        1
-        for name in tiers
-        for n, ln in code_lines(os.path.join(tests_dir, name))
-        if ASSIGN.match(ln)
-        and (
-            re.match(r"\s*[\"']?kit[-_]", ASSIGN.match(ln).group("rhs"))
-            or re.search(r"-control", ASSIGN.match(ln).group("rhs"))
-        )
-    )
-    if derived == 0:
-        problems.append(
-            f"{len(tiers)} docker tier(s) found and none derives a namespaced name, so this "
-            "check cannot tell a derived name from a literal. It is passing because it is not "
-            "looking."
-        )
-
-# …AND THE FIFTH IS THE TIER SET ITSELF, which is the one that could not have been
-# written before the mutation suite existed.
-#
-# The four above are all "a tier was found and nothing could be read inside it". This
-# one is "a script uses docker and NO rule here was ever pointed at it" — and it is
-# the one that was load-bearing while being absent, because a file dropped from
-# `tiers` is invisible to a rule that counts tiers. Three such files sat under
-# tests/ carrying the exact defect this check exists to catch and the output said
-# `5 docker tier(s), 0 hardcoded … name` in the same breath.
-#
-# SCOPE IS DERIVED, not listed, and from a predicate WIDER than the tier set on
-# purpose. Deriving it from `tiers` would be a tautology that can never fire; the
-# predicate here is "invokes a docker subcommand", which is a different question
-# from "brings a container up" and is true of `provenance_test.sh`. That file is
-# named by this finding and is not a tier, and the reason it is not is that it
-# builds an image rather than starting a container — which is exactly the shape a
-# rule scoped to `… up` cannot see.
-for name in uncovered:
-    problems.append(
-        f"{name}: invokes docker but was not counted as a docker tier, so none of the rules "
-        "above were pointed at it — this is a gap, not a pass. It brings no stack up in a form "
-        "this check recognises, so either it names a shared namespace somewhere else (an image "
-        "tag, a container name, a `docker volume rm`) and that name is unchecked, or it does "
-        "not and the gap is worth knowing about anyway: a check that covers less than a reader "
-        "believes is worse than no check, because it costs its trust in the findings it does "
-        "report."
-    )
-
-if problems:
-    for p in problems:
-        print("  -", p)
-    sys.exit(1)
-print(
-    f"{len(tiers)} docker tier(s), 0 hardcoded container/volume/project/image name and 0 "
-    f"fixed host port; {len(uncovered)} script(s) under tests/ invoke docker without being a "
-    f"tier, so a stack brought up through a wrapper is a tier too — covered on the day it "
-    f"lands, not the day this file is edited"
-)
-PY
-  }
-
-
-# ===========================================================================
 # phase: lint — run the configs, do not parse them
 # ===========================================================================
 #
@@ -7299,7 +4909,6 @@ else
   check 'tests/lint_test.sh  (every linter runs, and its control disagrees)' \
     bash "$ROOT/tests/lint_test.sh"
 fi
-
 
 kit_phase "60 summary"
 printf '\n'
