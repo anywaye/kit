@@ -1507,6 +1507,16 @@ we wrote them down to be:
   `until`** — and **an entry matching nothing is a failure**. The total is
   printed on every run, green included
 - no `actions/cache` step may cache a test report
+- **no `run:` body may read a variable it only ever set as a prefix
+  assignment.** `VAR=value cmd` puts `VAR` in `cmd`'s environment and in no
+  shell variable, so `echo "$VAR"` under `set -euo pipefail` is
+  `unbound variable` and exit 1 — which is how
+  `image.reusable.yml`'s `stamp provenance` step failed on every run it ever
+  had, and why `ghcr.io/cafaye/site` has never been published. A prefix
+  assignment that is **never** read back in the same block is left alone: the
+  command is its only consumer and the command did receive it. Comments are
+  stripped before the body is read, so the fix's own comment — which quotes the
+  broken shape — neither satisfies nor falsifies the check
 - no workflow may declare `pull_request_target`, `workflow_run` or
   `issue_comment`, read off the **parsed trigger keys** so the comment explaining
   why is not itself a violation

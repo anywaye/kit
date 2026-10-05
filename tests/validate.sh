@@ -2373,6 +2373,228 @@ PY
   fi
 
   # -------------------------------------------------------------------------
+  # THE `run:` BODIES ARE SHELL, AND `bash -n` NEVER LOOKED AT THEM.
+  #
+  # `yaml.safe_load` on a workflow is a parse of the DOCUMENT. A `run:` body is
+  # a string inside it, and everything that makes a step work or fail is decided
+  # by the shell that runs it — which is why every check above is satisfied by a
+  # workflow whose `run:` bodies are all broken.
+  #
+  # THE DEFECT THIS EXISTS FOR, measured. `.github/workflows/image.reusable.yml`'s
+  # `stamp provenance` step was:
+  #
+  #   KIT_PROVENANCE_BUILT_AT="$(date …)" \
+  #     KIT_PROVENANCE_SOURCE_DIRTY=clean \
+  #     sh docker/provenance.sh --validate
+  #   { echo "built_at=$KIT_PROVENANCE_BUILT_AT"; … } >>"$GITHUB_OUTPUT"
+  #
+  # `VAR=value <command>` is a PREFIX ASSIGNMENT: it exists in the environment of
+  # `<command>` and in no shell variable. So the `echo` was reading a name the
+  # shell had never been given, and under the `set -euo pipefail` every step in
+  # this tree begins with, an unset read is not an empty value — it is
+  # `unbound variable` and exit 1. The step failed on every run it ever had.
+  # `cafaye/site` calls this file, so `ghcr.io/cafaye/site` has never existed.
+  #
+  # The other four fields in that same step work because they arrive through the
+  # step's `env:` block, which really does populate the shell environment.
+  # `built_at` was the only one created INSIDE the body, and the only one
+  # created as a prefix assignment. It is the only one that broke. That is the
+  # shape of the bug: nothing about the file looks wrong and everything about it
+  # is.
+  #
+  # WHY A SHAPE CHECK AND NOT A REAL RUN. Executing every `run:` body needs the
+  # runner's services, the checked-out tree and each action's own inputs, and a
+  # check that needs all three to reach a verdict is a check that silently stops
+  # running. So this asks the question that is decidable from the text: is there a
+  # name that this block creates for a command and then reads as a variable?
+  #
+  # `KIT_PROVENANCE_SOURCE_DIRTY=clean sh …` is left alone on purpose, and the
+  # check knows the difference rather than the author having to remember it: a
+  # prefix assignment whose name is NEVER read bare in the same block is fine,
+  # because the command is its only consumer and the command did receive it. One
+  # assignment in `ci.reusable.yml` (`GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local
+  # go test`) is the same shape and is likewise correct — those three reach `go`
+  # and nothing reads them back.
+  section 'static: a run: body does not read a name it only ever prefix-assigned'
+  run_body_env_check() {
+    "$PY" - "$ROOT" <<'PY'
+import glob
+import os
+import re
+import sys
+
+import yaml
+
+root = sys.argv[1]
+
+# A logical line, with backslash continuations joined. A prefix assignment spread
+# over three physical lines is ONE assignment, and reading only the first line
+# would miss every multi-line one — which is the shape that actually shipped.
+# The line number reported is the FIRST physical line, so a message points at the
+# assignment rather than at its continuation.
+def logical_lines(block):
+    buf, start = [], None
+    for i, raw in enumerate(block.splitlines(), 1):
+        s = raw.rstrip()
+        if start is None:
+            start = i
+        if s.endswith("\\"):
+            buf.append(s[:-1])
+            continue
+        buf.append(s)
+        yield start, " ".join(buf)
+        buf, start = [], None
+    if start is not None:
+        yield start, " ".join(buf)
+
+
+def strip_comment(line):
+    """Drop a `#` comment.
+
+    A workflow here carries long explanatory comments and one of them NAMES the
+    bug (`built_at=$KIT_PROVENANCE_BUILT_AT` appears in prose explaining it). A
+    check that counted that comment would be a check a comment can satisfy, and a
+    check a comment can satisfy is the same defect as one a comment can falsify.
+    """
+    m = re.search(r"(?<![\"'\w])#", line)
+    return line[: m.start()] if m else line
+
+
+READ = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+# One whitespace-delimited word, honouring quotes so a value with a space in it
+# (`"$(date -u +%Y-%m-%dT%H:%M:%SZ)"`) is ONE word rather than three.
+WORD = re.compile(r"""(?:[^\s'"]+|'[^']*'|"[^"]*")+""")
+ASSIGN_HEAD = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+DECLARE = re.compile(r"^(?:export|declare|readonly|local|typeset)\b")
+
+
+def prefix_assignments(line):
+    """The names a logical line sets as a PREFIX assignment, in order.
+
+    Walks the line word by word. A run of `NAME=value` words is one prefix
+    assignment SET; the first word after that run is the command they belong to.
+    A run with no command after it is a plain assignment — which creates a shell
+    variable, so reading it back is correct.
+
+    Written as a walk rather than as "is there a `NAME=` at the start of a line"
+    because the shapes that matter are all wider than that one test:
+      - `FOO=-mod=mod BAR=off baz cmd` — three, then the command
+      - `FOO="$(date -u +%F)" cmd`        — a quoted value with spaces in it
+      - `FOO=bar cmd; …`                  — a `case` arm, terminated by `;;`
+      - `export FOO=bar cmd`              — NOT a prefix assignment; `export`
+                                             makes it a shell variable, so
+                                             reading it later is correct and
+                                             refusing it would be the check
+                                             firing on correct code
+    """
+    words = []
+    for w in WORD.finditer(line):
+        end = w.end()
+        # A terminator is a word in its own right and ends the command.
+        word = w.group(0)
+        words.append((word, end))
+    names = []
+    i = 0
+    while i < len(words):
+        word, _ = words[i]
+        if DECLARE.match(word):
+            # `export`/`local` and friends: the NEXT word is the assignment, and
+            # it is a plain one.
+            nxt = words[i + 1][0] if i + 1 < len(words) else ""
+            m = ASSIGN_HEAD.match(nxt)
+            if m:
+                names.append((m.group(1), False))
+                i += 2
+                continue
+            i += 1
+            continue
+        m = ASSIGN_HEAD.match(word)
+        if m:
+            names.append((m.group(1), True))
+            i += 1
+            continue
+        break
+    # Everything collected so far is a PREFIX assignment only if a command word
+    # followed the run.
+    if i >= len(words):
+        return []
+    # `;;` closes a case arm, and `;`/`&&`/`||` close a list — a word made only
+    # of those is punctuation, not the command.
+    tail = words[i][0]
+    if set(tail) <= set(";|&"):
+        return []
+    return [n for n, is_prefix in names if is_prefix]
+
+
+def steps(node, path=()):
+    """Yield (yaml_path, run_body) for every step with a `run:`."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "run" and isinstance(v, str):
+                yield path, v
+            else:
+                yield from steps(v, path + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from steps(v, path + (i,))
+
+
+problems = []
+
+for wf in sorted(glob.glob(os.path.join(root, ".github/workflows/*.yml"))):
+    rel = os.path.relpath(wf, root)
+    with open(wf, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+    if not isinstance(doc, dict):
+        continue
+    for path, body in steps(doc):
+        lines = list(logical_lines(body))
+        # name -> (first line number, the line as written)
+        prefix = {}
+        for ln, raw in lines:
+            for name in prefix_assignments(strip_comment(raw)):
+                prefix.setdefault(name, (ln, raw.strip()))
+
+        for name, (assign_ln, assign_txt) in sorted(prefix.items()):
+            bare = []
+            for ln, raw in lines:
+                if ln <= assign_ln:
+                    continue
+                line = strip_comment(raw)
+                for m in READ.finditer(line):
+                    got = m.group(1) or m.group(2)
+                    if got != name:
+                        continue
+                    # Skip the value of a LATER assignment of the same name:
+                    # `echo "$X" > f` then `X=…` is not a bare read, and a
+                    # check that counted it would fire on correct code.
+                    if re.search(
+                        r"(?:^|[\s;&|])" + re.escape(name) + r"=\S*$", line[: m.start()]
+                    ):
+                        continue
+                    bare.append((ln, raw.strip()))
+            if not bare:
+                continue
+            problems.append(
+                f"{rel} :: {'/'.join(str(p) for p in path)}: {name} is set as a "
+                f"PREFIX assignment on line {assign_ln} "
+                f"({assign_txt[:70]}) and read as a shell variable on line "
+                f"{bare[0][0]} ({bare[0][1][:70]}). A prefix assignment reaches "
+                f"the COMMAND's environment, not the shell, so under `set -u` "
+                f"that read is fatal: 'unbound variable', exit 1. Assign it on "
+                f"its own line and export it, or keep it as a prefix assignment "
+                f"and stop reading it back."
+            )
+
+if not problems:
+    sys.exit(0)
+sys.exit("; ".join(problems))
+PY
+  }
+  check 'every run: body  (no name is prefix-assigned and then read as a variable)' \
+    run_body_env_check
+
+  # -------------------------------------------------------------------------
   section 'static: compose — the observability chokepoint'
 
   compose_check() {

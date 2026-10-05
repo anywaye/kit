@@ -95,6 +95,70 @@
 
 ### Fixed
 
+- **`image.reusable.yml` has never run. Its `stamp provenance` step read a
+  variable it had never set, so `ghcr.io/cafaye/site` has never been
+  published.** The step wrote the build timestamp as a PREFIX ASSIGNMENT on the
+  command that needed it:
+
+  ```yaml
+  KIT_PROVENANCE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    KIT_PROVENANCE_SOURCE_DIRTY=clean \
+    sh docker/provenance.sh --validate
+  { echo "built_at=$KIT_PROVENANCE_BUILT_AT"; … } >>"$GITHUB_OUTPUT"
+  ```
+
+  `VAR=value cmd` exists in the environment of `cmd` and in no shell variable,
+  so the `echo` two lines down read a name the shell had never been given. Under
+  the `set -euo pipefail` every step in this tree begins with, an unset read is
+  not an empty value — it is `KIT_PROVENANCE_BUILT_AT: unbound variable` and
+  exit 1. Every one of `site`'s `publish` runs failed this way, back to
+  2026-10-04; there has never been a green one.
+
+  The other four fields in the same step were unaffected because they arrive
+  through the step's `env:` block, which really does populate the shell
+  environment. `built_at` was the only one created INSIDE the body, and the only
+  one created as a prefix assignment — so the failure was invisible in review
+  and identical on every run.
+
+  `built_at` is now a plain assignment followed by `export`, and
+  `source_dirty` stays a prefix assignment because the stamper is its only
+  consumer. Two shapes for two jobs: the shape follows the consumer.
+
+  `docker/provenance.sh` is **unchanged**, deliberately. `validate()` reads
+  `${KIT_PROVENANCE_BUILT_AT:-}` and treats an unset field as `unknown`, which
+  is correct for a developer's local `docker build`; the stamper was never the
+  broken half. It is worth being explicit about what that leniency costs a
+  proof, though: an unset field exits 0, so **a green `--validate` does not
+  demonstrate the field arrived.** The export is verified by planting a
+  MALFORMED timestamp and requiring the stamper to refuse it by name — the
+  control being that the same stamp with the `export` removed passes, stamping
+  `unknown`.
+
+- **`run:` bodies are shell, and nothing in the gate ever looked at them.**
+  `yaml.safe_load` on a workflow parses the DOCUMENT; a `run:` body is a string
+  inside it, so every check the static phase ran was satisfied by the workflow
+  that had just failed 179 commits running. `run_body_env_check` asks the
+  question that is decidable from the text: is there a name this block creates
+  for a command and then reads back as a variable?
+
+  It knows the difference rather than the author having to remember it. A prefix
+  assignment that is **never** read bare in the same block is left alone, because
+  the command is its only consumer and the command did receive it — which is
+  `source_dirty` in the step above and `GOFLAGS=-mod=mod GOPROXY=off
+  GOTOOLCHAIN=local go test` in `ci.reusable.yml`, both correct and both
+  untouched. Comments are stripped before the body is read, because the fix's
+  own comment quotes the broken shape; a check a comment can satisfy is not a
+  check, and one a comment can falsify is worse.
+
+  Why a shape check and not a real run: executing every `run:` body needs the
+  runner's services, the checked-out tree and each action's inputs, and a check
+  that needs all three to reach a verdict is a check that silently stops
+  running. The two halves were proved against throwaway fixture workflows — six
+  shapes that must go red (single-line, three names on one command, a `case`
+  arm) and three that must stay green (`export`, a later reassignment, a prefix
+  assignment nothing reads back) — so the check is known to fire and known not
+  to fire on correct code.
+
 - **The gate resolved python properly and assumed every other toolchain was
   already on `PATH`.** `tests/bootstrap.sh` had a deliberate resolution order
   for the interpreter — `$KIT_PYTHON`, then `.venv`, then a `python3` that
