@@ -272,9 +272,27 @@ jobs:
           KIT_PROVENANCE_TEMPLATE_VERSION: ${{ inputs.kit-version }}
         run: |
           set -euo pipefail
-          KIT_PROVENANCE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            KIT_PROVENANCE_SOURCE_DIRTY=clean \
-            sh docker/provenance.sh --validate
+          # `built_at` IS A SHELL VARIABLE, AND MUST BE, because the block below
+          # reads it. It was written as a PREFIX ASSIGNMENT on the `sh` line —
+          # `KIT_PROVENANCE_BUILT_AT=… KIT_PROVENANCE_SOURCE_DIRTY=clean sh …`
+          # — which sets that name in the environment of `provenance.sh` and
+          # nowhere else, so the `echo "built_at=$KIT_PROVENANCE_BUILT_AT"`
+          # two lines down was reading a shell variable that had never been set.
+          # Under `set -u` that is not an empty value, it is a FATAL: this step
+          # died with `KIT_PROVENANCE_BUILT_AT: unbound variable` on every run
+          # of every caller that reached it, which for `cafaye/site` means no
+          # image has ever been published. The other three fields work because
+          # they arrive through this step's `env:` block, which really does
+          # populate the shell environment — `built_at` was the only one created
+          # inside the body, and the only one created as a prefix assignment.
+          #
+          # So: assign on its own line, export, and the prefix assignment for
+          # `source_dirty` stays a prefix assignment because nothing reads it
+          # here — the stamper is its only consumer. Two different shapes for two
+          # different jobs, which is the point: the shape follows the consumer.
+          KIT_PROVENANCE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export KIT_PROVENANCE_BUILT_AT
+          KIT_PROVENANCE_SOURCE_DIRTY=clean sh docker/provenance.sh --validate
           {
             echo "source=$KIT_PROVENANCE_SOURCE"
             echo "revision=$KIT_PROVENANCE_REVISION"
