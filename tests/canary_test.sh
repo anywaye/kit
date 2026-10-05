@@ -147,14 +147,15 @@ source = open(path, encoding="utf-8").read()
 # was asserting about, so the names come from the parsed document and a rename
 # costs nothing here.
 #
-# The set is the two stores that ship. The metrics store's name was here once
-# and its exporter is gone, and this list is a filter over what may be
+# The set is the three stores that ship: Tempo and Loki (the LGTM profile) and
+# ClickStack, which takes all three signals. The metrics store's name was here
+# once and its exporter is gone, and this list is a filter over what may be
 # SUBSTITUTED rather than an assertion about what exists — so an absent name is
 # inert, which is why the removal needed no change here at all. It is removed
 # anyway, because a test naming a container the tree does not ship is a test
 # that reads as though it did.
 shipped = yaml.safe_load(source)
-BACKENDS = {"tempo", "loki"}
+BACKENDS = {"tempo", "loki", "clickstack"}
 targets = [
     name
     for name in (shipped.get("exporters") or {})

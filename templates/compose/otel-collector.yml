@@ -18,11 +18,15 @@
 #      twins — so the coverage is legible and so a later widening is a line
 #      somebody read. Not one of those names is ever a metric label, on the
 #      cheap default path or the full one.
-#   4. Fans out: traces to Tempo, logs to Loki, and metrics to this process's own
-#      stdout. Metrics come from the `spanmetrics` connector, so they are derived
-#      from spans that have ALREADY been redacted — and there is deliberately no
-#      metrics STORE (see the note above the `debug` exporter: it cost 130s of
-#      readiness budget per cold start and was removed rather than half-removed).
+#   4. Fans out: traces to Tempo, logs to Loki, and — derived from already-
+#      redacted spans by the `spanmetrics` connector — metrics to ClickStack.
+#      ClickStack (the `otlp/clickstack` exporter) is the metrics STORE, and it
+#      takes the other two signals too, because it is a single pane over all
+#      three rather than a store per signal. Its service is behind the
+#      `clickstack` compose profile, so with the profile off this exporter
+#      dials a dead hostname — the same accepted silence Tempo and Loki's
+#      absence already is, and the reason every exporter below disables its
+#      sending queue and its retry loop.
 #
 # THIS CONFIG IS DERIVED, NOT INVENTED
 #   Every `allowed_keys` list below is a projection of core's schemas, and
@@ -806,6 +810,23 @@ exporters:
     # observability tool, which is the worst possible source of one.
     timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
 
+  # THE SINGLE-PANE BACKEND. Traces, logs and the derived span metrics all go
+  # here, because ClickStack's whole point is that the three signals are one
+  # query apart. The redaction boundary above has ALREADY run by the time this
+  # exporter is reached — this is an exporter on the same pipelines as Tempo,
+  # not an alternative intake — so what ClickHouse stores is what the
+  # allowlist decided should leave the process, and `tests/canary_test.sh`
+  # proves it by capturing what this exporter would hand over.
+  otlp/clickstack:
+    endpoint: ${env:KIT_CLICKSTACK_OTLP_ENDPOINT}
+    tls:
+      insecure: ${env:KIT_OTEL_TLS_INSECURE}
+    sending_queue:
+      enabled: false
+    retry_on_failure:
+      enabled: false
+    timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
+
   # Loki takes OTLP over HTTP on its own port, and it has no gRPC listener at
   # all: a gRPC exporter pointed at `loki:4317` gets `connection refused` on
   # every export, which is a loud failure and an easy one. `endpoint` is the
@@ -820,31 +841,30 @@ exporters:
       enabled: false
     timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
 
-  # THERE IS NO METRICS EXPORTER, AND THAT IS A DECISION RATHER THAN A GAP.
+  # THE METRICS STORE IS BACK, AND IT IS NOT MIMIR. The history, because the
+  # note this replaces was a decision someone will otherwise undo blind:
   #
-  # The metrics store was 130 seconds of readiness budget per cold start and
-  # 384m of memory — against a 180s deadline for the whole stack — for a fleet
-  # that does not have the series to put in it. It is removed from the stack,
-  # and removing it means removing this exporter too: an exporter pointed at a
-  # host with nothing behind it is a connection refused on every flush, forever,
-  # in a log nobody reads. That is the "half-removed backend" this file will not
-  # ship.
+  # The old metrics store (Mimir) cost 130 seconds of readiness budget per cold
+  # start and 384m of memory — against a 180s deadline for the whole stack — for
+  # a fleet that did not have the series to put in it, and it was removed rather
+  # than half-wired. For a while the metrics pipeline ran on `debug` alone: this
+  # process's own stdout, which kept the allowlist EXERCISED on real derived
+  # metrics while storing none of them.
   #
-  # SO THE METRICS PIPELINE BELOW STILL RUNS. Span metrics are still derived by
-  # the `spanmetrics` connector, still pass `redaction/cafaye_metrics`, still
-  # pass `transform/cafaye_metrics_ingest_drop`, and are exported to `debug` —
-  # this process's own stdout, on the machine already running it, which cannot
-  # reach the network and costs nothing. That is not a consolation prize: it is
-  # what keeps the allowlist EXERCISED on real derived metrics rather than only
-  # asserted about, and `KIT_OTEL_DEBUG_VERBOSITY=basic` mutes it.
+  # ClickStack is the store that came back, and it is a different shape: one
+  # container (dev profile `clickstack`) that takes all three signals, so the
+  # span metrics land next to the traces they were derived from instead of in a
+  # fourth store with its own datasource. It arrives through the documented
+  # three edits, and all three are in this tree: the `otlp/clickstack` exporter
+  # above, the metrics pipeline's `exporters:` list below, and the
+  # `clickstack` service plus `KIT_CLICKSTACK_OTLP_ENDPOINT` in the compose
+  # file. With the profile OFF the exporter dials a dead hostname — the same
+  # accepted silence as Tempo's absence, and the reason sending_queue and
+  # retry_on_failure stay OFF.
   #
-  # PUTTING A STORE BACK IS THREE EDITS, and they belong together — a store with
-  # no exporter collects nothing, and an exporter with no store dials nothing:
-  #   1. an `otlp/<store>` exporter here, endpoint a `${env:...}`;
-  #   2. `exporters: [<it>]` on the metrics pipeline below, keeping `debug` or
-  #      dropping it deliberately;
-  #   3. the store's service, volume and `KIT_*` endpoint variable in the compose
-  #      file, plus its datasource in Grafana's provisioning.
+  # `debug` STAYS on the pipeline. The local escape hatch is how a developer
+  # sees a span without opening any UI, and it is what keeps the metrics
+  # pipeline observable when the clickstack profile is off.
 
   # The local escape hatch, and the reason a developer can see a span
   # without opening Grafana. It writes to this process's stdout on the machine
@@ -890,8 +910,9 @@ service:
         - transform/cafaye_resource_restore
         - batch
       # spanmetrics is an exporter here and a receiver in the metrics pipeline
-      # below, which is what a connector is. Tempo and the local debug.
-      exporters: [spanmetrics, otlp/tempo, debug]
+      # below, which is what a connector is. Tempo, ClickStack and the local
+      # debug.
+      exporters: [spanmetrics, otlp/tempo, otlp/clickstack, debug]
 
     metrics:
       # `spanmetrics` is in here as a receiver: this is where the fleet's
@@ -919,10 +940,9 @@ service:
         - transform/cafaye_metrics_labels
         - transform/cafaye_resource_restore
         - batch
-      # `debug`, not a store. See the note above `debug` for why there is no
-      # metrics exporter and what it takes to put one back — and why the pipeline
-      # runs at all rather than being deleted with the store it used to feed.
-      exporters: [debug]
+      # ClickStack is the store; see the note above the `debug` exporter for
+      # why it is this and not Mimir, and why `debug` is still on this list.
+      exporters: [otlp/clickstack, debug]
 
     logs:
       # otlp for an SDK's own records — including the exception log record
@@ -944,4 +964,4 @@ service:
         - redaction/cafaye_logs
         - transform/cafaye_resource_restore
         - batch
-      exporters: [otlphttp/loki]
+      exporters: [otlphttp/loki, otlp/clickstack]

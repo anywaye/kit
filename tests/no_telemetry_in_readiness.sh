@@ -188,6 +188,10 @@ services:
       # have been measuring a loopback to itself.
       KIT_TEMPO_OTLP_ENDPOINT: 127.0.0.1:9
       KIT_LOKI_OTLP_ENDPOINT: http://127.0.0.1:9/otlp
+      # ClickStack is the third backend the shipped config names, and this test
+      # is exactly the proof that a dead one is survivable: port 9 (discard),
+      # same reasoning as Tempo's above.
+      KIT_CLICKSTACK_OTLP_ENDPOINT: 127.0.0.1:9
       KIT_OTEL_TLS_INSECURE: "true"
       KIT_OTEL_EXPORT_TIMEOUT: 1s
       KIT_OTEL_DEBUG_VERBOSITY: normal

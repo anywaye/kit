@@ -20,9 +20,12 @@
 #   A service joins it by adding a `depends_on` and copying its connection URLs
 #   into .env.
 #
-#   THE THREE BACKENDS ARE OFF BY DEFAULT. `bin/dev` starts postgres, nats,
-#   redis and the collector; the observability profile — tempo, loki, grafana —
-#   is `KIT_DEV_PROFILES=observability bin/dev up`.
+#   THE OBSERVABILITY BACKENDS ARE OFF BY DEFAULT. `bin/dev` starts postgres,
+#   nats, redis and the collector; the LGTM profile — tempo, loki, grafana — is
+#   `KIT_DEV_PROFILES=observability bin/dev up`, and the single-pane ClickStack
+#   view is `KIT_DEV_PROFILES=clickstack bin/dev up`. The profiles are
+#   independent of each other; the collector forwards to whichever endpoints
+#   are up and stays silent about the ones that are not.
 #
 #   That is a reversal, and the numbers are why. As defaults they cost every
 #   developer's first run: grafana downloading a plugin zip on first boot
@@ -475,6 +478,13 @@ services:
       KIT_OTEL_METRICS_FLUSH_INTERVAL: ${KIT_OTEL_METRICS_FLUSH_INTERVAL:-15s}
       KIT_TEMPO_OTLP_ENDPOINT: ${KIT_TEMPO_OTLP_ENDPOINT:-tempo:4317}
       KIT_LOKI_OTLP_ENDPOINT: ${KIT_LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp}
+      # THE SINGLE-PANE BACKEND (traces, logs AND the derived span metrics).
+      # `clickstack` is the compose service below, behind its own profile; with
+      # the profile off this is a dead hostname and the exporter's silence is
+      # the accepted kind — the same class of absence as Tempo's above, which is
+      # why the exporter disables its queue and its retries like every other
+      # exporter in the config.
+      KIT_CLICKSTACK_OTLP_ENDPOINT: ${KIT_CLICKSTACK_OTLP_ENDPOINT:-clickstack:4317}
       # TWO backends now, not three, and the one that left is worth a note.
       #
       # THERE IS NO METRICS ENDPOINT VARIABLE ANY MORE. The metrics store cost
@@ -488,10 +498,11 @@ services:
       # refused per flush, forever, in a log nobody reads.
       #
       # The metrics pipeline still DERIVES span metrics, still runs the full
-      # redaction allowlist and the ingest deny set over them, and exports them
-      # to the collector's own stdout. Restoring a store is one endpoint variable
-      # here, one exporter block in `otel-collector.yml`, one `exporters:` line
-      # on the metrics pipeline, and one datasource in Grafana's provisioning.
+      # redaction allowlist and the ingest deny set over them, and — since
+      # ClickStack arrived (see the `clickstack` service below) — now HAS a
+      # store again, arriving through exactly the edits this note described:
+      # the `KIT_CLICKSTACK_OTLP_ENDPOINT` variable above, the
+      # `otlp/clickstack` exporter, and the pipeline's `exporters:` line.
       #
       # The two remaining backends speak plaintext OTLP to each other inside the
       # compose network. A self-hoster who terminates TLS does it here, and a
@@ -720,4 +731,69 @@ services:
       retries: 6
       start_period: 5s
     profiles: [observability]
+    networks: [platform]
+
+  # ----------------------------------------------------------------- clickstack
+  #
+  # The SECOND observability view, and why it exists beside Tempo/Loki/Grafana
+  # rather than replacing them: the LGTM stack is a VIEW per signal, stitched by
+  # datasource provisioning, and ClickStack (ClickHouse + the HyperDX UI) is a
+  # SINGLE pane over all three signals, where a trace, the log line next to it,
+  # and the span metrics derived from it are one query apart. Developers who
+  # want "why is this request slow" open this one; the LGTM stack stays for the
+  # provisioned dashboards and the alert rules, and either can be removed later
+  # without moving the contract — `<SERVICE>_OTEL_ENDPOINT` still names the
+  # collector, and the collector decides where the redacted bytes go.
+  #
+  # `hyperdx/hyperdx-local` is the vendor's own single-container dev flavour of
+  # ClickStack: ClickHouse, the HyperDX UI/API and an OTLP intake in one image.
+  # MIT (UI) and Apache-2.0 (ClickHouse) — the licence posture the AGPL notes
+  # above exist to reason about does not even arise here. LOCAL MODE MEANS:
+  # no auth to view or send (it is a port on the developer's own machine),
+  # single-user, no alerting, and NO PERSISTENCE — telemetry dies with the
+  # container. That is the deal, stated in the vendor's own LOCAL.md, and it
+  # matches this file's rule that losing a span is strictly better than a slow
+  # service. A developer who wants persisted or alerted observability runs the
+  # full ClickStack compose deployment in their own repo; the collector-side
+  # wiring is identical, because it is one OTLP exporter.
+  #
+  # THE COLLECTOR, AND THE POINT: services still point at `otel-collector`.
+  # The redaction boundary is not bypassed by a second backend, and nothing
+  # here is in anyone's readiness path. The collector forwards to
+  # `KIT_CLICKSTACK_OTLP_ENDPOINT`; with this profile OFF that endpoint is a
+  # dead hostname and the exporter's failure is the same accepted silence
+  # Tempo's absence already is.
+  #
+  # `USAGE_STATS_ENABLED: "false"` — the stack that exists to prove redaction
+  # does not phone home itself. Same posture as GF_ANALYTICS_REPORTING_ENABLED
+  # on the grafana service above.
+  clickstack:
+    image: hyperdx/hyperdx-local:${KIT_CLICKSTACK_TAG:-2.40.0}
+    environment:
+      USAGE_STATS_ENABLED: "false"
+    ports:
+      # The HyperDX UI only. OTLP arrives via the collector, not here: a
+      # published 4317 would be an unauthenticated telemetry intake on the
+      # host, which is the exact thing the collector's no-ports note exists
+      # to prevent.
+      - "${KIT_CLICKSTACK_PORT:-15910}:8080"
+    # The vendor's own floor is 1GB ("at least"); the cap is 2g because the
+    # container runs ClickHouse AND Mongo AND the UI process, and an uncapped
+    # ClickHouse on a laptop is a kernel OOM-kill of whatever else was running.
+    mem_limit: ${KIT_CLICKSTACK_MEMORY_LIMIT:-2g}
+    healthcheck:
+      # The UI, not the OTLP intake — the gate forbids probing 4317/4318, and
+      # a UI that answers is the thing `up --wait` is waiting for anyway.
+      # 127.0.0.1, not localhost: the image is Alpine, whose busybox wget
+      # resolves localhost to ::1 first, and the UI inside this container
+      # listens on IPv4 — `localhost` here is a healthcheck that reports
+      # connection refused against a perfectly healthy service. Measured.
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      # ClickHouse initialises its own store inside the container on first
+      # boot; on a cold pull that is tens of seconds, not milliseconds.
+      retries: 24
+      start_period: 10s
+    profiles: [clickstack]
     networks: [platform]

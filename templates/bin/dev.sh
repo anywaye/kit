@@ -832,6 +832,7 @@ up() {
     info "backends. Telemetry is STILL ON — the collector is not behind the"
     info "profile, and it still drops high-cardinality dimensions at ingest."
     info "For traces/logs/metrics to read back:  KIT_DEV_PROFILES=observability bin/dev up"
+    info "For the single-pane ClickStack view instead:  KIT_DEV_PROFILES=clickstack bin/dev up"
   fi
 }
 
@@ -1019,17 +1020,25 @@ print_urls() {
 URLS
 
   if [ -n "$KIT_DEV_PROFILES" ]; then
-    cat <<URLS
+    if [ "$KIT_DEV_PROFILES" = "clickstack" ]; then
+      cat <<URLS
+
+   hyperdx      http://localhost:${KIT_CLICKSTACK_PORT:-15910}        (traces, logs, metrics, errors — one pane)
+URLS
+    else
+      cat <<URLS
 
    grafana      http://localhost:${KIT_GRAFANA_PORT:-15000}        (traces, logs, errors)
    tempo        http://localhost:${KIT_TEMPO_PORT:-15900}
    loki         http://localhost:${KIT_LOKI_PORT:-15901}
 URLS
+    fi
   else
     cat <<URLS
 
    (no observability backends: this run started the cheap stack. For grafana,
-   tempo and loki:  KIT_DEV_PROFILES=observability bin/dev up)
+   tempo and loki:  KIT_DEV_PROFILES=observability bin/dev up.  For the
+   single-pane ClickStack view:  KIT_DEV_PROFILES=clickstack bin/dev up)
 URLS
   fi
 
