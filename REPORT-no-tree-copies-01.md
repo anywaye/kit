@@ -7,7 +7,7 @@ Worktree `/Users/kaka/Code/any/moon/cafaye/wt-kit-cut-all`, branch
 |---|---|
 | `32df467` | the self-test layer is gone: `tests/self_test.sh`, `tests/shard_test.sh`, the phase, the flags, the seams, the workflow reference |
 | `9c1a55f` | 18 check bodies the previous commit orphaned — 1,908 unreachable lines |
-| `de543f7` | the eight behaviours, each proved red without a copy; AGENTS.md, README.md, CUT-ALL-DISPOSITION.md corrected |
+| `d3b4c86` | the eight behaviours, each proved red without a copy; AGENTS.md, README.md, CUT-ALL-DISPOSITION.md corrected |
 
 ---
 
@@ -206,6 +206,20 @@ and that sentence is now written into `AGENTS.md` rather than left implicit.
 - The red proofs in the table above, each on the real tree or a small fixture,
   each restored (`git diff` confirmed clean after every one)
 
+### One thing the gate caught, which is worth the space
+
+The first draft of `d3b4c86` quoted the planted credential inline, to make the
+redaction proof vivid. `gitleaks` flagged it: `RuleID: gitlab-pat`,
+`File: CUT-ALL-DISPOSITION.md`, at commit `de543f7`. Because the scan reads full
+history, editing the file did not clear it — the literal was in a commit. So
+`de543f7` was **replaced**, not amended, and the value is now described rather
+than written in both documents.
+
+It is the smallest possible demonstration that behaviour 1 still works, and it
+worked on the commit that removed the machinery proving it: a committed
+credential-shaped literal is the finding, not an example. That is the same rule
+the canary is built on, one layer up, caught by the same scanner.
+
 **Did NOT run:**
 
 - Anything requiring the retired self-test — it does not exist.
@@ -218,5 +232,27 @@ and that sentence is now written into `AGENTS.md` rather than left implicit.
   box that was not loaded, so they are not comparable to the brief's load-48
   figures.
 
-**Machine state:** load 4–5 throughout (down from the 10 average at start, once
-the leftover copies were gone from under us). Nothing was pushed or merged.
+**Two FAILs on the last full run, and they are the box, not the tree.** The
+final run reported:
+
+```
+FAIL tests/isolation_test.sh  could not build the cluster image
+                              (needs network access to ghcr.io for the pglayers layer)
+FAIL tests/tenancy_test.sh    the docker daemon is not reachable
+```
+
+At the time I checked, `docker info` failed outright — `dial unix
+/Users/kaka/.orbstack/run/docker.sock: no such file or directory` — so OrbStack
+had stopped, and four other `tests/validate.sh` processes were running
+concurrently (another session was looping two full gate runs from this worktree).
+Both tiers passed on the **first** full run of the session, which is the run
+quoted above, and `tenancy_test.sh` passed standalone at 11.4s. Neither check was
+touched by any commit in this branch. I am calling this out rather than
+re-running until it goes green, because re-running on a busy box until it passes
+is exactly the practice this report is arguing against.
+
+So: **the static gate is green right now, verified minutes ago** (164 verdicts,
+0 FAIL), and the full gate is green on record from the earlier run. The two FAILs
+above are environmental and are named as such.
+
+**Machine state:** load 5–6 throughout. Nothing was pushed or merged.
