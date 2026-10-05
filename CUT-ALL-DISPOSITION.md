@@ -1,7 +1,8 @@
 # CUT-ALL disposition — every breakage and every check, KEEP or CUT
 
 Generated from `tests/self_test.sh` and `tests/validate.sh` as they stood at
-`78d84b5`.
+`78d84b5`. **Superseded on the breakage half** — see "The breakage layer is
+RETIRED" below, which is the disposition as it now stands.
 
 The question every row answers is the owner's, not "would we lose the only
 detector?":
@@ -13,8 +14,44 @@ detector?":
 
 | | before | kept | cut |
 |---|---|---|---|
-| breakages in `tests/self_test.sh` | 120 | 10 | 110 |
+| breakages in `tests/self_test.sh` | 120 | 0 | **120 — the whole layer, retired** |
 | checks in `tests/validate.sh` | 93 | 25 | 68 |
+
+## The breakage layer is RETIRED, not trimmed
+
+This table used to disposition the 120 breakages as 10 kept and 110 cut. That
+framing is wrong and is withdrawn.
+
+The owner:
+
+> i do not want any tree copies at all in the first place
+
+**A breakage in this suite WAS a tree copy.** `tests/self_test.sh` called
+`fresh_copy`, which made a full copy of this repository, mutated it, and ran a
+whole `tests/validate.sh` against the copy to see whether the gate went red.
+There is no breakage without a copy. So "no tree copies" and "keep some
+breakages" cannot both be true, and the 10 survivors went with the other 110.
+
+The cost, measured on this machine rather than quoted:
+
+    $ du -shc $TMPDIR/kit-self-test.* | tail -1
+    24G  total          # ten leftover runs, ~2.5 GiB each
+
+`$WORK` is created once at the top of the suite and swept only by an EXIT trap,
+so every copy made in minute 1 is still on disk in minute 15: 2.5 GiB live at
+once per run, and 17.5 GiB with load 48 across seven concurrent runs. That is
+the disk and CPU crisis the retirement removes.
+
+Removed with it, because each exists only to police the layer just removed:
+`tests/self_test.sh` (5,611 lines), `tests/shard_test.sh` (413), the `self_test`
+phase, `RUN_SELF_TEST`, `--no-self-test`, the `KIT_NO_LIVE` env seam whose only
+caller was `kit_child_gate`, `self_test_live_tier`, `self_test_no_version_literal`,
+and the `KIT_SELF_TEST_SHARD` seam.
+
+**What replaces it: nothing.** No mutation-testing tool, no copy machinery behind
+an env var, no `git worktree` variant, no sleep or retry. A small throwaway
+fixture directory is not a tree copy, and the checks that need one still build
+one — see "The eight behaviours, without a tree copy" below.
 
 ## Breakages
 
@@ -242,4 +279,29 @@ detector?":
 ## The GREEN control
 
 | green control | **KEEP** | The control that makes every other red meaningful: a tree with nothing broken must come back green, or the suite only proves it can produce output. |
+
+It used to be a *copy* of the tree, run through the gate and asserted clean.
+It is now what it always should have been: **an ordinary gate run on the real
+working tree.** Nothing is mutated, nothing is copied, and the assertion is the
+run's own exit status.
+
+## The eight behaviours, without a tree copy
+
+The eight the brief keeps. Every one is verified against the real tree or a
+minimal fixture — never against a copy of the tree — and every one was proved
+able to go RED by mutating the real tree in place and restoring it. No copy
+machinery was reintroduced to make that possible.
+
+| # | behaviour | how it is proven, now | red proof, measured |
+|---|---|---|---|
+| 1 | the secret scan finds a real planted secret and never prints it | `scan_behaviour_check` builds a **~4 KB throwaway git repo** in `mkdtemp` — one `config.toml`, one planted `glpat-` value — and runs the real `tests/gitleaks_gate.sh` against it | with `--redact` the output carries `Secret: REDACTED`; **with `--redact` removed it prints the value it found**. Same fixture, same scan, the assertion flips. (The value is deliberately not written here: this document is scanned, and a committed credential-shaped literal is the finding, not an example — which is how the gate caught the first draft of this very row.) |
+| 2 | the canary secret is never committed as a literal | `canary_literal_check` greps the **real tree** for the assembled canary | pointed at a one-file fixture holding the literal it reports `the assembled canary appears as a literal in ['planted.txt']` and exits 1. |
+| 3 | the canary suite never prints the value it planted | `canary_output_check` runs the real Go suite and sweeps its whole output | a `t.Log` planted in `templates/secrets/go/canary_test.go`, assembling the value **at runtime** so the committed source holds no contiguous literal and the suite's own literal scan stays green, turns the check **red on the real tree**. Reverted in the same breath. |
+| 4 | the Postgres tag agreement | `postgres_tag_check`, a direct read of the real `.env.example` and compose | `KIT_POSTGRES_TAG=17` → `16.6` in `.env.example` — **the defect that shipped** — goes red naming both values. Restored with `git checkout`. |
+| 5 | cluster topology and the connection budget | direct reads of compose and `.env.example` | deleting the `docker-entrypoint-initdb.d` mount turns the topology check red; `KIT_POSTGRES_MAX_CONNECTIONS=200` → `4` turns the budget check red. Both restored. |
+| 6 | tenancy / account boundary / isolation | **untouched** — already a live docker tier, never a copy. `bash tests/tenancy_test.sh`: 39 assertions green, and its own FORCE control reports **11 red** with the statement removed | already proven, in the file, every run. |
+| 7 | the lint gate goes red on a planted error | `lint_test.sh` builds a **throwaway service-shaped fixture** in `mktemp` and runs all four linters against it, each paired with a control that must answer differently | 22 assertions, each an assertion that the linter REJECTS the fixture. No tree copy: the fixture is a fixture. |
+| 8 | the GREEN control | an ordinary gate run on the real working tree | n/a — this one asserts green. |
+
+**Nothing above needed a tree copy, and nothing that did get one back.**
 
