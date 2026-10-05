@@ -309,10 +309,9 @@ permissions:
 #
 # THE RULE FOR A CALLER, which is the half this file cannot enforce: if you declare
 # `concurrency`, your group must NOT begin with `kit-`. Every other spelling is
-# yours. `reusable_concurrency_check` in tests/validate.sh reads the callers beside
-# this repository and fails on a collision in either direction, and
-# `tests/self_test.sh` breakage 105 puts the bare spelling back to prove the check
-# can still see it.
+# yours. The `no caller and callee share a concurrency group` check in
+# tests/validate.sh reads the callers beside this repository and fails on a
+# collision in either direction.
 # ===========================================================================
 concurrency:
   group: kit-${{ github.workflow }}-${{ github.ref }}

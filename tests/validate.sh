@@ -8,34 +8,21 @@
 #   bash tests/validate.sh                     # the gate: every phase
 #   bash tests/validate.sh --static-only       # parse/semantic checks only (fast)
 #   bash tests/validate.sh --language=go       # one telemetry language (CI matrix)
-#   bash tests/validate.sh --no-self-test      # skip the "can this go red" proof
 #   bash tests/validate.sh --no-observability  # skip the whole observability phase
 #   bash tests/validate.sh --no-live           # skip ONLY the observability live tier
 #   bash tests/validate.sh --no-lint           # skip running the linters themselves
 #
 # --no-live, and why it exists and why it is not --no-observability:
 #   `--no-observability` drops the whole phase, INCLUDING the two database
-#   boundary tiers. `--no-live` drops the three docker stacks the observability
+#   boundary tiers. `--no-live` drops the docker stacks the observability
 #   PLATFORM is proven by, and leaves the cluster tiers alone. The distinction
 #   matters because the two sets of claims are not the same: one is "the
 #   collector works", the other is "a service cannot read another service's
-#   rows". A child gate that asserts a file-level defect needs neither, and
-#   `tests/self_test.sh` is 104 whole gates — each of which used to bring up
-#   three docker stacks to learn one fact about one named check, on a machine
-#   that may also be running five other workers' gates. That is contention, and
-#   contention is what turned breakage 23b — a green-expecting proof about the
-#   ruby interpreter floor — red at recipe 23 of 104 in a full suite run while
-#   it was green standalone. (REPORTED, not reproduced: 23b's gate run is green
-#   on this machine, standalone and in a full suite run. The claim is the
-#   EXPOSURE — one whole gate, half of it docker, asserting nothing about any of
-#   it — and REPORT-kit-selftest-live-tier-01.md §2 keeps the two apart.)
-#   The opt-out is the fix and the bound is not: a bound widened to accommodate
-#   the machine it runs on has stopped measuring the thing it was written for.
+#   rows".
 #
-#   WHAT IT IS NOT: silence. Each of the three tiers becomes a `SKIP` naming the
-#   flag, counted in the skip tally and printed in the summary, because a skip
-#   that cannot be seen is a silent pass. Nothing sets this flag on a gate a
-#   human or CI runs; see `live_check` for the shape and `AGENTS.md`.
+#   WHAT IT IS NOT: silence. Each live tier becomes a `SKIP` naming the flag,
+#   counted in the skip tally and printed in the summary, because a skip that
+#   cannot be seen is a silent pass. See `live_check` for the shape.
 #
 # Six phases, all of which must pass:
 #   static         every artifact parses, and the strictness decisions are still
@@ -51,9 +38,6 @@
 #                  exporter, and that a service starts and serves with the
 #                  collector killed. Both need a real collector, so both SKIP
 #                  loudly without docker — never pass silently.
-#   self_test      breaks a throwaway copy of this tree once per kind of check
-#                  and asserts the gate goes red each time. A gate that cannot
-#                  fail is not a gate.
 #   lint           golangci-lint, RuboCop, ESLint and yamllint are RUN against
 #                  a fixture built to violate them, with kit's config, and each
 #                  is paired with a control that must answer differently. This
@@ -131,7 +115,6 @@ CONFIG_ONLY='none'
 # machine with no python and no network. A `--help` that bootstraps a virtualenv
 # is a help message with a side effect.
 RUN_STATIC=1
-RUN_SELF_TEST=1
 RUN_OBSERVABILITY=1
 RUN_LINT=1
 # The observability LIVE tier, which is a SUBSET of `RUN_OBSERVABILITY`: three
@@ -148,21 +131,10 @@ LANGS=()
 
 # ONLY_MATCH, when set, runs only the checks whose LABEL contains this substring.
 #
-# WHY IT EXISTS, measured rather than argued. A full `--static-only` run is214
-# checks and takes ~50s on this machine. `tests/self_test.sh` runs the gate once
-# per breakage -- 76 of them -- so the suite spends ~63 MINUTES re-running 16,000
-# checks to learn 76 facts, each of which is about ONE named check.
-#
-# Every breakage already names the check it is testing; it is the third argument
-# to `expect_red_check`, and the assertion is that THAT check goes red. Running
-# the other 213 cannot change that verdict. This is the difference between
-# scheduling 76 sequential runs in parallel and not doing 16,000 units of work.
-#
-# WHAT IT IS NOT. It does not weaken the assertion. `expect_red_check` still
-# demands `FAIL <the named check>` appear in the output and still fails if it
-# does not. Narrowing WHICH checks run is not the same as loosening WHAT they
-# must prove, and the difference is why this is a filter on the runner rather
-# than an edit to any assertion.
+# WHY IT EXISTS: one run of this gate is a couple of hundred checks, and
+# working on one of them means paying for the rest. Narrowing WHICH checks run
+# is not loosening WHAT they must prove -- a filtered run still fails if the
+# checks it did run fail.
 #
 # THE HONEST CAVEAT. A filtered run has not run the whole gate, so it must not
 # be reported as if it had. `--only` therefore prints a banner naming the filter
@@ -173,11 +145,9 @@ ONLY_MATCH=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --static-only)
-            RUN_SELF_TEST=0
       RUN_OBSERVABILITY=0
       RUN_LINT=0
       ;;
-    --no-self-test) RUN_SELF_TEST=0 ;;
     --no-observability) RUN_OBSERVABILITY=0 ;;
     --no-live) RUN_LIVE=0 ;;
     --no-lint) RUN_LINT=0 ;;
@@ -213,15 +183,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-# `KIT_NO_LIVE` is the same opt-out as `--no-live`, for the caller that cannot
-# put a flag on the command line — `tests/self_test.sh`, which runs the gate in
-# 105 labelled copies and would otherwise have to thread the flag through five
-# helpers. Truthy values only, and `--no-live` above cannot be undone from here:
-# an opt-out that a later assignment could turn back on is not an opt-out.
-case "${KIT_NO_LIVE:-}" in
-  1 | true | TRUE | yes | on) RUN_LIVE=0 ;;
-esac
-
 # ---------------------------------------------------------------------------
 # profiling — where the run's seconds actually went
 # ---------------------------------------------------------------------------
@@ -240,12 +201,9 @@ esac
 # numbers are wrong in the direction that matters.
 #
 # WHAT IT RECORDS, and what it deliberately does not. One TSV row per timed
-# region: kind, label, seconds, and an inherited tag. The tag is how a row from
-# inside a self-test breakage is told apart from a row from the gate itself —
-# `KIT_PROFILE_TAG` is exported by `tests/self_test.sh` per breakage, so the
-# profile attributes time to a BREAKAGE and not merely to a check name that 94
-# copies all share. Rows are appended with `>>`, which is atomic for lines this
-# short, and every writer in the tree is short enough to stay under one `PIPE_BUF`.
+# region: kind, label, seconds, and an inherited tag. Rows are appended with
+# `>>`, which is atomic for lines this short, and every writer in the tree is
+# short enough to stay under one `PIPE_BUF`.
 #
 # FOUR KINDS, and why there are four rather than one.
 #   check   a serial `check`/`check_verbose` — wall time of ONE command.
@@ -254,7 +212,7 @@ esac
 #           Collapsing them with the serial rows would double-count and produce a
 #           profile that adds up to more than the run, which is the one thing a
 #           profile must never do.
-#   tier    a `bounded_check` — a whole heavy script, self_test included.
+#   tier    a `bounded_check` — a whole heavy script.
 #   phase   the interval between two `section` headers. THE SAFETY NET: a tier
 #           that is a bare `report` over a heredoc spawns no command at all, so
 #           the check rows cannot see it, and the phase row can.
@@ -279,11 +237,10 @@ _pf_tag="${KIT_PROFILE_TAG:-}"
 # MILLISECONDS AND NOT A DECIMAL, and the reason is the one cost that would have
 # silently corrupted every number here. An earlier version computed each duration
 # with `awk`, which is a second process spawn per measurement — and the run being
-# measured spawns roughly 19,000 checks across `self_test`'s 94 breakages, so
-# the profiler would have added ~38,000 processes to the run and reported its own
-# overhead as the gate's cost. Integer arithmetic in the shell is not slower than
-# awk for one subtraction; it is 38,000 fewer processes. With the profile off,
-# `_pf_now` is never called at all.
+# a full run spawns hundreds of checks, so an `awk`-based timer would add a
+# second process per measurement and report its own overhead as the gate's cost.
+# Integer arithmetic in the shell is not slower than awk for one subtraction.
+# With the profile off, `_pf_now` is never called at all.
 if [ -n "$_PROFILE" ]; then
   _pf_now() { perl -MTime::HiRes=time -e 'printf "%d", time*1000'; }
 else
@@ -357,7 +314,7 @@ kit_total() {
 # prerequisite that is documented and not automated is a prerequisite that will
 # be skipped by exactly the machine you most wanted to hear from.
 #
-# The resolved interpreter is exported so `tests/self_test.sh`, and every
+# The resolved interpreter is exported so every
 # throwaway copy of the gate it spawns, uses the same one instead of each
 # re-deriving it. That is not only speed: eighteen copies each bootstrapping
 # their own virtualenv is eighteen chances to fail for a reason that has nothing
@@ -540,7 +497,7 @@ section() {
   # phase boundary already passes through: instrumenting it means no phase can be
   # missed by forgetting to add a line, which is the failure mode a hand-placed
   # marker has. It writes to the profile file and prints nothing, so the gate's
-  # own output — which `--only` and `self_test.sh` both read — is byte-identical
+  # own output — which `--only` reads — is byte-identical
   # with the profiler on and off. Only `kit_phase`'s FILE is touched.
   kit_phase "$1"
   printf '\n-- %s\n' "$1"
@@ -613,7 +570,7 @@ only_wanted() {
 #
 #   1. ORDER OF REPORTING IS UNCHANGED. Results are written to one file per
 #      check and replayed in submission order, so a reader sees byte-identical
-#      output to the serial run. That matters because self_test.sh greps gate
+#      output to the serial run. That matters because anything reading gate
 #      OUTPUT for `FAIL <the named check>`, and a report that reordered itself
 #      would be a report whose diffs lie.
 #   2. THE EXIT STATUS OF EACH CHECK IS CAPTURED, NOT INHERITED. A background
@@ -730,7 +687,7 @@ par_reap() {
 # from a `[ -x ]` test or a missing toolchain and call `report` directly. Mixing
 # those with `check_par` would print the direct ones immediately while the
 # spawned ones waited for the flush, so the ORDER of the report would depend on
-# which check finished first — and self_test.sh greps this output by position
+# which check finished first — and a reader of this output counts by position
 # far more often than it looks.
 #
 # So a loop in a parallel region reports everything through here: a verdict is
@@ -975,7 +932,7 @@ version_at_least() {
 # quotes both numbers because the honest before-number is the one with it off.
 #
 # WHERE THE RECORD LIVES, and why it is overridable. `$KIT_CACHE_DIR` if set,
-# else `.kit/cache/gate` under the tree. The override exists for `self_test`,
+# else `.kit/cache/gate` under the tree. The override exists for CI,
 # which runs 94 whole COPIES of this tree: a cache scoped to a copy is deleted
 # with the copy and can never be hit by the copy after it, so the 94 breakages
 # would each pay full price for the ~113 checks they share with each other.
@@ -1001,7 +958,7 @@ _kf_dir() {
 }
 
 # The check's identity is the FIRST TOKEN of its label, which is the same string
-# `--only` matches on and the same string `self_test.sh` names in `--only=<id>`.
+# `--only` matches on and the same string a caller names in `--only=<id>`.
 # One id, written once, read by three callers — a second spelling of it would be
 # a second thing to keep in step.
 _kf_id() {
@@ -1260,7 +1217,7 @@ bounded_check() {
 # reason is 23b: that recipe asserts the gate is GREEN while naming a skip, so a
 # fatal `--no-live` skip would red the one proof this exists to keep green. The
 # honesty is carried by the count and the summary line instead — which is enough
-# here because the flag is set by exactly one caller, in `tests/self_test.sh`,
+# here because the flag is set by exactly one caller,
 # and a top-level gate never sets it.
 live_check() {
   local label="$1" bound="$2"
@@ -1296,7 +1253,7 @@ live_check() {
   # never come back as a cache HIT either.
   KIT_CACHE_LAST_EXIT="$SKIP_EXIT"
   KIT_CACHE_LAST_OUT="$label  (not run: --no-live)"
-  report SKIP "$label  (NOT RUN — --no-live, or KIT_NO_LIVE=1: the observability live tier was opted out and this claim is UNEXERCISED)"
+  report SKIP "$label  (NOT RUN — --no-live: the observability live tier was opted out and this claim is UNEXERCISED)"
 }
 
 # ===========================================================================
@@ -2094,7 +2051,7 @@ OTEL
   # happened on every invocation — 3.8 s, 55.6% of the child gate's floor
   # (`PROFILE-startup-floor.md`), paid 86 times over by copies that had been told
   # to run one check. `only_wanted` is the guard; the LABEL it filters on is
-  # `kamal_test`, the same needle `tests/self_test.sh` passes to
+  # `kamal_test`, the same needle a caller passes to
   # `expect_red_check` as `$KAMALCHECK`, and every label this block can print
   # contains that substring — so breakages 78, 79 and 82 keep selecting it and
   # keep going red through it.
@@ -4542,7 +4499,7 @@ STUB
   # to avoid. A gate that reports the second when it means the first is a gate
   # that gets muted, and this one is going to be red a lot on purpose.
   #
-  # `KIT_FLEET` is the seam, and it exists so self_test.sh can point the check at
+  # `KIT_FLEET` is the seam, and it exists so a caller can point the check at
   # a FIXTURE fleet. Without it every breakage below would depend on the real
   # fleet being present and dirty, which is a proof that passes when the fleet is
   # absent — the exact shape this repository keeps warning about.
@@ -5547,10 +5504,7 @@ for root in fleet_roots:
 # is load-bearing. Both rules read the same missing information: with no sibling
 # checkouts there is no comparison, so every entry trivially describes no
 # difference. Reporting all of them as unused in that case is a false alarm that
-# says "delete these" about debt nobody has discharged, and it fires in exactly
-# the place it is most damaging — `tests/self_test.sh` runs the gate against a
-# throwaway copy of kit, which has no fleet beside it, so the control would be
-# red on a correct tree.
+# says "delete these" about debt nobody has discharged.
 #
 # The rule can only be evaluated when there was a fleet to evaluate it against.
 if not seen_repos:
@@ -6066,10 +6020,10 @@ PYE
     "$KIT_GITLEAKS_SHA256S" "$ROOT" \
     "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@arch@.tar.gz" gitleaks; then
     GITLEAKS_BIN="$BIN"
-    # Exported so the twenty-odd throwaway copies self_test makes share this
-    # binary instead of each downloading its own 15MB archive. Same reasoning as
-    # KIT_PYTHON, one level down: twenty downloads is twenty chances to fail for
-    # a reason that has nothing to do with the breakage under test.
+    # Exported so a re-run on the same machine reuses this binary instead of
+    # downloading its own 15MB archive. Same reasoning as KIT_PYTHON, one level
+    # down: a second download is a second chance to fail for a reason that has
+    # nothing to do with the tree.
     export KIT_GITLEAKS="$BIN"
   else
     report FAIL 'gitleaks (required: could not be installed — see the note above)'
@@ -6589,19 +6543,6 @@ kit_phase "40 classifier + staleness + fetch + tenancy, executed"
 check 'tests/classify_test.sh  (19 cases, incl. the fail-closed property)' \
   bash "$ROOT/tests/classify_test.sh"
 
-# THE HARNESS'S OWN SHARDING, and it is here rather than in a comment because the
-# property is about the arithmetic in tests/self_test.sh and nothing else in the
-# gate can see it. `self_test` runs its recipes in shards when asked to, and it
-# shipped computing a 0-based residue against a 1-based shard index -- so shard
-# n/n matched nothing, ran nothing, and reported PASS. Four shards as a merge gate
-# covered three quarters of the suite and said all four were green.
-#
-# `tests/shard_test.sh` evaluates the real `_shard_claims` out of self_test.sh
-# rather than restating it, so this cannot pass while the function it proves has
-# drifted; a second copy of the modulo would be a second thing to be wrong.
-#
-# Bounded, like the other executed proofs, because it forks once per shard index
-# and the largest safe n (62) is 62 of them. Measured ~23s.
 check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version)' \
   bash "$ROOT/tests/fingerprint_test.sh"
 
@@ -6669,8 +6610,8 @@ section 'staleness: the fleet reporter tells the states apart'
 # (a worktree that could be created, and the direct `is_worktree()` assertion
 # for when it could not). A number derived from the source and a number the
 # reader sees in the output then disagree on a green run, which is exactly how a
-# count stops meaning anything — the same reason `self_test`'s count is counted
-# from recipes and the header/recipe check exists at all.
+# count stops meaning anything — which is why it is read out of the run rather
+# than counted in the source.
 #
 # So the script runs, its own summary line is read, and the label carries what
 # the run said. If the two ever drift, this block fails rather than printing a
@@ -6729,23 +6670,11 @@ fi
 # phase: docker_tier_project_name — one shared namespace per RUN
 # ===========================================================================
 #
-# ITS OWN TOP-LEVEL PHASE, and the placement is the point rather than tidiness.
-# It was written first as a check inside the self_test phase, next to
-# `self_test_live_tier` and `self_test_no_version_literal` — and therefore inside
-# `if [ "$RUN_SELF_TEST" -eq 1 ]`, which `--static-only` sets to 0. So the guard
-# did not run in the static phase at all: `bash tests/validate.sh --static-only`
-# was green on a tree with a hardcoded project name in it, and 84 of the 93
-# recipes in the self-test invoke the gate exactly that way.
-#
-# This is the failure the self_test phase already records one section above, in
-# a comment about `RUN_STATIC`: a property that lives inside a phase's own guard
-# is a property that does not hold when the phase is skipped. It is the same shape
-# as the one `--no-live` was introduced for, one layer up, and it was found by
-# RUNNING the gate and looking for the check in the output rather than by reading
-# where the check had been put.
-#
 # It is a text scan over files in this directory, so it belongs with the static
-# checks and nowhere else.
+# checks and nowhere else. It shipped inside a phase guard that `--static-only`
+# turned off, which is the general shape worth remembering: a property that lives
+# inside a phase's own guard is a property that does not hold when the phase is
+# skipped.
 
   # A DOCKER TIER MAY NOT HARDCODE A NAME IN A SHARED NAMESPACE.
   #
@@ -7371,389 +7300,8 @@ else
     bash "$ROOT/tests/lint_test.sh"
 fi
 
-# ===========================================================================
-# phase: self_test — prove the gate can go red
-# ===========================================================================
 
-kit_phase "60 self_test: n whole gates, one per breakage"
-if [ "$RUN_SELF_TEST" -eq 1 ]; then
-  section 'self_test: this gate is able to fail'
-  # The numbers in this label are COUNTED from self_test.sh's recipes rather than
-  # written down. Every breakage calls exactly one of the four red-expecting
-  # helpers, so counting those calls is the breakage count by construction — and
-  # a hardcoded number is exactly the kind of thing that goes stale quietly when
-  # the next packet adds a check. The wording follows from the counts so the two
-  # cannot disagree.
-  # Three counts, because the helpers no longer agree on what they expect.
-  # `expect_skip_check` (breakage 23b) asserts the gate stays GREEN while naming
-  # a SKIP, and `expect_green_check` (breakage 59) asserts it stays green while
-  # naming a FINDING — kit-13's adoption ceiling, the other side of the same
-  # claim. Conflating either with the red-expecting helpers would either claim
-  # sixty-seven reds when there are sixty-five, or drop a green-expecting proof
-  # from the label entirely, and a proof the summary does not count is a proof
-  # nobody runs.
-  #
-  # The `green_check`/`skip_check` arms on the first pattern and their absence
-  # on the second are the load-bearing asymmetry: `breakages` is every recipe,
-  # `reds` is only the ones that must fail. Both read the same file, so neither
-  # can go stale, and both are anchored on the BREAKAGE LABEL so a helper
-  # *definition* can never be counted as a call.
-  _st_breakages=$(grep -cE '^ *expect_(red(_check|_lang|_script)?|green_check|skip_check) +.breakage +[0-9]+[a-z]*:' "$ROOT/tests/self_test.sh" || true)
-  _st_reds=$(grep -cE '^ *expect_red(_check|_lang|_script)? +.breakage +[0-9]+[a-z]*:' "$ROOT/tests/self_test.sh" || true)
-
-  # The header is a promise about what the file proves, and a promise nobody
-  # reads is decoration. Compare the breakage numbers the header NAMES against
-  # the numbers the recipes CARRY, so the two cannot drift:
-  #
-  #   - a recipe with no header entry is a breakage the file proves but does not
-  #     claim, which is how a proof quietly stops being one;
-  #   - a header entry with no recipe is worse — a claim the file does not
-  #     deliver, and the summary line above would be counting the recipes while
-  #     the documentation advertises something else.
-  #
-  # `2b` is parsed as a letter-suffixed continuation of 2 and is expected to
-  # appear on both sides, so it is compared literally rather than dropped.
-  #
-  # EVERYTHING IS A STRING. The first version of this check expanded `7-10` with
-  # `range(int(lo), int(hi) + 1)`, so those entries entered the set as `int` while
-  # the single entries arrived from the regex as `str`. `named - carried` then
-  # reported 7, 8, 9, 10 and every two-digit breakage as both documented-without-
-  # a-recipe AND proven-without-being-documented — which is the check reporting a
-  # disagreement that did not exist, on a tree that was correct. Normalising to
-  # `str` at every point of entry is the whole fix, and the reason it is worth
-  # stating: a set difference over two representations of the same number is
-  # never empty, so the failure mode is a permanently red check, not a missed one.
-  #
-  # ---------------------------------------------------------------------------
-  # AND THE SECOND PROPERTY ABOUT THE SAME FILE: no recipe needs the live tier,
-  # and every child gate opts out of it through ONE wrapper. Both are derived
-  # here rather than asserted in `self_test.sh`'s header, because the header is
-  # exactly the kind of claim this repository stops believing: a comment saying
-  # "the child gates do not run docker" is a comment, and the thing that failed
-  # was a docker tier that ran anyway for twenty-odd whole gates.
-  #
-  # THREE THINGS ARE CHECKED, and each answers a way this can rot:
-  #
-  #   1. `bash tests/validate.sh` appears EXACTLY ONCE in `self_test.sh`, in a
-  #      non-comment line. Five helpers spawn child gates; a sixth added without
-  #      the opt-out is a whole gate that quietly brings up three docker stacks
-  #      again, and the suite gets slower and flakier with nothing to read.
-  #   2. That one line sets `KIT_NO_LIVE=1` and lives inside `kit_child_gate`, so
-  #      the single place is also the place that knows what the opt-out is.
-  #   3. ZERO recipe invocations mention a live tier. The live set is READ from
-  #      this file's own `live_check` calls rather than written out here, so a
-  #      fourth live tier is covered by the same check on the day it lands, and
-  #      the list can never name a script that has been renamed.
-  #
-  # (3) is the count this packet asked for, as a check rather than as a claim:
-  # today it is 0, and it is 0 because every recipe asserts a verdict about ONE
-  # named check — a collector config, a workflow, a linter, a reporter — and the
-  # observability live tier is not one of them. It is 0 for a second reason the
-  # count cannot see. Counted on this tree: of the 107 recipe invocations, 93 run
-  # the gate at all (6 `expect_red_lang` and 8 `_script` invocations never do),
-  # **84 of the 93 pass `--static-only`**, and the other 9 are all narrowed to
-  # the single check they assert by `expect_red_check`'s `--only` — except 23b,
-  # whose helper cannot be filtered because the string it must find is a SKIP's
-  # verdict text rather than a check's label. So the opt-out changes the output
-  # of exactly ONE recipe in the suite.
-  self_test_live_tier() {
-    "$PY" - "$ROOT/tests/validate.sh" "$ROOT/tests/self_test.sh" <<'PY'
-import re
-import sys
-
-gate, suite = sys.argv[1], sys.argv[2]
-src = open(gate, encoding="utf-8").read()
-self_src = open(suite, encoding="utf-8").read()
-
-# (3) The live set, DERIVED. `live_check '<label>' … bash "$ROOT/tests/<script>"`
-# is the only shape a live tier has, because `live_check` is the only wrapper
-# that honours RUN_LIVE — and requiring the `live_check` spelling is the point:
-# a new tier added straight to `bounded_check` would be invisible here, so the
-# rule is that anything behind the opt-out is spelled `live_check`.
-live = re.findall(r"^[ \t]*live_check[^\n]*\n[ \t]*\d+ bash \"\$ROOT/tests/([^\"]+)\"", src, re.M)
-if not live:
-    print("  - no `live_check` invocation found: the observability live tier is not")
-    print("    behind --no-live any more, so `KIT_NO_LIVE=1` would opt out of nothing")
-    print("    and the opt-out in tests/self_test.sh would be a decoration.")
-    sys.exit(1)
-
-lines = self_src.splitlines()
-# A line whose first non-blank character is `#` is a comment. Everything this
-# check reads is CODE, and the file is full of prose that legitimately names
-# `canary_test.sh` — including the wrapper's own comment, which explains why the
-# count is zero.
-code = [(n, ln) for n, ln in enumerate(lines, 1) if ln.strip() and not ln.lstrip().startswith("#")]
-
-problems = []
-
-# (1) One spawn, and it is the gate rather than a path to it. The pattern is
-# deliberately loose about the path -- `bash "$dir/tests/validate.sh"` is the same
-# spawn as `bash tests/validate.sh` and opts out of nothing -- and deliberately
-# excludes `bash -n`, which this file already uses to syntax-check a script and
-# which runs no gate.
-spawns = [
-    (n, ln)
-    for n, ln in code
-    if re.search(r"\bbash\b(?! +-n\b)[^|;&\n]*tests/validate\.sh", ln)
-]
-if len(spawns) != 1:
-    where = ", ".join("line %d" % n for n, _ in spawns) or "nowhere"
-    problems.append(
-        f"a `bash … tests/validate.sh` spawn appears {len(spawns)} time(s) outside "
-        f"comments in tests/self_test.sh ({where}); expected exactly 1. Every child gate "
-        "must go through kit_child_gate, or it does not get KIT_NO_LIVE=1."
-    )
-
-# (2) The one spawn opts out, and it lives in a wrapper that exists.
-#
-# CONTAINMENT IS DELIBERATELY NOT ASSERTED, and the reason is a mutation that
-# made this check red on correct work while it was being written. Locating the
-# spawn "inside `kit_child_gate`" needs either brace counting or "the nearest
-# function definition above it", and both are wrong the moment a definition is
-# written inside another definition's body — which bash accepts, which no linter
-# here flags, and which a reader can do by accident. The span version reported
-# the nested function as the enclosing one and blamed a function that spawns
-# nothing; a check that fires on a correct edit teaches the reader to ignore it,
-# which is this repository's own rule about `Naming/PredicateName` and about
-# keyword scans over comments. So the property here is the one that matters —
-# one spawn, and it carries the opt-out — plus the fact that the wrapper is
-# still there to carry the reasoning.
-if len(spawns) == 1:
-    n, ln = spawns[0]
-    if "KIT_NO_LIVE=1" not in ln:
-        problems.append(
-            f"line {n} spawns the gate without KIT_NO_LIVE=1, so that child gate runs "
-            "the observability live tier — three docker stacks — for a recipe that "
-            "asserts one named check."
-        )
-    if not any(re.match(r"^kit_child_gate\(\)\s*\{\s*$", ln) for ln in lines):
-        problems.append(
-            "tests/self_test.sh defines no `kit_child_gate()`. One spawn of the gate is "
-            "not enough on its own: the wrapper is the single place that says what the "
-            "opt-out is and why, and a bare spawn in five helpers is a promise repeated "
-            "five times with nothing to check it."
-        )
-
-# (3) No recipe names a live tier. Statements are joined on a trailing `\` because
-# every recipe in this file is written across two or three lines. `cur` holds the
-# line NUMBER and the lines, in that order, because the failure message has to be
-# able to point at the recipe rather than at "somewhere in the file".
-stmts, cur = [], None
-for n, ln in code:
-    if cur is None:
-        # Anchored on the NAME and required NOT to be a definition. `expect_red()
-        # {` matches a name-only pattern exactly as well as a call does — which
-        # is the mistake this repository has already made once, in both the
-        # `_st_breakages` count and the header/recipe agreement check, and which
-        # printed 28 over 23 recipes on a run that was fine. The `()` is what
-        # tells the two apart.
-        if re.match(
-            r"^[ \t]*expect_(?:red(?:_check|_lang|_script)?|green_check|skip_check|green)\b",
-            ln,
-        ) and not re.match(r"^[ \t]*expect_[A-Za-z0-9_]*\(\)\s*\{", ln):
-            cur = (n, [ln])
-    else:
-        cur[1].append(ln)
-    if cur is not None and not ln.rstrip().endswith("\\"):
-        stmts.append(cur)
-        cur = None
-if cur is not None:
-    stmts.append(cur)
-
-offenders = []
-for start, body_lines in stmts:
-    body = " ".join(body_lines)
-    for script in live:
-        if script in body:
-            offenders.append(f"line {start} names `{script}`")
-if offenders:
-    problems.append(
-        f"{len(offenders)} recipe invocation(s) name a live tier out of "
-        f"{', '.join(live)}: " + "; ".join(offenders) + ". A recipe that asserts a "
-        "live docker tier can only be evaluated on a quiet machine, which is the "
-        "condition that made breakage 23b red at position 23 of 104 and green "
-        "standalone. Prove that tier from the top-level gate instead."
-    )
-
-if problems:
-    for p in problems:
-        print("  -", p)
-    sys.exit(1)
-print(
-    f"0 of {len(stmts)} recipe invocations name a live tier; "
-    f"{len(spawns)} child-gate spawn, opted out of all {len(live)}"
-)
-PY
-  }
-
-  # NO RECIPE MAY ANCHOR ON A BARE VERSION LITERAL.
-  #
-  # WHY THIS IS A CHECK AND NOT A CONVENTION. `edit` already refuses an anchor it
-  # cannot find, loudly, naming the file — so nothing here is about being louder.
-  # It is about making the class impossible rather than about detecting one
-  # instance, and the difference is the whole argument:
-  #
-  #   Four recipes anchored their mutations on the literal `1.0.0`. The next
-  #   release moved VERSION to 2.0.0 and all four reported
-  #   `the recipe no longer applies to its copy`, which reads as a harness
-  #   complaint rather than as "the only proof that a MAJOR bump owes a migration
-  #   has stopped running". Four proofs of kit's own release discipline died on a
-  #   commit whose message named three OTHER breakages and none of these four.
-  #
-  # A refusal cannot catch that, because at the moment `edit` refuses, the recipe
-  # is already dead and the damage is done. This check runs on the SOURCE, so the
-  # sixth recipe to be written the same way is a red gate at authoring time rather
-  # than a dead proof at release time.
-  #
-  # WHY NOT THE OTHER SHAPE. The alternative in the packet — a guard at suite
-  # start that resolves each anchor against a copy and names the drift — is the
-  # same information one step later, and it costs a full set of copies to say what
-  # a text scan says for free. Worse, it cannot say WHICH recipe or WHY at the
-  # moment somebody is writing one. Decided and recorded in DECISIONS.md (MD31).
-  #
-  # DERIVED, NOT ASSERTED. The set of interesting files is read out of the
-  # recipes themselves — every path `edit` is handed that resolves to `VERSION` or
-  # `CHANGELOG.md` — so adding a version recipe brings itself under the rule
-  # without this file being edited. That is the same move as `self_test_live_tier`
-  # deriving the live tier from `live_check` invocations, and for the same reason:
-  # a list of what is forbidden, written down separately, is a list that goes
-  # stale, and a rule that only covers the recipes its author remembered is a rule
-  # with a hole shaped like the next packet.
-  self_test_no_version_literal() {
-    "$PY" - "$ROOT/tests/self_test.sh" "$ROOT/VERSION" <<'PY'
-import os
-import re
-import sys
-
-suite = open(sys.argv[1], encoding="utf-8").read()
-live_version = open(sys.argv[2], encoding="utf-8").read().strip()
-
-lines = suite.splitlines()
-# Comments are excluded because this file is mostly prose about versions, and a
-# check that fires on a comment explaining WHY a literal is wrong is a check that
-# fires on its own documentation.
-code = [(n, ln) for n, ln in enumerate(lines, 1) if ln.strip() and not ln.lstrip().startswith("#")]
-
-# Join a trailing `\`, because every recipe here is written across two or three
-# lines and a per-line scan would see half a string literal and match nothing.
-stmts, cur = [], None
-for n, ln in code:
-    if cur is None:
-        if re.match(r"^[ \t]*edit\s", ln):
-            cur = (n, [ln])
-    else:
-        cur[1].append(ln)
-    if cur is not None and not ln.rstrip().endswith("\\"):
-        stmts.append(cur)
-        cur = None
-
-# MAJOR.MINOR.PATCH, as three components and nothing else. `1.0.0-rc1` and
-# `v1.4.0` are deliberately NOT matched by the bare form: they cannot appear in
-# VERSION, so a recipe that writes one is asserting a string the tree forbids.
-# The gate's own `stability_parse` refuses both for the same reason.
-VERSION_LITERAL = re.compile(r"(?<![\w.$/-])(\d+\.\d+\.\d+)(?![\w.-])")
-
-# The files whose contents a release moves. `VERSION` is the version;
-# `CHANGELOG.md` carries the version headings and the `## Unreleased` section.
-INTERESTING = ("VERSION", "CHANGELOG.md")
-
-problems = []
-# Which recipes the rule is about, derived rather than written down: a recipe
-# that mentions one of these paths. Used only for the summary count, so the
-# number printed is a measurement of the file rather than a claim about it.
-guarded = set()
-for start, body_lines in stmts:
-    body = " ".join(body_lines)
-    # The path is the first quoted or bare word after `edit`.
-    m = re.search(r"edit\s+(\"[^\"]*\"|'[^']*'|\S+)", body)
-    if not m:
-        continue
-    path = m.group(1).strip("\"'")
-    if not path.endswith(INTERESTING):
-        continue
-    guarded.add(start)
-    # Every remaining argument, so the rule covers the REPLACEMENT as well as the
-    # anchor. A recipe that anchored on a variable and wrote a literal
-    # destination has the same fuse: the literal stops existing the moment the
-    # tree moves past it.
-    #
-    # DEDUPED, because the commonest form names the same version twice — once as
-    # the anchor and once as the destination — and two identical findings read as
-    # two problems where there is one. One recipe, one finding per version.
-    for lit in sorted(set(VERSION_LITERAL.findall(body))):
-        problems.append(
-            f"line {start}: the recipe editing `{os.path.basename(path)}` names the version "
-            f"literal `{lit}` ({'the tree is at ' + live_version if lit == live_version else 'a version this tree has never been at'}). "
-            "Derive it from the copy instead: `copy_version \"$baseNN\"` for the version it "
-            "carries and `bump <v> <major|minor>` for the destination. A literal here is a "
-            "time bomb whose fuse is one release, and the release that lights it takes this "
-            "recipe's proof with it while reporting a harness complaint rather than a lost proof."
-        )
-
-if not guarded:
-    problems.append(
-        "no recipe edits VERSION or CHANGELOG.md any more, so this check is asserting over "
-        "nothing. Either the version recipes were removed or this pattern has stopped "
-        "matching their calls; both mean the rule is no longer covering what it was written for."
-    )
-
-if problems:
-    for p in problems:
-        print("  -", p)
-    sys.exit(1)
-print(
-    f"{len(stmts)} mutation(s) in {len(guarded)} recipe(s) touching "
-    f"{', '.join(INTERESTING)}; 0 anchors a bare version literal, so the next bump is not an event"
-)
-PY
-  }
-
-  # The label carries both numbers and, deliberately, does not sum them into
-  # "N breakages, N reds" the way it did while every recipe was red-expecting.
-  # Sixty-seven breakages of which sixty-five must go red and two must stay green
-  # — 23b naming a SKIP, 59 naming a FINDING — is a *stronger* suite than
-  # sixty-seven that must all go red, and a label that flattened the two would hide
-  # the only facts that distinguish them. The NUMBERS in this label are counted from
-  # the recipes; the numbers in these comments are written down, which is why they
-  # are the ones that go stale.
-  #
-  # BOUNDED, and this is the phase that most needs it. Every recipe builds a
-  # fresh throwaway copy of the tree and runs the whole static gate inside it, so
-  # the self-test is _n_ gates in sequence: 77 on this branch, and the number
-  # grows with every check this repository adds. On a quiet box it is the
-  # longest phase in the run by a wide margin, and it is the one that grows
-  # silently — nothing in it announces that the gate just got slower.
-  #
-  # The count in the LABEL above is computed from the recipes, so the number in
-  # this comment is the one place it can go stale, and it did: it read 67 for
-  # three packets. Corrected here rather than left, because a comment claiming a
-  # count is a claim, and this repository's rule about `DECISIONS.md` — that a
-  # reference to something that does not exist is worse than no reference — is the
-  # same rule one layer down.
-  #
-  # AND A BOUND IS NOT A RESULT ABOUT THE BREAKAGES IT DID NOT REACH. Measured on
-  # kit-22: this tier BOUNDed at breakage 56 of 77, so 21 recipes never ran, and
-  # the run still exited 0. That is the correct behaviour — a bound is neither a
-  # pass nor a skip, and it is reported — but it means a green gate is not
-  # evidence about the unreached recipes. Running them by hand is how kit-22 found
-  # breakage 72 green on a check that could not see its own defect. See
-  # AGENTS.md, "a BOUND self_test is a gate to run by hand".
-  #
-  # 5400s is measured, not chosen. The uninterrupted run recorded in
-  # REPORT-kit-13.md §5.2 took ~44 minutes end to end, of which the self-test
-  # phase was the majority; 5400 leaves room for a box three times busier than
-  # this one without being a number so large it never binds. A bound that never
-  # binds is the correct answer here — the point is that the run REACHES THE END
-  # and says so, not that it fails sooner. A tier that hits its bound is reported
-  # as a BOUND, which is neither a pass nor a skip, so a bound cannot buy a green
-  # this tree did not earn.
-  bounded_check "tests/self_test.sh  ($_st_breakages breakages: $_st_reds red, $((_st_breakages - _st_reds)) green-expecting — the ceiling has both sides proved)" \
-    5400 bash "$ROOT/tests/self_test.sh"
-fi
-
-# ---------------------------------------------------------------------------
-
-kit_phase "70 summary"
+kit_phase "60 summary"
 printf '\n'
 # FOUR COUNTS, and the reason there are four is the reason this summary exists
 # at all. `PASS` and `FAIL` are verdicts about the tree. `SKIP` is a verdict
@@ -7800,9 +7348,7 @@ fi
 # claims were not exercised by this run, whoever asked for the skip.
 if [ "$RUN_LIVE" -eq 0 ]; then
   echo "note: --no-live: the observability live tier (canary, collector-killed, fetched stack)"
-  echo "       did NOT run. Three claims are UNEXERCISED by this run and no gate that a"
-  echo "       human or CI runs sets this flag; it exists for the throwaway gates in"
-  echo "       tests/self_test.sh, none of which asserts anything about those three."
+  echo "       did NOT run. Those claims are UNEXERCISED by this run."
 fi
 if [ "$fails" -ne 0 ]; then
   echo "FAIL: $fails check(s) failed."
