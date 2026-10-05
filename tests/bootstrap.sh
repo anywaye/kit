@@ -300,10 +300,27 @@ kit_bootstrap_binary() {
   case "$(uname -m)" in
     arm64 | aarch64)
       arch=arm64
+      arch_x64=arm64
       triple_arch=aarch64
       ;;
     x86_64 | amd64)
+      # `x86_64` and `x64` because they are two different SPELLINGS and gitleaks
+      # uses the short one. Measured: the 8.30.1 release publishes
+      # `gitleaks_8.30.1_linux_x64.tar.gz` and 404s on `…_linux_x86_64.tar.gz`,
+      # while hadolint publishes `hadolint-linux-x86_64`. Both tables in this
+      # file are correct; the template is what has to pick, exactly as `@os@`
+      # and `@ros@` already do for the OS.
+      #
+      # Before this, `@arch@` was `x86_64` and the `secrets` job failed on
+      # ubuntu-latest with `no recorded sha256 for
+      # gitleaks_8.30.1_linux_x86_64.tar.gz` — the sha256 was RIGHT THERE in
+      # the table, filed under the name the release actually uses. A missing
+      # entry and a mismatched name read identically, which is why the message
+      # says "no recorded sha256" when the truth is "recorded under another
+      # name". `@rax@` is the short spelling; `@arch@` stays the long one that
+      # hadolint needs.
       arch=x86_64
+      arch_x64=x64
       triple_arch=x86_64
       ;;
     *)
@@ -315,6 +332,7 @@ kit_bootstrap_binary() {
   asset="${template//@os@/$os}"
   asset="${asset//@ros@/$ros}"
   asset="${asset//@arch@/$arch}"
+  asset="${asset//@rax@/$arch_x64}"
   asset="${asset//@triple@/$triple}"
 
   want="$(printf '%s\n' "$sums" | awk -v a="$asset" '$1 == a { print $2 }')"

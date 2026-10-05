@@ -1553,7 +1553,7 @@ jobs:
           kit_bootstrap_binary gitleaks \
             "https://github.com/gitleaks/gitleaks/releases/download/v${KIT_GITLEAKS_VERSION}" \
             "$KIT_GITLEAKS_SHA256S" "$KIT_TREE_DIR" \
-            "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@arch@.tar.gz" gitleaks
+            "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@rax@.tar.gz" gitleaks
           echo "GITLEAKS=$BIN" >> "$GITHUB_ENV"
       - name: gitleaks (full history, redacted)
         # kit's own script, so this invocation and `bash tests/validate.sh` on a

@@ -4229,7 +4229,7 @@ PY
   elif kit_bootstrap_binary gitleaks \
     "https://github.com/gitleaks/gitleaks/releases/download/v${KIT_GITLEAKS_VERSION}" \
     "$KIT_GITLEAKS_SHA256S" "$ROOT" \
-    "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@arch@.tar.gz" gitleaks; then
+    "gitleaks_${KIT_GITLEAKS_VERSION}_@ros@_@rax@.tar.gz" gitleaks; then
     GITLEAKS_BIN="$BIN"
     # Exported so a re-run on the same machine reuses this binary instead of
     # downloading its own 15MB archive. Same reasoning as KIT_PYTHON, one level
