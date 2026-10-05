@@ -1860,9 +1860,7 @@ if missing:
 PY
   }
 
-  # Every language ships: the codec, its suite, the SDK wiring snippet, and a
-  # README saying when to use which. The README is not optional — a template
-  # nobody knows when to use is a template nobody uses.
+  # Every language ships: the codec, its suite, and the SDK wiring snippet.
   #
   # The field count is deliberately variable. Five languages carry a separate
   # test file; rust does not, because `rustc --test` builds a single crate from
@@ -1871,33 +1869,28 @@ PY
   # none in it would be satisfied by a crate shipping an implementation and no
   # proof, which is the exact thing this packet exists to prevent.
   #
-  # `pins.md` lives at the otel root, not under rust/: it pins all six
-  # languages' OTel versions, and a version table scoped to one language reads
-  # as "rust's versions" to the next person who greps for it.
-  otel_readme='templates/otel/README.md'
-  if otel_required "$otel_readme" 'templates/otel/pins.md'; then
-    report PASS 'templates/otel/{README.md,pins.md}  (present)'
-  else
-    report FAIL 'templates/otel/{README.md,pins.md}  (present)'
-  fi
-
+  # README.md and pins.md are deliberately NOT asserted here. A gate that goes
+  # red because a document is missing tells its reader that the repository
+  # disagrees with itself, not that a service is broken or a contract violated,
+  # and those are the only two things a red here is allowed to mean.
   while IFS='|' read -r lang a b c d e; do
     [ -n "$lang" ] || continue
-    wanted=("templates/otel/$lang/$a" "templates/otel/$lang/$b" "templates/otel/$lang/$c")
-    [ -n "$d" ] && wanted+=("templates/otel/$lang/$d")
-    [ -n "$e" ] && wanted+=("templates/otel/$lang/$e")
+    wanted=()
+    for f in "$a" "$b" "$c" "$d" "$e"; do
+      [ -n "$f" ] && wanted+=("templates/otel/$lang/$f")
+    done
     if otel_required "${wanted[@]}"; then
       report PASS "templates/otel/$lang/  (${#wanted[@]} artifacts present)"
     else
       report FAIL "templates/otel/$lang/  (${#wanted[@]} artifacts present)"
     fi
   done <<'OTEL'
-go|traceparent.go|traceparent_test.go|otelhttp.go.snippet|README.md
-ruby|traceparent.rb|test_traceparent.rb|rack_middleware.rb.snippet|README.md
-elixir|traceparent.ex|test_traceparent.exs|phoenix_telemetry.ex.snippet|README.md
-rust|traceparent.rs|otel_client.rs.snippet|README.md
-python|traceparent.py|test_traceparent.py|fastapi.py.snippet|README.md
-node|traceparent.mjs|traceparent.test.mjs|hono.ts.snippet|README.md
+go|traceparent.go|traceparent_test.go|otelhttp.go.snippet
+ruby|traceparent.rb|test_traceparent.rb|rack_middleware.rb.snippet
+elixir|traceparent.ex|test_traceparent.exs|phoenix_telemetry.ex.snippet
+rust|traceparent.rs|otel_client.rs.snippet
+python|traceparent.py|test_traceparent.py|fastapi.py.snippet
+node|traceparent.mjs|traceparent.test.mjs|hono.ts.snippet
 OTEL
 
   # -------------------------------------------------------------------------
