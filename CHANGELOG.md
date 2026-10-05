@@ -1,5 +1,142 @@
 ## Unreleased
 
+### Fixed
+
+- **A reusable workflow has no location of its own, and four `run:` bodies in
+  `ci.reusable.yml` were reading one anyway.** `GITHUB_ACTION_PATH` is
+  documented by GitHub as supported only in composite actions;
+  `.github/workflows/ci.reusable.yml` is a *reusable* workflow, so the variable
+  is not set in it. Under `set -euo pipefail` an unset variable is not an empty
+  path — it is a fatal on the step's **first line**:
+
+  ```
+  …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+  ##[error]Process completed with exit code 1.
+  ```
+
+  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  on the `secrets` job — the one job in the file with no opt-in, the one this
+  repository calls the only control a service cannot choose not to run. It was
+  not a job that found nothing; it was a job that could not start. `zizmor` has
+  the same defect and is fixed in the same place (it is gated on an input, so it
+  has never run in the fleet), and so does `telemetry`'s fallback to kit's own
+  copy of the conformance suite.
+
+  **The file already knew.** The `kit-lint-ref` input's own comment names
+  `GITHUB_ACTION_PATH` as composite-action-only and explains that kit's configs
+  therefore have to be **fetched by a name** — and then five lines in three jobs
+  contradicted it. The reasoning was applied to the lint configs and not to
+  these. That is the whole of it: a rule written down once, obeyed in one place,
+  and contradicted in another by nobody reading the other place.
+
+  The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
+  `inputs.kit-lint-ref` — the same mechanism the six language jobs already use —
+  and the tree lands in `$RUNNER_TEMP`, **not** `<working-dir>/.kit`: `secrets`
+  runs a full-history git scan rooted at `$GITHUB_WORKSPACE`, and a second git
+  repository inside the tree being scanned is a question with no good answer.
+
+  **`kit_gate_tree_check` is the check, and it has four branches because writing
+  it found two defects in it.**
+
+  - 106 restores the variable.
+  - 106b is the **obvious fix, refused**: deleting the lines turns a fatal into
+    `bash: no such file or directory`, which is the same red job with the
+    diagnosis further away, and a variable-only check calls that a pass. So the
+    check asserts the *coupling* — a step reading the fetched tree needs a fetch
+    above it.
+  - 106c drops one checkout's `ref`. This recipe **found a real bug**: the pin
+    was originally asserted inside a per-step loop, so it reported one unpinned
+    checkout once per reading step and would have passed *entirely* for a
+    checkout no step referenced. A check whose coverage depends on an unrelated
+    step has a hole shaped like the defect it exists for.
+  - 106d pins to the literal `master`. This is what `inputs.kit-lint-ref`
+    evaluates to when a caller sets nothing, so it **looks** pinned; a check
+    written as "is it pinned to something" accepts it, and a caller pinning
+    `uses:` to a sha then gets that workflow with the gate scripts from `master`.
+  - 106e is the **green control**, and it exists because this check's first
+    version failed **seven jobs that were correct**. It looked for `tests/` and
+    `templates/` anywhere in a run body, and every language job prints
+    `See templates/tier/README.md` in an error message while running the
+    *caller's* own gate. A check that fires on correct work teaches its reader
+    to ignore it.
+
+- **`tests/zizmor_gate.sh` read `$PY`, and the `zizmor` job never set it.** A
+  second defect in the same job and the same shape as the one above: the script
+  ends by piping zizmor's report through `"$PY" - …`, which in kit's own gate
+  comes from `kit_bootstrap_python`. A reusable workflow makes no such call, so
+  the job reached the script's last line and died on `PY: unbound variable`.
+  Both are one mistake wearing two hats — a script written to be called by one
+  caller and run by another that had not been read.
+
+- **Every linted file gets type information, or the type-aware rules cannot run
+  at all — and `recommendedTypeChecked` is UNSCOPED, so `files` is load-bearing.**
+  `lint/eslint.config.mjs` enabled `tseslint.configs.recommendedTypeChecked` and
+  supplied `parserOptions` under `files: ['**/*.{js,mjs,cjs,ts,tsx}']`. One
+  config *inside* `recommendedTypeChecked` — `typescript-eslint/eslint-recommended`
+  — declares `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which **adds**
+  `.mts` and `.cts` to the set of files ESLint will lint. So every `.mts` file in
+  a service was linted, was handed the type-aware rules, and was never handed the
+  type information those rules require:
+
+  ```
+  Error: Error while loading rule '@typescript-eslint/await-thenable':
+  You have used a rule which requires type information, but don't have
+  parserOptions set to generate type information for this file.
+  ```
+
+  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  on the `node` job — whose first real execution this was, suppressed for four
+  days by the collision `ad3e320` fixed. Both services carry three root-level
+  `.mts` files, so this was never marginal. The run dies at **exit 2 before
+  reporting a single finding**.
+
+  **The diagnosis that arrived with it was wrong, and the wrong one is the more
+  useful half.** It was attributed to `tsconfigRootDir: import.meta.dirname` —
+  kit's directory rather than the caller's. That is a real misconfiguration and
+  it is fixed here, but it is **not** what produced the error. Measured on
+  eslint 9.39.5 / typescript-eslint 8: with `projectService: true`, setting
+  `tsconfigRootDir` to `/nonexistent-root`, or deleting it entirely, leaves the
+  run byte-identical — the project service walks **up from the linted file** to
+  find a tsconfig and never consults the root. A check written for the reported
+  cause would have been green on the defect that actually shipped.
+
+  `tsconfigRootDir` is still fixed, because it is load-bearing in exactly one
+  place and it is a place kit would otherwise reach for: `allowDefaultProject`
+  globs are matched **relative to it**
+  (`useProgramFromProjectService.js` does
+  `path.relative(parseSettings.tsconfigRootDir, filePathAbsolute)`). With kit's
+  directory as the root, a pattern meant to cover the caller's own root config
+  files resolves to `.kit/lint/*.mts` and matches nothing — and the error says
+  so: `allowDefaultProject is set to ["*.mts"], which does not match
+  '../../x.mts'`. A latent misconfiguration, invisible until the first entry is
+  added. The value is now `process.cwd()`, which is the caller's workspace by
+  construction because the lint step carries `working-directory:` — no new
+  workflow input, so **no caller in the fleet needs a PR**.
+
+  `.jsx` is deliberately still absent. Nothing above adds it to the linted set,
+  so adding it would widen kit's lint in every service and turn each React repo
+  red with `was not found by the project service`.
+
+  **Two checks, because the two halves fail differently.**
+
+  - `eslint_typed_scope_check` holds the invariant, in both directions: every
+    extension the recommended sets can lint must be present, and an extension
+    with no reason is a finding. It **strips JS comments before reading**, and
+    that is not hygiene: the file now explains `tsconfigRootDir` in eleven
+    comment lines, and the check's first version matched one of those and went
+    red on a config that is correct. AGENTS.md's "a check that can be satisfied
+    by a comment is not a check" has a mirror image that is worse — a check that
+    can be *falsified* by one.
+  - `tests/lint_test.sh` **runs** it, with six new assertions and three controls.
+    The control for the pre-fix glob asserts the crash *by its own message*, not
+    by its exit status, because the pre-fix failure was also red and was
+    mistaken for the linter working. The `allowDefaultProject` pair had the same
+    defect and it was caught by measurement: both runs exit non-zero, so two
+    `red` assertions could not tell "the glob resolved and the linter found the
+    bug" from "the glob matched nothing and ESLint exited 2 anyway". Reverting
+    kit's `tsconfigRootDir` was 22/22 green until that was fixed, which is the
+    same confusion as the defect itself: a red run that found nothing.
+
 ### Added
 
 - **The README's file list is now closed in the direction a packet moves in.**

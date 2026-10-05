@@ -118,6 +118,10 @@ REUSABLE_WORKFLOWS="$WORKFLOW $IMAGE_WORKFLOW"
 # heredocs is a dozen chances to spell it three ways.
 GITLEAKS_CONFIG='.gitleaks.toml'
 GITLEAKS_GATE='tests/gitleaks_gate.sh'
+# Same reason, for the same reason. `eslint_typed_scope_check` reads this path
+# twice — once as the file to open and once in its own failure messages — and a
+# literal in two places is two chances to spell it three ways.
+ESLINT_CONFIG='lint/eslint.config.mjs'
 ZIZMOR_CONFIG='.github/zizmor.yml'
 
 # The one `language` option that is not a language. `none` means "this
@@ -10867,6 +10871,466 @@ PY4
   }
   check "reusable workflows  (no caller and callee share a concurrency group)" \
     reusable_concurrency_check
+
+  # -------------------------------------------------------------------------
+  # `eslint_typed_scope`: every linted file gets type information, or the
+  # type-aware rules cannot run at all.
+  #
+  # WHAT IT IS FOR. `lint/eslint.config.mjs` turned on
+  # `tseslint.configs.recommendedTypeChecked` and supplied `parserOptions` under
+  # a `files` glob of `**/*.{js,mjs,cjs,ts,tsx}`. Meanwhile one of the configs
+  # inside `recommendedTypeChecked` — `typescript-eslint/eslint-recommended` —
+  # declares `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS
+  # `.mts` and `.cts` to the set of files ESLint will lint. So every `.mts` file
+  # in a service was linted, was handed the type-aware rules, and was never
+  # handed the type information those rules require:
+  #
+  #   Error: Error while loading rule '@typescript-eslint/await-thenable':
+  #   You have used a rule which requires type information, but don't have
+  #   parserOptions set to generate type information for this file.
+  #
+  # Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669,
+  # on the `node` job, whose first real execution this was — the job had been
+  # suppressed for four days by the concurrency collision fixed in ad3e320. Both
+  # services carry three `.mts` files at the repo root (vitest.config.mts,
+  # vite.config.mts, vite.node.config.mts), so this was never marginal. The run
+  # dies at exit 2 before reporting a single finding.
+  #
+  # THE DIAGNOSIS THAT WAS WRONG, recorded because the wrong diagnosis is the
+  # more useful half. It was attributed to `tsconfigRootDir:
+  # import.meta.dirname` — kit's directory rather than the caller's — and that is
+  # a real misconfiguration which is also fixed. It is not what produced the
+  # error. Measured on eslint 9.39.5 / typescript-eslint 8: with
+  # `projectService: true`, setting `tsconfigRootDir` to `/nonexistent-root`, or
+  # deleting it, leaves the run byte-identical, because the project service walks
+  # UP from the linted FILE to find a tsconfig rather than searching from the
+  # root. A check written for the reported cause would have been green on the
+  # defect that actually shipped.
+  #
+  # WHY THIS IS A CHECK RATHER THAN A COMMENT. `files` is load-bearing in a way
+  # nothing else in this file's static phase can see, because ESLint 9 accepts a
+  # `files` glob that is narrower than the set of files its own inputs pull in,
+  # and there is no parse error and no warning: the run simply dies when the
+  # first type-aware rule is constructed. The only place this is observable is a
+  # real run against a real project — which is `tests/lint_test.sh`'s job, and
+  # which has an assertion for it. What THIS check does is hold the invariant the
+  # fix rests on, so a future edit to either list is caught here rather than in
+  # eleven services' CI.
+  #
+  # BOTH DIRECTIONS, because they are different mistakes with different costs.
+  # Too NARROW is the defect that shipped: a crash, exit 2, no findings. Too WIDE
+  # lints files kit never linted before — `.jsx` is the standing example, and
+  # adding it would turn every React service red with `was not found by the
+  # project service` since no `.jsx` file is in anyone's tsconfig. So the
+  # assertion is a superset-with-a-reason: every extension the recommended sets
+  # add must be present, and an extension nobody has a reason for is a finding.
+  eslint_typed_scope_check() {
+    "$PY" - "$ROOT" "$ESLINT_CONFIG" <<'PYE'
+import re
+import sys
+
+path = sys.argv[2]
+
+
+def strip_js_comments(src):
+    """Remove `//` and block comments, leaving string contents intact.
+
+    This exists because the first version of this check read its answer out of
+    the file's own COMMENT and went red on a config that is correct. `tsconfig-
+    RootDir` appears eleven times in the header above, explaining at length why
+    the value must be the caller's workspace, and the regex matched the first of
+    those rather than the `process.cwd()` on the last line.
+
+    That is AGENTS.md's rule arriving in a new place: "a check that can be
+    satisfied by a comment is not a check", and the mirror image is worse — a
+    check that can be FALSIFIED by one. The file documenting its own invariant
+    is the normal case, not an unlucky one, so any check reading a JS or shell
+    file has to strip comments first or it is reading the prose.
+
+    Strings are tracked because a `//` inside a quoted path is content: the
+    `paths` style glob in this very file is full of them.
+    """
+    out = []
+    i, n = 0, len(src)
+    while i < n:
+        ch = src[i]
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n:
+                out.append(src[i])
+                if src[i] == "\\":
+                    if i + 1 < n:
+                        out.append(src[i + 1])
+                        i += 2
+                        continue
+                elif src[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "/":
+            while i < n and src[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and src[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+                if src[i] == "\n":
+                    out.append("\n")
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+src = strip_js_comments(open(path, encoding="utf-8").read())
+
+# The extensions `recommendedTypeChecked` can hand a type-aware rule. Held HERE
+# and asserted against kit's glob rather than read out of an installed
+# typescript-eslint, because this repository ships no node_modules and no
+# dependencies, and a check that could only run where a package was installed
+# would be a check that never runs in the one place it is needed. The value is
+# typescript-eslint 8's own `eslint-recommended` `files`, quoted in
+# lint/eslint.config.mjs's own header comment; if a future version changes it,
+# this list is the thing to update and the comment is where the reason lives.
+#
+# `.jsx` is deliberately NOT here and the comment says why; it is a plausible
+# addition to this tuple and one that would be wrong.
+REQUIRED = ("ts", "tsx", "mts", "cts")
+
+# kit's glob, read out of the file rather than restated. A restatement would be a
+# second copy of the same fact, and AGENTS.md's rule about `advisoryOps` and
+# `unrecognisedTier` is the general form of the point: a property stated in two
+# places is a property asserted zero times.
+m = re.search(r"files:\s*\[([^\]]*\*\.\{[^}]*\}[^\]]*)\]", src)
+if not m:
+    sys.exit(
+        f"{path}: could not find the brace-globbed `files` entry this check reads. "
+        f"The check has stopped being able to ask its question, and a check that "
+        f"cannot ask its question is not a check"
+    )
+present = set(re.findall(r"[a-z]+", m.group(1)))
+
+problems = []
+missing = [e for e in REQUIRED if e not in present]
+if missing:
+    problems.append(
+        f"{path}: the `files` glob covering `parserOptions` is missing {missing}. "
+        f"tseslint.configs.recommendedTypeChecked contains a config whose own "
+        f"`files` adds {list(REQUIRED)} to the set of files ESLint lints, and "
+        f"`recommendedTypeChecked` itself is UNSCOPED — so a linted file outside "
+        f"this glob is given the type-aware rules and never given the type "
+        f"information they require, and the run dies at exit 2 with `You have "
+        f"used a rule which requires type information` before reporting a single "
+        f"finding. This is the defect that shipped: cafaye/site run 37236386666 "
+        f"and cafaye/parlor run 37230458669, both of which carry three root-level "
+        f"`.mts` files"
+    )
+
+# And the other direction. `jsx` is the named example, and the reason is
+# measured: nothing above adds it to the linted set, so adding it here widens
+# kit's lint in every service in the fleet, and no `.jsx` file is in anyone's
+# tsconfig — so every one of them goes red with `was not found by the project
+# service`. A React service's components are `.tsx`.
+UNJUSTIFIED = ("jsx",)
+stray = [e for e in UNJUSTIFIED if e in present]
+if stray:
+    problems.append(
+        f"{path}: the `files` glob now covers {stray}. No recommended set adds "
+        f"those to the linted set, so this widens what kit lints in every service "
+        f"in the fleet, and a `.jsx` file is in nobody's tsconfig — so the cost is "
+        f"a red `was not found by the project service` in each of them. If this is "
+        f"wanted it is a decision about the fleet's lint policy and belongs in a "
+        f"comment here saying so"
+    )
+
+# `tsconfigRootDir` must be the CALLER's workspace. Not the reported cause of the
+# crash above, and still asserted: it is load-bearing in exactly one place, and
+# that place is `allowDefaultProject`, whose globs are matched RELATIVE TO IT
+# (`useProgramFromProjectService.js` does
+# `path.relative(parseSettings.tsconfigRootDir, filePathAbsolute)`). With kit's
+# own directory as the root, a pattern meant to cover the caller's root config
+# files resolves to `.kit/lint/*.mts` and matches nothing — the error says so:
+# `allowDefaultProject is set to ["*.mts"], which does not match '../../x.mts'`.
+# So the value is wrong in a way that is invisible until the first entry is added.
+tm = re.search(r"tsconfigRootDir:\s*([^,\n}]+)", src)
+if not tm:
+    problems.append(
+        f"{path}: no `tsconfigRootDir` is set. typescript-eslint then infers one, "
+        f"and the inference is a guess about a directory layout kit does not know"
+    )
+elif "import.meta.dirname" in tm.group(1):
+    problems.append(
+        f"{path}: `tsconfigRootDir` is `import.meta.dirname`, which is kit's own "
+        f"`lint/` directory rather than the caller's workspace. It is not the cause "
+        f"of the crash the header describes — with `projectService: true` the "
+        f"service walks up from the linted FILE, so this value is ignored for "
+        f"project lookup — but `allowDefaultProject` globs are matched relative to "
+        f"it, so the first entry added would resolve to `.kit/lint/` and match "
+        f"nothing. It must be the caller's workspace"
+    )
+
+if problems:
+    sys.exit("; ".join(problems))
+
+print(
+    f"every extension recommendedTypeChecked can lint ({', '.join(REQUIRED)}) is "
+    f"inside the `files` glob that supplies parserOptions, no extension is present "
+    f"without a reason, and tsconfigRootDir is the caller's workspace rather than "
+    f"kit's"
+)
+PYE
+  }
+  check "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" \
+    eslint_typed_scope_check
+
+  # -------------------------------------------------------------------------
+  # `kit-gate-tree`: a reusable workflow has NO location of its own, so every
+  # path into kit's tree must be a FETCH, and this is the check that says so.
+  #
+  # WHAT IT IS FOR. `GITHUB_ACTION_PATH` is documented by GitHub as supported
+  # only in composite actions. This repository's own header comment on the
+  # `kit-lint-ref` input says exactly that, and then four `run:` bodies in the
+  # same file read `${GITHUB_ACTION_PATH}/…` anyway. Under `set -euo pipefail` an
+  # unset variable is not an empty string — it is a fatal on the step's FIRST
+  # line — so `secrets`, `zizmor` and `telemetry` could not start. Measured in
+  # `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669:
+  #
+  #     …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+  #     ##[error]Process completed with exit code 1.
+  #
+  # WHY A PARSE DID NOT CATCH IT, which is the part worth keeping. Every other
+  # check in this file reads the workflow as YAML, and an unexpanded variable is
+  # a perfectly good string. There was no way for a check to notice, because a
+  # reusable workflow genuinely cannot know its own checkout path: inside one,
+  # `github.workflow_ref` is the CALLER's workflow, and `github.action_path` is
+  # the composite-action-only variable again. The tree has to be FETCHED by a
+  # name, which is what the `kit-lint-ref` input is for, and this check asserts
+  # that the fetch is what happens.
+  #
+  # WHY IT IS A SEPARATE CHECK AND NOT A LINE IN ANOTHER ONE. `ci_check` reads
+  # the `language` case statement; `lint_args_seam_check` reads three lint jobs.
+  # Neither looks at `secrets`, `zizmor` or `telemetry`, so a variable restored
+  # in any of them would be invisible to both. A defect that has been live in
+  # three jobs at once is a property of the FILE, and the check has to be too.
+  #
+  # WHAT IT ASSERTS, in three parts, and each part is a different failure:
+  #
+  #   1. no `run:` body in a reusable workflow mentions GITHUB_ACTION_PATH.
+  #      Stripped of comments first, because a check satisfied by the sentence
+  #      explaining why the variable is wrong is the failure mode AGENTS.md
+  #      names, and this file now contains several paragraphs that name it.
+  #   2. every job whose steps reference a path INTO kit's tree has a
+  #      `actions/checkout` of `cafaye/kit` before that step. Without this, part
+  #      1 alone is satisfiable by deleting the line — which turns a fatal into
+  #      a `bash: no such file or directory`, i.e. the same red job with the
+  #      diagnosis further away.
+  #   3. that checkout is pinned by `inputs.kit-lint-ref` and not by a literal.
+  #      A checkout of `cafaye/kit` with no `ref` follows the default branch, so
+  #      the pin that the input exists to express would be silently dropped by
+  #      the same edit that fixed the path.
+  kit_gate_tree_check() {
+    "$PY" - "$ROOT" "$REUSABLE_WORKFLOWS" <<'PYG'
+import os
+import sys
+
+import yaml
+
+root, reusables = sys.argv[1], sys.argv[2].split()
+
+# The variable, and the two contexts GitHub documents it for. Read as constants
+# with the reason attached, because the list of variables a reusable workflow may
+# not read is a fact about the platform and belongs where a reader finds it
+# rather than in the body of a loop.
+COMPOSITE_ONLY = ("GITHUB_ACTION_PATH", "github.action_path")
+
+# The variable that means "the directory kit's tree was fetched into". Part (2)
+# below is stated in terms of THIS and not in terms of a path substring, and the
+# first version of this check did the opposite and was wrong for a measured
+# reason: it looked for `tests/` and `templates/` anywhere in a run body, and
+# every one of the seven language jobs prints `See templates/tier/README.md` in
+# an error message while running `bash tests/validate.sh` — which is the
+# CALLER's own gate, in the CALLER's own tree, with no kit checkout anywhere
+# near it. Five jobs failed a check that had nothing to say about them.
+#
+# A check that fires on correct work teaches its reader to ignore it, and this
+# one fired on seven jobs before anything was shipped. The signal that is
+# actually load-bearing is the coupling: a step that reads kit's tree can only
+# do so through the directory the fetch put it in, so the fetch is what must
+# precede it.
+KIT_TREE_VAR = "KIT_TREE_DIR"
+
+
+def strip_shell_comments(src):
+    """Drop `#` comments from a run body, keeping quoted `#` as content.
+
+    Same rule as `strip_shell_comments` in the tier-demand check above, restated
+    rather than imported: this is a separate heredoc, and a shared helper across
+    two `python - <<PY` blocks would mean either duplication or a new file in
+    `tests/`, and the carve-out boundary in AGENTS.md counts programs.
+    """
+    out = []
+    for line in src.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        quote = None
+        cut = None
+        for i, ch in enumerate(line):
+            if quote:
+                if ch == quote:
+                    quote = None
+                continue
+            if ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and (i == 0 or line[i - 1] in " \t"):
+                cut = i
+                break
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
+def kit_checkouts(steps):
+    """Indexes of steps that check `cafaye/kit` out."""
+    found = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        if not str(step.get("uses") or "").startswith("actions/checkout"):
+            continue
+        with_ = step.get("with") or {}
+        if str(with_.get("repository") or "") == "cafaye/kit":
+            found.append((i, with_))
+    return found
+
+
+problems = []
+measured_checkouts = 0
+measured_refs = 0
+
+for rel in reusables:
+    path = os.path.join(root, rel)
+    if not os.path.isfile(path):
+        continue
+    with open(path, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+
+    for job_name, job in (doc.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps") or []
+        kit_at = kit_checkouts(steps)
+
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            body = strip_shell_comments(step.get("run") or "")
+            label = step.get("name") or step.get("uses") or f"step {i}"
+
+            # (1) the variable itself, in executable text only.
+            for var in COMPOSITE_ONLY:
+                if var in body:
+                    problems.append(
+                        f"{rel}: job {job_name} step '{label}' reads {var}. That "
+                        f"variable is documented as composite-action-only, so it is "
+                        f"not set inside a reusable workflow — and under "
+                        f"`set -euo pipefail` an unset variable is not an empty path "
+                        f"but a fatal on the first line, which is how the `secrets`, "
+                        f"`zizmor` and `telemetry` jobs failed. Check kit's tree out "
+                        f"with `uses: actions/checkout` and read it from there"
+                    )
+
+            # (2) a step that reads the fetched tree, with no fetch above it.
+            if KIT_TREE_VAR not in body:
+                continue
+
+            if not kit_at:
+                problems.append(
+                    f"{rel}: job {job_name} step '{label}' reads `{KIT_TREE_VAR}` — the "
+                    f"directory kit's tree was fetched into — but the job never checks "
+                    f"`cafaye/kit` out. Add a `kit (gate scripts)` checkout before it, "
+                    f"pinned by `inputs.kit-lint-ref`, and set the variable to its path"
+                )
+                continue
+
+            # A step may also read the tree without naming the variable, in which
+            # case the checkout alone has to be enough — so require that the
+            # variable is EXPORTED by the step that fetched, or by the job's env.
+            exports = " ".join(
+                f"{k}={v}" for k, v in ((step.get("env") or {}) if isinstance(step, dict) else {}).items()
+            )
+            job_env = " ".join(
+                f"{k}={v}" for k, v in ((job.get("env") or {}) if isinstance(job, dict) else {}).items()
+            )
+            declared = KIT_TREE_VAR in exports or KIT_TREE_VAR in job_env
+            if not declared and not any(
+                KIT_TREE_VAR in " ".join(
+                    f"{k}={v}" for k, v in ((s.get("env") or {}) if isinstance(s, dict) else {}).items()
+                )
+                for s in steps
+                if isinstance(s, dict)
+            ):
+                problems.append(
+                    f"{rel}: job {job_name} step '{label}' reads `{KIT_TREE_VAR}` but "
+                    f"nothing in the job ever sets it, so under `set -euo pipefail` the "
+                    f"step is a fatal on `{KIT_TREE_VAR}: unbound variable` — the same "
+                    f"defect as an unset `GITHUB_ACTION_PATH`, reached by the other door"
+                )
+
+            # (3) is NOT here. The pin is a property of the CHECKOUT, so it is
+            # asserted once per checkout below, and the first version of this
+            # check asserted it inside the per-step loop — which reported the same
+            # unpinned checkout once for every step that read the tree after it
+            # (twice, in the `secrets` job), and asserted it only for checkouts
+            # that some step happened to reference. A check whose coverage
+            # depends on an unrelated step is a check with a hole in it: an
+            # unpinned checkout in a job whose steps read nothing from it was
+            # invisible, which is the whole defect class this check exists for.
+        measured_checkouts += len(kit_at)
+
+        for at, with_ in kit_at:
+            ref = str(with_.get("ref") or "")
+            if ref == "":
+                problems.append(
+                    f"{rel}: job {job_name} checks `cafaye/kit` out with no `ref`, so it "
+                    f"follows the default branch. The gate scripts it is read for would "
+                    f"then be whatever `master` is on that day, which is the "
+                    f"unpinned-uses finding this repository declines to make silently. "
+                    f"Pin it to `${{{{ inputs.kit-lint-ref }}}}`"
+                )
+            elif "kit-lint-ref" not in ref:
+                # A LITERAL ref, including the default this input carries. It has
+                # to be this branch: `ref: master` is exactly what the input
+                # evaluates to when a caller sets nothing, so accepting the
+                # literal would accept a job that ignores a caller who pins
+                # `uses:` to a sha and raises `kit-lint-ref` with it. The input's
+                # own comment says the two must agree; this is what holds them to
+                # it.
+                problems.append(
+                    f"{rel}: job {job_name} pins `cafaye/kit` to the literal `{ref}` "
+                    f"rather than to `inputs.kit-lint-ref`. A caller that raises the "
+                    f"input to a sha would then get that workflow with the gate "
+                    f"scripts from `{ref}` — the drift the input exists to prevent, "
+                    f"made by the same edit that looks like pinning"
+                )
+            else:
+                measured_refs += 1
+
+if problems:
+    sys.exit("; ".join(problems))
+
+print(
+    f"{len(reusables)} reusable workflow(s) reach kit's tree only through a checkout: "
+    f"{measured_checkouts} `cafaye/kit` checkout(s), {measured_refs} of them pinned by "
+    f"`inputs.kit-lint-ref`, and no run body reads a composite-action-only variable"
+)
+PYG
+  }
+  check "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" \
+    kit_gate_tree_check
 
   # -------------------------------------------------------------------------
   # Secrets. Two scanners and two different questions, and this section is the

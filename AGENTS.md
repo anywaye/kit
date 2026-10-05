@@ -190,6 +190,97 @@ and the `uses:` job produces **no job, no check-run and no log line**. Measured 
   tree that spelling also collides with `ci.yml`, so it satisfies both branches
   and a recipe proving two branches proves neither.
 
+**THE SECOND RULE OF THAT FILE IS THAT A REUSABLE WORKFLOW HAS NO LOCATION OF
+ITS OWN**, and it is `kit_gate_tree_check` rather than a paragraph.
+`GITHUB_ACTION_PATH` is documented as **composite-action-only**, so it is not set
+inside a reusable workflow — and under `set -euo pipefail` an unset variable is
+not an empty path, it is a fatal on the step's **first line**:
+
+```
+…/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+```
+
+Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669, on
+the `secrets` job — the one job with no opt-in. `ad3e320` fixed the collision
+that had stopped those jobs being created, and two jobs that had **never run
+once** were broken: this one could not start at all, and the `node` job crashed on
+its first `.mts` file. Four days, eleven repositories, two red jobs and a red run
+that said nothing about why.
+
+- **THE FILE ALREADY KNEW.** The `kit-lint-ref` input's own comment names
+  `GITHUB_ACTION_PATH` as composite-action-only and explains that kit's configs
+  must therefore be **fetched by a name** — and then five lines in three jobs
+  contradicted it. The reasoning was applied to the lint configs and not to these.
+  A rule written down once, obeyed in one place, and contradicted in another by
+  nobody reading the other place.
+- The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
+  `inputs.kit-lint-ref`, into **`$RUNNER_TEMP`** and not `<working-dir>/.kit`:
+  `secrets` runs a full-history git scan rooted at `$GITHUB_WORKSPACE`, and a
+  second git repository inside the tree being scanned is a question with no good
+  answer.
+- **The second job had a second defect.** `tests/zizmor_gate.sh` ends by piping
+  zizmor's report through `"$PY" - …`, which in kit's own gate comes from
+  `kit_bootstrap_python`. A reusable workflow makes no such call, so `zizmor`
+  would have reached the script's last line and died on `PY: unbound variable`.
+  One mistake, two hats: a script written to be called by one caller and run by
+  another that had not been read.
+- `kit_gate_tree_check` asserts no `run:` body reads a composite-action-only
+  variable, that a step reading the fetched tree has a fetch above it, and that
+  every checkout is pinned **by the input and not to a literal** — `ref: master`
+  is what the input evaluates to when a caller sets nothing, so it looks pinned
+  and is not. Breakages **106-106d**, plus **106e** as the green control.
+- **The check failed SEVEN JOBS THAT WERE CORRECT** on its first version, by
+  looking for `tests/` and `templates/` anywhere in a run body: every language job
+  prints `See templates/tier/README.md` in an error message while running the
+  *caller's* own gate. The rule is therefore stated as a **coupling** — the
+  variable that means "the directory the fetch put it in" — not as a path
+  substring. A check that fires on correct work teaches its reader to ignore it.
+
+**AND THE SHARED ESLINT CONFIG HAS THE SAME SHAPE OF DEFECT, FROM A DIFFERENT
+CAUSE.** `recommendedTypeChecked` is **UNSCOPED**, and one config inside it adds
+`.mts` and `.cts` to the files ESLint lints; kit's `files` glob, which is the only
+thing that supplies `parserOptions`, was narrower than that. So every `.mts` file
+got the type-aware rules and never got the type information, and the run died at
+exit 2 before reporting a finding:
+
+```
+Error: Error while loading rule '@typescript-eslint/await-thenable':
+You have used a rule which requires type information, but don't have
+parserOptions set to generate type information for this file.
+```
+
+- **It was blamed on `tsconfigRootDir: import.meta.dirname`, and that was not the
+  cause.** Measured on eslint 9.39.5 / typescript-eslint 8: with
+  `projectService: true`, setting `tsconfigRootDir` to `/nonexistent-root`, or
+  deleting it, leaves the run **byte-identical** — the project service walks **up
+  from the linted file** to find a tsconfig and never consults the root. A check
+  written for the reported cause would have been green on the defect that
+  shipped.
+- `tsconfigRootDir` is still fixed, to `process.cwd()`, because it is load-bearing
+  in exactly one place and it is a place kit would otherwise reach for:
+  **`allowDefaultProject` globs are matched relative to it**, so with kit's
+  directory as the root a pattern meant for the caller's own config files
+  resolves to `.kit/lint/*.mts` and matches nothing. `process.cwd()` is the
+  caller's workspace by construction — the lint step carries `working-directory:` —
+  so **no caller needs a PR**.
+- `.jsx` is **deliberately still absent**, and that is a fleet decision rather than
+  an oversight: nothing adds it to the linted set, so adding it would widen kit's
+  lint everywhere and turn every React service red with `was not found by the
+  project service`.
+- `eslint_typed_scope_check` asserts both directions, and it **strips JS comments
+  before reading** — the file now explains `tsconfigRootDir` in eleven comment
+  lines, and the check's first version matched one of those and went red on a
+  correct config. "A check that can be satisfied by a comment is not a check" has
+  a mirror image that is worse: a check that can be **falsified** by one.
+  Breakages **107 / 107b / 107c**.
+- `tests/lint_test.sh` **runs** it, and writing those controls found three defects
+  in them. The load-bearing one: **two `red` assertions proved nothing**,
+  because the crash was also red, so the pair could not tell "the glob resolved and
+  the linter found the bug" from "the glob matched nothing and ESLint exited 2
+  anyway". Reverting kit's `tsconfigRootDir` left the file **22/22 green** until
+  the assertions were moved onto the finding rather than the exit status. That is
+  the same confusion as the defect itself — a red run that found nothing.
+
 A caller writes exactly this, and nothing else:
 
 ```yaml
@@ -400,8 +491,8 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   is the one that tells a working config from a valid one, and — unlike every
   other phase — it is **fatal on a skip**, because the claim under test is "kit's
   configs work" and a run in which no linter executed has not tested it.
-- **self_test** — one hundred and ten breakages of a throwaway copy. One
-  hundred and seven assert
+- **self_test** — one hundred and eighteen breakages of a throwaway copy. One
+  hundred and fifteen assert
   the gate goes red; three assert it stays **green** while naming what it said —
   23b a SKIP, because a check that turns a red into an honest skip is
   load-bearing precisely by not going red; 59 a FINDING, because kit-13's
@@ -411,12 +502,19 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   One further GREEN control (31b) asserts a service config that AGREES with
   kit's does not fail, because a check satisfied by banning the file would train
   every service to delete one. Six are a semantic mutation of one language each,
-  so **every suite is proven able to fail** rather than assumed to. Ninety-two
+  so **every suite is proven able to fail** rather than assumed to. One hundred
   assert that one *named* check reported `FAIL`, so a check written for a specific
   defect is proven still load-bearing. Two assert that a *proof* goes red: one
   inverts the classifier's fail-closed property, and one makes the staleness
   reporter call an undeclared pin `current`. A property nobody has tried to break
   is a property nobody has tested.
+  - **106e is the fourth GREEN control and it is the one that guards the others.**
+    `kit_gate_tree_check`'s first version keyed on the path substrings `tests/`
+    and `templates/` and failed **seven jobs that were correct** — every language
+    job prints `See templates/tier/README.md` in an error message while running
+    the *caller's* own gate. 106e is a job that names kit's paths in prose and
+    fetches nothing, and it is the direction that must stay green, because a
+    check that reports correct work teaches its reader to skip it.
   Seven are the shared-cluster work (68-74), and **73 is the one worth the
   most**: a generated config carrying `prepare: :unnamed` on a fleet with no
   pooler is slower and looks entirely correct, so the forbidden-list check is the
@@ -703,7 +801,7 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   rubocop ran on kit's own Ruby with kit's own config. That is the only way an
   obsolete key surfaces before six repos inherit it.
 - The suite must be able to fail: `self_test` breaks a throwaway copy of the
-  tree one hundred and ten ways and asserts the run goes red. If you change
+  tree one hundred and eighteen ways and asserts the run goes red. If you change
   the suite, keep that true.
 
 ## The classifier fails closed, and that is a rule about code

@@ -57,6 +57,27 @@
 #   79. a callable workflow at a path kit does not DECLARE -> red. The new one:
 #        the widening must exempt declared paths and nothing else, or it has
 #        stopped being a check.
+#   106-106e. from the reusable workflow having no location of its own.
+#        `GITHUB_ACTION_PATH` is composite-action-only, so four `run:` bodies
+#        reading it were a fatal on their first line — in `secrets`, the one
+#        job with no opt-in. 106 restores the variable; 106b is the OBVIOUS
+#        fix, refused, because deleting the line turns a fatal into "no such
+#        file" and a variable-only check calls that a pass; 106c drops one
+#        checkout's `ref`, so the gate scripts follow the default branch; 106d
+#        pins to the literal `master`, which is what the input evaluates to
+#        when a caller sets nothing and so LOOKS pinned; 106e is the GREEN
+#        control, and it exists because this check's first version failed SEVEN
+#        jobs that were correct — every language job names `templates/tier/`
+#        in an error message while running the caller's own gate.
+#   107-107c. from every linted file needing type information. 107 narrows the
+#        `files` glob back to four extensions, which is the defect that
+#        shipped: `recommendedTypeChecked` is UNSCOPED and one config inside it
+#        adds `.mts`/`.cts` to the linted set, so those files got the rules and
+#        never the type information. 107b widens it to `.jsx` — a one-word edit
+#        that reads like more strictness and is a red build in every React
+#        service. 107c is the separate `tsconfigRootDir` claim, and it is its own
+#        recipe because 107 was blamed on it: the reported cause and the real
+#        one are different, and a recipe that fired on both would prove neither.
 #   90-93. from the account boundary. 90 removes `FORCE ROW LEVEL SECURITY` from
 #        the substrate — the setting that is in no guide and that no lint in this
 #        fleet checked for before `templates/database/tenancy/` existed, and the
@@ -5154,6 +5175,218 @@ edit "$base105c/.github/workflows/ci.yml" \
   '  group: kit-${{ github.workflow }}-${{ github.ref }}'
 expect_red_check 'breakage 105c: the same lock spelled `ref` on one side and `github.ref` on the other' \
   "$base105c" 'no caller and callee share a concurrency group' --static-only
+
+# ---------------------------------------------------------------------------
+# 106, 106b, 106c, 106d: A REUSABLE WORKFLOW HAS NO LOCATION OF ITS OWN.
+#
+# MEASURED, and the same four-day shape as 105 above. `GITHUB_ACTION_PATH` is
+# documented by GitHub as supported only in composite actions.
+# `.github/workflows/ci.reusable.yml` is a REUSABLE WORKFLOW, so the variable is
+# not set in it — and four `run:` bodies read `${GITHUB_ACTION_PATH}/…` anyway.
+# Under `set -euo pipefail` an unset variable is not an empty path, it is a fatal
+# on the step's FIRST line:
+#
+#   …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
+#   ##[error]Process completed with exit code 1.
+#
+# In `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669, on the
+# `secrets` job — the job with no opt-in, the one this file says is the only
+# control a repository cannot choose not to run. It is not a job that found
+# nothing; it is a job that could not start.
+#
+# WHY NOBODY NOTICED, and this is the half worth keeping. Every check in this
+# repository PARSES the workflow, and an unexpanded variable is a valid string.
+# There was no check that could have failed, and the reason there was none is not
+# carelessness: a reusable workflow genuinely cannot know its own checkout path.
+# Inside one, `github.workflow_ref` is the CALLER's workflow. So the tree has to
+# be FETCHED by a name — which is what `inputs.kit-lint-ref` is for — and the fix
+# is a `uses: actions/checkout` rather than a variable that was never going to be
+# set. The defect was invisible for the same reason `lint/` was invisible for two
+# packets: nobody RAN the thing.
+#
+# FOUR RECIPES BECAUSE THE CHECK HAS FOUR BRANCHES, and the first version of the
+# check had two more than it should have had and a coverage hole besides. Both
+# are recorded below because both were found by running these recipes, which is
+# the only place a check finds out what it is.
+base106="$(fresh_copy kit-106)"
+edit "$base106/.github/workflows/ci.reusable.yml" \
+  'run: bash "$KIT_TREE_DIR/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"' \
+  'run: bash "${GITHUB_ACTION_PATH}/tests/gitleaks_gate.sh" "$GITHUB_WORKSPACE" "$GITLEAKS"'
+expect_red_check 'breakage 106: a run step reads GITHUB_ACTION_PATH again, which a reusable workflow never sets' \
+  "$base106" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
+
+# 106b. THE OBVIOUS FIX, refused. Deleting the five lines that read the variable
+# turns a fatal on line 2 into `bash: no such file or directory` — the same red
+# job with the diagnosis further away — and a check that only forbade the
+# variable would call that a pass. This recipe replaces the variable with a
+# literal path, which is what a person does when they do not know why the line was
+# there, and it is the branch that requires the coupling to be asserted rather
+# than the spelling.
+base106b="$(fresh_copy kit-106b)"
+edit "$base106b/.github/workflows/ci.reusable.yml" \
+  '          KIT_TREE_DIR: ${{ runner.temp }}/kit
+        run: |
+          set -euo pipefail
+          . "$KIT_TREE_DIR/tests/bootstrap.sh"' \
+  '        run: |
+          set -euo pipefail
+          . "$GITHUB_WORKSPACE/tests/bootstrap.sh"'
+expect_red_check 'breakage 106b: a step reads the fetched tree with nothing in the job that ever fetched it' \
+  "$base106b" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
+
+# 106c. THE PIN. `kit_gate_tree_check` asserts that every `cafaye/kit` checkout is
+# pinned by `inputs.kit-lint-ref`, because a checkout with no `ref` follows the
+# default branch and the gate scripts would then be whatever `master` is that
+# day — which is the `unpinned-uses` trade this repository declines to make
+# invisibly, arriving by another door.
+#
+# Dropping the pin from ONE checkout of the six, in the `secrets` job. It is one
+# of six deliberately: the check asserts per checkout, so a recipe that dropped
+# all six would prove the same branch and hide the counting. This recipe also
+# caught a real bug — the pin was originally asserted inside a per-step loop, so
+# it reported this once per reading step and would have passed entirely for a
+# checkout no step referenced.
+base106c="$(fresh_copy kit-106c)"
+# Strip the `ref:` line from the FOURTH `cafaye/kit` checkout — the `secrets`
+# job's — leaving the other five pinned. Done with a python edit rather than
+# `edit` because the same three lines appear three times and `edit` refuses an
+# ambiguous anchor; it would have matched a different checkout and this recipe
+# would have been proving the branch on a job that happens to be reading a lint
+# config instead of a gate script.
+"$PY" - "$base106c/.github/workflows/ci.reusable.yml" <<'PYK'
+import sys
+
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().split("\n")
+out, seen = [], 0
+for i, line in enumerate(lines):
+    if line.strip() == "ref: ${{ inputs.kit-lint-ref }}" and seen == 3:
+        continue
+    if line.strip() == "ref: ${{ inputs.kit-lint-ref }}":
+        seen += 1
+    out.append(line)
+open(path, "w", encoding="utf-8").write("\n".join(out))
+PYK
+expect_red_check 'breakage 106c: a kit checkout loses its pin, so the gate scripts follow the default branch' \
+  "$base106c" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
+
+# 106d. THE LITERAL, and it is the branch whose absence this check would not have
+# been able to report. `ref: master` is exactly what `inputs.kit-lint-ref`
+# evaluates to when a caller sets nothing, so it LOOKS like a pin, and a check
+# written as "is it pinned to something" accepts it happily. It is the drift the
+# input exists to prevent: a caller who pins `uses:` to a sha and raises the
+# input with it would get that workflow with the gate scripts from `master`.
+base106d="$(fresh_copy kit-106d)"
+edit "$base106d/.github/workflows/ci.reusable.yml" \
+  '          repository: cafaye/kit
+          ref: ${{ inputs.kit-lint-ref }}
+          path: ${{ runner.temp }}/kit' \
+  '          repository: cafaye/kit
+          ref: master
+          path: ${{ runner.temp }}/kit'
+expect_red_check 'breakage 106d: a kit checkout is pinned to a literal ref instead of to the input, so a caller pinning `uses:` gets a different policy' \
+  "$base106d" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
+
+# 106e. THE GREEN CONTROL, and it is load-bearing in a way the four above are
+# not. This check FAILED ITS FIRST VERSION ON SEVEN JOBS THAT WERE CORRECT: it
+# looked for `tests/` and `templates/` anywhere in a run body, and every one of
+# the seven language jobs prints `See templates/tier/README.md` in an error
+# message while running `bash tests/validate.sh` — the CALLER's own gate, in the
+# CALLER's own tree, with no kit checkout anywhere near it.
+#
+# So the direction that must stay GREEN is a job that names kit's paths in
+# PROSE and fetches nothing. A check that reports those is a check whose reader
+# learns to skip it, and it is why the rule is stated in terms of the coupling —
+# the variable that means "the directory the fetch put it in" — rather than in
+# terms of a path substring.
+base106e="$(fresh_copy kit-106e)"
+cat > "$base106e/.github/workflows/prose.yml" <<'YML'
+---
+name: prose
+on: [push]
+permissions:
+  contents: read
+jobs:
+  talks-about-kit:
+    name: talks about kit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: run the caller's own gate, and name kit's docs in the message
+        run: |
+          set -euo pipefail
+          if [ ! -f tests/validate.sh ]; then
+            echo "::error::nothing. See templates/tier/README.md." >&2
+            echo "::error::and lint/golangci.yml for the Go policy." >&2
+            exit 1
+          fi
+          bash tests/validate.sh
+YML
+expect_green_check 'breakage 106e: a job names kit paths in prose and fetches nothing — the seven jobs the first version of this check failed' \
+  "$base106e" "kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH)" --static-only
+
+# ---------------------------------------------------------------------------
+# 107, 107b, 107c: EVERY LINTED FILE GETS TYPE INFORMATION.
+#
+# MEASURED, and the diagnosis that arrived with it was wrong. `lint/eslint.config.mjs`
+# enabled `tseslint.configs.recommendedTypeChecked` and supplied `parserOptions`
+# under `files: ['**/*.{js,mjs,cjs,ts,tsx}']`. One config inside
+# `recommendedTypeChecked` — `typescript-eslint/eslint-recommended` — declares
+# `files: ['**/*.ts','**/*.tsx','**/*.mts','**/*.cts']`, which ADDS `.mts` and
+# `.cts` to the set of files ESLint will lint, while `recommendedTypeChecked`
+# itself is UNSCOPED. So every `.mts` file was linted, was handed the type-aware
+# rules, and was never handed the type information those rules require:
+#
+#   Error: Error while loading rule '@typescript-eslint/await-thenable':
+#   You have used a rule which requires type information, but don't have
+#   parserOptions set to generate type information for this file.
+#
+# Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669 on
+# the `node` job — the job's first real execution, suppressed for four days by
+# the collision ad3e320 fixed. Both services carry three root-level `.mts` files
+# (vitest.config.mts, vite.config.mts, vite.node.config.mts), so this was never
+# marginal. The run dies at exit 2 before reporting a single finding.
+#
+# IT WAS BLAMED ON `tsconfigRootDir: import.meta.dirname`, which IS wrong and IS
+# also fixed — but is not what produced the error. Measured on eslint 9.39.5 /
+# typescript-eslint 8: with `projectService: true`, setting `tsconfigRootDir` to
+# `/nonexistent-root`, or deleting it, leaves the run byte-identical, because the
+# service walks UP from the linted FILE rather than searching from the root. A
+# recipe written for the reported cause would have been green on the defect that
+# actually shipped, which is why 107 mutates the GLOB and 107c — the separate
+# `tsconfigRootDir` claim — is a different recipe against a different assertion.
+base107="$(fresh_copy kit-107)"
+edit "$base107/lint/eslint.config.mjs" \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx}'],"
+expect_red_check 'breakage 107: the files glob stops covering what recommendedTypeChecked can lint, so a .mts file gets the rules and never the type information' \
+  "$base107" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
+
+# 107b. THE OTHER DIRECTION, which is the one that is tempting. Adding `.jsx` is
+# a one-word edit that reads like making the check stricter, and it would turn
+# every React service red with `was not found by the project service`, because no
+# config above adds `.jsx` to the linted set (so it is not currently linted) and
+# no `.jsx` file is in anyone's tsconfig. A React service's components are
+# `.tsx`. This recipe is here so the check's second branch is proven rather than
+# merely written down.
+base107b="$(fresh_copy kit-107b)"
+edit "$base107b/lint/eslint.config.mjs" \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts}']," \
+  "files: ['**/*.{js,mjs,cjs,ts,tsx,mts,cts,jsx}'],"
+expect_red_check 'breakage 107b: the files glob widens to an extension nothing lints and nobody has a tsconfig for' \
+  "$base107b" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
+
+# 107c. `tsconfigRootDir` named kit's directory. Not the reported cause, and a
+# separate assertion for exactly that reason — a recipe that fired on both would
+# prove neither, which is the rule breakage 105 exists to state.
+base107c="$(fresh_copy kit-107c)"
+edit "$base107c/lint/eslint.config.mjs" \
+  'tsconfigRootDir: process.cwd()' \
+  'tsconfigRootDir: import.meta.dirname'
+expect_red_check 'breakage 107c: tsconfigRootDir names kits own directory, so the first allowDefaultProject entry would resolve to .kit/lint and match nothing' \
+  "$base107c" "the eslint config  (every linted file is given type information, or the type-aware rules cannot run)" --static-only
 
 # ---------------------------------------------------------------------------
 # 104b: THE CONTROL, and it is the one this check cannot afford to lose.
