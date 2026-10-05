@@ -44,7 +44,6 @@ kit/
 │   └── AGENTS.md                         # skeleton for a service repo
 └── tests/
     ├── validate.sh                       # THE gate
-    ├── self_test.sh                      # proves the gate can go red
     ├── lint_test.sh                      # the linters RUN, against fixtures
     ├── isolation_test.sh                 # the cluster, RUN; A cannot reach B's database
     ├── tenancy_test.sh                   # the account boundary, RUN; and its FORCE control
@@ -54,8 +53,7 @@ kit/
     ├── classify.py  rules.json           # the change classifier, failing closed
     ├── staleness.py  artifacts.json      # the staleness reporter, and WHAT it measures
     ├── core_fanout_check.py              # structural checks on core/vendir, core/renovate
-    ├── gate_declaration_check.py         # no adopter carries a D12/D13 workaround
-    └── self_test.sh                      # every check, broken once, asserted red
+    └── gate_declaration_check.py         # no adopter carries a D12/D13 workaround
 
 templates/ holds everything a service adopts, and it is split by **how a thing
 reaches a service**, not by subject:
@@ -340,30 +338,22 @@ tiers. They are separate flags because they are separate claims: "the collector
 works" and "a service cannot read another service's rows", measured at 128.8s and
 23.9s respectively on this machine.
 
-**The one thing that sets `--no-live` is `tests/self_test.sh`**, because its 104
-whole gates each used to bring up three docker stacks to learn one fact about
-one named check. Measured: **0 of the 107 recipe invocations name a live tier**,
-and only ONE recipe reached it at all — breakage 23b, whose helper is the one
-that cannot be `--only`-filtered, because the string it must find is a SKIP's
-verdict text rather than a check's label. Every other recipe is either
-`--static-only` or narrowed to the single check it asserts, and `bounded_check`
-honours `--only`. So contention, not a defect, is what made 23b red at position
-23 of 104 in a full suite run while it was green standalone — **reported, not
-reproduced**: 23b's gate run is green on this machine, standalone and inside a
-full suite run, and the claim being made here is about the *exposure* (one whole
-gate, half of it docker, asserting nothing about any of it) rather than about a
-failure someone watched.
+**A skip that cannot be seen is a silent pass**, so the opt-out is a printed
+`SKIP` row naming the flag, a row in the skip tally, and a summary line naming
+the claims the run did not exercise. A patch that deleted the live tiers outright
+would satisfy an exit-status assertion and fail its name-the-skip one; that
+asymmetry is the whole reason this is a `report SKIP` and not an absence. See
+`live_check` in `tests/validate.sh`.
 
-**A skip that cannot be seen is a silent pass**, so the opt-out is three printed
-`SKIP` rows, three in the skip tally, and a summary line naming the claims the
-run did not exercise. A patch that deleted the three tiers outright would satisfy
-23b's exit-status assertion and fail its name-the-skip one; that asymmetry is the
-whole reason this is a `report SKIP` and not an absence. A check derives the live
-set from the gate's own `live_check` calls and fails if any recipe names one, if
-a second `bash tests/validate.sh` spawn appears outside `kit_child_gate`, or if
-that spawn stops carrying `KIT_NO_LIVE=1`. See `live_check` in
-`tests/validate.sh`, `kit_child_gate` in `tests/self_test.sh`, and `DECISIONS.md`
-(MD30).
+**There is no self-test, and there is no tree copy.** The suite used to prove
+itself by making a full copy of this repository per "breakage", mutating the
+copy, and running a whole gate against it. That is gone — see
+`CUT-ALL-DISPOSITION.md` § "The breakage layer is RETIRED". A **throwaway
+fixture directory** is not a tree copy and is still how the checks that need one
+work: the secret scanner plants its credential in a ~4 KB temp git repo, the
+lint gate builds a service-shaped fixture, and both are swept on exit. What is
+banned is copying *this tree* so the gate can be run against a modified version
+of itself.
 
 **One command, on a clean clone, is the whole procedure.** The gate installs its
 own dependencies into the gitignored `.venv/` on first run and prints a `note:`
@@ -399,14 +389,9 @@ Six phases, and all six must pass:
   printing its own red proof. Stdlib only and offline on purpose. If they ever
   need the network, a template has grown a dependency and kit has stopped being
   config-only.
-- **self_test** — **thirty-four breakages** of a throwaway copy, asserting the
-  gate goes red each time. Six of them are a semantic mutation of one language
-  each, so **every suite is proven able to fail** rather than assumed to.
-  **Twenty-one** assert that one *named* check — or, for two of them, one
-  *named* proof script — reported the failure, so a check written for a
-  specific defect is proven still load-bearing. The count is derived by counting
-  the recipe invocations, never written down — the same expression
-  `validate.sh` uses for its own label, so the two cannot disagree.
+- **classifier + staleness** — both **executed**, not parsed, and deliberately
+  outside the `RUN_STATIC` guard: a check that only parsed those two files would
+  pass on a classifier that waves every change through.
 
 ## Secrets
 
@@ -423,8 +408,10 @@ without them:
   *shallow clone*; `fetch-depth: 0` is in the `secrets` job for that reason.
 - **`--redact`, unconditionally.** A CI log is a place secrets go to be read. The
   scanner finding a secret must never be why the secret is printed. There is no
-  flag to turn it off, and `self_test` breakage 43 removes it and proves the
-  gate notices.
+  flag to turn it off. The check `scan_behaviour_check` plants a credential in
+  a **throwaway ~4 KB git repo** and runs this very script against it, asserting
+  the value is found, is named by rule, and does **not** appear in the output —
+  with `--redact` removed, the same fixture makes it print the secret.
 - **The allowlist is `.gitleaks.toml` and nothing else.** No `-i` flags, no
   `.gitleaksignore`, and every `[[allowlists]]` entry carries a `description` of
   at least 40 characters. `extend.useDefault = true` means the rules stay
@@ -491,110 +478,38 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   is the one that tells a working config from a valid one, and — unlike every
   other phase — it is **fatal on a skip**, because the claim under test is "kit's
   configs work" and a run in which no linter executed has not tested it.
-- **self_test** — one hundred and eighteen breakages of a throwaway copy. One
-  hundred and fifteen assert
-  the gate goes red; three assert it stays **green** while naming what it said —
-  23b a SKIP, because a check that turns a red into an honest skip is
-  load-bearing precisely by not going red; 59 a FINDING, because kit-13's
-  adoption ceiling is only a ceiling if its unadopted side is proved green too;
-  and 104b a walked path count, because a closure check that demanded a README row
-  per shipped file is the failure it exists to prevent.
-  One further GREEN control (31b) asserts a service config that AGREES with
-  kit's does not fail, because a check satisfied by banning the file would train
-  every service to delete one. Six are a semantic mutation of one language each,
-  so **every suite is proven able to fail** rather than assumed to. One hundred
-  assert that one *named* check reported `FAIL`, so a check written for a specific
-  defect is proven still load-bearing. Two assert that a *proof* goes red: one
-  inverts the classifier's fail-closed property, and one makes the staleness
-  reporter call an undeclared pin `current`. A property nobody has tried to break
-  is a property nobody has tested.
-  - **106e is the fourth GREEN control and it is the one that guards the others.**
-    `kit_gate_tree_check`'s first version keyed on the path substrings `tests/`
-    and `templates/` and failed **seven jobs that were correct** — every language
-    job prints `See templates/tier/README.md` in an error message while running
-    the *caller's* own gate. 106e is a job that names kit's paths in prose and
-    fetches nothing, and it is the direction that must stay green, because a
-    check that reports correct work teaches its reader to skip it.
-  Seven are the shared-cluster work (68-74), and **73 is the one worth the
-  most**: a generated config carrying `prepare: :unnamed` on a fleet with no
-  pooler is slower and looks entirely correct, so the forbidden-list check is the
-  only thing that will ever find it.
-  - Three are the account boundary (90-92). **90 is the one worth the most of
-    those**, and its mutation is `delete`, not `sed`: it removes
-    `execute format('alter table %s force row level security', p_table)` from the
-    substrate and nothing else. Removing the *word* would satisfy a check that
-    read the file as text, because the substrate's comments quote it twice while
-    explaining why it exists — which is exactly why the tenancy contract check
-    strips SQL comments before looking. 91 is the one about the check rather than
-    the templates: a driver that reads `isolation.sql` and stops reading
-    `assertions.txt` still runs and still passes, and now asserts "no red rows"
-    about an unknown number of assertions, so the check requires the read on the
-    **same line** as a read call rather than a mention anywhere in the file.
-  - **75 is the one worth the second-most, and it exists because a green control
-    was evidencing a different check.** kit-21 turned the cluster into a *built*
-    image, which renamed kit's from `postgres` to `kit-postgres` — and
-    `check_stale_copy`, whose whole job is naming a service running its own copy
-    of the platform, matched on that bare repository name. The two stopped
-    matching, and **five repositories in the real fleet carry their own postgres
-    while the check that names them reported a clean fleet, silently** (still ran,
-    still printed PASS, printed no skip). Breakages 52/59/60 did not catch it
-    because their fixture carries a `ports:` entry, and `check_override_surface`
-    reports a published port by *service name* — a name the rename never
-    touched. So 60 went red on the port half while the image half was dead.
-    **75 is the same mutation with the port removed**, which leaves the image
-    comparison as the only thing that can go red; it is red on the pre-fix code
-    and green after, both measured. The general rule this earns: a control
-    satisfiable by two different checks proves the gate can go red and says
-    nothing about either.
-  - **23b now asserts THREE things, and the third is the one that makes
-    `--no-live` honest.** Exit 0, the interpreter skip named — which is what it
-    always asserted — and a `SKIP` row that **names `--no-live`**. Deleting the
-    three `bounded_check` calls satisfies the first two perfectly: the gate is
-    greener than ever and still names the ruby floor, and it has proved nothing
-    about the live tier. The assertion is on the ROW, not on the exit status,
-    because that is the whole difference between a skip and a deletion, and 23b
-    is the only helper in the suite that runs a whole unfiltered gate — so it is
-    the only place the property can be watched failing.
-  - **76 and 77** are the two ways a documented `bin/dev` command can stop
-    existing, and they fail differently — the command gone, and the *subcommand*
-    gone. 77 is the harder one: a check that only asks "is `db` dispatched" is
-    green on it.
-  - **96-100 are the VERSION STRING'S OWN GATE**, one property each: a MAJOR with
-    no `MIGRATIONS.md` (96), a MINOR declaring `### Breaking` (97), that same
-    heading parked under `## Unreleased` where no version covers it (98), a
-    prerelease the derivation refuses rather than tiers (99), and a reserved name
-    back in the tree (100). **96 and 97 found a defect in the check itself**: it
-    read its predecessor from `git show HEAD:VERSION`, which resolves to nothing
-    in a throwaway copy, so both derived `initial` and stayed green — a gate
-    whose verdict depends on a `.git` beside it verifies nothing on the machines
-    that consume kit the way services do. The predecessor now comes from the
-    changelog section below the current one. See `DECISIONS.md` (MD26).
-  - **Every version these four write is DERIVED from the copy, and that is a
-    rule with a gate behind it.** They used to spell their `edit` anchors as the
-    literal `1.0.0`, so `92a1127` — which correctly shipped 98's fix as a
-    release, and so moved `VERSION` to `2.0.0` — killed three of them and
-    reported each as `the recipe no longer applies to its copy`. That reads as a
-    harness complaint; it meant *the only proof that a MAJOR bump owes a
-    migration has stopped running*. `92a1127`'s message names 31b, 23b and 59,
-    because those had legible symptoms. Rewriting the anchors to `2.0.0` would
-    have been green and would have re-armed the bomb for `3.0.0`.
-    `copy_version <dir>` reads the version out of the copy and
-    `bump <v> <major|minor>` derives the destination, so the recipe means the
-    same thing at any version.
-    - **The check is over the RECIPES, not over a failure.** `edit` already
-      refuses an unmatched anchor loudly, and by the time it does the recipe is
-      dead and the damage is done; the new check refuses a bare version literal
-      in any argument of an `edit` touching `VERSION` or `CHANGELOG.md`, at
-      authoring time, with the line, the file and the literal in the message.
-      The files in scope are **derived** from the recipes, so the next version
-      recipe covers itself — see `self_test_no_version_literal` in
-      `tests/validate.sh`, `DECISIONS.md` (MD31), and the two measured holes in
-      `REPORT-kit-version-recipe-drift-01.md`.
-    - **98 carried a SECOND literal the version sweep could not see**: its
-      anchor was `## Unreleased\n\n### Added`, so `a5f8746` killed it the same
-      day for an unrelated reason, and the next release renames that heading to a
-      version, at which point the section to mutate is one the recipe has to
-      *create*. Both states are handled.
+- **The suite has no self-test, and that is the decision, not an omission.**
+  It used to have one: ~120 "breakages", each of which made a full COPY of this
+  repository, mutated the copy, and ran a whole gate against it to watch it go
+  red. The owner asked for no tree copies at all, and a breakage cannot exist
+  without one, so the layer is retired whole — `tests/self_test.sh`,
+  `tests/shard_test.sh`, and every check that existed only to police them.
+  Measured cost of what went: `$WORK` was created once and swept only by an EXIT
+  trap, so 104 copies × 25 MiB sat live simultaneously — **24 GiB** of leftovers
+  found in one TMPDIR on this machine, and 17.5 GiB at load 48 across seven
+  concurrent runs.
+
+  **What a check does instead is a fixture, and the distinction is not a
+  euphemism.** A fixture is a directory this repository *builds* to hold one
+  planted value: the secret scanner's ~4 KB git repo, the lint gate's
+  service-shaped tree, the tenancy substrate. It never contains this repository,
+  and nothing runs the gate against a modified version of itself.
+
+  **The eight behaviours the self-test existed to protect are all still
+  protected, and each was proved able to go red without a copy.** `README.md`
+  and `CUT-ALL-DISPOSITION.md` carry the table; the short form is that the
+  postgres tag, the cluster topology, the connection budget and the account
+  boundary are all direct reads of the real tree, so a defect is a one-line edit
+  and a `git checkout` — measured, red, restored. The secret scan, the canary
+  literal and the canary output are proven against fixtures the checks assemble
+  themselves. The lint gate is proven by construction: every assertion in it is
+  an assertion that a linter REJECTS the fixture. The GREEN control is now what
+  it always should have been, an ordinary gate run.
+
+  **What is genuinely gone: nothing can prove the gate is ABLE to fail any
+  more.** A check that has never been seen red is a claim in a comment, and this
+  file is full of lessons about checks that had gone blind while still printing
+  PASS. That is an honest gap and it is named here rather than papered over.
 - **A toolchain's floor is checked against the floor the ARTIFACT declares.**
   `KitOtel::RUBY_FLOOR` says what `templates/otel/ruby` needs and the gate reads
   that constant rather than restating the number. Below the floor is a loud,
@@ -604,46 +519,37 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   six that needs this: the other five refuse an old toolchain themselves, at
   build time, with a message naming their own requirement. Ruby 2.6 is the only
   one that loads the template happily and raises on first use.
-- **A self-test needle must be a thing the check EMITS.** `expect_red_check`
-  matches `FAIL $want`, so `$want` has to be the check's **label** — not the
-  wording of its finding, and not a paraphrase of either. Two failures on kit-22,
-  both from recipes whose *check* was correct:
+- **A needle, when something asserts a check went red, must be the LABEL, not
+  the finding's wording.** `FAIL $want` has to match the check's **label** —
+  not the text of its finding and not a paraphrase. Two failures on kit-22, both
+  from recipes whose *check* was correct:
   - Breakages 75/76/77 asserted the finding's text
     (`"which is the image kit's stack already ships"`,
     `"promises a command the script does not dispatch"`). Those strings are
     printed as **indented detail lines under** the `FAIL <label>` header, so
     `FAIL $want` never matched and all three reported "the gate went red, but NOT
     via …" **while printing the needle two lines above the complaint**. A check
-    that works, a mutation that works, and a recipe that cannot tell either from a
-    failure.
+    that works, a mutation that works, and a recipe that cannot tell either from
+    a failure.
   - Breakage 71 asserted `the connection budget  (max_connections covers` against
     a label that read `max_connions` — a misspelling of a setting that does not
     exist, in the one line a reader greps for to learn what a check measures.
-  - So: the needle is the label, and **a label a self-test asserts is a contract.**
-    Renaming one silently un-proofs the breakage, which is the same coupling as
-    the `callable path` check. When a recipe reports "red, but not via `<label>`",
-    read the actual FAIL line before assuming the check missed the defect — the
-    three failures above were all in the recipe.
-- **`self_test` hits its 90-minute bound on a busy box, and a `BOUND` tier is
-  not evidence about the breakages it never reached.** This repository's machine
-  runs several kit gates at once, and the self-test is *n* whole gates in
-  sequence, so it is the phase that binds first. Measured on kit-22: the full
-  gate **exited 0** while `self_test` reported `BOUND` at breakage **56 of 77** —
-  so 57-77 were never executed, and a green gate says nothing whatever about
-  them.
-  - The `BOUND` verdict is what made that legible, and it is why the bound is not
-    a failure: the point of the run is to reach the end and say so, and a bound
-    reported as a pass would be the silent skip this file forbids. It bought
-    nothing here, and the summary line is how a reader finds it.
-  - **So a `BOUND` self_test is a gate to run BY HAND, not a gate to report.**
-    Take the recipes that were not reached, apply each one's own mutation to a
-    throwaway copy, and run the static gate in it. On kit-22 that is how
-    breakage 72 was found to be green on a check that could not see the defect
-    it was written to catch — the `BOUND` did not hide a failure, it created the
-    gap where one was found.
+  - So: the needle is the label, and **a label that something asserts is a
+    contract.** Renaming one silently un-proves whatever asserted it. When
+    something reports "red, but not via `<label>`", read the actual FAIL line
+    before assuming the check missed the defect — all three failures above were
+    in the assertion, not the check.
+- **A `BOUND` tier is a verdict about the RUN, and it is not evidence about the
+  checks it never reached.** A heavy tier that hits its time bound reports
+  `BOUND`, which is neither a pass nor a skip, and the summary line says so: the
+  point of the run is to reach the end and announce it, and a bound reported as
+  a pass is the silent skip this file forbids. A bound reported as a failure is
+  no better — it is indistinguishable from a defect in the tree. Four counts,
+  because they are four different claims: `PASS`/`FAIL` are verdicts about the
+  tree, `SKIP` about the environment, `BOUND` about the run.
 - **A green control that two different checks could satisfy proves neither.**
-  This is the `reportUnusedDisableDirectives` rule's other half, and breakage 75
-  exists because it was violated by kit's own self-test. The rule above is about
+  This is the `reportUnusedDisableDirectives` rule's other half, and it was
+  violated by kit's own self-test before that was retired. The rule above is about
   an allowlist entry that never matches; this one is about a proof that goes red
   for a reason the recipe did not introduce. Both are the same defect — a control
   whose green is not about the thing it names.
@@ -674,9 +580,9 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
     direction to be wrong in, since the false answer is "this is a machine
     problem", which is the verdict that branch exists to protect.
   - So: when a check reads a captured variable with a pipe, grep the whole file
-    for that shape. The seven remaining `printf … | grep` calls in
-    `tests/self_test.sh` only **print** diagnostics, where a truncated line costs
-    nothing — and that difference is the whole test for which is which.
+    for that shape. A `printf … | grep` that only **prints** diagnostics is fine,
+    where a truncated line costs nothing — and that difference is the whole test
+    for which is which.
 - **No adopter carries a workaround for a fixed core defect.** `core`'s gate
   checker had two defects that forced adopting repositories into local
   workarounds — D12 (`RUN_KEY` could not see a one-line `run:`, core `63fd319`)
@@ -706,19 +612,21 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
     whose branch still carried the retired workaround, and the gate went red on
     a tree with nothing wrong with it. A sweep that reaches further than it owns
     is worse than no sweep.
-- **The self-test's copies are the fleet.** `fresh_copy` gives every breakage its
-  own parent directory, because `lint_drift_check` finds a fleet by globbing
-  `$ROOT/..`. Copies sharing one directory would each see the other fifty-five
-  as their fleet, and a breakage could be "caught" by a defect it did not
-  introduce — a control that goes red for a reason another test created reads as
-  evidence and is worse than no control at all.
-- **A breakage recipe asserts its own premise before it mutates.** Two of
-  kit-14's recipes were wrong and the suite caught both: one named an artefact
-  id that `artifacts.json` really declares, so the mutation broke nothing, and
-  one asserted that a check would go red when no such check exists in this
-  repository. `edit` already refuses an unmatched string; the same instinct
-  applies to a recipe whose *subject* has moved. A mutation that has silently
-  stopped breaking the thing it names is a proof of nothing.
+- **THE FLEET IS FOUND BESIDE THIS REPOSITORY, and never further.** The checks
+  that read service trees glob `$ROOT/..`, so they reach exactly one level of
+  siblings and no more. `../..` is deliberately NOT searched: it found a fleet
+  once, in a leftover copy of a cafaye repository in a shared temp directory
+  whose branch still carried a retired workaround, and a check went red on a
+  tree with nothing wrong with it. **A sweep that reaches further than it owns is
+  worse than no sweep**, and the same argument now covers the self-test copies
+  this repository used to make: a copy has no fleet beside it, which is a limit
+  to report and not one to route around.
+- **A MUTATION MUST ASSERT ITS OWN PREMISE BEFORE IT MUTATES.** Two of kit-14's
+  recipes were wrong and the suite caught both: one named an artefact id that
+  `artifacts.json` really declares, so the mutation broke nothing, and one
+  asserted that a check would go red when no such check exists in this
+  repository. A mutation that has silently stopped breaking the thing it names is
+  a proof of nothing. The harness that taught this is retired; the rule is not.
 - Tests are written **first** and watched fail before the artifacts exist. A
   config written from documentation instead of from the pinned image is a config
   that breaks on the first `bin/dev up`: Tempo, Loki and Mimir all reject keys
@@ -727,8 +635,9 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
 - **Never weaken a check to make the gate green.** If a check is wrong, fix the
   check and say so in the commit message.
 - `shellcheck` and `node` run when installed and are skipped when not. A skip is
-  reported in the summary, never hidden — and a *skip in self_test* fails the
-  run, because a proof nobody ran is not a proof.
+  reported in the summary, never hidden. The **lint** phase is the exception and
+  is fatal on a skip: the claim under test is "kit's configs work", and a run in
+  which no linter executed has not tested it.
 - **PyYAML, yamllint, zizmor and hadolint are required and are bootstrapped, not
   required of you.** `tests/bootstrap.sh` resolves an interpreter, builds
   `.venv`, pip installs `tests/requirements.txt`, and fetches pinned hadolint
@@ -746,9 +655,9 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   are verdicts about the tree. `SKIP` is a verdict about the **environment** —
   no docker, no toolchain, nothing ran. `BOUND` is a verdict about the **run** —
   the tier started, this machine was too busy to finish it, and the claim it
-  exists to prove is therefore unexercised. The heavy tiers (three docker stacks,
-  and the self-test, which is *n* whole gates in sequence) carry a time bound for
-  exactly this reason: a gate SIGKILLed by the OOM killer reports nothing about
+  exists to prove is therefore unexercised. The heavy tiers — the docker stacks,
+  the cluster tiers, the lint phase — carry a time bound for exactly this
+  reason: a gate SIGKILLed by the OOM killer reports nothing about
   the tiers it never reached, so its green is a claim about how far it got. A
   bound that is reported as a PASS is the silent skip this file forbids; a bound
   reported as a FAIL is indistinguishable from a defect in the tree. It is its
@@ -780,9 +689,9 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   harness READS output and has nothing to do with which check it is reading.
 - **A gate that reported nothing is not a red gate, and a proof that could not be
   evaluated is not a proof that failed.** The two demand different responses, so
-  they get different verdicts: `self_test` counts an environment failure
-  (`env_skips`) apart from a missing toolchain (`skips`), and both are fatal.
-  Collapsing them is how a busy machine gets filed as a weakened check. The test
+  they get different verdicts: an environment failure and a missing toolchain
+  are different facts and must not be filed as one. Collapsing them is how a busy
+  machine gets filed as a weakened check. The test
   is the finding, not the exit status — `validate.sh` exits 1 on a FAIL and also
   exits 1 from bootstrap when it cannot install its own dependencies, and only
   the first ever ran a check. The same rule as breakage 39, which asserts the
@@ -800,9 +709,13 @@ a test asserts on it. **The rule stays: assemble the canary, do not commit it.**
   `Metrics/MethodLength` block in `lint/rubocop.yml` were invisible until
   rubocop ran on kit's own Ruby with kit's own config. That is the only way an
   obsolete key surfaces before six repos inherit it.
-- The suite must be able to fail: `self_test` breaks a throwaway copy of the
-  tree one hundred and eighteen ways and asserts the run goes red. If you change
-  the suite, keep that true.
+- The suite must be able to fail, and there is no longer anything that proves it
+  for us. The self-test that did — by copying the tree once per breakage — is
+  gone by decision, because a copy of the tree is exactly what the owner asked
+  not to have. What remains is the eight behaviours above, each verified against
+  the real tree or a fixture, and each still goable-red by editing the tree and
+  restoring it. When you add a check, that is the price of it: nobody will
+  automatically try to break it, so you must.
 
 ## The classifier fails closed, and that is a rule about code
 
@@ -860,10 +773,11 @@ fleet.
 percentage, no "closest match", and no search for a file that hashes to kit's
 artefact. A copy is `current` when the bytes at the declared path are equal and
 the path is a real file in the service's own tree, and at no other time. One
-appended byte makes it `diverged`, and `diverged` needs a pin. This is
-self_test breakage 37, written as the well-intentioned patch it would be — a
-`quick_ratio() > 0.99` — because that is the shape a helpful contributor
-reaches for, and the only way to know the rule holds is to try to break it.
+appended byte makes it `diverged`, and `diverged` needs a pin. The tempting
+alternative was a `quick_ratio() > 0.99` similarity score, because that is the
+shape a helpful contributor reaches for — and the reason it is wrong is that it
+is unfalsifiable by the thing it is measuring: a ratio that says "close" cannot
+be argued with about what close means.
 
 **`templates/parity-allowlist` is the same dialect as
 `templates/tier/skip-allowlist`: the same four rules, in the same words, one
@@ -1008,8 +922,8 @@ than a comment.
   to accept, and it is why the check exists at all: three real defects in these
   templates' own first draft — a doubled registry host, a missing
   `builder.arch`, and a cross-file secret — were all invisible to a parse and all
-  caught by the binaries within one run each. `self_test` breakages 61, 62 and 65
-  are those three, inverted.
+  caught by the binaries within one run each. Each of the three was found this
+  way, once, and the mechanism is what found them.
 - **A missing required variable FAILS THE RENDER, by name.** `<%= ENV['X'] %>`
   with `X` unset renders an empty string, which YAML reads as a null list item
   and which surfaces three layers away as a deploy that cannot find a host. The
@@ -1105,9 +1019,9 @@ that is usually true:
   failures, with no change to this repository.
 
   Do not soften the checks to make this repository green. Do not raise the
-  ceiling either — a repository that HAS adopted is judged strictly, and
-  `breakage 60` in `self_test.sh` is the recipe that would go red if that ever
-  stopped being true. Report the findings; name the repositories.
+  ceiling either — a repository that HAS adopted is judged strictly, and nothing
+  checks that ceiling stays strict any more, which is the argument for leaving it
+  exactly where it is. Report the findings; name the repositories.
 
 `README.md` carries the override rules, and one of them is a trap worth knowing
 before you write a service compose file: **a second file's `ports:` list is

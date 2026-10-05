@@ -1,0 +1,307 @@
+# CUT-ALL disposition — every breakage and every check, KEEP or CUT
+
+Generated from `tests/self_test.sh` and `tests/validate.sh` as they stood at
+`78d84b5`. **Superseded on the breakage half** — see "The breakage layer is
+RETIRED" below, which is the disposition as it now stands.
+
+The question every row answers is the owner's, not "would we lose the only
+detector?":
+
+> **If this test went red, would someone learn that a service is broken or a
+> contract violated?**
+
+## Counts
+
+| | before | kept | cut |
+|---|---|---|---|
+| breakages in `tests/self_test.sh` | 120 | 0 | **120 — the whole layer, retired** |
+| checks in `tests/validate.sh` | 93 | 25 | 68 |
+
+## The breakage layer is RETIRED, not trimmed
+
+This table used to disposition the 120 breakages as 10 kept and 110 cut. That
+framing is wrong and is withdrawn.
+
+The owner:
+
+> i do not want any tree copies at all in the first place
+
+**A breakage in this suite WAS a tree copy.** `tests/self_test.sh` called
+`fresh_copy`, which made a full copy of this repository, mutated it, and ran a
+whole `tests/validate.sh` against the copy to see whether the gate went red.
+There is no breakage without a copy. So "no tree copies" and "keep some
+breakages" cannot both be true, and the 10 survivors went with the other 110.
+
+The cost, measured on this machine rather than quoted:
+
+    $ du -shc $TMPDIR/kit-self-test.* | tail -1
+    24G  total          # ten leftover runs, ~2.5 GiB each
+
+`$WORK` is created once at the top of the suite and swept only by an EXIT trap,
+so every copy made in minute 1 is still on disk in minute 15: 2.5 GiB live at
+once per run, and 17.5 GiB with load 48 across seven concurrent runs. That is
+the disk and CPU crisis the retirement removes.
+
+Removed with it, because each exists only to police the layer just removed:
+`tests/self_test.sh` (5,611 lines), `tests/shard_test.sh` (413), the `self_test`
+phase, `RUN_SELF_TEST`, `--no-self-test`, the `KIT_NO_LIVE` env seam whose only
+caller was `kit_child_gate`, `self_test_live_tier`, `self_test_no_version_literal`,
+and the `KIT_SELF_TEST_SHARD` seam.
+
+**What replaces it: nothing.** No mutation-testing tool, no copy machinery behind
+an env var, no `git worktree` variant, no sleep or retry. A small throwaway
+fixture directory is not a tree copy, and the checks that need one still build
+one — see "The eight behaviours, without a tree copy" below.
+
+## Breakages
+
+| breakage | | why |
+|---|---|---|---|
+| 1: templates/otel/go/traceparent.go deleted | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 2: collector gains an exporter nobody read | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 2b: the collector ships no exporter for tempo at all | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 3: python codec stops preserving trace-flags | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 4: docker-compose.yml hardcodes a published port | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 5: the telemetry CI job is no longer opt-in | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 6: the `none` job is no longer gated on its own input | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 7: README documents a `uses:` path that is not the reusable workflow | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| 8: the workflow no longer declares `on: workflow_call` | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 9: a second copy of the reusable workflow, out of reach | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 10: kit CI calls a remote ref instead of its own local copy | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 11: a Dockerfile pins nothing (hadolint DL3013) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 12: a Dockerfile final stage runs as root | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 13: go stops masking trace-flags (§3.2.2.5) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 14: ruby accepts uppercase hex (§3.2.2) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 15: elixir accepts trailing junk on version 00 (§3.2.2.2) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 16: node never truncates tracestate (§3.3.1.5) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 17: rust accepts an all-zero trace-id (§3.2.2.3) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 18: python stops masking trace-flags (§3.2.2.5) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 19: an allowlist entry that matches nothing | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 20: includePaths nested under `git:` (vendors everything, exits 0) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 21: the classifier FAILS OPEN on an unrecognised change | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 22: the staleness reporter calls an undeclared pin current | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 23: the interpreter floor is defined but never consulted | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 23b: an interpreter below the floor is a named skip, not a silent pass | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 24: D12 — the gate step is a block scalar, justified | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 25: D12 — a correct step with a justification for a fixed defect | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 26: D13 — a proof pattern carries escape tolerance | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 27: a language job no longer lints at all | **KEEP** | A language job that no longer lints turns every planted lint error into a green build: the configs exist and nothing runs them. |
+| 28: the lint step is advisory (continue-on-error) — a report, not a gate | **KEEP** | A lint step with continue-on-error is a report, not a gate, and nothing else in the tree would say so. |
+| 28b: the lint step swallows its exit status with `|| true` | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 29: the kit checkout is gone, so `--config` names nothing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 30: kit config silently drops correctness linters the policy names | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 31: a service carries a lint config INCONSISTENT with kit, not merely present | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 31b: a service config that MATCHES kit is not a failure | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 32: one lint job no longer guards the seam | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 32b: the guard no longer refuses --no-config | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 32c: the seam guard runs AFTER the linter it guards | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 33: a parity entry naming an artefact kit does not ship | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 34: an expired parity entry — the gate reads the clock | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 35: kit offers `language: bun` but ships no primer for it | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 36: the staleness reporter calls an ABSENT artefact current | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 37: the reporter grades a copy by resemblance, not equality | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 38: one of the two programs gains a third-party import | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 39: the suite cannot tell a broken FIXTURE from a broken reporter | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 40: the toolchain floor is defined but never consulted | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 41: a credential in history, since removed | **KEEP** | A credential committed and deleted is still on every fork, so a scanner that reads only the working tree would call this tree clean. |
+| 42: a credential in the working tree | **KEEP** | A live credential in the tree is the leak every service inherits; red here is the difference between a finding and a breach. |
+| 43: the scan stops redacting | **KEEP** | Without --redact the scanner prints the secret it found, so the CI log becomes the second copy of the credential. |
+| 44: the scan narrows to the last commit | **KEEP** | A shallow clone is the default checkout, so full history is the only configuration under which the scan sees a removed secret at all. |
+| 45: a dangerous trigger appears in the workflow | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 46: the secret scanner is made non-blocking | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 47: the reference type hides its credential in an unexported field | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 48: the credential type stops redacting when printed | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 49: the reference type marshals its credential | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 50: the canary is committed as a literal | **KEEP** | A committed canary literal is a credential-shaped string published in a public repository, which is the exact shape the scanner exists to refuse. |
+| 51: the zizmor config baselines unpinned-uses | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 61: LICENSE deleted — a repository with no grant is not permissive | **CUT** | licence provenance: the repository agreeing with itself about a legal document. Every service this repository ships is MIT and a red here would not change a single running container. |
+| 62: a root manifest declares a licence the LICENSE file contradicts | **CUT** | licence provenance: the repository agreeing with itself about a legal document. Every service this repository ships is MIT and a red here would not change a single running container. |
+| 52: a service carries its own copy of the shared stack | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 53: a service re-points the collector config mount | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 54: an otel-collector.yml that no compose file ever mounts | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 55: a service pins a BRANCH rather than a ref | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 56: a vendor config mount stopped resolving from the fetched tree | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 57: the pin is back in .env, where nothing reads it | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 58: a service publishes a port on a service kit already ships | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 59: an UNADOPTED service copies the stack — green, and named | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 60: the same copy in an ADOPTING service is a hard FAIL | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 83: a service overrides the shared cluster POSTGRES_USER | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 89: a workflow_call input declares `options`, which GitHub rejects for the whole file | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 78b: the UNMODIFIED generated config satisfies kamal and kamal-backup | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 78: the generated deploy.yml is invalid for kamal | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 79: the image name carries the registry host twice | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 80: one half of the kamal config set is deleted | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 81: the superseded custom backup toolchain is BACK | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 82: the drill stops refusing a production-looking scratch name | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 84: the initdb mount is relative again, so the cluster provisions nothing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 85: .env.example names a service as the fleet default tenant | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 86: the shared template defaults the tenant list to one of its own services | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 87: a .env-writing harness stops declaring its tenant | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 88: two tenants separated by a space fuse into one database | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 90: FORCE ROW LEVEL SECURITY is removed from the substrate | **KEEP** | Without FORCE ROW LEVEL SECURITY the table owner bypasses every policy, so one account reads another account rows through the application itself. |
+| 91: a driver reads the proof but no longer the assertion manifest | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 92: the assertion manifest and the proof stop agreeing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 93: the advisor and the fixtures that trip its rules stop agreeing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 68: the Postgres tag in .env.example disagrees with compose | **KEEP** | This defect shipped: every developer ran 16.6 while compose said 17, and nothing noticed for a release. |
+| 69: the cluster is pinned back to an alpine variant | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 70: the init script is never mounted, so no service gets a database | **KEEP** | One database and one role per service IS the topology; if the init script is never mounted a service silently gets nothing and still connects. |
+| 71: the connection budget is below what the topology needs | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 72: a generated config does not set application_name | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 73: a generated config carries a POOLER WORKAROUND | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 74: DECISIONS.md deleted — seven places reference it | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| 75: a service runs its own postgres IMAGE, with no port to catch it | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 76: bin/dev does not dispatch a command four files tell you to run | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 77: bin/dev takes a command whose subcommand four files promise is gone | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 78: a COPY of a declared standard is parked where no caller can reach it | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 79: a callable workflow ships at a path kit does not declare, so nothing polls it | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 94: the shard key is 0-based again, so shard n/n verifies nothing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 95: an over-provisioned shard is no longer refused at the door | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 96: a MAJOR bump ships without the MIGRATION the tier owes | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 97: a MINOR bump declares a breaking change | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 98: a breaking change sits under Unreleased, where no version covers it | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 99: a prerelease version string is tiered instead of refused | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 100: a reserved name is back in the tree | **CUT** | existence of a file: the tree contains a path. Nothing about a service is broken or a contract violated. |
+| 101: the outputs conjunct is deleted from the skip, so a cache with no work on disk still answers HIT | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 102: the correlated-subquery test is deleted from the advisor rule, so the slow policy shape goes unreported | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 103: the ownership-by-namespace check is removed, so a base image inherits a stamp that satisfies ours | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 104: a template tree nobody documented | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 105: the callee stops namespacing its concurrency group, so it asks for the lock its caller already holds | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 105b: a caller adopts the kit- prefix, which is the one group it may not ask for | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 105c: the same lock spelled `ref` on one side and `github.ref` on the other | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 106: a run step reads GITHUB_ACTION_PATH again, which a reusable workflow never sets | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 106b: a step reads the fetched tree with nothing in the job that ever fetched it | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 106c: a kit checkout loses its pin, so the gate scripts follow the default branch | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 106d: a kit checkout is pinned to a literal ref instead of to the input, so a caller pinning `uses:` gets a different policy | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 106e: a job names kit paths in prose and fetches nothing — the seven jobs the first version of this check failed | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| 107: the files glob stops covering what recommendedTypeChecked can lint, so a .mts file gets the rules and never the type information | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 107b: the files glob widens to an extension nothing lints and nobody has a tsconfig for | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 107c: tsconfigRootDir names kits own directory, so the first allowDefaultProject entry would resolve to .kit/lint and match nothing | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| 104b: a new file INSIDE a documented tree needs no README row | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+
+## Checks
+
+| check | | why |
+|---|---|---|
+| no tracked file carries a merge-conflict marker | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/otel/rust/traceparent.rs  (carries its own suite) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/otel/*/*.snippet  (installable, versioned, not vendored) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| templates/otel/go/go.mod  (no require) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/secrets/go/go.mod  (no require) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/otel/node/package.json  (no dependencies) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| docker/Dockerfile.*  (non-root final stage, no :latest, no ADD) | **KEEP** | Non-root is a real property of the shipped image and hadolint has no rule for a missing USER; :latest makes two builds of one tag different binaries. |
+| docker/Dockerfile.*  (STRICTNESS NOTES state the non-root stage) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| docker/Dockerfile.*  (ENTRYPOINT migrates, then execs the service) | **KEEP** | A service that serves traffic against an un-migrated schema is broken in production and green locally. |
+| templates/mise.toml  (a [tools] pin per language) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/compose/otel-collector.yml  (redaction first, env endpoints, no URL) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| otel-collector allowlist  (derived from core schemas/telemetry) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| otel-collector signals  (exceptions as logs, not span events) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| otel-collector degradation  (no queue, no retry, limiter first, health_check) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/compose/docker-compose.yml  (pinned, healthy, parameterized) | **KEEP** | The stack a developer runs on every bin/dev: unpinned or unhealthy entries mean a stack that cannot start, which two real defects proved. |
+| docker-compose.yml  (three AGPL backends, unmodified, pinned, bounded) | **CUT** | licence provenance: the repository agreeing with itself about a legal document. Every service this repository ships is MIT and a red here would not change a single running container. |
+| docker-compose.yml  (host ports all in the 15000-15999 block, no reuse) | **KEEP** | A hardcoded or colliding host port means one developer stack silently takes another service port; it breaks the machine, not the file. |
+| compose + bin/dev  (telemetry is never in a readiness path) | **KEEP** | Telemetry in a readiness path means a collector failure takes a healthy service out of rotation: a real outage from a non-dependency. |
+| templates/otel/*/*.snippet  (cafaye endpoint, on by default, free no-op) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| grafana provisioning  (2 datasources, and no third, dashboards, alerting — all files) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| grafana dashboards  (status is the predicate, error.type is a drill-down) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| grafana panels  (every query names the backend that can answer it) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| otel-collector env  (every ${env:} reaches the container) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/compose/.env.example  (every placeholder documented, no tenant named) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/database/*  (the contract, in the generated output, per language) | **KEEP** | It is the check that refuses a pooler workaround in a generated config, which on a fleet with no pooler is slower and looks entirely correct. |
+| templates/database/tenancy/*  (the account boundary, in the templates that enforce it) | **KEEP** | The templates are the enforcement: without FORCE, a login role and begin_account/1, one account reads another account rows. |
+| DECISIONS.md  (exists, records trades, and every reference resolves) | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| bin/dev  (every command the documentation promises is one the script dispatches) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| postgres tag  (.env.example and compose agree, and it is not alpine) | **KEEP** | SHIPPED DEFECT: the stack ran 16.6 on every developer machine while compose said 17, and an alpine variant cannot load pgvector at all. |
+| the cluster  (one database + role per service, wired end to end) | **KEEP** | Database-per-service IS the isolation boundary; a missing init mount or a missing role means one service can read another service rows. |
+| kit harnesses  (every .env-writing harness declares its own tenant) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| the connection budget  (max_connections covers the declared topology) | **KEEP** | A budget below the declared topology is a cluster that refuses connections under load, which is an outage nobody can debug from the config. |
+| templates/bin/dev.sh  (KIT_DEV_PROFILES= escape hatch actually runs) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/compose/ + bin/dev  (every vendor config mounts from the fetched tree) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/bin/dev.sh + .env.example  (the pin is kit.ref, and the gate reads the same file) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| core/vendir/ + core/renovate/  (structurally what Renovate and vendir need) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| adopting repositories  (no workaround for a fixed core defect) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| adopting repositories  (no workaround for a fixed core defect) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| in-scope repositories  (every one declares its account-scoped surface) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| in-scope repositories  (every one declares its account-scoped surface) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| account-scope wiring  (the gate runs the runner, and the runner has a record) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| .github/workflows/ci.reusable.yml  (opt-in telemetry job, defaults intact) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| templates/tier/<lang>/  (a declared tier, and a README row naming the collector) | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| .github/workflows/ci.reusable.yml  (required-tier is declared, demanded by every language job, and identical) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| lint/ + the workflow  (every lint step is a gate on kit config) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| the seam  (narrow, guarded before the linter, and wired to it) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| templates/tier/skip-allowlist  (reason, owner, since, until; unused entries fail) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| templates/parity-allowlist  (reason, owner, since, until; dead entries fail) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| tests/artifacts.json  (every declared source exists, for every language) | **CUT** | existence of a file: the tree contains a path. Nothing about a service is broken or a contract violated. |
+| the carve-out programs  (stdlib plus PyYAML; enforced, and AGENTS.md agrees) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| .github/workflows/*  (no test report is ever cached) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| .github/workflows/ci.reusable.yml  (secrets job: not advisory, full history, not opt-in) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| README.md  (documents every new template) | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| README.md  (every shipped path in an adoption tree is documented) | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| LICENSE  (MIT, and nothing in the tree can disagree with it) | **CUT** | licence provenance: the repository agreeing with itself about a legal document. Every service this repository ships is MIT and a red here would not change a single running container. |
+| stability tiers  (derived from two version strings, never asserted) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| stability gate  (a version bump pays for the tier it derives) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| reserved tombstones  (a retired name stays dead) | **CUT** | existence of a file: the tree contains a path. Nothing about a service is broken or a contract violated. |
+| README.md  (its documented callers match the workflow inputs) | **CUT** | documentation agreement: a document agreeing with the tree. A reader learns something; a service does not. |
+| reusable workflows  (callable: exists, on: workflow_call, docs agree) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| reusable workflows  (workflow_call inputs use only documented keys) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| reusable workflows  (no caller and callee share a concurrency group) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| the eslint config  (every linted file is given type information, or the type-aware rules cannot run) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| kit's tree  (fetched by a pinned checkout, never GITHUB_ACTION_PATH) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| .gitleaks.toml  (allowlist only, every entry reasoned) | **KEEP** | An allowlist is the one place a scanner is told what NOT to report, so an unexplained entry is a silent hole in the only credential gate kit owns. |
+| no .gitleaksignore  (the allowlist is the committed config) | **KEEP** | Two allowlists is one unreviewed bypass of the credential gate; the committed config has to be the only one. |
+| tests/gitleaks_gate.sh  (finds a real secret, never prints it, reads history) | **KEEP** | The scan itself, proven on a planted secret rather than trusted: finds it, does not print it, reads all of history. |
+| .github/workflows/*  (no dangerous trigger, on parsed keys) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| .github/zizmor.yml  (unpinned-uses recorded, never baselined) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| .github/zizmor.yml  (every ignore entry carries a reason) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/secrets  (contract names all five vectors, states its limits) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| the canary  (never committed as a literal, anywhere) | **KEEP** | A canary assembled as a literal is a published credential-shaped string; the rule is assemble-never-write. |
+| the canary  (unmistakably fake: prefixed, low-entropy, self-describing) | **KEEP** | The canary must stay unmistakably fake, or the safety property it proves becomes a real secret in the tree. |
+| the canary suite  (never prints the value it planted) | **KEEP** | A leak detector that logs what it planted is a second copy of the credential; this is the property that keeps the proof usable. |
+| templates/otel/$lang  ($tool test suite) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| templates/secrets/go  (five vectors, each with a red proof) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/canary_test.sh  (a canary secret reaches no exporter) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/no_telemetry_in_readiness.sh  (collector killed, service still serves) | **KEEP** | Collector killed, service still serves: a collector failure taking a healthy service out of rotation is a real outage. |
+| tests/stack_live_test.sh  (the fetched stack runs; a trace and a metric land) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/isolation_test.sh  (service A cannot reach service B | **KEEP** | Service A reading service B rows is the boundary, and only a real cluster can show it holds. |
+| tests/tenancy_test.sh  (no identity, another tenant and its own tenant — as the login role AND as the owner; and the same proof with FORCE removed goes red) | **KEEP** | The account boundary run for real, as the login role AND as the owner, with the FORCE control: the property worth nothing unexercised. |
+| tests/classify_test.sh  (19 cases, incl. the fail-closed property) | **KEEP** | The classifier decides what is breaking; a fail-open classifier waves every change through and this runs the fail-closed property. |
+| tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version) | **KEEP** | A cache that answers from a record it cannot trust serves a stale verdict as a real one. |
+| tests/shard_test.sh  (the n shards partition the suite, shard n/n included) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/provenance_test.sh  (11 leak shapes refused; both sinks agree; --verify refuses a foreign or ill-shaped stamp; 4/5/6 stay distinct) | **KEEP** | Eleven leak shapes refused by the stamper, plus --verify refusing a foreign stamp: this is what stops identity leaking into an image label. |
+| tests/fetch_test.sh  (a pin fetches, a branch is refused, offline is real) | **KEEP** | A pin fetches and a branch is refused: without it bin/dev can obtain no stack at all, or fetches something that moves. |
+| tests/multi_tenant_split_test.sh  (a second tenant is split, not fused; identifiers hold in every locale) | **KEEP** | Two tenants separated into two databases rather than fused into one is the whole cluster contract, and it runs the real init script. |
+| tests/  (no docker tier hardcodes a project, container, volume, image or host port name; every shared namespace is derived from the run) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/lint_test.sh  (every linter runs, and its control disagrees) | **KEEP** | A linter wired but not enforcing is a gate that is not a gate. |
+| tests/self_test.sh  (0 of the recipes name a live tier; every child gate opts out through one wrapper) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/self_test.sh  (every documented breakage has a recipe, and vice versa) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+| tests/self_test.sh  (no recipe anchors on a bare version literal; every version a recipe writes is derived from its copy) | **CUT** | framework self-consistency: the repository checking its own tooling and prose. It is a lint on the linter, and a red tells the reader to edit a check, not a service. |
+| tests/self_test.sh  ($_st_breakages breakages: $_st_reds red, $((_st_breakages - _st_reds)) green-expecting — the ceiling has both sides proved) | **CUT** | kit asserting that its own configuration matches what it says it matches: the subject is a file or a document, so a red here means the repository disagrees with itself, not that a service is broken. |
+
+## The GREEN control
+
+| green control | **KEEP** | The control that makes every other red meaningful: a tree with nothing broken must come back green, or the suite only proves it can produce output. |
+
+It used to be a *copy* of the tree, run through the gate and asserted clean.
+It is now what it always should have been: **an ordinary gate run on the real
+working tree.** Nothing is mutated, nothing is copied, and the assertion is the
+run's own exit status.
+
+## The eight behaviours, without a tree copy
+
+The eight the brief keeps. Every one is verified against the real tree or a
+minimal fixture — never against a copy of the tree — and every one was proved
+able to go RED by mutating the real tree in place and restoring it. No copy
+machinery was reintroduced to make that possible.
+
+| # | behaviour | how it is proven, now | red proof, measured |
+|---|---|---|---|
+| 1 | the secret scan finds a real planted secret and never prints it | `scan_behaviour_check` builds a **~4 KB throwaway git repo** in `mkdtemp` — one `config.toml`, one planted `glpat-` value — and runs the real `tests/gitleaks_gate.sh` against it | with `--redact` the output carries `Secret: REDACTED`; **with `--redact` removed it prints the value it found**. Same fixture, same scan, the assertion flips. (The value is deliberately not written here: this document is scanned, and a committed credential-shaped literal is the finding, not an example — which is how the gate caught the first draft of this very row.) |
+| 2 | the canary secret is never committed as a literal | `canary_literal_check` greps the **real tree** for the assembled canary | pointed at a one-file fixture holding the literal it reports `the assembled canary appears as a literal in ['planted.txt']` and exits 1. |
+| 3 | the canary suite never prints the value it planted | `canary_output_check` runs the real Go suite and sweeps its whole output | a `t.Log` planted in `templates/secrets/go/canary_test.go`, assembling the value **at runtime** so the committed source holds no contiguous literal and the suite's own literal scan stays green, turns the check **red on the real tree**. Reverted in the same breath. |
+| 4 | the Postgres tag agreement | `postgres_tag_check`, a direct read of the real `.env.example` and compose | `KIT_POSTGRES_TAG=17` → `16.6` in `.env.example` — **the defect that shipped** — goes red naming both values. Restored with `git checkout`. |
+| 5 | cluster topology and the connection budget | direct reads of compose and `.env.example` | deleting the `docker-entrypoint-initdb.d` mount turns the topology check red; `KIT_POSTGRES_MAX_CONNECTIONS=200` → `4` turns the budget check red. Both restored. |
+| 6 | tenancy / account boundary / isolation | **untouched** — already a live docker tier, never a copy. `bash tests/tenancy_test.sh`: 39 assertions green, and its own FORCE control reports **11 red** with the statement removed | already proven, in the file, every run. |
+| 7 | the lint gate goes red on a planted error | `lint_test.sh` builds a **throwaway service-shaped fixture** in `mktemp` and runs all four linters against it, each paired with a control that must answer differently | 22 assertions, each an assertion that the linter REJECTS the fixture. No tree copy: the fixture is a fixture. |
+| 8 | the GREEN control | an ordinary gate run on the real working tree | n/a — this one asserts green. |
+
+**Nothing above needed a tree copy, and nothing that did get one back.**
+
