@@ -69,8 +69,35 @@ fi
 
 # -count=1 defeats the test cache: a prime must prove the tests run now, not
 # that they ran at some point today.
+#
+# -p 4 bounds how many package binaries run at once. It is here for the same
+# reason -count=1 is, and it is fleet-wide rather than per-service: this
+# template is what every new Go service copies, so a hole in it is inherited
+# by everything that adopts it afterwards.
+#
+# The arithmetic is the cluster's, not a preference. The per-role CONNECTION
+# LIMIT is a service's share of the one shared cluster (10-cluster.sh:268), and
+# pgxpool's MaxConns is 8 (templates/database/go/database.go.snippet). So two
+# concurrent test binaries can already breach the default cap of 10, and
+# `go test ./...` runs one binary per CPU — every service that adopts this
+# template with more than a couple of database-backed packages will hit it.
+# Measured on identity (24 packages, limit 50, pool 8): an unbounded run failed
+# with `FATAL: too many connections for role "identity"` (SQLSTATE 53300) on one
+# invocation and passed on the next, with no code change in between.
+#
+# Raising the cap to fit a parallel run would spend a shared resource to buy
+# local speed: that limit is the mechanism that stops one service's runaway
+# pool from starving the other eight. Bounding the test run respects it.
+# Measured on identity, all 24 packages against the real database:
+#
+#     -p 1 (fully serial)  114s
+#     -p 4 (this)           57s
+#     unbounded             46s   <- and intermittently 53300
+#
+# A service whose own role limit is much larger than the default may raise this;
+# it is a ceiling, not a constant.
 step "go test ./..."
-go test -count=1 ./...
+go test -count=1 -p 4 ./...
 
 step "go vet ./..."
 go vet ./...
