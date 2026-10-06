@@ -43,7 +43,9 @@ kit/
     ├── validate.sh                       # THE gate
     ├── lint_test.sh                      # the linters RUN, against fixtures
     ├── isolation_test.sh                 # the cluster, RUN; A cannot reach B's database
+    ├── onecluster_test.sh                # the one-cluster claim asked of bin/dev, RUN
     ├── tenancy_test.sh                   # the account boundary, RUN; and its FORCE control
+    ├── failfast_test.sh                  # a missing variable is refused in seconds, RUN
     ├── zizmor_gate.sh                    # the one zizmor split, ditto
     ├── bootstrap.sh                      # the gate installs its own tools
     ├── classify.py  rules.json           # the change classifier, failing closed
@@ -450,6 +452,27 @@ assemble the canary, do not commit it.**
   real Postgres rather than a real collector, and they live in this phase for the
   same reason: a security property that nothing executes is worth nothing. They
   SKIP loudly without docker — never pass silently.
+  - **`tests/onecluster_test.sh`** is the one-cluster claim asked of `bin/dev`
+    rather than of a compose file, so it runs in this phase beside its two
+    siblings. `isolation_test.sh` brings its own stack up with its own
+    `docker compose` call, which is why it can move one port and start one
+    container — the property was proven and the **developer's path to it** was
+    not, since every step between a person and that cluster lives inside
+    `bin/dev`. It runs a full `bin/dev up` with `KIT_POSTGRES_DATABASES=alpha,beta`
+    and asserts on the world afterwards, including both services answering a real
+    query **as their own role** and neither reaching the other's database.
+    **The negative half is matched against the refusal text**, not against a
+    non-zero exit, because a cluster with no second service also refuses.
+- **`tests/failfast_test.sh`** is the **wall clock** claim, and it is a
+  measurement rather than a shape: a compose file needing a variable with no
+  default must be refused in **seconds, by name, with nothing started** — so the
+  elapsed time is read from `date +%s` and the container list is read back **by
+  compose project label**. Its control is what carries it: with the variable set
+  the run must actually reach compose, or the whole suite is satisfied by a
+  preflight that refuses unconditionally. Docker-gated, and a machine with no
+  daemon gets one `SKIP` naming the flag rather than a wall of failures that all
+  say the same missing thing — **"no container was created" is itself the claim**,
+  so a silent skip here would be the defect the suite exists to catch.
 - **classifier + fingerprint** — the change classifier and the fingerprint record
   are *executed*, not parsed, and deliberately **outside** the `RUN_STATIC`
   guard: a check that only parsed those two files would pass on a classifier

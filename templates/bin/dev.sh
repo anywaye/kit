@@ -466,6 +466,160 @@ stack_is_usable() {
     [ -d "$dir/templates/compose/grafana/provisioning" ]
 }
 
+# --------------------------------------------------------------------------
+# RETIRED GENERATIONS
+# --------------------------------------------------------------------------
+# The tree `fetch_stack` replaced, kept. It is kept because the destination is
+# not a directory kit owns: compose bind-mounts FILES out of it into running
+# containers, and on macOS a bind mount resolves its source when the container is
+# CREATED.
+#
+# So `rm -rf "$dest"` leaves every running container working off descriptors it
+# already holds, while every NEW open through the mount path fails ENOENT.
+# Measured on this machine, seven containers up for three hours: the collector
+# kept serving the whole time and only its healthcheck went red, because the
+# healthcheck re-reads the config through the mount on every probe —
+#
+#   open /etc/otel/otel-collector.yml: no such file or directory
+#
+# — which then failed `bin/dev up` with `stack did not become healthy`, so the
+# recovery path reported the fault the cache had caused.
+#
+# MOVING IT ASIDE IS NOT THE WHOLE FIX, and this is the half that is easy to get
+# wrong: a retired generation is the SAME INODE the containers are mounted to, so
+# `mv "$dest" "$retired"` followed by a later `rm -rf "$retired"` breaks the bind
+# mount exactly as the `rm -rf "$dest"` did. "Clean it up later" is only true when
+# the later cleanup ASKS whether anything is mounted from it — which is what
+# `generation_is_mounted` below does, and why it retains on every answer it cannot
+# get an answer from.
+#
+# What it retains is a few hundred KB per fetch: a `--depth 1` checkout of a
+# repository that is almost entirely YAML.
+
+# Where retired generations live. A SUBDIRECTORY of the cache home rather than
+# siblings of the ref directory, so `ls ~/.cache/cafaye/kit` still reads as "one
+# directory per ref" and nothing else has to learn a second naming scheme.
+generation_home() { printf '%s/.retired\n' "$(stack_home)"; }
+
+# How many retired generations to keep. Three, and the point of the number is
+# that a re-fetch is allowed to run more than once before anything is reclaimed —
+# a developer's second `bin/dev up` after a version bump is the common case, and
+# pruning the generation out from under the first one is the defect this whole
+# section exists to remove. Overridable, because a developer who knows their
+# machine has a reason.
+generation_keep() {
+  local n
+  n="$(stack_setting KIT_STACK_KEEP_GENERATIONS 3)"
+  # A `.env` line is a developer typing, and a non-number here would make
+  # `[ "$n" -gt "$keep" ]` fail the whole fetch rather than fall back. The
+  # default is the value; anything that is not a positive integer IS the value.
+  case "$n" in
+    '' | *[!0-9]* | 0) printf '3' ;;
+    *) printf '%s' "$n" ;;
+  esac
+}
+
+# next_generation <ref> — a path under the retired home that nothing occupies.
+# Never reuses a number, so pruning one generation can never make a later fetch
+# land on it and inherit a directory that something is mounted from.
+next_generation() {
+  local ref="$1" home n=0
+  home="$(generation_home)"
+  mkdir -p "$home"
+  while [ -e "$home/$ref.$n" ] || [ -L "$home/$ref.$n" ]; do
+    n=$((n + 1))
+    [ "$n" -lt 10000 ] || return 1
+  done
+  printf '%s/%s.%s' "$home" "$ref" "$n"
+}
+
+# mount_sources — every bind source the daemon currently has a container using.
+# ONE `docker inspect` over every container, and not a `--filter volume=` lookup
+# per generation, because compose mounts INDIVIDUAL FILES: measured on this
+# machine (docker 29.4.0), `--filter volume=<the file>` matches, and
+# `--filter volume=<the directory that holds it>` matches NOTHING — so a filter
+# built from the generation directory would have reported every generation as
+# unreferenced and deleted the one a container was mounted to.
+#
+# Nonzero means "cannot tell", and the caller keeps everything. That is also
+# what happens when the daemon is down, or `docker` is not installed — and a
+# machine that cannot answer also has no containers mounted from these paths, so
+# retaining is right rather than merely cautious.
+mount_sources() {
+  local ids
+  command -v docker >/dev/null 2>&1 || return 1
+  docker info >/dev/null 2>&1 || return 1
+  ids="$(docker ps -aq 2>/dev/null)" || return 1
+  [ -n "$ids" ] || return 0
+  # Deliberate word splitting: `$ids` is a list of container ids and docker takes
+  # them as separate arguments. The alternative — one `docker inspect` per id —
+  # is a spawn per container on a developer machine with a dozen running.
+  # shellcheck disable=SC2086
+  docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' $ids 2>/dev/null
+}
+
+# generation_is_mounted <dir> <sources> — is anything mounted out of this tree?
+# A PREFIX test rather than an equality test, because the mounted path is a file
+# inside the generation, not the generation.
+generation_is_mounted() {
+  local gen="$1" src
+  while IFS= read -r src; do
+    [ -n "$src" ] || continue
+    case "$src" in
+      "$gen"/*) return 0 ;;
+    esac
+  done <<<"$2"
+  return 1
+}
+
+# prune_generations <ref> — reclaim retired generations beyond `generation_keep`.
+#
+# Oldest first, and ONLY a generation the daemon reports nothing mounted from.
+# The two halves are one rule: reclaiming space is never worth breaking a
+# developer's running stack, so the conservative answer wins whenever the
+# question has no cheap answer.
+prune_generations() {
+  local ref="$1" keep
+  keep="$(generation_keep)"
+  local home
+  home="$(generation_home)"
+  [ -d "$home" ] || return 0
+
+  local lines="" path serial drop=0 n=0
+  for path in "$home/$ref".*; do
+    [ -d "$path" ] || continue
+    serial="${path##*.}"
+    lines="$lines$serial	$path
+"
+    n=$((n + 1))
+  done
+  # Nothing to reclaim, and the COMMON case: the cold path never reaches here, so
+  # `bin/dev stack` on a fresh cache starts no docker process at all.
+  [ "$n" -gt "$keep" ] || return 0
+  drop=$((n - keep))
+
+  local sources="" known=1
+  sources="$(mount_sources)" || known=0
+  if [ "$known" -ne 1 ]; then
+    info "keeping $n retired generation(s): docker could not be asked what is mounted"
+    return 0
+  fi
+
+  local i=0
+  while IFS=$'\t' read -r serial path; do
+    [ -n "${serial:-}" ] || continue
+    if [ "$i" -lt "$drop" ]; then
+      if generation_is_mounted "$path" "$sources"; then
+        info "keeping retired generation $path: a container is mounted from it"
+      else
+        rm -rf "$path"
+      fi
+    fi
+    i=$((i + 1))
+  done < <(printf '%s' "$lines" | sort -n)
+  return 0
+}
+
 fetch_stack() {
   # `git init` + `fetch --depth 1` + `checkout --detach FETCH_HEAD`, not
   # `git clone --branch`. Three reasons, and the third is the one that matters:
@@ -514,8 +668,21 @@ fetch_stack() {
   # another terminal never sees a half-populated cache directory. `mv` within a
   # filesystem is atomic; a `cp -R` into place is not, and the failure it causes
   # is a bind-mount error about a file that was about to exist.
-  rm -rf "$dest"
+  #
+  # The destination is RETIRED, never removed — see the retired-generations
+  # header above for the measurement. Both moves are renames within one
+  # filesystem, so there is no instant at which `$dest` is neither the old tree
+  # nor the new one: that is the property the old `rm -rf` bought with the mount
+  # it broke, and this keeps it without the breakage.
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    local retired
+    retired="$(next_generation "$ref")" ||
+      die "could not find a free generation name under $(generation_home)"
+    mv "$dest" "$retired"
+    info "previous generation kept at $retired"
+  fi
   mv "$tmp" "$dest"
+  prune_generations "$ref"
 }
 
 resolve_stack() {

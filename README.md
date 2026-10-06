@@ -383,6 +383,32 @@ cache, or a copy you vendored at `.kit/stack` — and **fails loudly**, naming e
 when none of them holds the pinned ref. It never falls back to an unversioned
 directory.
 
+### Replacing the cache never breaks a running stack
+
+The cache directory is **bind-mounted into your containers**, so it is not a
+directory `bin/dev` may delete out from under them. A fetch that finds a populated
+cache **retires** it — `mv` to `<cache home>/.retired/<ref>.<serial>` — and then
+`mv`s the new tree into place. Both are renames within one filesystem, so a second
+`bin/dev` in another terminal still never sees a half-populated directory.
+
+This is measured rather than asserted. On macOS a bind mount resolves its source
+when the container is **created**, so the running process keeps serving off
+descriptors it already holds while every **new** open through the mount path fails
+`no such file or directory`. Against a real container re-reading its mount once a
+second: rename the tree aside → still reading fine; delete the renamed copy →
+`no such file or directory` on the very next probe. **So the old tree is kept, not
+just moved** — deleting it later would break the mount exactly as deleting it now
+did, because it is the same inode.
+
+Space is reclaimed oldest-first, past `KIT_STACK_KEEP_GENERATIONS` (default 3), and
+**only for a generation nothing is mounted from** — `bin/dev` asks the daemon.
+It retains on every answer it cannot get: no `docker` on `PATH`, no daemon,
+`docker info` failing. A machine that cannot answer also has no containers mounted
+from those paths, so nothing is lost by keeping them. Each generation is a few
+hundred KB (a `--depth 1` checkout of a repository that is almost entirely YAML),
+and a fresh cache starts no `docker` process at all, because there is nothing to
+prune.
+
 A vendored copy must **say what it is**, and this is the part that is not
 optional:
 

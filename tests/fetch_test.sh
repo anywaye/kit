@@ -48,6 +48,15 @@
 #      else. Accepting it silently is how an offline loop stops matching what
 #      the team runs.
 #
+#   7. `bin/dev pin` — the DELIBERATE upgrade, from a cold cache, printing a real
+#      stack diff rather than a claim that one cannot be computed.
+#   8. REPLACING a populated cache RETIRES the old tree instead of deleting it.
+#      This is the one that is not about `bin/dev` at all: the cache directory is
+#      bind-mounted into running containers, so deleting it leaves every container
+#      serving off descriptors it already holds while every NEW open through the
+#      mount path fails. See `REPORT-kit-cachemount-01.md` for the measurement
+#      and `templates/bin/dev.sh`'s retired-generations header for the mechanism.
+#
 # NO SLEEPS. Every wait is a poll with a deadline, and the only thing polled for
 # is this script's own subprocesses.
 
@@ -416,6 +425,83 @@ elif ! printf '%s' "$DEV_OUT" | grep -qiE 'nothing to do|unchanged|already pinne
   printf '%s\n' "$DEV_OUT" | tail -6 | sed 's/^/        /'
 else
   pass "bin/dev pin to the ref already pinned is a no-op, and says so"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. REPLACING a populated cache RETIRES it rather than deleting it
+# ---------------------------------------------------------------------------
+# The claim is the whole point of `fetch_stack`'s retired-generation machinery:
+# the tree a running container may be bind-mounted to must survive the fetch that
+# replaces it.
+#
+# It has to be asserted on the FILESYSTEM rather than on docker, because the two
+# halves of this claim live at different times. A bind mount resolves its source
+# when the container is CREATED, so a container that is already up is unaffected
+# by whatever `fetch_stack` does afterwards — what breaks is the NEXT open through
+# the mount path, and that is a property of whether the inodes are still linked.
+# Renamed: they are. Unlinked: they are not, and the open fails ENOENT. So the
+# assertion below is "the retired tree's files still open", which is the
+# filesystem statement of the container one, and it needs no daemon — a machine
+# with no docker gets the same answer.
+#
+# THE FIXTURE PUTS THE CACHE IN THE ONLY STATE THAT REACHES `fetch_stack` WITH
+# SOMETHING ALREADY THERE. `resolve_stack` returns early on a usable cache, so a
+# fetch on top of a populated directory happens only when that directory FAILS
+# `stack_is_usable`. Deleting `.kit-stack-ref` is the smallest edit that produces
+# that state, and it leaves the rest of the tree exactly as a running container has
+# it open — which is why the assertion below is about `grafana/provisioning/` and
+# the collector config rather than about the marker.
+#
+# Both halves are asserted. "A retired generation survived" on its own is
+# satisfied by a `fetch_stack` that never replaces anything, and "the new tree is
+# correct" on its own is satisfied by the delete this section exists to catch.
+retire="$WORK/svc-retire"
+make_service "$retire" "$PIN_SHA" "$WORK/cache-retire"
+run_dev "$retire" stack
+LIVE="$WORK/cache-retire/$PIN_SHA"
+
+if [ "$DEV_EC" -ne 0 ] || [ ! -f "$LIVE/templates/compose/docker-compose.yml" ]; then
+  fail "could not warm the cache the replacement case needs (exit $DEV_EC)"
+  printf '%s\n' "$DEV_OUT" | tail -8 | sed 's/^/        /'
+else
+  pass "the cache is warm, and holds a complete tree at the pinned ref"
+
+  # The one edit, and nothing else in the tree is touched — so a red assertion
+  # below can only be about what the fetch did to it.
+  rm -f "$LIVE/.kit-stack-ref"
+
+  run_dev "$retire" stack
+  RETIRED="$(find "$WORK/cache-retire/.retired" -maxdepth 1 -type d \
+    -name "$PIN_SHA.*" 2>/dev/null | sort | head -1 || true)"
+
+  if [ "$DEV_EC" -ne 0 ]; then
+    fail "re-fetching over a populated cache failed (exit $DEV_EC)"
+    printf '%s\n' "$DEV_OUT" | tail -10 | sed 's/^/        /'
+  elif [ ! -f "$LIVE/templates/compose/docker-compose.yml" ]; then
+    fail "the replacement did not put a tree back at the cache path"
+  elif ! diff -q "$LIVE/templates/compose/docker-compose.yml" \
+    "$ROOT/templates/compose/docker-compose.yml" >/dev/null 2>&1; then
+    fail "the replacement left the WRONG tree at the cache path"
+  else
+    pass "re-fetching over a populated cache replaces it, and the new tree is correct"
+  fi
+
+  # THE ASSERTION. `find` rather than a name this test chose, because a bind mount
+  # does not care what a generation is CALLED — only that the files it resolved to
+  # still resolve.
+  if [ -z "$RETIRED" ] || [ ! -d "$RETIRED" ]; then
+    fail "the previous generation was DESTROYED, not retired. A container bind-mounted to it keeps serving off descriptors it already holds while every NEW open through the mount path fails ENOENT — which is how a stack that is working reports itself broken."
+  elif [ ! -d "$RETIRED/templates/compose/grafana/provisioning" ] ||
+    [ ! -f "$RETIRED/templates/compose/otel-collector.yml" ] ||
+    [ ! -d "$RETIRED/templates/compose/tempo" ] ||
+    [ ! -d "$RETIRED/templates/compose/loki" ]; then
+    fail "a retired generation exists at $RETIRED but has lost files it had before the fetch, so the mount is broken in exactly the same way"
+    find "$RETIRED" -maxdepth 3 | head -20 | sed 's/^/        /'
+  elif [ "$(cat "$RETIRED/templates/compose/otel-collector.yml" 2>/dev/null | wc -l | tr -d ' ')" -lt 10 ]; then
+    fail "the retired generation's collector config does not read back as a real file, so the surviving directory is a name and not a tree"
+  else
+    pass "the previous generation is retained and its files still open — the filesystem form of 'a running container's bind mount survives the fetch'"
+  fi
 fi
 
 printf '\n'

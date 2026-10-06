@@ -2,6 +2,75 @@
 
 ### Fixed
 
+- **`bin/dev`: replacing a populated cache RETIRES it instead of deleting it,
+  which is the difference between a stack that serves and a stack that reports
+  itself broken.** `fetch_stack` used to end with `rm -rf "$dest"; mv "$tmp"
+  "$dest"`. The cache directory is not kit's to destroy: `docker compose`
+  bind-mounts files out of it into running containers, and on macOS a bind mount
+  resolves its source **when the container is created**. So the delete left every
+  container serving off descriptors it already held while every **new** open
+  through the mount path failed `no such file or directory`. Measured on this
+  machine with seven containers up for three hours: the collector kept serving
+  the whole time and only its **healthcheck** went red, because the healthcheck
+  re-reads the config through the mount on every probe — which then failed
+  `bin/dev up` with `stack did not become healthy`, so the recovery path was
+  also the thing reporting the fault, and the first run lost its readiness budget
+  to a checkpoint that took 271s to write. Replaced with a generation swap:
+  `mv "$dest" "$(next_generation "$ref")"`, then `mv "$tmp" "$dest"`. Both moves
+  are renames within one filesystem, so **the property the old comment was buying
+  is kept** — a second `bin/dev` in another terminal never sees a half-populated
+  directory, and there is no instant at which the cache path is neither the old
+  tree nor the new one. **Moving it aside is not the whole fix, and the half that
+  is easy to get wrong is measured:** a retired generation is the same inode the
+  containers are mounted to, so deleting it *later* breaks the mount exactly as
+  the original delete did. Against a real container re-reading its mount path
+  once a second — rename aside → **OK**, then delete the renamed copy →
+  **`no such file or directory` on the very next probe**. So
+  `prune_generations` **asks the daemon** (`docker inspect` over every container's
+  `.Mounts`) and retains any generation something is mounted from, oldest-first,
+  beyond `KIT_STACK_KEEP_GENERATIONS` (default 3). It retains on every answer it
+  cannot get — no `docker`, no daemon, `docker info` failing — because reclaiming
+  a few hundred KB is never worth a developer's running stack, and a machine that
+  cannot answer has no containers mounted from these paths either. The cold path
+  never starts a docker process: there is nothing to prune on a fresh cache.
+  `tests/fetch_test.sh` gains section 8, which puts the cache in the only state
+  that reaches `fetch_stack` with something already there (a populated tree that
+  fails `stack_is_usable`), and asserts **both** halves — the new tree is
+  correct, and the retired tree's files still open. It needs no daemon, because a
+  rename keeps the inodes linked and an unlink does not, which is the filesystem
+  statement of the container claim. Mutation: restoring `rm -rf "$dest"` turns
+  it red on exactly that assertion.
+
+- **The collector healthcheck's comment described a check the command does not
+  run.** `templates/compose/docker-compose.yml` said the healthcheck was "the
+  `health_check` extension's real endpoint, not `components`", because `up
+  `--wait` should wait for the pipelines to be wired — while the command was
+  `otelcol-contrib validate --config=…`, which proves the file parses **from
+  disk**. Weaker claim, stronger words, one line apart, in a repository whose
+  stated rule is that prose is load-bearing. **Measured whether the stronger probe
+  is reachable, rather than assuming:** the whole rootfs of
+  `otel/opentelemetry-collector-contrib:0.115.1` is `/otelcol-contrib`,
+  `ca-certificates.crt` and the usual empty `/proc`, `/sys`, `/dev` — no shell, no
+  `curl`, no `wget`, no `nc` — and the binary's entire command set is
+  `completion`, `components`, `help`, `validate`. A compose `test:` in `CMD` form
+  execs one binary, so nothing inside the image can open a socket to
+  `${KIT_OTEL_HEALTH_ENDPOINT:-0.0.0.0:13133}`, and `CMD-SHELL` would need the
+  shell that is not there. So the endpoint is genuinely not reachable this way, and
+  the comment now says **what `validate` proves** (the config is readable through
+  its bind mount and parses — both load-bearing, and the mount is the thing that
+  breaks) and **what it does not** (that the pipelines are wired). The check is
+  not deleted: a container that is up and misreporting is worse than one that
+  reports nothing, and this one catches a real class of failure — it is the probe
+  that surfaced the cache-eviction defect above.
+
+### Docs
+
+- **`AGENTS.md` listed six of the eight suites in `tests/`.** `tests/validate.sh`'s
+  gate list and the layout tree both omit `tests/onecluster_test.sh` and
+  `tests/failfast_test.sh`, both of which exist, both of which are registered in
+  `validate.sh`, and both of which run. Two names added to each of the two places
+  that enumerate the suites.
+
 - **`tests/onecluster_test.sh`: the packet's own question, asked of `bin/dev`
   rather than of a compose file.** `tests/isolation_test.sh` already proves
   database-per-service isolation on a two-tenant cluster, and it proves it well —

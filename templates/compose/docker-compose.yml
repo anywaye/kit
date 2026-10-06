@@ -543,10 +543,48 @@ services:
     # blamed for whatever else was running.
     mem_limit: ${KIT_OTEL_MEMORY_LIMIT:-384m}
     healthcheck:
-      # The health_check extension's real endpoint, not `components`. `up
-      # --wait` is meant to be waiting for the pipelines to be wired; asking
-      # the binary to print its component list proves the binary starts, which
-      # is a weaker claim that reads as a stronger one.
+      # WHAT THIS ACTUALLY PROVES, because the comment that stood here described
+      # a stronger check than the command performs: it said the check was "the
+      # health_check extension's real endpoint, not `components`", while the
+      # command was `validate`. In a repository whose stated rule is that prose is
+      # load-bearing, a comment naming a check the code does not run is a defect,
+      # and the gap is here rather than elsewhere.
+      #
+      # IT PROVES: the collector config is still READABLE THROUGH ITS BIND MOUNT,
+      # and it parses. Both halves are load-bearing and neither is decorative.
+      # The mount is the thing that breaks: this cache directory is bind-mounted
+      # into running containers, and deleting it leaves the collector serving off
+      # the config it already has open while every NEW read of the mounted path
+      # fails `no such file or directory`. A healthcheck that re-reads the file
+      # reports that as unhealthy, which is correct — the read IS broken. Measured
+      # on this machine with seven containers up for three hours, and the failing
+      # probe then failed `bin/dev up` with `stack did not become healthy`, so the
+      # recovery path reported the fault the cache had caused. `bin/dev` now
+      # retires a replaced cache instead of deleting it; see
+      # REPORT-kit-cachemount-01.md.
+      #
+      # IT DOES NOT PROVE: that the pipelines are WIRED. `up --wait` waiting on
+      # this waits for "the config reads and parses", which is weaker than
+      # "the collector is serving". Stated plainly here so the next reader does
+      # not have to rediscover it from a mismatch.
+      #
+      # WHY NOT THE `health_check` ENDPOINT, which really is configured
+      # (`health_check:` at `templates/compose/otel-collector.yml`, bound to
+      # `${KIT_OTEL_HEALTH_ENDPOINT:-0.0.0.0:13133}`): the image is distroless and
+      # has no HTTP client to call it with. Measured on
+      # `otel/opentelemetry-collector-contrib:0.115.1` — the entire rootfs is
+      # `/otelcol-contrib`, `/etc/ssl/certs/ca-certificates.crt` and the usual
+      # empty `/proc`, `/sys`, `/dev` mounts: no shell, no `curl`, no `wget`, no
+      # `nc`. A compose `test:` in `CMD` form execs one binary, so the only
+      # candidate is `/otelcol-contrib` itself, and its entire command set is
+      # `completion`, `components`, `help`, `validate`. None of them opens a
+      # socket. `CMD-SHELL` would need the shell that is not there.
+      #
+      # So this stays, and it is not deleted: a container that is up and
+      # misreporting readiness is worse than one that reports nothing, and this
+      # catches a whole class of real failure. If a future collector image gains
+      # a client, the endpoint becomes reachable and this line should become that
+      # request — and the comment above it should change with it.
       test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel/otel-collector.yml"]
       interval: 10s
       timeout: 10s
