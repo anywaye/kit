@@ -244,6 +244,64 @@ on:
         required: false
         type: string
         default: 'false'
+      # The account-isolation declaration check, opt-in for the same reason
+      # `zizmor` is: it reads the adopting repo's `tenancy.yml` and the tree
+      # behind it, which kit did not write and cannot fix. A string for the
+      # same reason `telemetry` is one, and for the same trap.
+      #
+      # WHAT IT RUNS, and why it is a job and not a step in a language job: the
+      # checker is core's, not kit's, and it needs core's harness on disk. A
+      # language job's matrix has no use for a whole extra checkout, and the
+      # check is about the SERVICE's declaration, not about any one toolchain —
+      # so it is toolchain-independent and runs once, not six times.
+      #
+      # THE VERDICT IS THE EXIT CODE, AND IT IS FATAL. This is not a report-only
+      # step: a repo that turns this on is asserting its declaration is green,
+      # and a red build is the assertion being wrong. The opt-in IS the gate —
+      # a repo that has not adopted `tenancy.yml` leaves the input at 'false'
+      # and is not graded, which is the whole of "without turning the fleet red".
+      # Measured 2026-10-06 across the sixteen repositories under cafaye/:
+      # exactly one (identity) is green today and can turn this on now.
+      #
+      # THE FINDINGS LAND ON THE REPOSITORY THAT CAN FIX THEM. That is the
+      # argument for this job living here rather than in thirteen adopting
+      # repositories: MD36's first reason (a finding nobody in this repository
+      # can fix is not this gate's finding) does not apply to a step whose
+      # subject is the caller, and the alternative — thirteen hand-rolled
+      # fetches of cafaye/core, each pinning its own ref — is the drift this
+      # repository exists to prevent. The fetch is written once and the pin is
+      # one input, below.
+      tenancy:
+        description: >-
+          'Run core's tenancy checker against this repository: "true" or
+          "false". Off by default so a repo adopts kit without inheriting a red
+          build for a declaration it has not written yet. Turn it on once your
+          tenancy.yml is green; the checker exits 1 on any failure and 2 when it
+          cannot run, and both are fatal.'
+        required: false
+        type: string
+        default: 'false'
+      # The core ref the TENANCY CHECKER is read from. A separate input from
+      # `kit-lint-ref` because it is a different repository: that one pins kit's
+      # lint configs, this one pins core's harness. A caller who pins the
+      # workflow to a kit SHA and leaves this at 'master' gets that SHA's
+      # workflow with whatever checker core's master carries, which is a real and
+      # specific drift — so pin this to the core ref you have verified.
+      #
+      # The checker is stdlib-only Python (floor 3.9) and reads no TOML and runs
+      # no process, so it needs no packages and no toolchain beyond what the
+      # runner already has. It is not vendored here on purpose: a copy of
+      # `tenancy_check.py` in kit would be a copy that can drift from core's
+      # schema, which is the drift core's own harness exists to prevent.
+      kit-core-ref:
+        description: >-
+          Git ref to read core's tenancy checker from, e.g. 'master' or a
+          commit SHA. Pin it to the core ref you have verified the checker
+          against. The checker is fetched, never vendored, so a change to it
+          lands on every opted-in repo on its next run.
+        required: false
+        type: string
+        default: 'master'
 permissions:
   contents: read
 
@@ -1466,3 +1524,150 @@ jobs:
         env:
           PY: python3
         run: bash "$KIT_TREE_DIR/tests/zizmor_gate.sh" "$GITHUB_WORKSPACE" "$(command -v zizmor)"
+
+  # ------------------------------------------------------------------ tenancy
+  # Opt-in (see the `tenancy` input). Core's account-isolation declaration
+  # checker, run against the adopting repository's own tree.
+  #
+  # A separate job because it needs core's harness on disk, and a language job's
+  # matrix has no use for a whole extra checkout. It is toolchain-independent —
+  # the checker is stdlib-only Python — so it runs once, not once per language.
+  #
+  # THE SUBJECT IS THE CALLER, AND THAT IS THE ARGUMENT FOR THIS JOB LIVING
+  # HERE. Every job in this file runs against the caller's tree; a red tenancy
+  # finding lands on the repository that owns `tenancy.yml` and can fix it,
+  # which is the finding MD36's first reason excludes (a finding nobody in this
+  # repository can fix). The alternative — thirteen adopting repositories each
+  # hand-rolling a fetch of cafaye/core and each pinning its own ref — is the
+  # drift this repository exists to prevent, and it is strictly worse than the
+  # one fetch and one pin this job makes.
+  #
+  # WHAT IT DOES NOT CHECK, said plainly: this job runs `tenancy-check` and
+  # nothing else. The sibling `account-scope-check` is a separate checker with
+  # a separate adoption state — measured 2026-10-06, identity is green on
+  # `tenancy-check` and carries 42 failures from `account-scope-check` in the
+  # same tree — and wiring it in is a different packet. Do not read a green
+  # here as "this service has adopted tenancy"; read it as "this service's
+  # tenancy.yml is true of its tree".
+  tenancy:
+    name: tenancy
+    if: ${{ inputs.tenancy == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Core's own tree, for the checker below. Fetched by a NAME and never read
+      # out of `$GITHUB_ACTION_PATH`, for the reason the two kit fetches above
+      # give: the variable is documented as composite-action-only, so inside a
+      # REUSABLE WORKFLOW it is not set, and reading it under `set -euo pipefail`
+      # is a fatal on the step's first line. The whole of that argument is in
+      # the `kit (conformance fallback)` and `kit (gate scripts)` steps; this
+      # is the THIRD hand-rolled fetch in this file and the first that reaches
+      # outside kit.
+      #
+      # WHY CORE AND NOT KIT, AND WHY A FETCH AND NOT A VENDORED COPY. The
+      # checker is core's: it reads `tenancy.yml` against
+      # `schemas/tenant-isolation.schema.json`, and kit ships no schema and no
+      # checker. A copy of `tenancy_check.py` in kit would be a copy that can
+      # drift from core's schema — the same reason courier's gate-self-test
+      # fetches core rather than vendoring the gate checker. So this job
+      # establishes the notion of core's harness for the first time, through the
+      # same idiom the kit fetches use: a public repository, no token,
+      # `$RUNNER_TEMP` scratch, a pin that is an input.
+      #
+      # WHAT IT SPARSE-CHECKS OUT, and why `harness` and not the whole tree: the
+      # wrapper resolves `tenancy_check.py` and `cafaye_contract.py` beside
+      # itself, and the schema's constraints are re-implemented in the Python
+      # (the file is stdlib-only), so `harness/` is the whole of what this job
+      # reads. A full clone of core on every opt-in push is a cost paid for
+      # files nobody opens.
+      - name: core (harness)
+        env:
+          CORE_REF: ${{ inputs.kit-core-ref }}
+          CORE_SPARSE: harness
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          CORE_TREE_DIR="$RUNNER_TEMP/core"
+          git init --quiet "$CORE_TREE_DIR"
+          git -C "$CORE_TREE_DIR" remote add origin https://github.com/cafaye/core.git
+          git -C "$CORE_TREE_DIR" sparse-checkout set --no-cone "$CORE_SPARSE"
+          git -C "$CORE_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$CORE_REF"
+          git -C "$CORE_TREE_DIR" checkout --quiet FETCH_HEAD
+          echo "CORE_TREE_DIR=$CORE_TREE_DIR" >> "$GITHUB_ENV"
+      - name: tenancy-check
+        # THE EXIT-CODE CONTRACT IS THE WRAPPER'S, AND THIS STEP PASSES IT
+        # THROUGH UNTOUCHED. `core/harness/bin/tenancy-check` exits 0 (no
+        # failure — warnings may still print), 1 (at least one failure) or 2
+        # (the check could not happen), and its header says the one thing a
+        # caller branches on is the exit code. So this step captures the status
+        # and re-emits it rather than letting `set -e` abort on the first
+        # non-zero and lose the summary — a wrapper that turns a refusal into a
+        # pass is worse than no wrapper, and the same is true of a step.
+        #
+        # THE SUMMARY IS PUBLISHED ON EVERY EXIT CODE, including 0. A green run
+        # with warnings is a report worth reading — `enumeration-partial` means
+        # "this machine could not answer that question" — and a red run is a
+        # diagnosis that belongs in the step summary, not only in an artifact
+        # somebody has to download. The JSON is uploaded as an artifact below on
+        # every exit code, so the findings survive the run.
+        #
+        # `CORE_TREE_DIR` is not re-declared here: the fetch step above exports
+        # it through `$GITHUB_ENV`.
+        env:
+          CORE_TREE_DIR: ${{ env.CORE_TREE_DIR }}
+        run: |
+          set -euo pipefail
+          json="$RUNNER_TEMP/tenancy.json"
+          status=0
+          "$CORE_TREE_DIR/harness/bin/tenancy-check" --json . > "$json" || status=$?
+          # The summary is best-effort and must not mask the exit code: a
+          # checker that could not run (exit 2) writes no JSON, and the step's
+          # verdict is the exit code, not the summary. So the reader handles a
+          # missing or corrupt file and always exits 0 — the one status this
+          # step swallows is the summary's, never the checker's.
+          python3 - "$json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  data = json.load(fh)
+          except Exception as exc:
+              print(f"### tenancy-check — no JSON to report ({exc})")
+              sys.exit(0)
+
+          counts = data.get("counts") or {}
+          print(
+              f"### tenancy-check — {counts.get('fail', 0)} failure(s), "
+              f"{counts.get('warn', 0)} warning(s)"
+          )
+          print()
+          if data.get("couldNotRun"):
+              print(f"**could not run:** {data['couldNotRun']}")
+              print()
+          findings = data.get("findings") or []
+          if findings:
+              print("| severity | id | message |")
+              print("| --- | --- | --- |")
+              for f in findings:
+                  msg = str(f.get("message", "")).replace("|", "\\|")
+                  print(f"| {f.get('severity', '')} | {f.get('id', '')} | {msg} |")
+          else:
+              print("no findings")
+          PY
+          if [ "$status" -ne 0 ]; then
+            echo "::error::tenancy-check exited $status — the findings are in the step" >&2
+            echo "::error::summary and the tenancy-findings artifact." >&2
+            exit "$status"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: tenancy-findings
+          path: ${{ runner.temp }}/tenancy.json
+          # `warn`, not `error`: a checker that could not run (exit 2) writes no
+          # JSON, and the step above has already failed with the real reason. A
+          # second failure here would be noise on top of the verdict.
+          if-no-files-found: warn
