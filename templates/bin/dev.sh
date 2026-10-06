@@ -33,6 +33,17 @@
 #   stack behind silently: if a step fails, the message says which one and what
 #   to run, and the stack it started is stopped.
 #
+#   IT REFUSES AN UNINTERPOLATABLE STACK BEFORE IT STARTS ANYTHING. A compose
+#   file that needs a variable with no default — `KIT_POSTGRES_DATABASES` is the
+#   only one kit ships — is refused in seconds, naming the variable and the line
+#   to add to .env. Docker Compose does NOT do this itself: it substitutes an
+#   empty string for a bare `${VAR}`, so the postgres container comes up, the
+#   init script refuses, the container exits, and the only report arrives when
+#   the whole readiness deadline has run out. That was 180s per attempt for one
+#   missing line. `preflight_required` reads the required set out of the compose
+#   files themselves rather than from a list kept here, so a service that
+#   introduces its own required variable gets the same fast refusal.
+#
 # THE STACK IS FETCHED, NOT COPIED
 #   There is no `docker-compose.yml` of kit's in this repository, and there is no
 #   `otel-collector.yml`, no `tempo/`, no `loki/`, no `mimir/`, no `grafana/`.
@@ -715,6 +726,121 @@ compose() {
 }
 
 # --------------------------------------------------------------------------
+# preflight: required compose interpolations
+# --------------------------------------------------------------------------
+#
+# WHAT THIS IS AND WHY IT EXISTS, MEASURED.
+#
+# `templates/compose/docker-compose.yml` interpolates one variable with NO
+# default:
+#
+#     KIT_POSTGRES_DATABASES: ${KIT_POSTGRES_DATABASES}
+#
+# and every other `${KIT_*}` in that file carries a `:-` default. The reason that
+# one has none is written out in the compose file itself: a default of
+# `${KIT_POSTGRES_DATABASES:-courier}` provisions ONE FLEET SERVICE's database for
+# everybody who adopts kit, and an EMPTY default is refused by
+# `initdb/10-cluster.sh`, which is the correct outcome. So the absence of a
+# default is load-bearing and this check may not add one back.
+#
+# Docker Compose does NOT treat a bare `${VAR}` as an error. It substitutes the
+# EMPTY STRING and logs one warning line, so the container is created, the init
+# script runs, and `10-cluster.sh` refuses at its `:?` guard — and the postgres
+# container exits 1. `up -d --wait` then waits out the whole
+# `STACK_TIMEOUT` (180s by default) for a container that already died, and only
+# then reports a failure whose message names a healthcheck. On the fleet that is
+# the 900 seconds in the packet: not one missing variable being expensive to
+# notice, but the notice arriving only after the readiness deadline has expired,
+# five times over.
+#
+# So the cost was never the check; it was WHERE the check happened. This runs
+# after the stack resolves (the compose file has to exist to be read) and BEFORE
+# the first `docker compose` call, which is the earliest point at which the
+# answer is available. It is seconds, and it names the variable.
+#
+# THE LIST IS DERIVED, NOT RESTATED. Every `${NAME}` with no `:-`/`-`/`:?`/`?`
+# operator, in BOTH compose files — kit's base and the service's own override,
+# because a service may introduce its own required variable and would otherwise
+# discover it the same 180 seconds later. A list written out here would be a
+# second copy of a fact that lives in the compose file, and it would go stale in
+# exactly the way AGENTS.md's "a property stated in two places is a property
+# asserted in zero times" rule describes. There is deliberately no
+# `KIT_POSTGRES_DATABASES` in this file: the base compose file says which
+# variables are required, and this reads that answer.
+#
+# EMPTY COUNTS AS MISSING, and that is not the same check. `templates/compose/
+# .env.example` ships `KIT_POSTGRES_DATABASES=` with nothing after it, and
+# `ensure_env` copies that example to `.env` on a fresh clone — so the most likely
+# state of a new checkout is the variable PRESENT AND EMPTY. Compose substitutes
+# an empty string for that too, so a presence check would pass on exactly the
+# input that fails.
+#
+# `grep -o` and `sort -u` only: the pin validation above runs before any tooling
+# beyond POSIX shell has been located, and a dependency in a preflight is a
+# dependency in the path whose entire job is to fail before anything expensive
+# happens.
+required_compose_vars() {
+  local file
+  for file in "$@"; do
+    [ -f "$file" ] || continue
+    grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$file" 2>/dev/null |
+      sed -e 's/^\${//' -e 's/}$//'
+  done | sort -u
+}
+
+# preflight_required — refuse a stack whose compose files cannot be
+# interpolated, naming every missing variable and how to set it.
+#
+# `stack_setting "$name" ""` rather than a bare `${!name}`: the two sources it
+# reads are the two compose itself reads (the process environment and `.env`), and
+# a check that consulted a third source would disagree with the value the
+# container gets.
+preflight_required() {
+  local -a files missing=()
+  files=("$STACK_DIR/templates/compose/docker-compose.yml")
+  [ -f docker-compose.yml ] && files+=(./docker-compose.yml)
+
+  local var value
+  while IFS= read -r var; do
+    [ -n "$var" ] || continue
+    value="$(stack_setting "$var" "")"
+    [ -n "$value" ] || missing+=("$var")
+  done <<EOF
+$(required_compose_vars "${files[@]}")
+EOF
+
+  [ "${#missing[@]}" -eq 0 ] && return 0
+
+  local count="${#missing[@]}"
+  printf '\n\033[1;31mbin/dev: %s required by the compose file %s not set:\033[0m\n' \
+    "$count" "$( [ "$count" -eq 1 ] && printf 'is' || printf 'are' )" >&2
+  local m
+  for m in "${missing[@]}"; do
+    printf '  %s\n' "$m" >&2
+  done
+  printf '\n' >&2
+  printf 'Docker Compose substitutes an empty string for a bare ${VAR} rather than\n' >&2
+  printf 'refusing it, so nothing here has started yet and nothing will. The stack\n' >&2
+  printf 'would come up with that value empty and fail later, minutes in.\n\n' >&2
+  printf 'Set it in .env, which is the only file a developer edits:\n\n' >&2
+  printf '  %s=<value>\n' "${missing[0]}" >&2
+  [ "$count" -gt 1 ] && printf '  …and one line for each of the names above.\n\n' >&2
+  case " ${missing[*]} " in
+    *' KIT_POSTGRES_DATABASES '*)
+      printf '\nFor KIT_POSTGRES_DATABASES, that value is the COMMA-separated list of\n' >&2
+      printf 'the services sharing this one Postgres cluster. Each name becomes a\n' >&2
+      printf 'database and an owner role of its own, and the database is the boundary\n' >&2
+      printf 'between them (templates/compose/docker-compose.yml, "THE DECLARATION"):\n\n' >&2
+      printf '  KIT_POSTGRES_DATABASES=alpha,beta\n\n' >&2
+      printf 'One service needs its own name alone; a developer working across two\n' >&2
+      printf 'services on one laptop lists both, and they get one container and two\n' >&2
+      printf 'databases. Add a name later without wiping the volume: bin/dev db grant <name>\n\n' >&2
+      ;;
+  esac
+  exit 1
+}
+
+# --------------------------------------------------------------------------
 # .env
 # --------------------------------------------------------------------------
 
@@ -786,6 +912,13 @@ up() {
   resolve_stack
   ensure_env
   warn_stale_env_example
+
+  # BEFORE the first `docker compose` call, and after `ensure_env` so that the
+  # `.env` the message tells the developer to edit actually exists. `up` is the
+  # only step that starts containers, so it is the only step that needs it — a
+  # `bin/dev status` against a misconfigured service should still report what is
+  # running rather than refuse to look.
+  preflight_required
 
   step "starting the stack from kit@$(stack_ref) (deadline: ${STACK_TIMEOUT}s)"
   # The wall-clock is measured here and printed at the end, because "the dev

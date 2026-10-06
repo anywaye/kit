@@ -2,6 +2,24 @@
 
 ### Fixed
 
+- **`bin/dev` no longer spends its whole readiness deadline noticing one missing
+  `.env` line.** Docker Compose does not refuse a bare `${VAR}` — it substitutes
+  the empty string and logs one warning — so a service that never declared itself
+  in `KIT_POSTGRES_DATABASES` came up with a postgres container whose init script
+  refused at its `:?` guard, exited 1, and was only reported when
+  `up -d --wait` ran out its 180s budget. Five attempts is the 900 seconds the
+  packet names; the variable cost was never the check. `preflight_required` in
+  `templates/bin/dev.sh` now derives the required set from the compose files
+  themselves — every `${NAME}` with no `:-`/`-`/`:?`/`?` operator, in kit's base
+  **and** the service's own override — and refuses before the first
+  `docker compose` call, naming the variable and printing the line to add. The
+  set is derived rather than restated on purpose: a list kept in the script would
+  be a second copy of a fact the compose file owns, and would go stale the way a
+  duplicated property does. **Empty counts as missing**, because
+  `.env.example` ships `KIT_POSTGRES_DATABASES=` empty and `ensure_env` copies it
+  to a fresh clone — so the most likely state of a new checkout is the variable
+  present and blank, which compose also substitutes away.
+
 - **Two sentences of the SDK-2.x prose contradicted the evidence written to
   support them.** `hono.ts.snippet`'s comment claimed SDK 2.x removed
   `register()` from the base provider and that `NodeTracerProvider extends
