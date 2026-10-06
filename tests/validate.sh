@@ -4264,6 +4264,31 @@ if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
     # (once clean, once with the control mutation, once measuring the init plan).
     bounded_check 'tests/tenancy_test.sh  (no identity, another tenant and its own tenant — as the login role AND as the owner; and the same proof with FORCE removed goes red)' \
       1800 bash "$ROOT/tests/tenancy_test.sh"
+    # ONE CLUSTER, TWO SERVICES, THROUGH `bin/dev` — the packet's own question.
+    #
+    # `isolation_test.sh` above already proves the boundary on a two-tenant
+    # cluster, and it proves it carefully. It brings the stack up ITSELF, with its
+    # own `docker compose --project-name … up -d --wait postgres`, which is why it
+    # can move one port and start one container. So on this tree the property was
+    # proven and the DEVELOPER'S PATH to it was not: every step between a person
+    # and that cluster lives inside `bin/dev` — the ref validation, the `.env`
+    # creation, the compose argument assembly, the readiness wait — and no tier in
+    # this file invoked `bin/dev`. A `bin/dev` that resolved the wrong project
+    # directory or waited on the wrong health signal would leave the two cluster
+    # tiers green.
+    #
+    # It runs the FULL cheap stack rather than `postgres` alone, which is why it
+    # moves five published ports and not one: `bin/dev up` brings up
+    # postgres/nats/redis/collector, and a developer's own stack is on the same
+    # machine. That collision was measured, and it is reported in the script's
+    # header — templates/compose/docker-compose.yml's port block calls the range
+    # collision-free for two checkouts, and it is not, for the four services
+    # whose defaults sit inside the block.
+    #
+    # 1800s like its siblings: it builds the cluster image on a cold cache and
+    # runs one initdb.
+    bounded_check 'tests/onecluster_test.sh  (two services, ONE postgres container, each with its own database and roles; both answer as their own role, neither reaches the other'"'"'s)' \
+      1800 bash "$ROOT/tests/onecluster_test.sh"
   fi
 fi
 # ===========================================================================

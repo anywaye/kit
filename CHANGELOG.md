@@ -2,6 +2,47 @@
 
 ### Fixed
 
+- **`tests/onecluster_test.sh`: the packet's own question, asked of `bin/dev`
+  rather than of a compose file.** `tests/isolation_test.sh` already proves
+  database-per-service isolation on a two-tenant cluster, and it proves it well —
+  but it brings the stack up with its own `docker compose --project-name … up
+  -d --wait postgres` call, which is why it can move one port and start one
+  container. So the property was proven and **the developer's path to it was
+  not**: every step between a person and that cluster lives inside `bin/dev` — the
+  ref validation, the `.env` creation, the compose argument assembly, the
+  readiness wait — and no tier in `validate.sh` invoked `bin/dev`. A `bin/dev`
+  that resolved the wrong project directory or waited on the wrong health signal
+  would have left both cluster tiers green. This tier runs `bin/dev up` against a
+  service fixture and asserts on the world afterwards: exactly one postgres
+  container in the run's compose project, two databases with a non-superuser
+  owner role each, two non-owner `LOGIN` roles with the membership running
+  owner→app in one direction only, **both services answering a real query as
+  their own role** (write, read back, pgvector) in their own database, and —
+  the negative control on that last claim — neither reaching the other's database,
+  refused at the door by `permission denied for database`. 7s, one container, two
+  databases. Registered in the observability phase beside its two siblings and
+  not inside `RUN_STATIC`, because a security property nothing executes is worth
+  nothing.
+
+- **THE PORT BLOCK IS NOT COLLISION-FREE FOR A SECOND CHECKOUT, and the compose
+  file says it is.** `templates/compose/docker-compose.yml`'s port block states
+  that the 15000-15999 range "makes two checkouts on one laptop a non-event". It
+  is, for **postgres** — whose default is the port most likely to be taken and
+  therefore the one you move. The other published defaults sit *inside the same
+  range*: nats 15600/15700, redis 15800, grafana 15000, tempo 15900, loki 15901,
+  clickstack 15910. `bin/dev up` brings up postgres, nats, redis and the
+  collector, so a second checkout beside a running one collides on the first of
+  those it reaches. Measured, on this machine, against a developer's own running
+  `cafaye` stack: moving only `KIT_POSTGRES_PORT`, as `isolation_test.sh` does,
+  fails with `Bind for 0.0.0.0:15800 failed: port is already allocated` — on
+  redis, the third container, **after** postgres had already been allocated.
+  `tests/onecluster_test.sh` moves all five ports of the cheap stack from one
+  free 10-port block as a result. **The defaults are not changed here**: that is a
+  different packet, it touches every adopting service's `.env`, and the brief for
+  this one holds the compose template's contract load-bearing. Reported with the
+  measurement instead, because a documented claim that is false for four of six
+  services is a thing a reader believes.
+
 - **`tests/failfast_test.sh`, a new suite that EXECUTES the fail-fast path rather
   than grepping for it.** Seven claims: the refusal is nonzero, arrives under a
   **measured** 10s budget, names the variable, prints the line to set it, creates
