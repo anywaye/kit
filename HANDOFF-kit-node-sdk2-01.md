@@ -32,27 +32,54 @@ check's label).
 Both were run in the worktree:
 
 ```
-bash tests/validate.sh --language=node     # PASS: every check passed.
+bash tests/validate.sh --language=node     # EXIT=0  PASS: every check passed.
                                            # note: 5 check(s) skipped
                                            # note: 4 tier(s) ran under a time bound; none was reached.
-bash tests/validate.sh --static-only        # see "Currently-failing" — see the caveat below
+bash tests/validate.sh --static-only       # EXIT=0  PASS: every check passed.
+                                           # note: 6 check(s) skipped
+                                           # note: 1 tier(s) ran under a time bound; none was reached.
 ```
 
-**Read the caveat.** The `--language=node` run reported PASS with exit 0 and I
-observed that exit code directly. **The `--static-only` run was still in flight
-when the hour ended** — a full run takes several minutes and I chose not to kill
-it and quote a partial log. It is the one thing in this packet I have not
-observed. What I *can* say precisely: the two checks my change touches are both
-in the **static** phase, which `--static-only` keeps (`RUN_STATIC=1` is not
-cleared by that flag), and both were run directly and green:
+Both run sequentially, on this tree, with **nothing edited while either was in
+flight** — see the caution below, which is not hypothetical. Zero `FAIL` rows in
+either, and all three `otel/node` rows green in both:
+
+```
+PASS templates/otel/node  (3 artifacts present)
+PASS otel/node/hono.ts.snippet  (parses as .ts)
+PASS templates/otel/node  (the traceparent suite, executed — inbound trace id asserted, and no SDK-2-removed call in the snippet)
+```
+
+The two checks this change touches are also runnable on their own, which is what
+to reach for while working rather than paying for a whole gate:
 
 ```
 node --test templates/otel/node/traceparent.test.mjs    # pass 20, fail 0
 node --experimental-strip-types --check <copy>.ts       # clean
 ```
 
-Those are the two checks `--static-only` would run for this surface. Run the
-full flag before merging.
+### Do not edit `tests/validate.sh` while the gate is running
+
+One `--language=node` run of this packet died with
+
+```
+tests/validate.sh: line 4168: plates/secrets/go && … : No such file or directory
+tests/validate.sh: line 4170: local: can only be used in a function
+EXIT=1
+```
+
+having passed every row up to that point, and the tree was clean. **That exit 1
+was self-inflicted**: a label rename inside `validate.sh` was committed while
+that run was executing the file, and **bash re-reads a running script by byte
+offset** — `plates/secrets/go` is a fragment of `templates/secrets/go`, and
+`local:` came from a line the edit split in two. `bash -n` was clean and both
+lines are ordinary statements inside a function.
+
+It is recorded because the shape is misleading in the worst way: a gate that
+reports a shell syntax error it did not have looks exactly like a tree defect,
+and the plausible reaction is to go looking for one in `validate.sh`. The rule
+the run teaches is narrow and mechanical: **finish the run before you commit an
+edit to the gate, or run the gate from a copy.**
 
 ## Evidence: what the pinned versions actually declare
 
@@ -209,16 +236,15 @@ Revert after all eight: `pass 20  fail 0`.
 
 ## Currently-failing command
 
-**None known.** The one command whose result I have not observed is
-`bash tests/validate.sh --static-only`; it was still running at the hour's end
-and I chose to report that rather than kill it and quote a truncated log. Both
-checks this change touches are in the static phase and both pass when run
-directly (§ *The gates*).
+**None.** Both gate spellings pass with the exit code observed directly
+(§ *The gates*), zero `FAIL` rows, and the worktree clean. Nothing is failing,
+skipped past, or unverified in this packet.
 
 ## The successor's first move
 
-1. `bash tests/validate.sh --static-only` and read the exit code. Then
-   `bash tests/validate.sh --language=node`. Nothing else is in doubt.
+1. Nothing must be re-verified. The remaining work is not this packet's:
+   extend `SDK_2_REMOVED_CALLS` on the next OTel bump, and read the other five
+   languages' snippets against their own pins (findings 1 and 3).
 2. **Extend `SDK_2_REMOVED_CALLS` the next time an OTel release is bumped.** That
    table is the only place a new removal gets covered, and a missing row is
    invisible by construction. It is the same "an entry matching nothing is a
