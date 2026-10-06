@@ -2229,6 +2229,23 @@ SNIPPETS
   # see it: "a span was exported" is blind to it by construction, because the
   # span IS exported — wrongly.
   #
+  # WHAT ELSE IS IN THAT SUITE NOW, because the label above names only the first
+  # claim and a reader should not have to open the file to find the rest. It also
+  # asserts that `hono.ts.snippet` calls NONE of the APIs SDK 2.x removed
+  # (`addSpanProcessor(`, `new BatchSpanProcessor({`, `addLogRecordProcessor(`,
+  # `register()` on a BasicTracerProvider) and that it installs the three globals
+  # and an ENABLED context manager. Those calls are what a service copies without
+  # compiling them, and the last one fails in total silence: with no context
+  # manager `context.with()` is a no-op that still runs its callback, so every
+  # span is exported with the right `service.name` as a root span and nothing
+  # downstream attributes to the request.
+  #
+  # It is a check on the snippet's SOURCE SHAPE and not on an installed SDK,
+  # because kit vendors no OTel tree and deliberately has no network: the parse
+  # check above is what a vendored tree would buy, and pins.md states that
+  # trade. What the source shape buys is that these four are SPELLINGS, and a
+  # spelling cannot come back by accident.
+  #
   # `have node` rather than a floor check, for the reason the five other
   # languages get: node's own type stripper is already the parser above, so a node
   # too old to run this suite is a node that could not have got here.
@@ -2241,7 +2258,7 @@ SNIPPETS
     node_suite_check() {
       node --test "$ROOT/templates/otel/node/traceparent.test.mjs" 2>&1
     }
-    check 'templates/otel/node  (the traceparent suite, executed — inbound trace id asserted)' \
+    check 'templates/otel/node  (the traceparent suite, executed — inbound trace id asserted, and no SDK-2-removed call in the snippet)' \
       node_suite_check
   else
     report SKIP 'templates/otel/node  (node not installed — the conformance suite ran nothing)'

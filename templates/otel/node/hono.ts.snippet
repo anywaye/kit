@@ -26,10 +26,10 @@
 //
 // ---------------------------------------------------------------------------
 // bun add @opentelemetry/api@1.9.1
+// bun add @opentelemetry/context-async-hooks@2.11.0
 // bun add @opentelemetry/core@2.11.0
 // bun add @opentelemetry/resources@2.11.0
 // bun add @opentelemetry/sdk-trace-base@2.11.0
-// bun add @opentelemetry/sdk-trace-node@2.11.0
 // bun add @opentelemetry/semantic-conventions@1.38.0
 // bun add @opentelemetry/exporter-trace-otlp-proto@0.222.0
 // bun add @opentelemetry/api-logs@0.222.0
@@ -41,6 +41,14 @@
 // newer than its sdk, compiles and then records no spans at runtime. Both
 // mistakes look identical in a trace view, which is why the versions here are
 // explicit rather than `latest`.
+//
+// `@opentelemetry/sdk-trace-node` is DELIBERATELY ABSENT. `NodeTracerProvider`
+// is still the one class that has a `register()` method, and `register()` is what
+// this snippet must not use — see `installTelemetry` for what it used to hide.
+// A service that wants the node-specific provider adds that one package back.
+//
+// `@opentelemetry/context-async-hooks` is the package that makes `context.active()`
+// mean anything, and it is here because `register()` used to be what installed it.
 //
 // READ THE API VERSION TWICE, because it is the row every reader wants to
 // "correct". The api is **1.9.1** and the sdk line is **2.11.0**, and that is
@@ -63,6 +71,7 @@
 import { context, propagation, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { TextMapGetter } from "@opentelemetry/api";
 import { logs, SeverityNumber } from "@opentelemetry/api-logs";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -211,23 +220,81 @@ export function installTelemetry(): void {
     // it is the combination that matters — always-on at the root, and every
     // downstream hop follows whatever the caller decided.
     sampler: new ParentBasedSampler({ root: new AlwaysOnSampler() }),
+    // IN THE CONSTRUCTOR, AS AN ARRAY. SDK 2.x REMOVED `addSpanProcessor()`;
+    // `TracerProvider` in `@opentelemetry/sdk-trace@2.11.0` — which is what
+    // `BasicTracerProvider` extends — has exactly three methods (`getTracer`,
+    // `forceFlush`, `shutdown`) and `addSpanProcessor` is not one of them. It
+    // was a TypeError against every version `pins.md` pins.
+    //
+    // `BatchSpanProcessor`, not `SimpleSpanProcessor`: one export per span makes
+    // the collector the bottleneck and drops spans on a slow network.
+    //
+    // THE EXPORTER IS THE FIRST POSITIONAL ARGUMENT, not an `exporter:` property.
+    // That is not a style choice, and it is the opposite of the logs processor
+    // below, which DOES take an options object: the two packages changed shape in
+    // different releases. `BatchSpanProcessor`'s constructor is
+    // `constructor(exporter, config)` and its body is `super({ exporter, ...config })`,
+    // so passing `{ exporter }` compiles nowhere and, read as JavaScript, builds a
+    // processor whose `_exporter` is an OBJECT and fails on its first export
+    // rather than at construction.
+    spanProcessors: [
+      new BatchSpanProcessor(new OTLPTraceExporter({ url: `${target}/v1/traces` })),
+    ],
   });
 
-  // BatchSpanProcessor, not SimpleSpanProcessor: one export per span makes the
-  // collector the bottleneck and drops spans on a slow network.
-  provider.addSpanProcessor(
-    new BatchSpanProcessor({ exporter: new OTLPTraceExporter({ url: `${target}/v1/traces` }) }),
-  );
+  // THE GLOBALS, SET EXPLICITLY, INSTEAD OF `provider.register({ propagator })`.
+  //
+  // `register()` was on `BasicTracerProvider` in SDK 1.x and is now on
+  // `NodeTracerProvider` only: SDK 2.x removed it from the base provider, and
+  // `NodeTracerProvider extends BasicTracerProvider` while REDECLARING it —
+  // `register(config?: SDKRegistrationConfig): void;` in
+  // `sdk-trace-node@2.11.0 build/src/NodeTracerProvider.d.ts`. So the method
+  // MOVED rather than disappeared, and it is still in the ecosystem: the reason
+  // the call cannot be made HERE is the snippet's own `provider`, typed
+  // `BasicTracerProvider`, which is the base class it was removed from. A TypeError
+  // at the call, not an API that was never there.
+  //
+  // THE PROPAGATOR IS NAMED rather than left to the default. The default IS W3C
+  // today, but several instrumentations call `register()` themselves and a
+  // service that depends on a default it never wrote down breaks silently when
+  // one of them changes it.
+  trace.setGlobalTracerProvider(provider);
+  propagation.setGlobalPropagator(new W3CTraceContextPropagator());
 
-  // Named explicitly. The default propagator IS W3C today, but several
-  // instrumentations call register() themselves and a service that depends on
-  // a default it never wrote down breaks silently when one of them changes it.
-  provider.register({ propagator: new W3CTraceContextPropagator() });
+  // THE CONTEXT MANAGER, and this is the line that makes `context.active()` mean
+  // anything. `register()` used to install one as a side effect, so removing the
+  // call without adding this is the expensive half of this change: without it
+  // `context.active()` is `ROOT_CONTEXT` for the life of the process,
+  // `context.with()` is a no-op that still runs its callback, and every span
+  // started under it is a ROOT span — a fresh trace id and no parent. Every span
+  // is still exported, with the right `service.name`, so a trace view shows a
+  // healthy pile of single-span traces across services that were called
+  // synchronously from one another and nothing looks broken.
+  //
+  // Installed ONLY on the enabled path. On the disabled path there is no provider
+  // and no span to carry, so the no-op boot stays free: this is `node:async_hooks`
+  // behind `AsyncLocalStorage`, and a "disabled" path that opens an async-context
+  // store on boot is not the no-op this function promises above.
+  //
+  // `.enable()` is called and its RESULT is installed. `AsyncLocalStorageContextManager`
+  // is a two-call API and passing the un-enabled instance installs a manager whose
+  // `with` never establishes a store — the same silent no-op, one line down.
+  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
 
-  loggerProvider = new LoggerProvider({ resource: buildResource() });
-  loggerProvider.addLogRecordProcessor(
-    new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: `${endpoint()}/v1/logs` }) }),
-  );
+  loggerProvider = new LoggerProvider({
+    resource: buildResource(),
+    // ALSO IN THE CONSTRUCTOR. `LoggerProvider` in
+    // `@opentelemetry/sdk-logs@0.222.0` has no `addLogRecordProcessor()`; the
+    // option is named `processors` and is an array, which is a third spelling of
+    // the same idea — `spanProcessors` on the traces side, `processors` here.
+    //
+    // `BatchLogRecordProcessor` DOES take an options object with an `exporter`
+    // property at this version, which is why this line and the `BatchSpanProcessor`
+    // above do not look alike. They are not meant to; see the constructor.
+    processors: [
+      new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: `${target}/v1/logs` }) }),
+    ],
+  });
   logs.setGlobalLoggerProvider(loggerProvider);
 }
 
