@@ -2,6 +2,88 @@
 
 ### Fixed
 
+- **`tests/onecluster_test.sh`: the packet's own question, asked of `bin/dev`
+  rather than of a compose file.** `tests/isolation_test.sh` already proves
+  database-per-service isolation on a two-tenant cluster, and it proves it well —
+  but it brings the stack up with its own `docker compose --project-name … up
+  -d --wait postgres` call, which is why it can move one port and start one
+  container. So the property was proven and **the developer's path to it was
+  not**: every step between a person and that cluster lives inside `bin/dev` — the
+  ref validation, the `.env` creation, the compose argument assembly, the
+  readiness wait — and no tier in `validate.sh` invoked `bin/dev`. A `bin/dev`
+  that resolved the wrong project directory or waited on the wrong health signal
+  would have left both cluster tiers green. This tier runs `bin/dev up` against a
+  service fixture and asserts on the world afterwards: exactly one postgres
+  container in the run's compose project, two databases with a non-superuser
+  owner role each, two non-owner `LOGIN` roles with the membership running
+  owner→app in one direction only, **both services answering a real query as
+  their own role** (write, read back, pgvector) in their own database, and —
+  the negative control on that last claim — neither reaching the other's database,
+  refused at the door by `permission denied for database`. 7s, one container, two
+  databases. Registered in the observability phase beside its two siblings and
+  not inside `RUN_STATIC`, because a security property nothing executes is worth
+  nothing.
+
+- **THE PORT BLOCK IS NOT COLLISION-FREE FOR A SECOND CHECKOUT, and the compose
+  file says it is.** `templates/compose/docker-compose.yml`'s port block states
+  that the 15000-15999 range "makes two checkouts on one laptop a non-event". It
+  is, for **postgres** — whose default is the port most likely to be taken and
+  therefore the one you move. The other published defaults sit *inside the same
+  range*: nats 15600/15700, redis 15800, grafana 15000, tempo 15900, loki 15901,
+  clickstack 15910. `bin/dev up` brings up postgres, nats, redis and the
+  collector, so a second checkout beside a running one collides on the first of
+  those it reaches. Measured, on this machine, against a developer's own running
+  `cafaye` stack: moving only `KIT_POSTGRES_PORT`, as `isolation_test.sh` does,
+  fails with `Bind for 0.0.0.0:15800 failed: port is already allocated` — on
+  redis, the third container, **after** postgres had already been allocated.
+  `tests/onecluster_test.sh` moves all five ports of the cheap stack from one
+  free 10-port block as a result. **The defaults are not changed here**: that is a
+  different packet, it touches every adopting service's `.env`, and the brief for
+  this one holds the compose template's contract load-bearing. Reported with the
+  measurement instead, because a documented claim that is false for four of six
+  services is a thing a reader believes.
+
+- **`tests/failfast_test.sh`, a new suite that EXECUTES the fail-fast path rather
+  than grepping for it.** Seven claims: the refusal is nonzero, arrives under a
+  **measured** 10s budget, names the variable, prints the line to set it, creates
+  no container (read back by compose project label, because a developer's own
+  stack is running on the machine the suite shares), never reaches compose, and —
+  **the control** — a set variable does reach compose. Two further claims cover
+  set-and-empty being equivalent to unset, and the required set being *derived*:
+  a service's own bare `${VAR}` in its own `docker-compose.yml` is caught, and one
+  carrying a `:-` default is not. Measured able to go red: removing the single
+  call to `preflight_required` from `up()` — one line, restored with
+  `git checkout` — produces **5 failed assertions**, and two of them were wrong
+  in a way worth recording. `compose_progress` anchored at `^` while compose
+  indents its output, so a control run that had demonstrably created three
+  containers was reported as never reaching compose; and the teardown named
+  `postgres-1`, `postgres-data` and `platform`, leaving three containers and two
+  volumes behind on the machine. Both are fixed — leading whitespace allowed, and
+  cleanup sweeps by project label — and both are the same shape as the defect
+  this suite exists for: an assertion that cannot see the evidence in front of it,
+  and a teardown that quietly stops covering the stack. Note which assertions
+  stayed green under that mutation: *"an uninterpolatable stack is refused"* and
+  *"refused in 3s"* both passed with the preflight gone, because the stack failed
+  anyway, later. A non-zero exit is not evidence of a *fast* refusal.
+
+- **`bin/dev` no longer spends its whole readiness deadline noticing one missing
+  `.env` line.** Docker Compose does not refuse a bare `${VAR}` — it substitutes
+  the empty string and logs one warning — so a service that never declared itself
+  in `KIT_POSTGRES_DATABASES` came up with a postgres container whose init script
+  refused at its `:?` guard, exited 1, and was only reported when
+  `up -d --wait` ran out its 180s budget. Five attempts is the 900 seconds the
+  packet names; the variable cost was never the check. `preflight_required` in
+  `templates/bin/dev.sh` now derives the required set from the compose files
+  themselves — every `${NAME}` with no `:-`/`-`/`:?`/`?` operator, in kit's base
+  **and** the service's own override — and refuses before the first
+  `docker compose` call, naming the variable and printing the line to add. The
+  set is derived rather than restated on purpose: a list kept in the script would
+  be a second copy of a fact the compose file owns, and would go stale the way a
+  duplicated property does. **Empty counts as missing**, because
+  `.env.example` ships `KIT_POSTGRES_DATABASES=` empty and `ensure_env` copies it
+  to a fresh clone — so the most likely state of a new checkout is the variable
+  present and blank, which compose also substitutes away.
+
 - **Two sentences of the SDK-2.x prose contradicted the evidence written to
   support them.** `hono.ts.snippet`'s comment claimed SDK 2.x removed
   `register()` from the base provider and that `NodeTracerProvider extends
