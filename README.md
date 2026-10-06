@@ -476,6 +476,63 @@ One thing about the `.env` line: `docker-entrypoint-initdb.d` runs **once per
 volume**, so after adding your name you need `bin/dev down -v && bin/dev up`.
 An existing volume keeps the list it was provisioned with.
 
+**One cluster for every service, and the list is the whole declaration.** That
+line above is not a per-service setting — it is the fleet's data topology in one
+place. A single `postgres` container serves every service that names itself in
+it; each name gets its own database and its own role pair, and the database is
+the boundary between them. Nothing else is needed: no container, no port, no
+volume per service. **Proven by running it**, not by reading the template:
+`tests/onecluster_test.sh` brings up `alpha,beta` through `bin/dev` and asserts
+**one** postgres container, two databases, two owner roles and two non-owner
+login roles, both services answering a real query as their own role in their own
+database, and neither reaching the other's.
+
+And if you forget the line, `bin/dev` says so **before it starts anything**:
+
+```
+$ bin/dev up
+bin/dev: 1 required by the compose file is not set:
+  KIT_POSTGRES_DATABASES
+
+Set it in .env, which is the only file a developer edits:
+
+  KIT_POSTGRES_DATABASES=<value>
+```
+
+Docker Compose does not do this itself: it substitutes an **empty string** for a
+bare `${VAR}` rather than refusing it, so the postgres container used to come up,
+the init script refuse at its guard, the container exit — and the only report
+arrive when `up --wait` had already run out its 180-second budget. The check is
+**derived from the compose files**, so a service that introduces a required
+variable in its own `docker-compose.yml` gets the same refusal by name.
+
+### Working across two services on one laptop
+
+Two checkouts, one cluster — which is the case the topology is for. Declare both
+services in **each** service's `.env` (the cluster is declared by whichever
+stack brings it up, and both stacks share the machine's ports):
+
+```sh
+# .env, in both checkouts
+KIT_POSTGRES_DATABASES=alpha,beta
+```
+
+**Move the ports, and move all five.** The port block is collision-free across
+*databases* but not across *checkouts*: `bin/dev up` publishes five ports
+(postgres, nats client, nats monitor, redis, grafana) and each has a fixed default
+inside kit's 15000-15999 range. A second checkout beside a running one collides
+on the first it reaches — measured, with only postgres moved, on redis:
+`Bind for 0.0.0.0:15800 failed: port is already allocated`. Give each checkout
+its own block, in `.env`, for all five:
+
+```sh
+KIT_POSTGRES_PORT=15500      KIT_NATS_CLIENT_PORT=15600
+KIT_NATS_MONITOR_PORT=15700  KIT_REDIS_PORT=15800      KIT_GRAFANA_PORT=15000
+```
+
+…offset by a hundred per checkout. Never in a compose override — a `ports:` entry
+in a second file **appends** rather than replacing, which is the trap above.
+
 It is a **stack, fetched from a pinned ref**, not a template you copy. Every
 published port is `${KIT_*:default}` inside kit's claimed block, every image is
 pinned to an exact tag, and every service has a healthcheck so `up --wait` can
