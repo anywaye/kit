@@ -4345,6 +4345,30 @@ section 'tenancy: how one shared cluster is split into per-service databases'
 check 'tests/multi_tenant_split_test.sh  (a second tenant is split, not fused; identifiers hold in every locale)' \
   bash "$ROOT/tests/multi_tenant_split_test.sh"
 
+# THE FAIL-FAST PATH, EXECUTED. The claim is about a developer's wall clock and
+# about what is running on their machine afterwards, so it is measured with
+# `date +%s` against a real `bin/dev up` and the container list is read by compose
+# project label.
+#
+# Deliberately NOT inside the `RUN_STATIC` guard, and not a `check` on a grep:
+# `grep -c preflight_required templates/bin/dev.sh` is green on a function that is
+# never CALLED, or called after the compose call, or called with an empty file
+# list — and this file's whole subject is a defect that existed for exactly that
+# long without anyone noticing, because the check was never there. It needs a
+# docker daemon for two of its claims and DEGRADES LOUDLY without one: "no
+# container was created" is reported as unexercised rather than passed, because a
+# silent skip of this particular claim is the defect it exists to catch.
+#
+# Gated on `have docker` rather than run unconditionally, so a machine with no
+# daemon gets one reported SKIP naming the flag instead of a wall of failures that
+# all say the same missing thing.
+if have docker && docker info >/dev/null 2>&1; then
+  check 'tests/failfast_test.sh  (a missing required variable is refused in seconds, by name, with nothing started)' \
+    bash "$ROOT/tests/failfast_test.sh"
+else
+  report SKIP 'tests/failfast_test.sh  (NOT RUN — no docker daemon: "no container was created" and the control are UNEXERCISED)'
+fi
+
 # ===========================================================================
 # phase: lint — run the configs, do not parse them
 # ===========================================================================

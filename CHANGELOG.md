@@ -2,6 +2,29 @@
 
 ### Fixed
 
+- **`tests/failfast_test.sh`, a new suite that EXECUTES the fail-fast path rather
+  than grepping for it.** Seven claims: the refusal is nonzero, arrives under a
+  **measured** 10s budget, names the variable, prints the line to set it, creates
+  no container (read back by compose project label, because a developer's own
+  stack is running on the machine the suite shares), never reaches compose, and —
+  **the control** — a set variable does reach compose. Two further claims cover
+  set-and-empty being equivalent to unset, and the required set being *derived*:
+  a service's own bare `${VAR}` in its own `docker-compose.yml` is caught, and one
+  carrying a `:-` default is not. Measured able to go red: removing the single
+  call to `preflight_required` from `up()` — one line, restored with
+  `git checkout` — produces **5 failed assertions**, and two of them were wrong
+  in a way worth recording. `compose_progress` anchored at `^` while compose
+  indents its output, so a control run that had demonstrably created three
+  containers was reported as never reaching compose; and the teardown named
+  `postgres-1`, `postgres-data` and `platform`, leaving three containers and two
+  volumes behind on the machine. Both are fixed — leading whitespace allowed, and
+  cleanup sweeps by project label — and both are the same shape as the defect
+  this suite exists for: an assertion that cannot see the evidence in front of it,
+  and a teardown that quietly stops covering the stack. Note which assertions
+  stayed green under that mutation: *"an uninterpolatable stack is refused"* and
+  *"refused in 3s"* both passed with the preflight gone, because the stack failed
+  anyway, later. A non-zero exit is not evidence of a *fast* refusal.
+
 - **`bin/dev` no longer spends its whole readiness deadline noticing one missing
   `.env` line.** Docker Compose does not refuse a bare `${VAR}` — it substitutes
   the empty string and logs one warning — so a service that never declared itself
