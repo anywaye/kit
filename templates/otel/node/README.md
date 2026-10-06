@@ -84,8 +84,8 @@ that the snippet calls **none** of the APIs SDK 2.x removed, and that it sets th
 tracer provider, the W3C propagator and an **enabled** context manager
 explicitly. Those are the calls a service copies without ever compiling them —
 `provider.addSpanProcessor(`, `new BatchSpanProcessor({ exporter })`,
-`loggerProvider.addLogRecordProcessor(`, `provider.register(` — and three of the
-four used to be in the snippet this repository ships.
+`loggerProvider.addLogRecordProcessor(`, `provider.register(` — and all four
+used to be in the snippet this repository ships, one per line, as live code.
 
 The check reads the snippet's **source**, with comments stripped first, so a
 `//` line explaining the removed call cannot satisfy it. That is a real limit and

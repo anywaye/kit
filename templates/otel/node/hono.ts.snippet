@@ -245,10 +245,14 @@ export function installTelemetry(): void {
   // THE GLOBALS, SET EXPLICITLY, INSTEAD OF `provider.register({ propagator })`.
   //
   // `register()` was on `BasicTracerProvider` in SDK 1.x and is now on
-  // `NodeTracerProvider` only — SDK 2.x removed it from the base provider, and
-  // `NodeTracerProvider extends BasicTracerProvider` without redeclaring it.
-  // The call was a TypeError here, and the snippet's own `provider` is typed
-  // `BasicTracerProvider`.
+  // `NodeTracerProvider` only: SDK 2.x removed it from the base provider, and
+  // `NodeTracerProvider extends BasicTracerProvider` while REDECLARING it —
+  // `register(config?: SDKRegistrationConfig): void;` in
+  // `sdk-trace-node@2.11.0 build/src/NodeTracerProvider.d.ts`. So the method
+  // MOVED rather than disappeared, and it is still in the ecosystem: the reason
+  // the call cannot be made HERE is the snippet's own `provider`, typed
+  // `BasicTracerProvider`, which is the base class it was removed from. A TypeError
+  // at the call, not an API that was never there.
   //
   // THE PROPAGATOR IS NAMED rather than left to the default. The default IS W3C
   // today, but several instrumentations call `register()` themselves and a

@@ -2,6 +2,25 @@
 
 ### Fixed
 
+- **Two sentences of the SDK-2.x prose contradicted the evidence written to
+  support them.** `hono.ts.snippet`'s comment claimed SDK 2.x removed
+  `register()` from the base provider and that `NodeTracerProvider extends
+  BasicTracerProvider` *without redeclaring it* — the second clause is false, and
+  `npm pack @opentelemetry/sdk-trace-node@2.11.0` shows why:
+  `build/src/NodeTracerProvider.d.ts` declares
+  `register(config?: SDKRegistrationConfig): void;` on the subclass. The method
+  **MOVED**, it was never removed, and a file a service copies without compiling
+  should not tell the next reader to go looking for a nonexistent API. The
+  conclusion — do not call it here, install the context manager explicitly —
+  stands: the call fails because the snippet's own `provider` is typed
+  `BasicTracerProvider`. Separately, `pins.md`'s sentence above a **four**-row
+  table said "Three calls … and two of the three fail silently"; it is **four**
+  calls and **one** of the four is silent, which is what the next paragraph
+  already said. A third instance of the same miscount was in
+  `templates/otel/node/README.md` ("three of the four used to be in the
+  snippet"): `git show d905728~1:templates/otel/node/hono.ts.snippet` shows all
+  four as live code. Prose only; no behaviour, test or decision changed.
+
 - **`templates/otel/node/hono.ts.snippet` called four APIs the versions
   `pins.md` pins have removed, and one of them failed in total silence.**
   `provider.addSpanProcessor(...)` and `loggerProvider.addLogRecordProcessor(...)`

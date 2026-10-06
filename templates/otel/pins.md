@@ -123,9 +123,10 @@ What is *not* a placeholder is the rule each version encodes:
   per span makes the collector the bottleneck and drops spans on a slow
   network.
 - **A 2.x SDK is not the 1.x SDK with a bigger number, and the removals are the
-  reason this file is a table rather than a comment.** Three calls the 1.x docs
-  teach do not exist on these versions, and **two of the three fail silently
-  rather than loudly**, which is what makes them worth a row each:
+  reason this file is a table rather than a comment.** Four calls the 1.x docs
+  teach do not work as taught on these versions, and **one of the four fails
+  silently rather than loudly**, which is what earns it a row as much as the
+  three loud ones do:
 
   | removed in 2.x | replacement | how it fails |
   |---|---|---|
