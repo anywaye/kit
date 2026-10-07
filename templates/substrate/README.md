@@ -18,6 +18,7 @@ this file only describes what is here and what is proven.
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
 | `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Loki, Grafana, Prometheus). |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
+| `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — and `redis.yaml` — one Deployment + Service + PVC. |
 
 ## What `install.sh` does
 
@@ -33,6 +34,20 @@ this file only describes what is here and what is proven.
    `letsencrypt-prod`, applied from `manifests/tls/` with the operator's
    `KIT_SUBSTRATE_ACME_EMAIL` substituted into a pipe at apply time. Never a
    literal in the repo, never written to disk, never printed.
+8. **The Postgres Cluster** — one CNPG `Cluster` (`postgres` in the `data`
+   namespace) applied from `manifests/data/postgres-cluster.yaml`, plus the
+   eight `postgres-role-*` password secrets it names. Requires
+   `KIT_SUBSTRATE_DATABASES` (no default; must equal the manifest's service
+   set) and refuses empty in DRY_RUN, naming the fix.
+9. **Redis and the services' secrets** — one Deployment + Service + PVC in
+   `data`, applied from `manifests/data/redis.yaml`, with the generated
+   `redis-password` secret; then `identity-secrets`, `gateway-secrets`,
+   `courier-secrets`, `parlor-secrets`, one per service namespace, each
+   exactly the keys its chart reads (see [The services' secrets](#the-services-secrets)
+   below). Generated values are once-only with read-back; externally-sourced
+   values are shape-validated and never echoed. Two guarded halves in one
+   step, so a half-finished step 9 resumes the secrets without touching
+   Redis.
 
 Every version is pinned exactly. The pins were verified against the GitHub
 releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
@@ -126,8 +141,19 @@ or, from a kit checkout:
 ```sh
 export KIT_SUBSTRATE_PULL_SECRET='<base64 dockerconfigjson>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
+export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
+export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
+export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
+export KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN='<minted-by-identity-after-it-boots>'
+export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET='<provider-signing-secret>'
 bash templates/substrate/install.sh
 ```
+
+`KIT_SUBSTRATE_SMTP_ADAPTER` (default `smtp`) and `KIT_SUBSTRATE_SMTP_PORT`
+(default `587`) are validated, not required. `KIT_SUBSTRATE_MAIL_FROM` /
+`_NAME`, identity's `COURIER_TOKEN`, and the OIDC/MFA/OAuth keys are optional
+passthroughs — unset stays unwired (a reduced surface, never a placeholder).
 
 `KIT_SUBSTRATE_ACME_EMAIL` is the ACME account contact address — the one
 Let's Encrypt sends expiry notices to. It is not a secret, but the script
@@ -140,6 +166,113 @@ from the customer's side.
 ```sh
 DRY_RUN=1 bash templates/substrate/install.sh
 ```
+
+Note: step 8 validates before its dry-run early-return, so a bare
+`DRY_RUN=1` without `KIT_SUBSTRATE_DATABASES` is refused (naming the fix)
+rather than planned — the refusal is the contract, and
+`tests/substrate_test.sh` asserts it. Courier's SMTP and paired values are
+validated on the live path only: a plan does not need credentials to print.
+The full plan needs only the database list.
+
+## The data layer: Postgres and Redis
+
+`manifests/data/` holds two files, and both are applied by `install.sh`
+(steps 8–9), not by Argo: the Postgres cluster and Redis are platform state,
+not services, and the install already carries that class of component
+(cert-manager, CNPG's operator).
+
+**Postgres** is one CNPG `Cluster` (`postgres`, namespace `data`) with one
+database and two roles per launch service — the local
+`templates/compose/postgres/initdb/10-cluster.sh` contract reproduced through
+CNPG's bootstrap: per-service `CREATE DATABASE`, `REVOKE ALL … FROM PUBLIC`
+(the isolation), `GRANT CONNECT, TEMPORARY` to both roles, `CONNECTION LIMIT
+10` and the two timeouts, and the `GRANT <svc>_app TO <svc>` membership in
+its declarative `inRoles` form. `spec.imageName` is unset on purpose: CNPG's
+standard image already carries pgvector, so the substrate needs no custom
+image and no build step. Storage is explicit (`20Gi` on `local-path`, k3s's
+default) and resources are stated as a share of the 8GB box — both numbers
+are the box's, not Postgres's. Step 8 waits on the labelled pods' Ready
+condition, not on a Cluster phase string this script does not own.
+
+**What the Cluster does NOT reproduce: per-database `CREATE EXTENSION`.**
+The local script creates the extension list (compose default: `vector`)
+inside every service database as the cluster admin. CNPG's bootstrap hooks
+execute in the single initdb database — `postInitSQL` as the superuser
+(which cannot reach the other databases from there) and
+`postInitApplicationSQL` as the non-superuser app owner (which is *refused*
+an untrusted extension, failing the whole bootstrap) — so neither hook can
+create extensions per database, and the manifest carries neither. The list
+is still declared and validated (`KIT_SUBSTRATE_POSTGRES_EXTENSIONS`,
+default `vector`, step 8 refuses a non-identifier), none of the four launch
+services reads vector, and a service that needs an extension is a named
+follow-up with a box to prove it on. An earlier revision of this manifest
+shipped the `postInitApplicationSQL` hook claiming per-database creation;
+that claim was false on both counts (wrong user, wrong database) and would
+have failed the first real boot.
+
+**Redis** is one Deployment (replicas exactly 1 — a second replica with no
+sentinel is a split brain) + Service + PVC at the exact tag
+`redis:7.4.1-alpine`, with `--appendonly yes` and the `redis-cli ping`
+healthcheck the local stack runs. The password is a `secretKeyRef` to the
+generated `redis-password` secret, never a literal `--requirepass`.
+
+## The services' secrets
+
+One secret per service namespace, each exactly the keys its chart reads —
+the generated charts use `envFrom: secretRef`, so every key becomes an
+environment variable and the key list IS the service's env list:
+
+| Secret | Keys | Provenance |
+|---|---|---|
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY` (+ `COURIER_TOKEN`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `MFA_ENCRYPTION_KEY`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | generated, except the parenthesised five (environment) |
+| `gateway-secrets` | `REDIS_URL` | built from step 9's password |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; the rest from the environment |
+| `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
+
+The key lists were enumerated from the code, not guesswork: identity's
+`internal/config` + README variable table (`SIGNUP_SIGNING_KEY` is base64url
+exactly 32 bytes, an unconditional startup failure when absent);
+gateway's `charts/gateway/values.yaml` (`REDIS_URL` as the one required
+`secretKeyRef`) + `internal/httpapi` (no `REDIS_URL`, no browser surface);
+courier's `chart/values.yaml` (the eight documented keys) +
+`config/runtime.exs` (the three mail-adapter settings it refuses to boot
+without); parlor's `process.env.*` reads (no secret keys — the secret exists
+because the chart's `envFrom` requires it to).
+
+**The split is by provenance.** A random, self-contained value
+(`SIGNUP_SIGNING_KEY`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`,
+`COURIER_ERROR_RELAY_TOKEN`, the Redis password, each Postgres role's
+password) is **generated on the box, never printed, generated ONCE and read
+back on a re-run** — a second `install.sh` never rotates a live system's
+keys, and no step overwrites an existing secret (rotation is replace-the-
+secret plus restart-the-pods, never re-run-the-install). Anything externally
+sourced — courier's SMTP settings and provider secrets, the
+identity-minted `COURIER_IDENTITY_TOKEN`, identity's optional
+`COURIER_TOKEN`/OIDC/MFA/OAuth surfaces — comes **from the environment,
+shape-validated and never echoed**, in the `KIT_SUBSTRATE_PULL_SECRET`
+pattern. `DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
+`postgres-rw.data` service, the service's own database, the `<svc>_app`
+login role the local compose files use (`postgres://` for identity and
+parlor, `ecto://` for courier — each service's own spelling), and the
+password read back from step 8's role secret. `gateway-tls` is NOT created
+here — cert-manager fills it from the ClusterIssuer.
+
+Two pairings to read carefully, because both look generatable and neither
+is. `COURIER_IDENTITY_TOKEN` is courier's credential *for* identity: an API
+key identity itself mints, so the box cannot invent it — the first run
+refuses naming the mint (`POST /v1/accounts/{id}/api-keys`), and the
+re-run resumes through the guards. Identity's `COURIER_TOKEN` is the
+opposite direction (identity's credential *for* courier) and stays unset
+unless the operator sets it: absent is the reduced surface the chart
+documents. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
+*shared* secret every service presents to the relay — sibling services do
+not read it yet, so wiring them to this value is a named follow-up, not a
+second copy of it.
+
+The SECRET RECORD comment block on `install_secrets` is the drift tripwire:
+`tests/substrate_test.sh` parses it and fails if any recorded name is not
+created or any recorded key is not set, with a key-removed fixture that must
+go red.
 
 ## The install host: `kit.cafaye.com`
 
@@ -181,7 +314,23 @@ operator action, and the URL works only when observed.
 **Proven, on any machine, by `tests/substrate_test.sh`:**
 
 - `install.sh` parses (`bash -n`) and is shellcheck-clean.
-- `DRY_RUN=1` runs to completion, printing the seven steps in order.
+- `DRY_RUN=1` runs to completion with the database list set,
+  printing the nine steps in order, each with an action.
+- `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
+  manifest is refused in DRY_RUN, naming the fix — with the matching list
+  accepted as the control.
+- The Cluster manifest names one cluster (`data/postgres`) and carries the
+  per-role provisioning (`REVOKE … FROM PUBLIC`, the `inRoles` membership,
+  the connection limit, the timeouts, no `imageName`, and pointedly no
+  `postInitApplicationSQL` — a fixture with the `REVOKE` removed goes
+  **red** under the same check, as does a manifest re-adding the hook).
+- The extension list defaults to `vector` and is validated as identifiers in
+  `install.sh` — a fixture with no default goes **red**.
+- The Redis manifest parses with the exact tag `redis:7.4.1-alpine` and the
+  password by `secretKeyRef` only — a floating-tag fixture goes **red**.
+- The recorded secret name-and-key list matches what `install.sh` creates —
+  a fixture with a key removed goes **red** either way (and an unrecorded
+  key the other way) — and no operator value is ever echoed.
 - Every pin is exact — a fixture with a `latest` or floating pin goes **red**
   under the same check that the real tree passes.
 - Every `Application` manifest parses and carries the fields Argo needs
@@ -213,6 +362,13 @@ operator action, and the URL works only when observed.
   the charts themselves are one packet per service.
 - That the observability stack (Alloy, Loki, Grafana, Prometheus) actually
   deploys and retains.
+- That the Postgres Cluster ever reaches Ready, that Redis answers, or that
+  any service secret decrypts into a working boot. What is proven is **a
+  checked script and a set of manifests — not a running cluster**: the install
+  needs root, a Linux kernel and a reachable registry, none of which this
+  machine (or any development machine) is. The `DATABASE_URL`↔Cluster
+  agreement, the once-only generation and the refusal paths are all asserted
+  without a box; the live boot is a customer-box claim.
 - That `https://kit.cafaye.com` answers. The Worker, its config and the
   byte-equality are proven; binding the host to the Worker is a Cloudflare
   route/custom-domain action outside every repository, so the URL works
@@ -227,7 +383,7 @@ this paragraph is unexercised.
 
 The first real run, on a Linux box with 8GB or more:
 
-1. `curl https://kit.cafaye.com | sh` completes all seven steps.
+1. `curl https://kit.cafaye.com | sh` completes all nine steps.
 2. `kubectl get nodes` shows the node Ready.
 3. `kubectl get applications -n argocd` shows all eight Applications synced.
 4. The observability stack is reachable and retaining.

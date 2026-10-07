@@ -2,6 +2,48 @@
 
 ### Added
 
+- **The substrate's data layer and the services' secrets: `install.sh`
+  steps 8–9.** `DEPLOYMENT.md` (manager decision, 2026-10-06) commits the
+  box to a CNPG Postgres `Cluster`, single-instance Redis, and
+  box-created service secrets — and `install.sh` installed the CNPG
+  *operator* with nothing that used it, no Redis, and no service secret.
+  This packet closes that: step 8 applies `manifests/data/
+  postgres-cluster.yaml` (one Cluster, `postgres` in namespace `data`,
+  reproducing `templates/compose/postgres/initdb/10-cluster.sh` through
+  bootstrap `postInitSQL` + `spec.managed.roles`) and creates the eight
+  `postgres-role-*` password secrets it names; step 9 applies
+  `manifests/data/redis.yaml` (one Deployment + Service + PVC at the exact
+  tag `redis:7.4.1-alpine`, password by `secretKeyRef`) with the generated
+  `redis-password` secret, then creates `identity-secrets`,
+  `gateway-secrets`, `courier-secrets` and `parlor-secrets` with exactly
+  the keys each chart reads (the split is by provenance: generated values
+  are once-only with read-back, externally-sourced values are
+  shape-validated and never echoed, and `DATABASE_URL` agrees with the
+  Cluster by construction — the `<svc>_app` role, the service's own
+  database, `postgres-rw.data` as host). `spec.imageName` is unset on
+  purpose — CNPG's standard image already carries pgvector, so there is no
+  custom image and no build step. `tests/substrate_test.sh` grows the
+  nine-step plan, the `KIT_SUBSTRATE_DATABASES` refusal (unset, empty, and
+  manifest-mismatching, each naming the fix), the Cluster's per-role
+  provisioning with REVOKE-removed and hook-re-added fixtures, the
+  extension-list default with its own control, Redis's exact tag with a
+  `latest` fixture, and the SECRET RECORD tripwire checked both ways
+  (key-removed and unrecorded-key fixtures), each red-first with its
+  control.
+  **What remains unproven, and is stated rather than hidden:** the live
+  boot — and two things sharper than that. Per-database `CREATE EXTENSION`
+  is the one line of the local contract the Cluster does NOT reproduce: no
+  CNPG bootstrap hook can run DDL inside each service database (the app-hook
+  runs as a non-superuser and is refused; the superuser hook cannot reach
+  across databases), so the manifest carries neither and the extension list
+  is declared-and-validated only; none of the launch services reads vector.
+  And the CNPG `spec.managed.roles` shape (plus the pod-label wait) is read
+  from documentation knowledge, not verified against the CRD source or a
+  live apply — the first real boot is what proves it. This machine has no
+  root, no Linux kernel and no cluster, so nothing here was installed;
+  whether the Cluster reaches Ready and the secrets boot the services is a
+  customer-box claim.
+
 - **The install host: `kit-install.mjs` serves `install.sh` at
   `kit.cafaye.com`'s root.** `DEPLOYMENT.md` decides the product's front
   door — `curl https://kit.cafaye.com | sh` — and the script it serves has
