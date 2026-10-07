@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts
+    repoURL: https://grafana.github.io/helm-charts
     chart: grafana
-    targetRevision: 0.1.0
+    targetRevision: 10.5.15
   destination:
     server: https://kubernetes.default.svc
     namespace: observability

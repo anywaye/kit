@@ -94,8 +94,12 @@ annotation pointing at nothing, and every chart's TLS breaks at once.
 
 The deploy loop this substrate serves is **pull-based**: a commit changes a
 chart, Argo makes the box agree. The consume end is the eight `Application`
-manifests in `manifests/applications/`, each pulling
-`oci://ghcr.io/cafaye/charts` at `targetRevision: 0.1.0`. **The publish end
+manifests in `manifests/applications/`, in two halves with different owners:
+the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
+`oci://ghcr.io/cafaye/charts` at `targetRevision: 0.1.0`, and the four
+observability charts (`alloy`, `grafana`, `loki`, `prometheus`) pull their
+official upstream chart repositories at pinned chart versions (see [The
+observability half of the loop](#the-observability-half-of-the-loop)). **The publish end
 is kit's `.github/workflows/chart.reusable.yml`**, and a service adopts it by
 copying `templates/publish/publish.yml` to `.github/workflows/publish.yml` —
 one caller that publishes both the image and the chart.
@@ -125,10 +129,38 @@ Three facts about that loop, each load-bearing:
   own `GITHUB_TOKEN` — no PAT, nothing to rotate — and the caller grants
   `packages: write`.
 
-**What is still true:** the charts themselves do not exist yet. Each service
+**What is still true:** the service charts themselves do not exist yet. Each service
 runs `caf gen chart` and commits `chart/`; until then `targetRevision: 0.1.0`
 is a promise, not a published artifact, and the publish workflow has nothing
 to push. That is one packet per service, not this one.
+
+## The observability half of the loop
+
+The four observability `Application`s (`alloy`, `grafana`, `loki`,
+`prometheus`) once named the same private OCI registry as the service charts
+— for charts nothing in the fleet publishes, so four Applications could never
+sync. Per `DEPLOYMENT.md` ("Who owns the `Application`", cited rather than
+restated so this file cannot drift from it), the private-OCI shape exists for
+**our closed-source service charts** — a customer must be able to pull them
+without read access to our repositories. It does not cover third-party
+components we do not author and do not modify. The observability four
+therefore point at their official upstream chart repositories with a pinned
+chart version as `targetRevision` — the standard Argo shape — **shipped
+unmodified**:
+
+| Application | `repoURL` | `chart` | `targetRevision` |
+|---|---|---|---|
+| `alloy` | `https://grafana.github.io/helm-charts` | `alloy` | `1.13.0` |
+| `grafana` | `https://grafana.github.io/helm-charts` | `grafana` | `10.5.15` |
+| `loki` | `https://grafana.github.io/helm-charts` | `loki` | `7.3.0` |
+| `prometheus` | `https://prometheus-community.github.io/helm-charts` | `prometheus` | `29.36.0` |
+
+Each pin was verified to exist in its upstream repository's `index.yaml`
+before it was written. No vendoring, no publish pipeline for charts we do not
+own, and the pin keeps "the stack you get on Tuesday is the stack you
+reviewed on Monday". Kit's gate states the whole rule over all eight
+manifests — every `Application` resolves to either a fleet publication or its
+pinned upstream, and anything else fails closed.
 
 ## How to run it
 
@@ -354,12 +386,15 @@ operator action, and the URL works only when observed.
 - That Let's Encrypt actually issues — the issuers are applied and the
   challenges are solved on a customer box with real DNS. Whether the first
   certificate lands is a box-level claim, not a property of these manifests.
-- That the Applications actually sync — **the charts they point at do not
-  exist yet.** `caf gen chart` (m72) generates them; until then the
+- That the Applications actually sync — **the service charts they point at do not
+  exist yet.** `caf gen chart` (m72) generates them; until then the service
   `targetRevision: 0.1.0` is a promise, not a published artifact. The
   publish path that would push them now exists (kit's `chart.reusable.yml`,
   see [The publication half of the loop](#the-publication-half-of-the-loop));
-  the charts themselves are one packet per service.
+  the charts themselves are one packet per service. The observability four,
+  by contrast, resolve to pinned upstream charts (see [The observability half
+  of the loop](#the-observability-half-of-the-loop)) — what remains unproven
+  for them is the live sync and retention on a customer box, below.
 - That the observability stack (Alloy, Loki, Grafana, Prometheus) actually
   deploys and retains.
 - That the Postgres Cluster ever reaches Ready, that Redis answers, or that

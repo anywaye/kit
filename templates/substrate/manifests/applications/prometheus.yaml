@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts
+    repoURL: https://prometheus-community.github.io/helm-charts
     chart: prometheus
-    targetRevision: 0.1.0
+    targetRevision: 29.36.0
   destination:
     server: https://kubernetes.default.svc
     namespace: observability

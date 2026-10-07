@@ -2,6 +2,30 @@
 
 ### Added
 
+- **The observability `Application`s point at their official upstream chart
+  repositories with pinned chart versions.** All eight `Application`s in
+  `templates/substrate/manifests/applications/` named
+  `oci://ghcr.io/cafaye/charts`, but nothing in the fleet publishes the
+  observability four — kit holds no `Chart.yaml` for `alloy`, `grafana`,
+  `loki` or `prometheus` and no service publish workflow pushes them — so
+  four Applications could never sync. Per `DEPLOYMENT.md` ("Who owns the
+  `Application`"), the private-OCI shape governs the closed-source service
+  charts only; third-party components we do not author and do not modify
+  point upstream, shipped unmodified: `alloy 1.13.0`, `grafana 10.5.15`,
+  `loki 7.3.0` from `https://grafana.github.io/helm-charts`, and
+  `prometheus 29.36.0` from
+  `https://prometheus-community.github.io/helm-charts`, each pin verified to
+  exist in its upstream `index.yaml` before it was written. The four service
+  `Application`s are untouched. Kit's gate states the rule over all eight
+  manifests (`check_obs_chart_sources`: every `Application` resolves to
+  either a fleet publication or its pinned upstream, anything else fails
+  closed) with a reverted-repoURL control and a drifted-chart-name control
+  that must go red; `check_chart_publish`'s registry assertion is narrowed
+  to the four service `Application`s in the same commit, since the
+  observability half is no longer its seam to govern. Committed red-first:
+  the new check failed on all four files before the repoint, and goes green
+  after it.
+
 - **The substrate's data layer and the services' secrets: `install.sh`
   steps 8–9.** `DEPLOYMENT.md` (manager decision, 2026-10-06) commits the
   box to a CNPG Postgres `Cluster`, single-instance Redis, and
