@@ -1,0 +1,39 @@
+{
+  // kit-install — the install host at kit.cafaye.com.
+  //
+  // Serves templates/substrate/install.sh at GET / and GET /install.sh: the
+  // exact bytes, content-type text/x-shellscript, no transformation. The
+  // decisions are in DEPLOYMENT.md; the operator action (binding the host)
+  // is named in templates/substrate/README.md and is NOT a file here.
+  //
+  // `main` is this directory's kit-install.mjs — plain ESM, so the gate
+  // imports the handler as a plain module with no wrangler, no network and
+  // no account (check_install_host in tests/validate.sh).
+  //
+  // `compatibility_date` pins the runtime the Worker is written against, so
+  // a Cloudflare-side change cannot silently alter what this build does. It
+  // is the fleet's number, unchanged from site's wrangler.jsonc: the BFF's
+  // behaviour was measured on this runtime and kit's Worker is written
+  // against the same one.
+  //
+  // `rules` is the mechanism that keeps the served bytes equal to the file:
+  // the Text-module rule bundles install.sh's bytes into the Worker at
+  // deploy time, so `import installSh from "./install.sh"` in kit-install.mjs
+  // resolves to the file itself. There is no hand-copied second copy of the
+  // script anywhere in the tree — a copy is a second author, and the gate's
+  // hash comparison is what proves the two never drift.
+  //
+  // NO `routes` BLOCK, matching the fleet: measured, site/wrangler.jsonc
+  // carries none, so the cafaye.com binding is done outside the repositories
+  // and kit.cafaye.com follows the same shape. Binding the host is a
+  // Cloudflare route/custom-domain action — an operator step, not a value
+  // this repository can verify.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kit-install",
+  "compatibility_date": "2025-09-02",
+  "main": "kit-install.mjs",
+  "observability": {
+    "enabled": true
+  },
+  "rules": [{ "type": "Text", "globs": ["install.sh"] }]
+}

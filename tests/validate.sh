@@ -1629,7 +1629,10 @@ PY
     "$ROOT"/templates/database/contract.json \
     "$ROOT"/templates/database/tenancy/* \
     "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh \
+    "$ROOT"/tests/*.mjs \
     "$ROOT"/templates/substrate/install.sh \
+    "$ROOT"/templates/substrate/kit-install.mjs \
+    "$ROOT"/templates/substrate/wrangler.jsonc \
     "$ROOT"/templates/substrate/manifests/applications/* \
     "$ROOT"/templates/substrate/manifests/tls/* \
     "$ROOT"/templates/publish/*; do
@@ -1646,6 +1649,44 @@ PY
         # topology's dependency.
         check_par "$path  (json.loads)" "$PY" -c \
           'import json,sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$f"
+        ;;
+      *.jsonc)
+        # wrangler's config is JSONC: comments are legal and this fleet's
+        # configs carry them. A STRING-AWARE stripper, not a `//` grep — the
+        # fleet's own wrangler.jsonc files put `https://` inside strings, and
+        # a naive strip would eat the scheme and call the result a parse error
+        # (or worse, parse a different document). The same stripper
+        # check_install_host uses, so the loop and the check cannot disagree
+        # about what the config says.
+        check_par "$path  (jsonc: comments stripped, then json.loads)" "$PY" -c '
+import json, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+out, i, n, in_str = [], 0, len(src), False
+while i < n:
+    c = src[i]
+    if in_str:
+        out.append(c)
+        if c == "\\" and i + 1 < n:
+            out.append(src[i + 1]); i += 2; continue
+        if c == "\"":
+            in_str = False
+        i += 1
+        continue
+    if c == "\"":
+        in_str = True; out.append(c); i += 1; continue
+    if c == "/" and src[i + 1:i + 2] == "/":
+        while i < n and src[i] != "\n":
+            i += 1
+        continue
+    if c == "/" and src[i + 1:i + 2] == "*":
+        i += 2
+        while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+            i += 1
+        i += 2
+        continue
+    out.append(c); i += 1
+json.loads("".join(out))
+' "$f"
         ;;
       # The cluster image. hadolint is its parser and runs below — reported
       # there rather than here for the same reason docker/Dockerfile.* is:
