@@ -1,0 +1,270 @@
+---
+# kit — the chart path every cafaye service repo runs.
+#
+# Consumers do not copy this file; they call it, exactly as they call
+# `.github/workflows/image.reusable.yml`. Most call it through the composed
+# `publish.reusable.yml` (see that file's header); a service that ships a chart
+# and no image calls it directly:
+#
+#   # .github/workflows/publish-chart.yml
+#   name: publish-chart
+#   on:
+#     push:
+#       branches: [master]
+#   permissions:
+#     contents: read
+#     packages: write          # REQUIRED, and the caller's to grant — see below
+#   jobs:
+#     chart:
+#       uses: cafaye/kit/.github/workflows/chart.reusable.yml@master
+#       with:
+#         push: true
+#
+# WHY THIS EXISTS, IN ONE SENTENCE. `DEPLOYMENT.md`'s deploy loop is
+# pull-based — a commit changes a chart, Argo makes the box agree — and only
+# one end of that loop existed: eight Argo CD `Application`s pull from
+# `oci://ghcr.io/cafaye/charts`, and nothing in the fleet ever ran `helm push`
+# or `helm package`, so every `Application` pointed at a registry nothing wrote
+# to. Argo synced nothing; the box never converged. This is the other half.
+#
+# THE TWO SEAMS THAT MUST NOT DRIFT, AND WHY BOTH ENDS LIVE IN KIT.
+#
+#   1. THE REGISTRY STRING. This workflow pushes to a registry; every
+#      `Application` in `templates/substrate/manifests/applications/` pulls
+#      from `oci://ghcr.io/cafaye/charts`. Both files are in kit, which is what
+#      makes this provable in this repository's own gate:
+#      `check_chart_publish` in `tests/validate.sh` compares this workflow's
+#      default `registry`
+#      input against every `Application`'s `source.repoURL` and fails on a
+#      disagreement. A registry string that drifts fails SILENTLY — Argo
+#      reports no error, it just never finds the artifact.
+#
+#   2. THE VERSION. Each `Application` pins `targetRevision: 0.1.0`, and a
+#      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
+#      Helm chart IS its `version`, so the push tag and the pull
+#      `targetRevision` must be the chart's version — not a git sha, not
+#      `latest`. A chart pushed as `0.1.1` while the `Application` says `0.1.0`
+#      is a service that never deploys. So the name and version are READ FROM
+#      `Chart.yaml` and never taken as inputs: an input is a string a service
+#      copies into its own repo, and a copied string drifts from the chart it
+#      names.
+#
+# WHY A REUSABLE WORKFLOW AND NOT EIGHT COPIES. The same argument
+# `image.reusable.yml` makes: a fix to how a chart is published has to reach
+# every service without a per-repo pull request, or it reaches none of them.
+# The per-service ADOPTION is a separate packet per repo; this file is the
+# contract.
+#
+# GITHUB PACKAGES, NOT A REGISTRY ACCOUNT. The registry is `ghcr.io` and the
+# credential is the workflow's own `GITHUB_TOKEN`. There is no PAT, no
+# `secrets:` entry, no registry password to rotate. `helm registry login`
+# needs `packages: write`, which the CALLER grants — a reusable workflow can
+# ask for a permission but cannot grant itself one, and a caller that omits it
+# gets a 401 at the push that reads like a wrong password rather than like a
+# missing grant.
+#
+# HELM IS PINNED, NOT `latest`. A floating toolchain is the thing the fleet's
+# pins exist to prevent. `v4.3.0` is installed with the upstream script's own
+# pin mechanism (`get-helm-3 --version v4.3.0`), never `@latest`.
+#
+# STRICTNESS NOTES (read before loosening anything):
+#   - `push` is an input and it DEFAULTS TO FALSE, exactly as the image
+#     workflow's does. A reusable workflow that publishes by default is one
+#     every caller publishes from by accident, including the caller that only
+#     meant to check the chart still packages. Publishing is opt-in at the
+#     call site.
+#   - The job REFUSES to publish from a `pull_request`, regardless of what a
+#     caller asks: publishing from a fork is a registry write by untrusted
+#     code, and a fork's token is read-only anyway. Refusing before the attempt
+#     beats failing after it with a 401.
+#   - The chart the repo declares is the chart that is pushed. `version` and
+#     `appVersion` are never rewritten from git, and no `latest` tag is added.
+#     The chart's identity is the repo's statement; a publish step that
+#     overrides it is a second author.
+#   - No `secrets:` are consumed beyond `GITHUB_TOKEN`, so a service adopting
+#     this needs no secret configured, and nothing here is worth rotating.
+name: chart
+
+on:
+  workflow_call:
+    inputs:
+      push:
+        description: >-
+          Publish the chart to the OCI registry. FALSE by default and it stays
+          that way: a caller that wants a chart published says so at the call
+          site, and a workflow nobody opted into cannot write to the registry.
+        required: false
+        type: boolean
+        default: false
+      registry:
+        description: >-
+          The OCI registry to push to, including the oci:// scheme. The default
+          is the exact string every Argo CD Application in
+          templates/substrate/manifests/applications/ carries as source.repoURL.
+          An input, because a self-hoster may point at their own registry — but
+          the default is the fleet's, and kit's gate proves the two agree.
+        required: false
+        type: string
+        default: 'oci://ghcr.io/cafaye/charts'
+      chart-dir:
+        description: >-
+          The directory holding Chart.yaml, relative to the repository root.
+          'chart/' is where `caf gen chart` writes; a service with a
+          differently-located chart names it.
+        required: false
+        type: string
+        default: 'chart/'
+
+permissions:
+  contents: read
+
+jobs:
+  chart:
+    name: chart (and publish, if asked)
+    runs-on: ubuntu-latest
+    # `packages: write` is DECLARED HERE AND GRANTED BY THE CALLER — see the
+    # header. In a reusable workflow this is a ceiling, not a grant: the
+    # effective permission is the caller's, intersected with this. A caller
+    # that omits it gets read-only and a 401 at the push.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # THE REFUSAL, BEFORE THE ATTEMPT — and before the install, the read and
+      # the package too: a pull_request that asked to publish has no business
+      # costing a helm download before it is told no. Fails the job when a
+      # caller asks for a publish from a pull_request. A fork's GITHUB_TOKEN is
+      # read-only and would 403 anyway; refusing before the attempt beats
+      # failing after it with a 401 that reads like a wrong password.
+      - name: refuse to publish from a pull request
+        if: inputs.push && github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          echo "chart: refusing to publish from a pull_request." >&2
+          echo "A fork's GITHUB_TOKEN is read-only, and publishing from a pull" >&2
+          echo "request is a registry write by untrusted code. Refusing before" >&2
+          echo "the attempt beats failing after it with a 401 that reads like a" >&2
+          echo "wrong password." >&2
+          exit 1
+
+      # HELM, PINNED. The upstream script's own pin mechanism; never @latest.
+      # `helm version --client` at the end prints the pin in the log, so a
+      # floating install is visible rather than assumed.
+      - name: install helm (pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version v4.3.0
+          helm version --client
+
+      # THE CHART'S IDENTITY, READ FROM THE CHART. Not inputs — see the header.
+      # Refuses loudly when either is empty: a chart with no name or version
+      # is a chart `helm package` would reject anyway, but the message here
+      # names the file and the field rather than helm's parse error.
+      - name: read the chart's name and version
+        id: chart
+        env:
+          CHART_DIR: ${{ inputs.chart-dir }}
+        run: |
+          set -euo pipefail
+          chart="$CHART_DIR/Chart.yaml"
+          if [ ! -f "$chart" ]; then
+            echo "chart: no Chart.yaml at $chart — set chart-dir to the directory that holds it" >&2
+            exit 1
+          fi
+          # `|| true` because a grep with no match exits 1 and the pipeline
+          # would take the step down under set -e before the empty check below
+          # can say what is wrong. The empty check is the real refusal.
+          name="$(grep -m1 '^name:' "$chart" | sed 's/^name:[[:space:]]*//' | tr -d "\"'" || true)"
+          version="$(grep -m1 '^version:' "$chart" | sed 's/^version:[[:space:]]*//' | tr -d "\"'" || true)"
+          if [ -z "$name" ] || [ -z "$version" ]; then
+            echo "chart: could not read name and version from $chart (name='$name', version='$version')" >&2
+            exit 1
+          fi
+          echo "name=$name" >>"$GITHUB_OUTPUT"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+      # PACKAGE, ALWAYS. `push: false` means "check the chart still packages",
+      # exactly as the image workflow's `push: false` means "check the image
+      # still builds". The package step is what makes that check real.
+      - name: package the chart
+        id: package
+        env:
+          WORK: ${{ runner.temp }}/chart-package
+          CHART_DIR: ${{ inputs.chart-dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK"
+          helm package "$CHART_DIR" --destination "$WORK"
+          shopt -s nullglob
+          packages=("$WORK"/*.tgz)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "chart: expected exactly one packaged chart in $WORK, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          echo "package=${packages[0]}" >>"$GITHUB_OUTPUT"
+
+      # LOGIN, WITH THIS WORKFLOW'S OWN TOKEN. The host is derived from the
+      # registry input so a self-hoster's registry works; the credential is
+      # always the workflow's own GITHUB_TOKEN, never a PAT.
+      - name: log in to the registry with this workflow's own token
+        if: inputs.push && github.event_name != 'pull_request'
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          host="$(printf '%s' "$REGISTRY" | sed 's|^oci://||; s|/.*$||')"
+          echo "$GITHUB_TOKEN" | helm registry login "$host" --username "$GITHUB_ACTOR" --password-stdin
+
+      # PUSH, WITH THE CHART'S OWN VERSION AS THE TAG. `helm package` names the
+      # artifact <name>-<version>.tgz and `helm push` tags it with the chart's
+      # version — the same version the Application's targetRevision names.
+      #
+      # THE REMOTE IS THE REGISTRY, NOT THE REGISTRY PLUS THE NAME, and the
+      # difference was measured rather than assumed: `helm push` APPENDS the
+      # chart's own name and version to whatever remote it is given, so
+      #   helm push probe-0.1.0.tgz oci://localhost:5555/charts
+      # reports `Pushed: localhost:5555/charts/probe:0.1.0`, while the same
+      # package pushed at `oci://localhost:5555/charts/probe` reports
+      # `Pushed: localhost:5555/charts/probe/probe:0.1.0` — a chart no
+      # `helm pull oci://…/charts/probe` will ever find. The name is read from
+      # Chart.yaml above and used in the reference below; it is deliberately
+      # not part of the push target.
+      - name: push the chart
+        if: inputs.push && github.event_name != 'pull_request'
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          NAME: ${{ steps.chart.outputs.name }}
+          VERSION: ${{ steps.chart.outputs.version }}
+          PACKAGE: ${{ steps.package.outputs.package }}
+        run: |
+          set -euo pipefail
+          helm push "$PACKAGE" "$REGISTRY"
+          echo "pushed $REGISTRY/$NAME:$VERSION"
+
+      # SAY WHAT LANDED. The full OCI reference and the tag, because a log line
+      # is the only place a person can copy it from.
+      - name: say what landed
+        if: inputs.push && github.event_name != 'pull_request'
+        env:
+          REGISTRY: ${{ inputs.registry }}
+          NAME: ${{ steps.chart.outputs.name }}
+          VERSION: ${{ steps.chart.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo '### chart published'
+            echo
+            echo "chart: \`$REGISTRY/$NAME:$VERSION\`"
+            echo
+            echo "The OCI tag is the chart's version. An Argo CD Application pulls"
+            echo "this chart with repoURL: $REGISTRY, chart: $NAME, targetRevision:"
+            echo "$VERSION — the targetRevision and this tag are the same fact"
+            echo "written twice, and a chart pushed as one version while the"
+            echo "Application names another is a service that never deploys."
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "published $REGISTRY/$NAME:$VERSION"

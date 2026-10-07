@@ -1,0 +1,124 @@
+---
+# kit — the publish path every cafaye service repo runs, both halves in one call.
+#
+# Consumers do not copy this file; they call it, exactly as they call
+# `.github/workflows/ci.reusable.yml`:
+#
+#   # .github/workflows/publish.yml
+#   name: publish
+#   on:
+#     push:
+#       branches: [master]
+#   permissions:
+#     contents: read
+#     packages: write          # REQUIRED, and the caller's to grant — see below
+#   concurrency:
+#     group: ${{ github.workflow }}-${{ github.ref }}
+#     cancel-in-progress: true
+#   jobs:
+#     publish:
+#       uses: cafaye/kit/.github/workflows/publish.reusable.yml@master
+#       with:
+#         push: true
+#
+# WHY ONE CALLER FOR TWO ARTIFACTS. A service publishes two things — the image
+# `config/deploy.yml` deploys and the chart the Argo CD `Application` pulls —
+# and two separate caller files would be two places to remember, two
+# concurrency groups to keep apart, and two `packages: write` grants to forget.
+# The composition lives here so a service's `publish.yml` is one `uses:` and the
+# decision "what does a push publish" is made once, in kit.
+#
+# A REUSABLE WORKFLOW CALLING A REUSABLE WORKFLOW. GitHub allows a
+# `workflow_call` workflow to call another, and that is what makes "one caller,
+# two artifacts" possible: each half keeps its own file, its own header and its
+# own pin, and this file only threads `push` through. The alternative — one
+# workflow with the image steps and the chart steps inlined — would be a second
+# copy of both, which is the drift kit exists to prevent.
+#
+# PERMISSIONS, AND THE CEILING THAT IS NOT A GRANT. This file declares
+# `contents: read` + `packages: write` at the top level, and each called
+# workflow declares its own job-level ceiling. A reusable workflow can request a
+# permission but cannot grant itself one, and GitHub's rule for a chain of
+# reusable workflows is that permissions can only be maintained or reduced,
+# never elevated: the effective permission at each level is the caller's grant
+# intersected with that level's declaration. This file therefore declares the
+# FULL set it needs — not a subset — so the nested image and chart jobs keep
+# `packages: write` all the way down. A caller that omits `packages: write`
+# gets read-only and a 401 at the push that reads like a wrong password rather
+# than like a missing grant — which is why the example above shows the
+# permission on the caller.
+#
+# THE TWO SEAMS, AND WHY BOTH ENDS LIVE IN KIT.
+#   1. The registry string. `chart.reusable.yml` pushes to a registry; every
+#      Argo CD Application in `templates/substrate/manifests/applications/`
+#      pulls from `oci://ghcr.io/cafaye/charts`. Both files are in kit, which is
+#      what makes this provable in this repository's own gate — the check
+#      compares the workflow's default registry against every Application's
+#      `source.repoURL` and fails on a disagreement.
+#   2. The version. Each Application pins `targetRevision: 0.1.0`, and a
+#      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
+#      Helm chart is its `version`, so the push tag and the pull
+#      `targetRevision` must be the chart's version — not a git sha, not
+#      `latest`. A chart pushed as `0.1.1` while the Application says `0.1.0`
+#      is a service that never deploys, and Argo reports no error: it just
+#      never finds the artifact.
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      push:
+        description: >-
+          Publish both artifacts. FALSE by default and it stays that way: a
+          caller that wants a publish says so at the call site, and a workflow
+          nobody opted into cannot write to the registry.
+        required: false
+        type: boolean
+        default: false
+      registry:
+        description: >-
+          The OCI registry charts are pushed to, including the oci:// scheme.
+          The default is the exact string every Argo CD Application carries as
+          source.repoURL. Images are always pushed to ghcr.io — the image
+          workflow derives the name from github.repository and takes no
+          registry input.
+        required: false
+        type: string
+        default: 'oci://ghcr.io/cafaye/charts'
+      chart-dir:
+        description: >-
+          The directory holding Chart.yaml, relative to the repository root.
+          'chart/' is where `caf gen chart` writes.
+        required: false
+        type: string
+        default: 'chart/'
+
+permissions:
+  contents: read
+  packages: write
+
+# THE CONCURRENCY GROUP, AND WHY IT BEGINS WITH `kit-`. A reusable workflow's
+# group is namespaced so it can never collide with a CALLER's: the caller
+# declares `group: ${{ github.workflow }}-${{ github.ref }}` and this file
+# declares the same string prefixed, which is the rule `ci.reusable.yml` states
+# at length — a caller and callee sharing one group is a job that is refused
+# before it starts, producing no check-run and no log line. `cancel-in-progress`
+# is on because a second push makes the first run's artifacts irrelevant: the
+# image and the chart it would publish are superseded by the newer commit.
+concurrency:
+  group: kit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: image
+    uses: ./image.reusable.yml
+    with:
+      push: ${{ inputs.push }}
+  chart:
+    name: chart
+    uses: ./chart.reusable.yml
+    with:
+      push: ${{ inputs.push }}
+      registry: ${{ inputs.registry }}
+      chart-dir: ${{ inputs.chart-dir }}
