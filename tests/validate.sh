@@ -4326,12 +4326,19 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #
   # WHY THIS CHECK EXISTS. `DEPLOYMENT.md`'s deploy loop is pull-based: a
   # commit changes a chart, Argo makes the box agree. The consume end is the
-  # eight Argo CD `Application`s in `templates/substrate/manifests/
-  # applications/`, every one pulling `oci://ghcr.io/cafaye/charts`; the
-  # publish end is `.github/workflows/chart.reusable.yml`. The loop fails
+  # SERVICE half of the Argo CD `Application`s in `templates/substrate/
+  # manifests/applications/` — `identity`, `gateway`, `courier`, `parlor`,
+  # the four charts the fleet publishes; the publish end is
+  # `.github/workflows/chart.reusable.yml`. The loop fails
   # SILENTLY when the two disagree — Argo reports no error, it just never
   # finds the artifact — and the fact that BOTH ends of that seam live in
   # this repository is what makes it provable here rather than documented.
+  # The OBSERVABILITY half (`alloy`, `grafana`, `loki`, `prometheus`) is
+  # NOT this seam: those are upstream charts nobody in the fleet publishes,
+  # so they point at their official chart repositories with pinned versions,
+  # and `check_obs_chart_sources` below governs them. This check covers the
+  # service Applications only; an observability `repoURL` drifting here is
+  # that check's failure, not this one's.
   #
   # WHAT IT ASSERTS, each with the reason:
   #   1. `chart.reusable.yml` exists, parses, and is a `workflow_call`. A
@@ -4340,11 +4347,13 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      does. A reusable workflow that publishes by default is one every
   #      caller publishes from by accident, including the caller that only
   #      meant to check the chart still packages.
-  #   3. Its default `registry` equals the `source.repoURL` of EVERY
-  #      Application manifest. The seam itself: the string the push writes
+  #   3. Its default `registry` equals the `source.repoURL` of every
+  #      SERVICE Application manifest (`identity`, `gateway`, `courier`,
+  #      `parlor`). The seam itself: the string the push writes
   #      to and the string the pull reads from are one fact, and a chart
   #      pushed to a registry no Application names is a service that never
-  #      deploys.
+  #      deploys. Observability Applications are SKIPPED here — they resolve
+  #      to upstream repositories by design (see `check_obs_chart_sources`).
   #   4. The chart name and version are NOT inputs. An input is a string a
   #      service copies into its own repo, and a copied string drifts from
   #      the chart it names; the OCI tag of a Helm chart IS its `version`,
@@ -4403,12 +4412,19 @@ if not isinstance(push, dict):
 elif push.get("default") is not False:
     problems.append(f"`push` default is {push.get('default')!r}, not false")
 
-# 3. The default registry equals every Application's source.repoURL.
+# 3. The default registry equals every SERVICE Application's source.repoURL.
+# Observability Applications (alloy, grafana, loki, prometheus) point at
+# upstream chart repositories by design and are skipped here — asserting them
+# here as well would pin them to a registry nothing publishes them to, which
+# is the defect w102 exists to remove. They are asserted in full by the
+# obs-chart-sources checker, which names the same four by filename.
+SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
 registry = inputs.get("registry")
 default_registry = registry.get("default") if isinstance(registry, dict) else None
 apps = sorted(glob.glob(apps_dir + "/*.yaml")) + sorted(glob.glob(apps_dir + "/*.yml"))
 if not apps:
     problems.append(f"no Application manifests found in {apps_dir}")
+checked = 0
 for app in apps:
     try:
         with open(app, encoding="utf-8") as fh:
@@ -4417,6 +4433,10 @@ for app in apps:
         problems.append(f"{app} does not parse: {exc}")
         continue
     repo = ((adoc.get("spec") or {}).get("source") or {}).get("repoURL")
+    name = ((adoc.get("metadata") or {}).get("name"))
+    if name not in SERVICE_APPS:
+        continue
+    checked += 1
     if repo != default_registry:
         problems.append(
             f"{app}: source.repoURL is {repo!r} but the workflow's default "
@@ -4445,7 +4465,7 @@ if problems:
     for problem in problems:
         print(f"chart publish: {problem}")
     sys.exit(1)
-print(f"seam: default registry == source.repoURL in {len(apps)} Application(s)")
+print(f"seam: default registry == source.repoURL in {checked} service Application(s)")
 PY
 
     # The `|| ec=$?` shape is load-bearing rather than defensive: a bare
@@ -4465,8 +4485,8 @@ PY
     # green means the check is not measuring what it claims, and that is
     # reported as a failure of the test itself rather than passed over.
 
-    # (a) THE SEAM CONTROL: one Application's repoURL drifted from the
-    # workflow's default registry. The publish end and the consume end
+    # (a) THE SEAM CONTROL: one service Application's repoURL drifted from
+    # the workflow's default registry. The publish end and the consume end
     # disagreeing is the defect this check exists to catch, so the fixture
     # is that disagreement, in one file, with everything else identical.
     local seam_fixture="$TMP/chart-publish-seam"
@@ -4497,6 +4517,206 @@ PY
     # The proof, on the way out: the seam the check measured, so a green run
     # prints the number of Applications the registry string was compared
     # against rather than asserting it in a comment.
+    printf '%s\n' "$out" | sed 's/^/       /'
+    return 0
+  }
+
+  # -------------------------------------------------------------------------
+  # The observability chart sources — every Application resolves to a chart
+  # somebody publishes.
+  #
+  # WHY THIS CHECK EXISTS. The four observability `Application`s (`alloy`,
+  # `grafana`, `loki`, `prometheus`) once named `oci://ghcr.io/cafaye/charts`
+  # — the fleet's private registry — for charts nothing in the fleet
+  # publishes (measured: kit holds no `Chart.yaml` for any of them, and no
+  # service repository's publish workflow pushes them either). On a customer
+  # box `install.sh` applied eight `Application`s and four could never sync:
+  # Argo reports no error for an artifact that does not exist, it just never
+  # finds it — the same silent shape as the publish/consume seam above, at
+  # the other end of the same directory.
+  #
+  # THE RULING IT ENFORCES (decided in `DEPLOYMENT.md`, "Who owns the
+  # `Application`" — cited, not restated, so this comment cannot drift from
+  # it): the private-OCI shape exists for the closed-source service charts a
+  # customer must pull without read access to our repositories. Third-party
+  # components we do not author and do not modify point at their official
+  # upstream chart repositories with a pinned chart version as
+  # `targetRevision` — the standard Argo shape — shipped unmodified.
+  #
+  # WHAT IT ASSERTS, stated once as the single rule: every `Application`
+  # resolves to either a chart the fleet publishes (the four service charts
+  # at the private OCI registry, `targetRevision: 0.1.0`) or a chart a named
+  # upstream repository publishes at the pinned version (the four
+  # observability charts below) — a chart that resolves to neither is a gate
+  # failure. Concretely, per file in `manifests/applications/`:
+  #   1. `metadata.name` equals the filename stem — the identity the rule
+  #      classifies by. A file whose name and manifest disagree is classified
+  #      by neither and fails.
+  #   2. A service name (`identity`, `gateway`, `courier`, `parlor`) carries
+  #      `repoURL: oci://ghcr.io/cafaye/charts`, its own name as `chart`,
+  #      and `targetRevision: 0.1.0` — the private-OCI ruling, untouched.
+  #   3. An observability name carries EXACTLY the (repoURL, chart,
+  #      targetRevision) triple in the EXPECTED table — the official upstream
+  #      repository, the unmodified chart, the pinned version. Each pin was
+  #      verified to exist in its upstream repo's index before it was written
+  #      here; a pin that does not resolve is a broken install.
+  #   4. Any other name fails closed. An `Application` nobody classified is
+  #      not "grandfathered in" — it resolves to neither class by definition.
+  #
+  # THE TWO CONTROLS, which must go RED under the same assertions the real
+  # tree passes: a fixture with one observability `repoURL` reverted to the
+  # private OCI registry (the defect this packet removed — a chart resolving
+  # to a registry nothing publishes it to) and a fixture with one
+  # observability `chart` name altered (a chart no named repository
+  # publishes). A control that stays green means the check is not measuring
+  # what it claims, and that is reported as a failure of the test itself.
+  #
+  # The check is PARAMETERISED (`<applications-dir>`) so the controls run the
+  # same assertions against fixtures rather than a second copy of them: two
+  # copies of an assertion is one assertion that can drift.
+  check_obs_chart_sources() {
+    local apps_dir="$1"
+    # The assertions live in ONE python program, written to a temp file so the
+    # real run and both controls run the SAME code: two copies of an assertion
+    # is one assertion that can drift, and a control that re-measures with a
+    # second implementation is a control that can disagree with the check.
+    local checker="$TMP/obs-chart-sources-check.py"
+    cat >"$checker" <<'PY'
+import glob
+import os
+import sys
+
+import yaml
+
+apps_dir = sys.argv[1]
+
+PRIVATE_OCI = "oci://ghcr.io/cafaye/charts"
+GRAFANA_REPO = "https://grafana.github.io/helm-charts"
+PROM_REPO = "https://prometheus-community.github.io/helm-charts"
+
+# The single rule, as data: service names resolve to the fleet's registry,
+# observability names resolve to (upstream repo, chart, pinned version).
+# The pins were verified against the upstream index before they were written:
+#   alloy 1.13.0, grafana 10.5.15, loki 7.3.0 in the grafana index;
+#   prometheus 29.36.0 in the prometheus-community index.
+SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
+EXPECTED = {
+    "alloy": (GRAFANA_REPO, "alloy", "1.13.0"),
+    "grafana": (GRAFANA_REPO, "grafana", "10.5.15"),
+    "loki": (GRAFANA_REPO, "loki", "7.3.0"),
+    "prometheus": (PROM_REPO, "prometheus", "29.36.0"),
+}
+
+problems = []
+apps = sorted(glob.glob(apps_dir + "/*.yaml")) + sorted(glob.glob(apps_dir + "/*.yml"))
+if not apps:
+    problems.append(f"no Application manifests found in {apps_dir}")
+resolved = 0
+for app in apps:
+    stem = os.path.splitext(os.path.basename(app))[0]
+    try:
+        with open(app, encoding="utf-8") as fh:
+            adoc = yaml.safe_load(fh)
+    except Exception as exc:
+        problems.append(f"{app} does not parse: {exc}")
+        continue
+    if not isinstance(adoc, dict):
+        problems.append(f"{app} is not a mapping")
+        continue
+    name = ((adoc.get("metadata") or {}).get("name"))
+    if name != stem:
+        problems.append(
+            f"{app}: metadata.name is {name!r}, not the filename stem "
+            f"{stem!r} — the rule classifies by name and cannot place this file"
+        )
+        continue
+    source = ((adoc.get("spec") or {}).get("source") or {})
+    triple = (source.get("repoURL"), source.get("chart"), str(source.get("targetRevision")))
+    if name in SERVICE_APPS:
+        want = (PRIVATE_OCI, name, "0.1.0")
+        if triple != want:
+            problems.append(
+                f"{app}: service chart resolves to {triple!r}, not {want!r} — "
+                f"the private-OCI ruling still governs the service charts"
+            )
+            continue
+    elif name in EXPECTED:
+        want = EXPECTED[name]
+        if triple != want:
+            problems.append(
+                f"{app}: observability chart resolves to {triple!r}, not "
+                f"{want!r} — a chart that resolves to neither a fleet "
+                f"publication nor its pinned upstream is a broken install"
+            )
+            continue
+    else:
+        problems.append(
+            f"{app}: {name!r} is neither a service chart nor a pinned "
+            f"observability chart — an unclassified Application fails closed"
+        )
+        continue
+    resolved += 1
+
+if problems:
+    for problem in problems:
+        print(f"obs chart sources: {problem}")
+    sys.exit(1)
+print(f"sources: {resolved} Application(s) resolve to a published chart")
+PY
+
+    # The `|| ec=$?` shape is load-bearing rather than defensive: a bare
+    # `out="$(cmd)"` that fails takes the shell down under `set -e` before the
+    # status is ever read, so a check that correctly REJECTS a broken tree
+    # would take the gate with it. The guard makes the assignment part of a
+    # list, which `set -e` does not apply to.
+    local out ec=0
+    out="$("$PY" "$checker" "$apps_dir" 2>&1)" || ec=$?
+    if [ "$ec" -ne 0 ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return 1
+    fi
+
+    # THE CONTROLS. Each builds a fixture that violates exactly one property
+    # and requires the same assertions to answer RED. A control that stays
+    # green means the check is not measuring what it claims, and that is
+    # reported as a failure of the test itself rather than passed over.
+
+    # (a) THE REGISTRY CONTROL: one observability Application's repoURL
+    # reverted to the private OCI registry — the defect this packet removed.
+    # Nothing publishes these charts there, so the install this fixture
+    # describes syncs four Applications forever.
+    local registry_fixture="$TMP/obs-chart-sources-registry"
+    rm -rf "$registry_fixture"
+    mkdir -p "$registry_fixture"
+    cp "$apps_dir"/*.yaml "$registry_fixture"/
+    # A temp file and `mv`, not `sed -i`: BSD sed (macOS) requires a backup
+    # argument after `-i` and GNU sed does not, so the in-place spelling is
+    # one platform's bug and the other's no-op.
+    sed 's|repoURL: https://grafana.github.io/helm-charts|repoURL: oci://ghcr.io/cafaye/charts|' \
+      "$registry_fixture/loki.yaml" >"$registry_fixture/loki.yaml.reverted"
+    mv "$registry_fixture/loki.yaml.reverted" "$registry_fixture/loki.yaml"
+    if "$PY" "$checker" "$registry_fixture" >/dev/null 2>&1; then
+      printf '       control (a) the registry control did not go red — the repoURL comparison is not measuring what it claims\n'
+      return 1
+    fi
+
+    # (b) THE CHART-NAME CONTROL: one observability Application's chart name
+    # altered — a chart no named repository publishes at any version.
+    local chart_fixture="$TMP/obs-chart-sources-chart"
+    rm -rf "$chart_fixture"
+    mkdir -p "$chart_fixture"
+    cp "$apps_dir"/*.yaml "$chart_fixture"/
+    sed 's/chart: grafana$/chart: grafana-drifted/' \
+      "$chart_fixture/grafana.yaml" >"$chart_fixture/grafana.yaml.drifted"
+    mv "$chart_fixture/grafana.yaml.drifted" "$chart_fixture/grafana.yaml"
+    if "$PY" "$checker" "$chart_fixture" >/dev/null 2>&1; then
+      printf '       control (b) the chart-name control did not go red — the chart comparison is not measuring what it claims\n'
+      return 1
+    fi
+
+    # The proof, on the way out: the count the check measured, so a green run
+    # prints the number of Applications that resolved rather than asserting
+    # it in a comment.
     printf '%s\n' "$out" | sed 's/^/       /'
     return 0
   }
@@ -4844,8 +5064,23 @@ PY
   # source.repoURL, and its two controls (a drifted repoURL, a flipped push
   # default) must go red under the same assertions the real tree passes.
   section 'static: the chart publish path — the publish/consume seam, both ends in kit'
-  check 'chart publish  (workflow_call, push defaults false, registry == every Application repoURL, name/version not inputs, pull_request refused)' \
+  check 'chart publish  (workflow_call, push defaults false, registry == every service Application repoURL, name/version not inputs, pull_request refused)' \
     check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
+      "$ROOT/templates/substrate/manifests/applications"
+
+  # -------------------------------------------------------------------------
+  # The observability chart sources — every Application resolves to a chart
+  # somebody publishes.
+  #
+  # The four observability `Application`s once named the private OCI registry
+  # for charts nothing publishes; the service four are untouched by that
+  # ruling. The check states the single rule over all eight manifests — each
+  # resolves to either a fleet publication or its pinned upstream — and its
+  # two controls (a reverted repoURL, a drifted chart name) must go red under
+  # the same assertions the real tree passes.
+  section 'static: the observability chart sources — every Application resolves to a chart somebody publishes'
+  check 'obs chart sources  (service charts stay on the private OCI registry at 0.1.0; alloy/grafana/loki/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
+    check_obs_chart_sources \
       "$ROOT/templates/substrate/manifests/applications"
 
   # -------------------------------------------------------------------------
