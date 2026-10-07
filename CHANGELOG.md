@@ -80,6 +80,42 @@
   them and never with `check`/`cpu`/`tier`; `tests/profile_report.py` reads the
   new kind. The TSV's four-column shape is unchanged.
 
+- **`templates/kamal/deploy.yml.erb`: the proxy healthcheck path was `/up`, a
+  path no adopting service serves — a deploy that could not succeed.** All six
+  services that adopt this template (`identity`, `courier`, `gateway`, `parlor`,
+  `darkroom`, `muse`) serve `/healthz` and `/readyz`; none serves `/up`.
+  `billing` serves `/up` (Rails' boot check) and does not use this template.
+  Kamal gates the rollout on that path, so a fresh copy of the template
+  deployed a container the proxy probed, read 404 from, and never accepted.
+  `identity` and `courier` each hand-patched their own copy to `/readyz`; the
+  template catches up to them. The default is now `/readyz`, and
+  `tests/kamal_agreement_test.sh` fails if it ever drifts back to a path the
+  fleet does not serve.
+
+- **`templates/kamal/README.md`: it told services to set a `migrate` command in
+  `deploy.yml.erb` — a key the template does not have and Kamal 2 refuses.**
+  `migrate:` was Kamal 1's way; Kamal 2.12.0 rejects the config outright with
+  `unknown key: migrate` (measured against courier's copy). Migrations run from
+  `.kamal/hooks/pre-deploy`, which is not a key in the file at all. Following
+  the README produced a config kamal rejects. The README now says so, and the
+  agreement test fails if it ever names a key the template does not have.
+
+- **`templates/kamal/README.md`: the adoption steps never copied `drill.sh` to
+  `bin/drill`.** A fleet-wide search finds `bin/drill` in zero repositories: the
+  backup path is configured and never proven to restore, which is the one thing
+  a backup is for. Step 1 named the two `.erb` files but not the drill, so a
+  service that followed the steps exactly ended up with backups configured and
+  no way to prove them. Step 1 now names the drill copy, and the agreement test
+  fails if the adoption steps ever stop producing it.
+
+- **`templates/bin/dev.sh`: `stack_is_usable` checked `templates/compose/` but
+  not `templates/kamal/`.** A service pinned at a ref without `templates/kamal/`
+  fetched a tree that passed every compose check and was still missing the files
+  its adoption steps tell it to copy (kit-23's defect 1). The kamal files are
+  now part of the existence check. Every caller either falls through to a
+  re-fetch or dies with a re-vendor message, so a stricter check does not strand
+  an existing cache.
+
 - **`bin/dev`: replacing a populated cache RETIRES it instead of deleting it,
   which is the difference between a stack that serves and a stack that reports
   itself broken.** `fetch_stack` used to end with `rm -rf "$dest"; mv "$tmp"

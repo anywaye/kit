@@ -2103,6 +2103,23 @@ OTEL
     report SKIP 'kamal + kamal-backup + ruby not installed  (the generated config was validated by nothing)'
   fi
 
+  # The agreement test is STATIC — it reads the template and the README and
+  # asserts they agree — so it runs whether or not the real binaries are
+  # installed. It is the check that makes the two defects this packet fixed
+  # unable to return silently: a healthcheck path no adopting service serves,
+  # and a README that tells services to set a key the template does not have.
+  # kit-23 asked for it and it never landed; it is here now, and it is fatal
+  # on a skip because the claim under test is "the template and its README
+  # agree", which needs no toolchain to check.
+  if only_wanted 'kamal_agreement_test'; then
+    if bash "$ROOT/tests/kamal_agreement_test.sh" >"$TMP/kamal_agreement_test.log" 2>&1; then
+      report PASS "$(sed 's/^PASS: //' "$TMP/kamal_agreement_test.log" | tail -1)"
+    else
+      report FAIL 'kamal_agreement_test  (the template and its README agree)'
+      sed 's/^/       /' "$TMP/kamal_agreement_test.log" | tail -20
+    fi
+  fi
+
   # -------------------------------------------------------------------------
   # The canary harness's Go sources must PARSE, and must parse in Go's own
   # parser rather than in a regex.

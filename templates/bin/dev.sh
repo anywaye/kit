@@ -454,6 +454,12 @@ read_stack_ref() {
 # missing the files `up` mounts, because a fetch that succeeded and produced an
 # unusable tree is a `bin/dev up` that dies four containers later on a bind-mount
 # error naming a path the developer has never heard of.
+#
+# The kamal files are checked for the same reason, and the reason they were
+# MISSING is kit-23's defect 1: a service pinned at a ref without
+# `templates/kamal/` fetched a tree that passed every compose check and was
+# still missing the files its adoption steps tell it to copy. The compose
+# checks say nothing about the deploy half of the tree.
 stack_is_usable() {
   local dir="$1" ref="$2" have
   [ -d "$dir" ] || return 1
@@ -463,7 +469,10 @@ stack_is_usable() {
     [ -f "$dir/templates/compose/otel-collector.yml" ] &&
     [ -d "$dir/templates/compose/tempo" ] &&
     [ -d "$dir/templates/compose/loki" ] &&
-    [ -d "$dir/templates/compose/grafana/provisioning" ]
+    [ -d "$dir/templates/compose/grafana/provisioning" ] &&
+    [ -f "$dir/templates/kamal/deploy.yml.erb" ] &&
+    [ -f "$dir/templates/kamal/kamal-backup.yml.erb" ] &&
+    [ -f "$dir/templates/kamal/drill.sh" ]
 }
 
 # --------------------------------------------------------------------------
@@ -747,8 +756,9 @@ resolve_stack() {
     if ! stack_is_usable "$vendor" "$ref"; then
       die "$vendor records $ref but is missing files the stack mounts
    (templates/compose/{docker-compose,otel-collector}.yml, tempo/, loki/,
-   grafana/provisioning/). Re-vendor it rather than starting a stack that will die
-   four containers later on a bind mount."
+   grafana/provisioning/, kamal/{deploy.yml.erb,kamal-backup.yml.erb,drill.sh}).
+   Re-vendor it rather than starting a stack that will die four containers later
+   on a bind mount."
     fi
     STACK_DIR="$vendor"
     info "stack: $STACK_DIR (vendored, and it declares the pinned ref)"
