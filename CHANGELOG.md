@@ -2,6 +2,52 @@
 
 ### Added
 
+- **`tests/lint_test.sh`: the four independent lint sections now run
+  concurrently.** The go/ruby/node/yaml sections each build their own fixture in
+  their own subdirectory of `$WORK` and share nothing but the helper
+  functions, so they overlap with shell `&` and `wait` instead of running
+  serially. The verdict is preserved by the same rule the serial path used:
+  each section writes to its own log, the logs print in order, and a `FAIL` or
+  `SKIP` line in any log makes the whole script exit 1. The check id in
+  `validate.sh` is unchanged and the gate's verdict count is unchanged (one
+  PASS for `lint_test`). Measured: 31.62 s serial → 26.4 s parallel
+  standalone, exit 0, all 22 assertions green; a full-gate after-run confirms
+  it end-to-end — the check row reads 24.332 s against the before-run's
+  31.625 s, with identical verdict counts (157 PASS / 0 FAIL / 5 SKIP) and
+  identical check ids. The saving is bounded by the slowest linter (eslint,
+  which does `npm install`), not by the sum. This is the one cut the
+  honest profile's levers yielded: the parse region is already at the 4-way
+  cap and spawn-latency-bound, the docker tiers are substrate-backed, and the
+  remaining serial static checks are each under 0.1 s.
+
+- **`REPORT-kit-m44-gate-profile-truth-01.md`: the two written answers — the
+  gate tests no other repository, and `tests/validate.sh` is still needed.**
+  (a) Confirmed with a command of the same shape as the manager's: zero
+  `$ROOT/..` references in `tests/`, the only `../` hits are fixture strings
+  (a relative-path shape the provenance stamper must refuse), every `git
+  clone`/`fetch` is over `file://` against a bare repo the gate builds from
+  its own tree, and every `curl` is localhost or a GitHub release. (b)
+  Inventoried the six docker/network tiers with the substrate claim each
+  alone proves, and recommended **keep**: the gate is the only proof of those
+  claims, and the profile shows the top costs are substrate-backed tiers and
+  an already-parallel spawn-latency-bound parse region, so no cut keeps
+  every check and every verdict. The cut was assessed and not made; the
+  honest profile and the two answers are the deliverables.
+
+- **`PROFILE-gate-honest.md`: the measured re-derivation of the gate profile,
+  from one complete run.** 493.30 s wall clock, 157 PASS / 0 FAIL / 5 SKIP,
+  exit 0 — every row a real interval, the 28 `phase` + 2 `par` rows tiling
+  the run to within 0.026 s. The honest top costs: the observability tiers
+  (200.06 s as a phase, `no_telemetry_in_readiness` alone 63.29 s), the parse
+  region (99.20 s, 55 parallel checks, spawn-latency-bound), and `lint_test`
+  (31.62 s). The old table's headline — `self_test` at ~96% — is doubly
+  retired: the tree-copy layer is gone (`32df467`) and the number was a
+  projection from a bad mean. Four of the old rows are gone with it
+  (`self_test`, `stack_live_test` as a tier, `staleness_test`, `gitleaks_gate`)
+  and the rest are re-measured. Also names the one thing the leaf table cannot
+  see: ~99 s in the observability phase and ~22 s in the fetch section that no
+  check row claims — real wall clock outside any `check`/`tier` call.
+
 - **`REPORT-kit-gate-speed-overlap-01.md`: the gate-speed packet's target was
   retired before it was dispatched, and the measurement that proves it.** The
   packet commissioned overlap for the 73 `--only`-filtered child gates; those
@@ -18,6 +64,21 @@
   tiers this packet's own flakiness constraint puts out of scope.
 
 ### Fixed
+
+- **`KIT_PROFILE` recorded a parallel region's wall clock nowhere, so the
+  `phase` row of whatever `section` came next absorbed it whole.** A
+  `par_begin`…`par_flush` region's span is now a row of its own — kind `par`,
+  measured from the last phase marker to the flush — and `_pf_last` is
+  re-armed at the flush, so a phase row covers only the work after the region
+  it follows. Until this, `static: handed-out scripts are executable` profiled
+  at 212.3 s (a `for` loop over ~25 files doing `[ -x "$f" ]`) and
+  `static: templates/otel` at 45.3 s: both were join artifacts — the parse
+  region's and the shellcheck region's wall clock respectively, each charged to
+  the section that merely followed it. The `cpu` rows already overlapped inside
+  the span, so the span itself was the one number nothing recorded. `par` rows
+  tile with `phase` rows (regions never overlap each other) and are summed with
+  them and never with `check`/`cpu`/`tier`; `tests/profile_report.py` reads the
+  new kind. The TSV's four-column shape is unchanged.
 
 - **`bin/dev`: replacing a populated cache RETIRES it instead of deleting it,
   which is the difference between a stack that serves and a stack that reports

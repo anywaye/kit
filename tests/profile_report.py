@@ -3,11 +3,14 @@
 
 WHY THIS IS A PROGRAM AND NOT A `sort`. The file it reads is appended to by
 every gate copy the self-test spawns, so it has ~1,000 rows whose labels are
-long, whose kinds are four (`check`, `cpu`, `tier`, `phase`), and which fall
-into two populations that must never be added together: the GATE's rows and the
-SELF-TEST's rows. Aggregating those into one column is how a profile claims a
-ten-minute run that cost four, and it is why this renders the two populations
-separately and refuses to sum a `cpu` row with a `phase` row.
+long, whose kinds are five (`check`, `cpu`, `tier`, `phase`, `par`), and which
+fall into two populations that must never be added together: the GATE's rows and
+the SELF-TEST's rows. Aggregating those into one column is how a profile claims
+a ten-minute run that cost four, and it is why this renders the two populations
+separately and refuses to sum a `cpu` row with a `phase` row. A `par` row is a
+parallel region's wall clock: it tiles with the `phase` rows (regions do not
+overlap each other) while the `cpu` rows overlap inside it, so it is summed with
+the one and never with the other.
 
 Standard library only, like the other programs in `tests/`. There was a
 `carve-out boundary` check in `validate.sh` that walked the AST of every Python
@@ -24,6 +27,7 @@ import argparse
 import sys
 
 PHASE = "phase"
+PAR = "par"
 CHECK = "check"
 CPU = "cpu"
 TIER = "tier"
@@ -96,10 +100,10 @@ def selftest_by_breakage(inner):
                                       "wall": 0.0, "checks": 0.0})
         # `check` and `tier` rows are NESTED INSIDE the `phase` row that covers
         # them, so summing kinds together double-counts -- which is how the first
-        # version of this column reported a 48s copy as 99s. Only the PHASE rows
-        # tile a copy without overlapping, so only they are summed, and the copy's
-        # own `total` row is carried beside them as the number to trust.
-        if kind == PHASE:
+        # version of this column reported a 48s copy as 99s. Only the PHASE and
+        # PAR rows tile a copy without overlapping, so only they are summed, and
+        # the copy's own `total` row is carried beside them as the number to trust.
+        if kind in (PHASE, PAR):
             entry["total"] += secs
         elif kind in (CHECK, TIER):
             entry["checks"] += secs
@@ -164,17 +168,18 @@ def main(argv=None):
         print(f"   of which the self-test's {len(inner_totals)} copies spent "
               f"{sum(inner_totals):.1f}s in total, {sum(inner_totals) / len(inner_totals):.1f}s each")
 
-    # The gate's own phases, in wall time. This is the table a reader of a
-    # ten-minute run thinks in: it cannot double-count, because a phase row is
-    # emitted once per phase and covers everything the phase did.
+    # The gate's own phases and parallel regions, in wall time. This is the table
+    # a reader of a ten-minute run thinks in: it cannot double-count, because a
+    # phase row is emitted once per phase, a `par` row once per region, and the
+    # two tile the run without overlapping.
     render(
-        "the GATE's phases, wall time (these do not overlap)",
-        [r for r in gate if r[0] == PHASE],
+        "the GATE's phases and parallel regions, wall time (these do not overlap)",
+        [r for r in gate if r[0] in (PHASE, PAR)],
         args.top,
     )
     render(
         "the GATE's own checks and bounded tiers (excludes the self-test's copies)",
-        [r for r in gate if r[0] not in (PHASE, TOTAL)],
+        [r for r in gate if r[0] not in (PHASE, PAR, TOTAL)],
         args.top,
     )
 
@@ -197,9 +202,9 @@ def main(argv=None):
         wall = e["wall"] or e["total"]
         print(f"{wall:9.2f}  {e['total']:8.2f}  {e['checks']:7.2f}  {e['rows']:5d}  {name[:74]}")
 
-    grand = sum(r[2] for r in gate if r[0] == PHASE) + total
+    grand = sum(r[2] for r in gate if r[0] in (PHASE, PAR)) + total
     print(f"\n   accounted: {grand:.1f}s of the gate's own phase time "
-          f"({sum(r[2] for r in gate if r[0] == PHASE):.1f}s gate + {total:.1f}s self-test)")
+          f"({sum(r[2] for r in gate if r[0] in (PHASE, PAR)):.1f}s gate + {total:.1f}s self-test)")
     print("   the difference from the run's wall time is the check rows that are not")
     print("   phases, the argument parsing, and whatever the parent shell spent.")
     return 0

@@ -203,7 +203,7 @@ done
 # `>>`, which is atomic for lines this short, and every writer in the tree is
 # short enough to stay under one `PIPE_BUF`.
 #
-# FOUR KINDS, and why there are four rather than one.
+# FIVE KINDS, and why there are five rather than one.
 #   check   a serial `check`/`check_verbose` — wall time of ONE command.
 #   cpu     a `check_par` child — time of one parallel check. THESE OVERLAP: their
 #           sum is an upper bound on the parallel region, not its elapsed time.
@@ -214,6 +214,15 @@ done
 #   phase   the interval between two `section` headers. THE SAFETY NET: a tier
 #           that is a bare `report` over a heredoc spawns no command at all, so
 #           the check rows cannot see it, and the phase row can.
+#   par     a `par_begin`…`par_flush` region — the region's OWN wall clock, from
+#           the last phase marker to the flush. THE `cpu` rows overlap INSIDE
+#           this span, so the span is the one number that says how long the
+#           region really took. Without it the whole span was absorbed by the
+#           `phase` row of whatever `section` happened to come next — which is
+#           how a 25-file `[ -x ]` loop was once profiled at 212 s. A `par`
+#           row tiles with the `phase` rows (regions do not overlap each other),
+#           so the two kinds together sum to the run, and neither may be added
+#           to a `check`/`cpu`/`tier` row.
 #   verdict a `report_par` — a loop reaching its verdict from a `[ -x ]`. ~0s by
 #           construction; recorded so the table accounts for every printed line.
 #
@@ -263,6 +272,10 @@ if [ -n "$_PROFILE" ]; then
   _pf_last="$(_pf_now)"
 fi
 _pf_start="$_pf_last"
+# The phase marker a `par_begin`…`par_flush` region's span is measured from, so
+# the lead-in since the last `section` lands inside the region row rather than
+# in the gap where no row would see it. 0 means "no region in flight".
+_pf_region_base=0
 # `_pf_mark` / `_pf_kind` — the unit of work currently in flight, and which of the
 # four kinds it is. `report` reads both and re-arms the mark; see the comment
 # there. Both are 0 / `check` with the profiler off, and nothing reads them.
@@ -630,10 +643,10 @@ check_par() {
   # millisecond — which is precisely the shape of measurement that argues for
   # deleting the concurrency. These rows are recorded as `cpu` rather than
   # `check` because they OVERLAP: their sum is an upper bound on the parallel
-  # region, not its elapsed time, and the `phase` row is what says how long the
-  # region really took. Collapsing the two would double-count and produce a
-  # profile that adds up to more than the run, which is the one thing a profile
-  # must never do.
+  # region, not its elapsed time, and the `par` row `par_flush` writes is what
+  # says how long the region really took. Collapsing the two would double-count
+  # and produce a profile that adds up to more than the run, which is the one
+  # thing a profile must never do.
   ( set +e
     _t0=0; [ -n "$_PROFILE" ] && _t0="$(_pf_now)"
     "$@" >"$slot.out" 2>&1; _ec=$?
@@ -782,6 +795,21 @@ par_flush() {
     fi
     i=$((i + 1))
   done
+  # The region's OWN wall clock, as a row of its own. The `cpu` rows the
+  # children wrote overlap inside this span, so this is the one number that says
+  # how long the region really took — and until it existed, the whole span was
+  # absorbed by the `phase` row of whatever `section` came next, which is how a
+  # 25-file `[ -x ]` loop was profiled at 212 s and a shellcheck sweep at 38 s.
+  #
+  # `_pf_last` is re-armed HERE, so the `phase` row the next `section` emits
+  # covers only the work after the region. The span starts at `_pf_region_base`
+  # (the last phase marker, captured in `par_begin`), so `par` and `phase` rows
+  # together tile the run exactly and neither double-counts the other.
+  if [ -n "$_PROFILE" ] && [ "$_pf_region_base" -ne 0 ]; then
+    kit_profile par "par region: $par_count check(s) — wall clock; the cpu rows overlap inside it" "$_pf_region_base"
+    _pf_last="$(_pf_now)"
+  fi
+  _pf_region_base=0
   par_count=0
   par_pids=""
   par_slots=""
@@ -805,6 +833,13 @@ par_begin() {
   par_running=0
   par_count=0
   rm -f "$par_dir"/*.label "$par_dir"/*.out "$par_dir"/*.status 2>/dev/null || true
+  # The region's span is measured from the LAST PHASE MARKER, not from now: the
+  # lead-in since the previous `section` is work this region's phase interval
+  # would otherwise drop, and a profile whose rows do not tile the run is one a
+  # reader stops believing. `par_flush` writes the row and re-arms `_pf_last`,
+  # so the `phase` row the next `section` emits covers only the work AFTER the
+  # region — a phase row must not absorb a region it merely precedes.
+  _pf_region_base="$_pf_last"
 }
 
 par_pids=""

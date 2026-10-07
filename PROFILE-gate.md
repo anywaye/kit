@@ -1,5 +1,10 @@
 # Where kit's gate spends its time — the profile
 
+> **SUPERSEDED — read `PROFILE-gate-honest.md` first.** That file is the
+> measured re-derivation this one asked for: one complete run (493.30 s, 157
+> PASS / 0 FAIL / 5 SKIP), every row a real interval, the rows tiling the run
+> exactly. This file is kept as the record of the truncated run it was.
+>
 > **READ THIS FIRST — this file's headline number was wrong, and a later packet
 > found out why.** Everything below is kept as the record it was, but the
 > "~96% of the run" and the "~4,905 s" are arithmetic from a bad mean: the four
