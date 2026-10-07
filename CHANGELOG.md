@@ -2,6 +2,24 @@
 
 ### Added
 
+- **`tests/lint_test.sh`: the four independent lint sections now run
+  concurrently.** The go/ruby/node/yaml sections each build their own fixture in
+  their own subdirectory of `$WORK` and share nothing but the helper
+  functions, so they overlap with shell `&` and `wait` instead of running
+  serially. The verdict is preserved by the same rule the serial path used:
+  each section writes to its own log, the logs print in order, and a `FAIL` or
+  `SKIP` line in any log makes the whole script exit 1. The check id in
+  `validate.sh` is unchanged and the gate's verdict count is unchanged (one
+  PASS for `lint_test`). Measured: 31.62 s serial → 26.4 s parallel
+  standalone, exit 0, all 22 assertions green; a full-gate after-run confirms
+  it end-to-end — the check row reads 24.332 s against the before-run's
+  31.625 s, with identical verdict counts (157 PASS / 0 FAIL / 5 SKIP) and
+  identical check ids. The saving is bounded by the slowest linter (eslint,
+  which does `npm install`), not by the sum. This is the one cut the
+  honest profile's levers yielded: the parse region is already at the 4-way
+  cap and spawn-latency-bound, the docker tiers are substrate-backed, and the
+  remaining serial static checks are each under 0.1 s.
+
 - **`REPORT-kit-m44-gate-profile-truth-01.md`: the two written answers — the
   gate tests no other repository, and `tests/validate.sh` is still needed.**
   (a) Confirmed with a command of the same shape as the manager's: zero

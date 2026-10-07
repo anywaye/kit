@@ -1,6 +1,8 @@
 # m44 — the honest gate profile, and the two written answers
 
-**Branch:** `worker/kit-m44-gateprofile` · **Commit:** `1c69ae7` (profile) +
+**Branch:** `worker/kit-m44-gateprofile` · **Commits:** `d25e860` (the profiler
+records a parallel region's own span) → `1c69ae7` (the honest top-20) →
+`47418e0` (the two written answers) → `5f93abb` (the lint overlap cut) →
 this report · **Run the profile is from:** preserved at
 `/tmp/kit-m44-preserved/` (`before.tsv`, `before.log`, `before.exit`=0)
 
@@ -14,19 +16,21 @@ answers the brief asks for, and the cut assessment.
 **No. Confirmed with my own command, not the manager's grep.**
 
 ```
-grep -rn '\.\./' tests/*.sh tests/*.py        # only 2 hits, both fixtures
+grep -rn '\.\./' tests/*.sh tests/*.py        # 3 hits: one fixture string, two comments
 grep -rn '\$ROOT/\.\.' tests/*.sh tests/*.py   # zero hits
 grep -rn 'git clone\|git fetch\|git ls-remote' # file:// only — local
 grep -rn 'curl \|wget '                        # localhost + GitHub releases
 ```
 
-The two `../` hits are not repository references:
+None of the three `../` hits is a repository reference:
 
 - `tests/provenance_test.sh:95` — `refuse source '../cafaye/identity'`.
   This is a **fixture string**: a relative-path *shape* the provenance
   stamper must refuse. The test asserts the stamper rejects it; it never
   reads that path.
 - `tests/lint_test.sh:84` — a comment about `$TMPDIR` on macOS.
+- `tests/lint_test.sh:684` — a comment quoting a glob shape (`'../../x.mts'`)
+  that `allowDefaultProject` must not match.
 
 The `courier` references in `tests/deploy_test.sh` (`SERVICE_NAME=courier`,
 `URL_CANARY="postgres://courier:…"`) are a **fixture service name** for
@@ -92,8 +96,10 @@ a missing toolchain, makes the whole script exit 1; each section writes to
 its own log, the logs print in order, and a `FAIL`/`SKIP` line in any log is
 red. The check id in `validate.sh` is unchanged and the gate's verdict count
 is unchanged (one PASS for `lint_test`). **Measured: 31.62 s serial → 26.4 s
-parallel, exit 0, all 22 assertions green.** The saving is bounded by the
-slowest linter (eslint, which does `npm install`), not by the sum.
+parallel standalone, exit 0, all 22 assertions green; in the full after-run
+the check row reads 24.332 s against the before-run's 31.625 s.** The saving
+is bounded by the slowest linter (eslint, which does `npm install`), not by
+the sum.
 
 **Not made, and why:**
 
@@ -115,9 +121,21 @@ slowest linter (eslint, which does `npm install`), not by the sum.
 | | wall clock | verdicts | how measured |
 | --- | ---: | --- | --- |
 | **before** | **493.30 s** | 157 PASS / 0 FAIL / 5 SKIP | the preserved run's `total` row |
-| **after** | not measured | — | the cut is to one script; a full after-run was out of budget |
+| **after** | **472.12 s** | 157 PASS / 0 FAIL / 5 SKIP | a second complete run, same command, same `KIT_PROFILE` mechanism |
 
-The before-run's rows tile the run exactly (phases + par = 493.278 s against
-a 493.304 s total), so the 493.30 s is a measurement, not an estimate. The
-cut's own saving is measured at the script it touches: `lint_test` 31.62 s →
-26.4 s, same verdict, same assertions.
+Both runs tile exactly (before: phases + par = 493.278 s against a 493.304 s
+total; after: 472.089 s against 472.115 s — the 0.026 s difference is argument
+parsing and the exit trap), so both numbers are measurements, not estimates.
+The verdict counts are identical, and the two TSVs carry the same 30 timed
+phase/par rows and the same check ids — no check was dropped to shrink the
+run.
+
+**The cut's own saving, measured at the check it touches:** `lint_test`
+31.625 s → 24.332 s (−7.29 s), same check id, same PASS verdict, all 22
+assertions green in both runs. The remaining ~14 s of the 21.2 s total
+difference is run-to-run variance on this shared machine — the observability
+phase alone was 12.5 s *slower* in the after-run (212.55 s vs 200.06 s), and
+several static phases were faster. The honest claim is the one the check row
+supports: the overlap saves ~7 s against a 31.6 s serial cost, and the
+full-gate after-run proves the verdict counts and check ids are unchanged
+end-to-end.
