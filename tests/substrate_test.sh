@@ -102,7 +102,13 @@ run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 # ===========================================================================
 # 2. DRY_RUN=1 runs to completion, printing the ordered steps
 # ===========================================================================
-dry_run_out="$(DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
+# The full operator environment is what reaches step 10: steps 8 and 10
+# refuse before their dry_run early-return (an empty database list or missing
+# SMTP settings are refusals even in DRY_RUN), so a bare DRY_RUN without
+# KIT_SUBSTRATE_DATABASES never completes — section 8 asserts that refusal,
+# and this runs the plan that passes it.
+FULL_DRY_ENV="KIT_SUBSTRATE_DATABASES=identity,gateway,courier,parlor KIT_SUBSTRATE_SMTP_ADAPTER=smtp KIT_SUBSTRATE_SMTP_HOST=smtp.example.com KIT_SUBSTRATE_SMTP_USERNAME=relay KIT_SUBSTRATE_SMTP_PASSWORD=x KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET=x KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN=x"
+dry_run_out="$(env $FULL_DRY_ENV DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
 if [ "$dry_run_ec" -ne 0 ]; then
   fail 'DRY_RUN=1 runs to completion' "$dry_run_out"
@@ -110,29 +116,29 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The seven steps, in order. The markers are `[1/7]` … `[7/7]`; the check reads
+# The ten steps, in order. The markers are `[1/10]` … `[10/10]`; the check reads
 # them out of the output in the order they appear and compares against the
 # expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all seven.
-# The `|| true` is load-bearing: with no `[n/7]` markers printed yet, grep
+# one — would go red here rather than passing on the presence of all ten.
+# The `|| true` is load-bearing: with no `[n/10]` markers printed yet, grep
 # exits 1, and under `set -o pipefail` a failing command substitution would
 # take the harness down before the status is ever read — the same shape the
 # `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/7\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/10\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7" ]; then
-  pass 'DRY_RUN prints the seven steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10" ]; then
+  pass 'DRY_RUN prints the ten steps in order'
 else
-  fail 'DRY_RUN prints the seven steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the ten steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
 # and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
-if [ "$dry_count" -ge 7 ]; then
+if [ "$dry_count" -ge 10 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
 else
-  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 7"
+  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 10"
 fi
 
 # ===========================================================================
@@ -424,6 +430,302 @@ if grep -rn 'stringData:' "$fixture_secret" >/dev/null 2>&1; then
 else
   fail 'control: a planted stringData secret is found by the same grep' "the grep did not find the planted secret"
 fi
+
+# The operator values are never echoed either — in any mode. The check reads
+# every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
+# the line also dereferences it. Naming the VARIABLE in a message is fine
+# (every refusal below does); printing its VALUE is the leak.
+sourced_vars="KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+echo_leak=""
+for v in $sourced_vars; do
+  if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
+    echo_leak="${echo_leak} $v: $(grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" | head -3)"
+  fi
+done
+if [ -n "$echo_leak" ]; then
+  fail 'no operator value is ever echoed' "$echo_leak"
+else
+  pass 'no operator value is ever echoed'
+fi
+
+# ===========================================================================
+# 8. KIT_SUBSTRATE_DATABASES unset/empty/mismatched refuses in DRY_RUN
+# ===========================================================================
+#
+# The refusal is the contract: a cluster with no database list is a cluster
+# with no databases, and a list that disagrees with the manifest is a
+# DATABASE_URL pointing at nothing. Each case must refuse (non-zero exit)
+# NAMING the fix. The control is the valid environment, which must be
+# accepted — a refusal that fires unconditionally proves nothing.
+databases_try() {
+  # $1: __UNSET__, __EMPTY__, a value, or __FULL__ (the valid environment).
+  local out ec=0
+  case "$1" in
+    __UNSET__) out="$(env -u KIT_SUBSTRATE_DATABASES DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
+    __EMPTY__) out="$(KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
+    __FULL__) out="$(env $FULL_DRY_ENV DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
+    *) out="$(KIT_SUBSTRATE_DATABASES="$1" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
+  esac
+  printf '%s' "$out"
+  return "$ec"
+}
+
+refused_out=""; refused_ec=0
+refused_out="$(databases_try __UNSET__)" || refused_ec=$?
+case "$refused_ec:$refused_out" in
+  0:*)
+    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses' "exit 0 — the install would proceed with no database list"
+    ;;
+  *KIT_SUBSTRATE_DATABASES*)
+    pass 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix'
+    ;;
+  *)
+    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix' "$refused_out"
+    ;;
+esac
+
+refused_out=""; refused_ec=0
+refused_out="$(databases_try __EMPTY__)" || refused_ec=$?
+case "$refused_ec:$refused_out" in
+  0:*)
+    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses' "exit 0 — the install would proceed with an empty database list"
+    ;;
+  *KIT_SUBSTRATE_DATABASES*)
+    pass 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix'
+    ;;
+  *)
+    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix' "$refused_out"
+    ;;
+esac
+
+refused_out=""; refused_ec=0
+refused_out="$(databases_try 'identity,courier')" || refused_ec=$?
+case "$refused_ec:$refused_out" in
+  0:*)
+    fail 'DRY_RUN with a database list disagreeing with the manifest refuses' "exit 0 — a typo would boot a cluster missing a service"
+    ;;
+  *manifest*)
+    pass 'DRY_RUN with a database list disagreeing with the manifest refuses'
+    ;;
+  *)
+    fail 'DRY_RUN with a database list disagreeing with the manifest refuses' "$refused_out"
+    ;;
+esac
+
+refused_out=""; refused_ec=0
+refused_out="$(databases_try __FULL__)" || refused_ec=$?
+if [ "$refused_ec" -eq 0 ]; then
+  pass 'control: DRY_RUN with the full operator environment is accepted'
+else
+  fail 'control: DRY_RUN with the full operator environment is accepted' "$refused_out"
+fi
+
+# ===========================================================================
+# 9. The Postgres Cluster manifest — one cluster, the per-role provisioning
+# ===========================================================================
+#
+# Parses as YAML, names one Cluster (postgres in data), carries the boundary
+# (REVOKE … FROM PUBLIC per database), the membership (inRoles, the
+# declarative GRANT <svc>_app TO <svc>), the connection limit, the timeouts
+# and the vector extension — and pointedly NO imageName (CNPG's standard image
+# already carries pgvector, so there is no custom image to pin). The control
+# is a fixture with the REVOKE removed, which must go red under the same
+# check the real manifest passes.
+DATA_DIR="$SUBSTRATE/manifests/data"
+check_cluster() {
+  "$PY" - "$1" <<'PY'
+import sys
+
+import yaml
+
+path = sys.argv[1]
+try:
+    docs = list(yaml.safe_load_all(open(path, encoding="utf-8")))
+except yaml.YAMLError as e:
+    print(f"does not parse ({e})")
+    sys.exit(1)
+if len(docs) != 1:
+    print(f"expected 1 document, found {len(docs)}")
+    sys.exit(1)
+doc = docs[0]
+problems = []
+if doc.get("kind") != "Cluster":
+    problems.append(f"kind is {doc.get('kind')!r}, not 'Cluster'")
+if doc.get("apiVersion") != "postgresql.cnpg.io/v1":
+    problems.append(f"apiVersion is {doc.get('apiVersion')!r}")
+meta = doc.get("metadata", {})
+if meta.get("name") != "postgres" or meta.get("namespace") != "data":
+    problems.append(
+        f"is {meta.get('namespace')}/{meta.get('name')}, not data/postgres —"
+        " step 10 builds DATABASE_URL against postgres-rw.data"
+    )
+spec = doc.get("spec", {})
+if "imageName" in spec:
+    problems.append(
+        "spec.imageName is set — CNPG's standard image already carries"
+        " pgvector, so a pinned image here is a second artifact to maintain"
+    )
+store = spec.get("storageConfiguration", {})
+if not store.get("size"):
+    problems.append("spec.storageConfiguration.size is unset")
+if store.get("storageClass") != "local-path":
+    problems.append(
+        f"storageClass is {store.get('storageClass')!r}, not 'local-path'"
+        " (k3s's default provisioner)"
+    )
+svcs = ("identity", "gateway", "courier", "parlor")
+sql = "\n".join(spec.get("bootstrap", {}).get("initdb", {}).get("postInitSQL", []))
+for svc in svcs:
+    for needle in (
+        f'CREATE DATABASE "{svc}" OWNER "{svc}"',
+        f'REVOKE ALL ON DATABASE "{svc}" FROM PUBLIC',
+        f'GRANT CONNECT, TEMPORARY ON DATABASE "{svc}" TO "{svc}"',
+        f'GRANT CONNECT, TEMPORARY ON DATABASE "{svc}" TO "{svc}_app"',
+        f'ALTER ROLE "{svc}" CONNECTION LIMIT 10',
+        f'ALTER ROLE "{svc}" SET statement_timeout',
+        f'ALTER ROLE "{svc}_app" SET statement_timeout',
+        f'ALTER ROLE "{svc}" SET idle_in_transaction_session_timeout',
+    ):
+        if needle not in sql:
+            problems.append(f"postInitSQL is missing: {needle}")
+appsql = "\n".join(
+    spec.get("bootstrap", {}).get("initdb", {}).get("postInitApplicationSQL", [])
+)
+if "vector" not in appsql:
+    problems.append("postInitApplicationSQL creates no vector extension")
+roles = {r.get("name"): r for r in spec.get("managed", {}).get("roles", [])}
+for svc in svcs:
+    owner, app = roles.get(svc), roles.get(f"{svc}_app")
+    if owner is None or app is None:
+        problems.append(f"managed.roles is missing {svc} or {svc}_app")
+        continue
+    if not owner.get("login") or not app.get("login"):
+        problems.append(f"role {svc} or {svc}_app is not a LOGIN role")
+    if f"{svc}_app" not in (owner.get("inRoles") or []):
+        problems.append(
+            f"role {svc} has no inRoles [{svc}_app] — the declarative"
+            f" GRANT {svc}_app TO {svc}"
+        )
+    if app.get("inRoles"):
+        problems.append(
+            f"role {svc}_app carries inRoles {app.get('inRoles')} — the"
+            " reverse membership would hand the application the owner's"
+            " privileges"
+        )
+    for r in (owner, app):
+        if not (r.get("passwordSecret") or {}).get("name"):
+            problems.append(f"role {r.get('name')} names no passwordSecret")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("1 Cluster (data/postgres), 4 services provisioned, no imageName")
+PY
+}
+
+run 'the Cluster manifest carries the per-role provisioning' green check_cluster "$DATA_DIR/postgres-cluster.yaml"
+
+# The control: the same check against a fixture with the REVOKE removed. This
+# MUST go red — a boundary the check cannot see missing is not a check.
+fixture_no_revoke="$WORK/no-revoke-cluster.yaml"
+grep -v 'REVOKE ALL ON DATABASE' "$DATA_DIR/postgres-cluster.yaml" >"$fixture_no_revoke"
+run 'control: a Cluster without the REVOKE goes red' red check_cluster "$fixture_no_revoke"
+
+# ===========================================================================
+# 10. The Redis manifest — parses, exact tag, password by reference only
+# ===========================================================================
+check_redis() {
+  "$PY" - "$1" <<'PY'
+import sys
+
+import yaml
+
+path = sys.argv[1]
+try:
+    docs = [d for d in yaml.safe_load_all(open(path, encoding="utf-8")) if d]
+except yaml.YAMLError as e:
+    print(f"does not parse ({e})")
+    sys.exit(1)
+problems = []
+by_kind = {}
+for d in docs:
+    by_kind.setdefault(d.get("kind"), []).append(d)
+for want in ("PersistentVolumeClaim", "Deployment", "Service"):
+    if want not in by_kind:
+        problems.append(f"no {want} document")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+dep = by_kind["Deployment"][0]
+container = dep["spec"]["template"]["spec"]["containers"][0]
+image = container.get("image", "")
+if image != "redis:7.4.1-alpine":
+    problems.append(f"image is {image!r}, not the exact 'redis:7.4.1-alpine'")
+if "latest" in image:
+    problems.append(f"image {image!r} floats on latest")
+cmd = " ".join(container.get("command", []))
+if "--requirepass" in cmd and "$REDIS_PASSWORD" not in cmd:
+    problems.append("a literal --requirepass password in the command")
+env = {e.get("name"): e for e in container.get("env", [])}
+ref = (env.get("REDIS_PASSWORD", {}).get("valueFrom", {}).get("secretKeyRef", {}))
+if ref.get("name") != "redis-password" or ref.get("key") != "password":
+    problems.append(
+        "REDIS_PASSWORD is not a secretKeyRef to redis-password/password"
+    )
+pvc = by_kind["PersistentVolumeClaim"][0]
+if pvc["spec"].get("storageClassName") != "local-path":
+    problems.append("the PVC is not on storageClass local-path")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("Deployment + Service + PVC, redis:7.4.1-alpine, password by secretKeyRef")
+PY
+}
+
+run 'the Redis manifest parses with an exact tag and no literal password' green check_redis "$DATA_DIR/redis.yaml"
+
+# The control: the same check against a fixture floating on latest. Must go red.
+fixture_latest_redis="$WORK/latest-redis.yaml"
+sed 's/image: redis:7.4.1-alpine/image: redis:latest/' "$DATA_DIR/redis.yaml" >"$fixture_latest_redis"
+run 'control: a Redis floating on latest goes red' red check_redis "$fixture_latest_redis"
+
+# ===========================================================================
+# 11. The recorded secret name-and-key list matches what install.sh creates
+# ===========================================================================
+#
+# The SECRET RECORD in install.sh is the drift tripwire both ways: every name
+# it lists must be created below it, and every key must appear as a
+# --from-literal. The control removes one key from a fixture copy and must go
+# red — a record the check cannot see drift in is documentation, not a check.
+check_secret_record() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
+if len(records) != 4:
+    print(f"expected 4 RECORD lines, found {len(records)}")
+    sys.exit(1)
+problems = []
+for secret, keys in records:
+    if f"create secret generic {secret}" not in src:
+        problems.append(f"{secret} is recorded but never created")
+    for key in keys.split():
+        if f"--from-literal={key}=" not in src:
+            problems.append(f"{secret} records {key} but no --from-literal sets it")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{len(records)} secrets, every recorded key created")
+PY
+}
+
+run 'the recorded secret name-and-key list matches install.sh' green check_secret_record "$SUBSTRATE/install.sh"
+
+# The control: a fixture with one key's --from-literal removed. Must go red.
+fixture_dropped_key="$WORK/install-dropped-key.sh"
+grep -v -- '--from-literal=COURIER_SMTP_PASSWORD=' "$SUBSTRATE/install.sh" >"$fixture_dropped_key"
+run 'control: a secret with a key removed goes red' red check_secret_record "$fixture_dropped_key"
 
 # ===========================================================================
 # Summary

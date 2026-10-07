@@ -456,7 +456,7 @@ install_postgres_cluster() {
     exit 1
   fi
   if [ "$want" != "$have" ]; then
-    echo "error: KIT_SUBSTRATE_DATABASES='${KIT_SUBSTRATE_DATABASES}' does not match the Cluster manifest (provisions: ${want%,})" >&2
+    echo "error: KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})" >&2
     echo "  # adding a service means extending manifests/data/postgres-cluster.yaml AND this variable in the same change" >&2
     exit 1
   fi
@@ -591,7 +591,7 @@ install_secrets() {
   case "$KIT_SUBSTRATE_SMTP_ADAPTER" in
     smtp | postmark) ;;
     *)
-      echo "error: KIT_SUBSTRATE_SMTP_ADAPTER='$KIT_SUBSTRATE_SMTP_ADAPTER' — smtp or postmark" >&2
+      echo "error: KIT_SUBSTRATE_SMTP_ADAPTER must be smtp or postmark" >&2
       exit 1
       ;;
   esac

@@ -5,9 +5,9 @@
 # `redis-cli ping` healthcheck and a `redis-data` volume; this reproduces all
 # three, in the `data` namespace beside the Postgres Cluster.
 #
-# THE TAG IS EXACT. `redis:7.4.1-alpine`, never `latest`: a floating tag in an
+# THE TAG IS EXACT. `redis:7.4.1-alpine`, never a floating tag: one in an
 # install manifest is the defect kit exists to avoid, and the gate fails a
-# `:latest` fixture under the same check this file passes.
+# floating-tag fixture under the same check this file passes.
 #
 # THE PASSWORD IS A secretKeyRef, NEVER A LITERAL. The Deployment carries no
 # `--requirepass <value>`: the password lives in the `redis-password` secret
