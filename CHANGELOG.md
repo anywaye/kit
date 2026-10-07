@@ -2,6 +2,20 @@
 
 ### Added
 
+- **`REPORT-kit-m44-gate-profile-truth-01.md`: the two written answers — the
+  gate tests no other repository, and `tests/validate.sh` is still needed.**
+  (a) Confirmed with a command of the same shape as the manager's: zero
+  `$ROOT/..` references in `tests/`, the only `../` hits are fixture strings
+  (a relative-path shape the provenance stamper must refuse), every `git
+  clone`/`fetch` is over `file://` against a bare repo the gate builds from
+  its own tree, and every `curl` is localhost or a GitHub release. (b)
+  Inventoried the six docker/network tiers with the substrate claim each
+  alone proves, and recommended **keep**: the gate is the only proof of those
+  claims, and the profile shows the top costs are substrate-backed tiers and
+  an already-parallel spawn-latency-bound parse region, so no cut keeps
+  every check and every verdict. The cut was assessed and not made; the
+  honest profile and the two answers are the deliverables.
+
 - **`PROFILE-gate-honest.md`: the measured re-derivation of the gate profile,
   from one complete run.** 493.30 s wall clock, 157 PASS / 0 FAIL / 5 SKIP,
   exit 0 — every row a real interval, the 28 `phase` + 2 `par` rows tiling
