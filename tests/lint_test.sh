@@ -184,7 +184,8 @@ KIT_YAMLLINT="$ROOT/lint/yamllint.yml"
 #       thing a reader is entitled to doubt. It is also the failure this packet
 #       exists to end: a service whose lint step lost its `--config` still runs,
 #       still passes, and is now on a policy nobody chose.
-if have golangci-lint; then
+section_go() {
+  if have golangci-lint; then
   g="$WORK/gosvc"
   mkdir -p "$g/pkg"
   cat >"$g/go.mod" <<'EOF'
@@ -329,6 +330,7 @@ else
   skip 'go: golangci-lint is not installed' 'the go control did not run'
   skip 'go: golangci-lint is not installed' 'the go negative control did not run'
 fi
+}
 
 # ===========================================================================
 # RuboCop
@@ -339,7 +341,8 @@ fi
 # same file is red on the default and green on kit's — which is a measurement of
 # the config being read, not merely of a linter existing. A fixture tripped at
 # some other cop would pass under both and prove nothing.
-if have rubocop; then
+section_ruby() {
+  if have rubocop; then
   r="$WORK/rubysvc"
   mkdir -p "$r/lib"
   cat >"$r/lib/widget.rb" <<'EOF'
@@ -422,6 +425,7 @@ else
   skip 'ruby: rubocop is not installed' 'the rubocop proof did not run'
   skip 'ruby: rubocop is not installed' 'the rubocop control did not run'
 fi
+}
 
 # ===========================================================================
 # ESLint
@@ -443,7 +447,8 @@ fi
 # because that rule is in the config's own `rules` block: a rule that is
 # switched on by kit and not by ESLint's bare recommended set, so a green run
 # means the config was not read.
-if have node && have npm; then
+section_node() {
+  if have node && have npm; then
   e="$WORK/eslintsvc"
   mkdir -p "$e/src" "$e/fixtures" "$e/.kit/lint"
   cat >"$e/package.json" <<'EOF'
@@ -806,6 +811,7 @@ else
   skip 'node: node or npm is not installed' 'the tsconfigRootDir control being distinct did not run'
   skip 'node: node or npm is not installed' 'the tsconfigRootDir control parsing did not run'
 fi
+}
 
 # ===========================================================================
 # yamllint
@@ -815,7 +821,8 @@ fi
 # the README can say so on evidence rather than by contrast. The fixture is a
 # long line and a missing `---`; both are things kit's config changes from the
 # default, so a run under it and a run without it disagree.
-if kit_bootstrap_console_script yamllint yamllint "$ROOT"; then
+section_yaml() {
+  if kit_bootstrap_console_script yamllint yamllint "$ROOT"; then
   y="$WORK/yamlsvc"
   mkdir -p "$y"
   "$PY" - "$y/bad.yml" <<'PY'
@@ -843,23 +850,35 @@ else
   skip 'yaml: yamllint could not be bootstrapped' 'the yamllint proof did not run'
   skip 'yaml: yamllint could not be bootstrapped' 'the yamllint control did not run'
 fi
+}
 
 # ===========================================================================
+# The four language sections are INDEPENDENT — each builds its own fixture in
+# its own subdirectory of $WORK and shares nothing but the helper functions
+# above. They run CONCURRENTLY, because this file's cost is process start-up
+# (four linters, ~19 real-binary spawns) and the sections have no ordering
+# dependency. The gate reads this script's EXIT STATUS, not its output, so the
+# sections overlap as long as the verdict is preserved: each writes to its own
+# log, the logs print in order, and a FAIL or SKIP line in any log is red.
+#
+# THE VERDICT IS PRESERVED by the same rule the serial path used: a section
+# that finds a failure, or skips for a missing toolchain, makes the whole
+# script exit 1. The per-assertion lines are in the section logs below.
 printf '\n'
-if [ "$failures" -ne 0 ]; then
-  echo "FAIL: lint_test — $failures of $((passes + failures)) assertions did not hold."
-  [ "$skips" -eq 0 ] || echo "note: $skips skipped (no toolchain) — a skipped lint proof is a gap."
+section_go >"$WORK/go.log" 2>&1 &
+section_ruby >"$WORK/ruby.log" 2>&1 &
+section_node >"$WORK/node.log" 2>&1 &
+section_yaml >"$WORK/yaml.log" 2>&1 &
+wait
+cat "$WORK/go.log" "$WORK/ruby.log" "$WORK/node.log" "$WORK/yaml.log"
+if grep -q 'FAIL lint_test:' "$WORK/go.log" "$WORK/ruby.log" "$WORK/node.log" "$WORK/yaml.log"; then
+  echo "FAIL: lint_test — at least one assertion did not hold (see the section logs above)."
   exit 1
 fi
-if [ "$skips" -ne 0 ]; then
-  # Loud, and fatal. Every other phase of this gate reports a skip in a summary
-  # and stays green, because a missing toolchain is an environment fact. This
-  # one is different: the claim being tested is "kit's lint configs work", and a
-  # run in which no linter executed is a run that has not tested it. The exit is
-  # the honest report, and the message says which toolchain to install.
-  echo "FAIL: lint_test — $skips assertion(s) skipped for a missing toolchain."
+if grep -q 'SKIP lint_test:' "$WORK/go.log" "$WORK/ruby.log" "$WORK/node.log" "$WORK/yaml.log"; then
+  echo "FAIL: lint_test — assertion(s) skipped for a missing toolchain."
   echo "      A skipped lint proof is not a proof. Install the toolchain and re-run:"
   echo "        golangci-lint, rubocop, node+npm — all three are exercised above."
   exit 1
 fi
-echo "PASS: lint_test — $passes assertions; every linter ran with kit's config and rejected a bad file."
+echo "PASS: lint_test — every linter ran with kit's config and rejected a bad file."
