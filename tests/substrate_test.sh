@@ -13,9 +13,10 @@
 #   printing the ordered steps, every pin is exact, every manifest parses, the
 #   two ClusterIssuers are staging and prod with distinct account keys, the
 #   Postgres Cluster reproduces the local provisioning contract, the Redis
-#   image is pinned exact, the recorded secret name-and-key list matches what
-#   install.sh creates, no image floats on `latest`, and no secret is a
-#   literal in the tree.
+#   image is pinned exact, the NATS broker is installed with the fleet's
+#   stream defined idempotently and matching the local stack's nats-stream-init,
+#   the recorded secret name-and-key list matches what install.sh creates,
+#   no image floats on `latest`, and no secret is a literal in the tree.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
 #   A check that passes against an empty directory is not a check. So each
@@ -120,26 +121,26 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The nine steps, in order. The markers are `[1/9]` … `[9/9]`; the check reads
+# The ten steps, in order. The markers are `[1/10]` … `[10/10]`; the check reads
 # them out of the output in the order they appear and compares against the
 # expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all nine.
-# The `|| true` is load-bearing: with no `[n/9]` markers printed yet, grep
+# one — would go red here rather than passing on the presence of all ten.
+# The `|| true` is load-bearing: with no `[n/10]` markers printed yet, grep
 # exits 1, and under `set -o pipefail` a failing command substitution would
 # take the harness down before the status is ever read — the same shape the
 # `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/9\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/10\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9" ]; then
-  pass 'DRY_RUN prints the nine steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10" ]; then
+  pass 'DRY_RUN prints the ten steps in order'
 else
-  fail 'DRY_RUN prints the nine steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the ten steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
 # and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
-if [ "$dry_count" -ge 9 ]; then
+if [ "$dry_count" -ge 10 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
 else
   fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 9"
@@ -180,12 +181,12 @@ import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
 pins = re.findall(
-    r'^(K3S_VERSION|CERT_MANAGER_VERSION|CNPG_VERSION|ARGOCD_VERSION)="([^"]+)"',
+    r'^(K3S_VERSION|CERT_MANAGER_VERSION|CNPG_VERSION|ARGOCD_VERSION|NATS_VERSION|NATS_BOX_VERSION)="([^"]+)"',
     src,
     re.M,
 )
-if len(pins) != 4:
-    print(f"expected 4 pins, found {len(pins)}")
+if len(pins) != 6:
+    print(f"expected 6 pins, found {len(pins)}")
     sys.exit(1)
 bad = []
 for name, val in pins:
@@ -199,7 +200,7 @@ if bad:
 PY
 }
 
-run 'every pin is exact (k3s, cert-manager, CNPG, Argo CD)' green check_pins "$SUBSTRATE/install.sh"
+run 'every pin is exact (k3s, cert-manager, CNPG, Argo CD, NATS, nats-box)' green check_pins "$SUBSTRATE/install.sh"
 
 # The control: the same check against a fixture with a floating pin. This MUST
 # go red. If it does not, the check above is not measuring what it claims.
@@ -207,6 +208,13 @@ fixture_latest="$WORK/install-latest.sh"
 sed 's/^K3S_VERSION="v1.37.1+k3s1"/K3S_VERSION="latest"/' \
   "$SUBSTRATE/install.sh" >"$fixture_latest"
 run 'control: a latest pin goes red under the same check' red check_pins "$fixture_latest"
+
+# The second control: a fixture floating the NATS pin instead. Must go red the
+# same way — a pin the check cannot see float is documentation, not a pin.
+fixture_latest_nats="$WORK/install-latest-nats.sh"
+sed 's/^NATS_VERSION="2.10.24-alpine"/NATS_VERSION="latest"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_latest_nats"
+run 'control: a latest NATS pin goes red under the same check' red check_pins "$fixture_latest_nats"
 
 # ===========================================================================
 # 4. Every manifest parses, and the Applications carry the fields Argo needs
