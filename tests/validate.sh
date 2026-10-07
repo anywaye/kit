@@ -1227,8 +1227,18 @@ ONLY_RAN=0
 # fastest way to make a reader ignore the line entirely.
 bounded_hit=0
 _timeout_bin() {
+  # `command -v`, NEVER `have`. `have` resolves its probe runner through THIS
+  # function (`runner="$(_timeout_bin ...)"`), so calling `have` here is
+  # unbounded mutual recursion: each `$( )` nests a forked child of the same
+  # gate process, and the cache `have` writes is only assigned AFTER the
+  # recursion returns — i.e. never. Measured on the pre-fix tree: one `have`
+  # call grew 427 nested gate processes in 1s (SIGTERMed at 624 in the
+  # focused-publish incident). The timeout binary gets existence, not
+  # runnability: a run-probe here would need a runner, which IS this
+  # function. A missing timeout degrades to unprobed `have` checks, the
+  # pre-Oct-05 behavior, not a hang.
   for candidate in timeout gtimeout; do
-    if have "$candidate"; then
+    if command -v "$candidate" >/dev/null 2>&1; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -4373,152 +4383,13 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # controls run the same assertions against fixtures rather than a second
   # copy of them: two copies of an assertion is one assertion that can drift.
   check_chart_publish() {
-    local workflow="$1" apps_dir="$2"
-    # The assertions live in ONE python program, written to a temp file so the
-    # real run and both controls run the SAME code: two copies of an assertion
-    # is one assertion that can drift, and a control that re-measures with a
-    # second implementation is a control that can disagree with the check.
-    local checker="$TMP/chart-publish-check.py"
-    cat >"$checker" <<'PY'
-import glob
-import re
-import sys
-
-import yaml
-
-workflow_path, apps_dir = sys.argv[1], sys.argv[2]
-problems = []
-
-# 1. Exists, parses, and is a workflow_call. PyYAML parses the bare `on:`
-# key as boolean True (YAML 1.1), so both spellings are read.
-try:
-    with open(workflow_path, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh)
-except Exception as exc:
-    sys.exit(f"{workflow_path} does not parse: {exc}")
-if not isinstance(doc, dict):
-    sys.exit(f"{workflow_path} is not a mapping")
-on = doc.get("on") or doc.get(True)
-inputs = {}
-if isinstance(on, dict):
-    inputs = ((on.get("workflow_call") or {}).get("inputs")) or {}
-if not inputs and not (isinstance(on, dict) and "workflow_call" in on):
-    problems.append("not a workflow_call reusable workflow")
-
-# 2. `push` defaults to false.
-push = inputs.get("push")
-if not isinstance(push, dict):
-    problems.append("no `push` input")
-elif push.get("default") is not False:
-    problems.append(f"`push` default is {push.get('default')!r}, not false")
-
-# 3. The default registry equals every SERVICE Application's source.repoURL.
-# Observability Applications (alloy, grafana, loki, prometheus) point at
-# upstream chart repositories by design and are skipped here — asserting them
-# here as well would pin them to a registry nothing publishes them to, which
-# is the defect w102 exists to remove. They are asserted in full by the
-# obs-chart-sources checker, which names the same four by filename.
-SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
-registry = inputs.get("registry")
-default_registry = registry.get("default") if isinstance(registry, dict) else None
-apps = sorted(glob.glob(apps_dir + "/*.yaml")) + sorted(glob.glob(apps_dir + "/*.yml"))
-if not apps:
-    problems.append(f"no Application manifests found in {apps_dir}")
-checked = 0
-for app in apps:
-    try:
-        with open(app, encoding="utf-8") as fh:
-            adoc = yaml.safe_load(fh)
-    except Exception as exc:
-        problems.append(f"{app} does not parse: {exc}")
-        continue
-    repo = ((adoc.get("spec") or {}).get("source") or {}).get("repoURL")
-    name = ((adoc.get("metadata") or {}).get("name"))
-    if name not in SERVICE_APPS:
-        continue
-    checked += 1
-    if repo != default_registry:
-        problems.append(
-            f"{app}: source.repoURL is {repo!r} but the workflow's default "
-            f"registry is {default_registry!r} — the publish/consume seam"
-        )
-
-# 4. The name and version are not inputs.
-for banned in ("chart-name", "chart-version"):
-    if banned in inputs:
-        problems.append(
-            f"`{banned}` is an input — the chart's name and version must be "
-            f"read from Chart.yaml, never copied into a service repo"
-        )
-
-# 5. The pull_request refusal is present. Comments are stripped BEFORE the
-# grep: a check that a comment can satisfy is not a check, and this
-# workflow's own header explains the refusal in prose.
-with open(workflow_path, encoding="utf-8") as fh:
-    code = "\n".join(
-        line for line in fh.read().splitlines() if not line.lstrip().startswith("#")
-    )
-if not re.search(r"github\.event_name\s*==\s*'pull_request'", code):
-    problems.append("no pull_request refusal (github.event_name == 'pull_request')")
-
-if problems:
-    for problem in problems:
-        print(f"chart publish: {problem}")
-    sys.exit(1)
-print(f"seam: default registry == source.repoURL in {checked} service Application(s)")
-PY
-
-    # The `|| ec=$?` shape is load-bearing rather than defensive: a bare
-    # `out="$(cmd)"` that fails takes the shell down under `set -e` before the
-    # status is ever read, so a check that correctly REJECTS a broken tree
-    # would take the gate with it. The guard makes the assignment part of a
-    # list, which `set -e` does not apply to.
-    local out ec=0
-    out="$("$PY" "$checker" "$workflow" "$apps_dir" 2>&1)" || ec=$?
-    if [ "$ec" -ne 0 ]; then
-      printf '%s\n' "$out" | sed 's/^/       /'
-      return 1
-    fi
-
-    # THE CONTROLS. Each builds a fixture that violates exactly one property
-    # and requires the same assertions to answer RED. A control that stays
-    # green means the check is not measuring what it claims, and that is
-    # reported as a failure of the test itself rather than passed over.
-
-    # (a) THE SEAM CONTROL: one service Application's repoURL drifted from
-    # the workflow's default registry. The publish end and the consume end
-    # disagreeing is the defect this check exists to catch, so the fixture
-    # is that disagreement, in one file, with everything else identical.
-    local seam_fixture="$TMP/chart-publish-seam"
-    rm -rf "$seam_fixture"
-    mkdir -p "$seam_fixture"
-    cp "$apps_dir"/*.yaml "$seam_fixture"/
-    # A temp file and `mv`, not `sed -i`: BSD sed (macOS) requires a backup
-    # argument after `-i` and GNU sed does not, so the in-place spelling is
-    # one platform's bug and the other's no-op.
-    sed 's|oci://ghcr.io/cafaye/charts|oci://ghcr.io/cafaye/charts-drifted|' \
-      "$seam_fixture/gateway.yaml" >"$seam_fixture/gateway.yaml.drifted"
-    mv "$seam_fixture/gateway.yaml.drifted" "$seam_fixture/gateway.yaml"
-    if "$PY" "$checker" "$workflow" "$seam_fixture" >/dev/null 2>&1; then
-      printf '       control (a) the seam control did not go red — the registry comparison is not measuring what it claims\n'
-      return 1
-    fi
-
-    # (b) THE DEFAULT CONTROL: `push` flipped to default-true. A reusable
-    # workflow that publishes by default is one every caller publishes from
-    # by accident, so the fixture is the one-line flip.
-    local push_fixture="$TMP/chart-publish-push-default.yml"
-    sed 's/default: false/default: true/' "$workflow" >"$push_fixture"
-    if "$PY" "$checker" "$push_fixture" "$apps_dir" >/dev/null 2>&1; then
-      printf '       control (b) the push-default control did not go red — the default comparison is not measuring what it claims\n'
-      return 1
-    fi
-
-    # The proof, on the way out: the seam the check measured, so a green run
-    # prints the number of Applications the registry string was compared
-    # against rather than asserting it in a comment.
-    printf '%s\n' "$out" | sed 's/^/       /'
-    return 0
+    # Single source of truth: tests/chart_publish_check.sh holds the
+    # assertions and both red controls. The gate calls it so that PASS/FAIL
+    # here means exactly what the standalone proof means — no second
+    # implementation to drift. tests/focused_publish.sh calls the same file
+    # directly, which is what keeps the focused run out of the gate's
+    # self-tests in tests/bootstrap.sh.
+    bash "$ROOT/tests/chart_publish_check.sh" "$1" "$2"
   }
 
   # -------------------------------------------------------------------------
@@ -5248,6 +5119,25 @@ check 'tests/classify_test.sh  (19 cases, incl. the fail-closed property)' \
 
 check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version)' \
   bash "$ROOT/tests/fingerprint_test.sh"
+
+# The CI path router, executed. Pure bash over synthetic argv, ~0.1s: every
+# routing class (docs, tier, publish, platform, unknown, empty, mixed
+# families, non-PR events) plus the recursion guard that fails if route.sh
+# ever names validate.sh in an executable line. Deliberately OUTSIDE any
+# RUN_* guard with the classifier and the fingerprint test: the route decides
+# which proofs run, so a skipped router is a gate that cannot say what it ran.
+check 'tests/route_test.sh  (19 cases: every routing class fails closed; the router never launches the gate)' \
+  bash "$ROOT/tests/route_test.sh"
+
+# The probe self-recursion guard, executed. `have()` resolves its probe
+# runner through `_timeout_bin()`, so `_timeout_bin()` calling `have()` back
+# is unbounded mutual recursion — one forked gate child per `$( )` level,
+# measured at 427 nested processes in 1s on the pre-fix tree (the
+# focused-publish fork bomb). Static text only, never the gate itself.
+# Deliberately OUTSIDE any RUN_* guard with the classifier and the router:
+# the probes decide what every other check can run.
+check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gate: _timeout_bin never calls have)' \
+  bash "$ROOT/tests/have_timeout_test.sh"
 
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port
 # block and only later binds it; two concurrent runs starting at the same seed

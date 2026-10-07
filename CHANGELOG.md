@@ -2,6 +2,32 @@
 
 ### Added
 
+- **Proportional CI: route docs/tier/publish changes to focused proofs,
+  everything else to the full gate.** `.github/workflows/ci.yml` now
+  classifies each pull request with `tests/route.sh` (pure bash, argv in,
+  one `ROUTE=` line out — no venv, no network, and it never launches the
+  gate) and runs exactly one proving job: `docs` runs `git diff --check`
+  and nothing else; `tier` runs `tests/focused_tier.sh` and `publish`
+  runs `tests/focused_publish.sh` (family syntax with the gate's own
+  tools, plus the gate's exact `chart publish` check for publish —
+  `tests/chart_publish_check.sh`, one file called by both the gate's
+  `check_chart_publish` and the focused script, so the two verdicts cannot
+  drift; the focused script never invokes `tests/validate.sh`, whose
+  bootstrap self-tests would re-enter the gate recursively); all
+  platform/runtime artifacts, workflows, tests, mixed families, unknown
+  or empty diffs, and every non-PR event take `full` — the unchanged
+  reusable workflow running `bash tests/validate.sh` with no flags.
+  `tests/route_test.sh` proves all 19 routing cases in ~0.1s including
+  the fail-closed property and a guard that fails if the router ever
+  names the gate in an executable line, and the full gate executes it.
+  The stable required check is still `ci / gate`, which passes iff the
+  selected route's job passed and prints which checks ran and which did
+  not; narrowed runs are never reported as platform-test passes.
+  `ci.reusable.yml` is untouched — no new input, no behavior change for
+  any consumer. Pushes to `master`, a weekly schedule, and manual
+  `workflow_dispatch` runs always take `full` and are the release proof.
+  README documents the platform/service boundary and the routing table.
+
 - **The observability `Application`s point at their official upstream chart
   repositories with pinned chart versions.** All eight `Application`s in
   `templates/substrate/manifests/applications/` named
