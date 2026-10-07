@@ -13,9 +13,10 @@
 #   printing the ordered steps, every pin is exact, every manifest parses, the
 #   two ClusterIssuers are staging and prod with distinct account keys, the
 #   Postgres Cluster reproduces the local provisioning contract, the Redis
-#   image is pinned exact, the recorded secret name-and-key list matches what
-#   install.sh creates, no image floats on `latest`, and no secret is a
-#   literal in the tree.
+#   image is pinned exact, the NATS broker is installed with the fleet's
+#   stream defined idempotently and matching the local stack's nats-stream-init,
+#   the recorded secret name-and-key list matches what install.sh creates,
+#   no image floats on `latest`, and no secret is a literal in the tree.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
 #   A check that passes against an empty directory is not a check. So each
@@ -120,26 +121,26 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The nine steps, in order. The markers are `[1/9]` … `[9/9]`; the check reads
+# The ten steps, in order. The markers are `[1/10]` … `[10/10]`; the check reads
 # them out of the output in the order they appear and compares against the
 # expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all nine.
-# The `|| true` is load-bearing: with no `[n/9]` markers printed yet, grep
+# one — would go red here rather than passing on the presence of all ten.
+# The `|| true` is load-bearing: with no `[n/10]` markers printed yet, grep
 # exits 1, and under `set -o pipefail` a failing command substitution would
 # take the harness down before the status is ever read — the same shape the
 # `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/9\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/10\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9" ]; then
-  pass 'DRY_RUN prints the nine steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10" ]; then
+  pass 'DRY_RUN prints the ten steps in order'
 else
-  fail 'DRY_RUN prints the nine steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the ten steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
 # and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
-if [ "$dry_count" -ge 9 ]; then
+if [ "$dry_count" -ge 10 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
 else
   fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 9"
@@ -180,12 +181,12 @@ import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
 pins = re.findall(
-    r'^(K3S_VERSION|CERT_MANAGER_VERSION|CNPG_VERSION|ARGOCD_VERSION)="([^"]+)"',
+    r'^(K3S_VERSION|CERT_MANAGER_VERSION|CNPG_VERSION|ARGOCD_VERSION|NATS_VERSION|NATS_BOX_VERSION)="([^"]+)"',
     src,
     re.M,
 )
-if len(pins) != 4:
-    print(f"expected 4 pins, found {len(pins)}")
+if len(pins) != 6:
+    print(f"expected 6 pins, found {len(pins)}")
     sys.exit(1)
 bad = []
 for name, val in pins:
@@ -199,7 +200,7 @@ if bad:
 PY
 }
 
-run 'every pin is exact (k3s, cert-manager, CNPG, Argo CD)' green check_pins "$SUBSTRATE/install.sh"
+run 'every pin is exact (k3s, cert-manager, CNPG, Argo CD, NATS, nats-box)' green check_pins "$SUBSTRATE/install.sh"
 
 # The control: the same check against a fixture with a floating pin. This MUST
 # go red. If it does not, the check above is not measuring what it claims.
@@ -207,6 +208,13 @@ fixture_latest="$WORK/install-latest.sh"
 sed 's/^K3S_VERSION="v1.37.1+k3s1"/K3S_VERSION="latest"/' \
   "$SUBSTRATE/install.sh" >"$fixture_latest"
 run 'control: a latest pin goes red under the same check' red check_pins "$fixture_latest"
+
+# The second control: a fixture floating the NATS pin instead. Must go red the
+# same way — a pin the check cannot see float is documentation, not a pin.
+fixture_latest_nats="$WORK/install-latest-nats.sh"
+sed 's/^NATS_VERSION="2.10.24-alpine"/NATS_VERSION="latest"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_latest_nats"
+run 'control: a latest NATS pin goes red under the same check' red check_pins "$fixture_latest_nats"
 
 # ===========================================================================
 # 4. Every manifest parses, and the Applications carry the fields Argo needs
@@ -798,6 +806,253 @@ fixture_extra_key="$WORK/install-extra-key.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_extra_key"
 printf '\n--from-literal=EXTRA_UNRECORDED_KEY=x\n' >>"$fixture_extra_key"
 run 'control: a secret with an unrecorded key goes red' red check_secret_record "$fixture_extra_key"
+
+# ===========================================================================
+# 12. NATS with JetStream — the bus the local stack runs, on the box too
+# ===========================================================================
+#
+# The local stack runs NATS with JetStream (`nats` with `-js`, plus the
+# one-shot `nats-stream-init` defining stream `cafaye`); the substrate
+# installed no broker, so on the box every event with no matching stream is a
+# silent black hole — the exact failure `nats-stream-init`'s comment exists to
+# prevent. Step 10 installs one Deployment + Service + PVC in `data` and
+# defines the same stream, idempotently (`info || add`, mirroring the local
+# service). Three checks: the manifest carries the broker, install.sh applies
+# it and defines the stream, and the two renders agree — the drift check
+# parses BOTH contracts and fails on divergence, so local and substrate
+# cannot drift apart silently. Each has a fixture control that must go red.
+COMPOSE_STACK="$ROOT/templates/compose/docker-compose.yml"
+
+check_nats_manifest() {
+  "$PY" - "$1" <<'PY'
+import sys
+
+import yaml
+
+path = sys.argv[1]
+try:
+    docs = [d for d in yaml.safe_load_all(open(path, encoding="utf-8")) if d]
+except yaml.YAMLError as e:
+    print(f"does not parse ({e})")
+    sys.exit(1)
+except OSError as e:
+    print(f"{path}: unreadable ({e})")
+    sys.exit(1)
+problems = []
+by_kind = {}
+for d in docs:
+    by_kind.setdefault(d.get("kind"), []).append(d)
+if sorted(by_kind) != ["Deployment", "PersistentVolumeClaim", "Service"]:
+    problems.append(
+        f"kinds are {sorted(by_kind)}, not exactly [Deployment,"
+        " PersistentVolumeClaim, Service]"
+    )
+    print("; ".join(problems))
+    sys.exit(1)
+dep = by_kind["Deployment"][0]
+meta = dep.get("metadata", {})
+if meta.get("name") != "nats" or meta.get("namespace") != "data":
+    problems.append(
+        f"Deployment is {meta.get('namespace')}/{meta.get('name')}, not"
+        " data/nats"
+    )
+if dep.get("spec", {}).get("replicas") != 1:
+    problems.append("replicas is not 1 — one box, one broker; a second replica without a route is a split brain")
+containers = dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+if len(containers) != 1:
+    problems.append(f"expected 1 container, found {len(containers)}")
+    print("; ".join(problems))
+    sys.exit(1)
+container = containers[0]
+if container.get("image") != "NATS_IMAGE_PLACEHOLDER":
+    problems.append(
+        f"image is {container.get('image')!r}, not NATS_IMAGE_PLACEHOLDER —"
+        " the pin lives in install.sh ($NATS_VERSION) and is substituted at"
+        " apply time; a literal tag here is a second opinion"
+    )
+tokens = container.get("command", [])
+for flag in ("-js", "-sd", "/data", "-m", "8222"):
+    if flag not in tokens:
+        problems.append(
+            f"broker command is missing {flag!r} — without -js the bus is"
+            " at-most-once and every publish is unacked file storage"
+        )
+for probe in ("livenessProbe", "readinessProbe"):
+    if probe not in container:
+        problems.append(f"no {probe} — an unprobed broker is never waited on")
+    elif "8222" not in str(container[probe]):
+        problems.append(
+            f"{probe} does not hit the monitor port 8222 — the same signal"
+            " the local stack's healthcheck uses"
+        )
+mounts = container.get("volumeMounts", [])
+if not any(m.get("mountPath") == "/data" for m in mounts):
+    problems.append("nothing mounts /data — file storage without a volume is a fresh broker on every restart")
+svc = by_kind["Service"][0]
+ports = sorted(p.get("port") for p in svc.get("spec", {}).get("ports", []))
+if ports != [4222, 8222]:
+    problems.append(
+        f"Service ports are {ports}, not [4222, 8222] (client + monitor)"
+    )
+pvc = by_kind["PersistentVolumeClaim"][0]
+if pvc.get("spec", {}).get("storageClassName") != "local-path":
+    problems.append("the PVC is not on storageClass local-path (k3s's default provisioner)")
+if not (pvc.get("spec", {}).get("resources", {}).get("requests", {}).get("storage")):
+    problems.append("the PVC requests no storage")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("Deployment + Service + PVC, -js file storage, monitor probes, image from install.sh")
+PY
+}
+
+check_nats_install() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+problems = []
+
+
+def need(sub, msg):
+    if sub not in code:
+        problems.append(msg)
+
+
+need("TOTAL=10", "TOTAL is not 10 — step 10 (NATS) widens the plan and the DRY_RUN order check with it")
+need('NATS_VERSION="2.10.24-alpine"', "no exact NATS_VERSION pin beside the other pins")
+need('NATS_BOX_VERSION="0.20.0"', "no exact NATS_BOX_VERSION pin for the stream-init image")
+if not re.search(r"(?m)^install_nats\(\)", code):
+    problems.append("no install_nats step")
+if not re.search(r"(?m)^  install_nats$", code):
+    problems.append("main never calls install_nats")
+need("    nats)", "the guard has no nats component — a re-run would reinstall the broker")
+need("NATS_IMAGE_PLACEHOLDER", "the broker manifest substitution is missing")
+need("nats:${NATS_VERSION}", "the broker image is not substituted from $NATS_VERSION — the pin lives in two places")
+need("nats stream info cafaye", "the stream is never inspected before creation")
+need("nats stream add cafaye", "the stream cafaye is never created")
+if not any(
+    "nats stream info cafaye" in ln and "||" in ln and "nats stream add cafaye" in ln
+    for ln in code.splitlines()
+):
+    problems.append(
+        "the stream init is not the idempotent info || add shape — a plain"
+        " add fails every second run (measured: exit 1, stream already in use)"
+    )
+need(
+    '"identity.>,billing.>,courier.>,muse.>,darkroom.>"',
+    "the fleet subject set is not the local one — an uncovered prefix is a silent black hole",
+)
+for flag in ("--storage file", "--retention limits", "--max-age 7d", "--discard old", "--replicas 1", "--defaults"):
+    need(flag, f"the stream spec is missing {flag} — the drift check names the divergence")
+need("--restart=Never", "the one-shot pod must never restart — a restart policy hides a failed add")
+need("status.phase", "nothing waits for the one-shot pod's completion — a failed init would pass silently")
+need("Succeeded", "the wait does not assert the Succeeded phase")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("step 10 applies the broker and defines stream cafaye idempotently")
+PY
+}
+
+check_nats_drift() {
+  "$PY" - "$1" "$2" <<'PY'
+import re
+import sys
+
+compose = open(sys.argv[1], encoding="utf-8").read()
+install = open(sys.argv[2], encoding="utf-8").read()
+problems = []
+
+
+def grp(pat, text, label):
+    m = re.search(pat, text)
+    if not m:
+        problems.append(f"could not parse {label}")
+        return None
+    return m.group(1)
+
+
+ctag = grp(r"KIT_NATS_TAG:-([^}]+)", compose, "the compose KIT_NATS_TAG default")
+itag = grp(r'(?m)^NATS_VERSION="([^"]+)"', install, "install.sh NATS_VERSION")
+if ctag and itag and ctag != itag:
+    problems.append(f"broker image drift: compose defaults to {ctag}, install.sh pins {itag}")
+cbox = grp(r"KIT_NATS_BOX_TAG:-([^}]+)", compose, "the compose KIT_NATS_BOX_TAG default")
+ibox = grp(r'(?m)^NATS_BOX_VERSION="([^"]+)"', install, "install.sh NATS_BOX_VERSION")
+if cbox and ibox and cbox != ibox:
+    problems.append(f"nats-box image drift: compose defaults to {cbox}, install.sh pins {ibox}")
+
+
+def stream_flags(text, label):
+    i = text.find("nats stream add cafaye")
+    if i < 0:
+        problems.append(f"{label}: no `nats stream add cafaye`")
+        return None
+    seg = text[i : i + 600]
+    out = {}
+    m = re.search(r'--subjects\s+"([^"]+)"', seg)
+    if not m:
+        problems.append(f"{label}: the --subjects set is unparsable")
+        return None
+    out["subjects"] = m.group(1)
+    for flag in ("storage", "retention", "max-age", "discard", "replicas"):
+        m = re.search(r"--" + flag + r"\s+(\S+)", seg)
+        if not m:
+            problems.append(f"{label}: --{flag} is missing from the stream spec")
+            return None
+        out[flag] = m.group(1)
+    if "--defaults" not in seg:
+        problems.append(f"{label}: --defaults is missing — without it the CLI waits on a terminal that is not there")
+    return out
+
+
+cflags = stream_flags(compose, "compose nats-stream-init")
+iflags = stream_flags(install, "install.sh stream init")
+if cflags and iflags:
+    for flag in ("subjects", "storage", "retention", "max-age", "discard", "replicas"):
+        if cflags[flag] != iflags[flag]:
+            problems.append(
+                f"stream drift on --{flag}: local is {cflags[flag]!r}, substrate is {iflags[flag]!r}"
+            )
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"broker {itag} + nats-box {ibox}, stream cafaye {cflags['subjects']} storage={cflags['storage']} retention={cflags['retention']} max-age={cflags['max-age']}")
+PY
+}
+
+run 'the NATS manifest carries the broker (Deployment + Service + PVC, -js, monitor probes)' green check_nats_manifest "$DATA_DIR/nats.yaml"
+
+# The controls: a fixture without -js, and a fixture floating on latest. Both
+# MUST go red under the same check the real manifest passes.
+fixture_no_js="$WORK/nats-no-js.yaml"
+if [ -r "$DATA_DIR/nats.yaml" ]; then
+  grep -v '"-js"' "$DATA_DIR/nats.yaml" >"$fixture_no_js"
+  run 'control: a NATS manifest without -js goes red' red check_nats_manifest "$fixture_no_js"
+  fixture_float_nats="$WORK/nats-float.yaml"
+  sed 's/NATS_IMAGE_PLACEHOLDER/nats:latest/' "$DATA_DIR/nats.yaml" >"$fixture_float_nats"
+  run 'control: a NATS manifest floating on latest goes red' red check_nats_manifest "$fixture_float_nats"
+else
+  fail 'controls: the NATS fixtures need the real manifest' "$DATA_DIR/nats.yaml is missing — the green check above names what is missing"
+fi
+
+run 'install.sh applies the broker and defines stream cafaye idempotently' green check_nats_install "$SUBSTRATE/install.sh"
+
+# The control: a fixture with one publisher dropped from the subject set. Must
+# go red — a subject list the check cannot see shrink is documentation.
+fixture_subjects="$WORK/install-nats-subjects.sh"
+sed 's/muse\.>,darkroom\.>/muse.>/' "$SUBSTRATE/install.sh" >"$fixture_subjects"
+run 'control: a stream missing a publisher goes red' red check_nats_install "$fixture_subjects"
+
+run 'the substrate stream spec equals the compose stack nats-stream-init args' green check_nats_drift "$COMPOSE_STACK" "$SUBSTRATE/install.sh"
+
+# The drift control mutates ONE side only: a substrate copy with a 30d replay
+# window must disagree with the untouched stack. Must go red.
+fixture_drift="$WORK/install-nats-drift.sh"
+sed 's/--max-age 7d/--max-age 30d/' "$SUBSTRATE/install.sh" >"$fixture_drift"
+run 'control: a substrate with a drifted max-age goes red' red check_nats_drift "$COMPOSE_STACK" "$fixture_drift"
 
 # ===========================================================================
 # Summary

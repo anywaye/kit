@@ -1,0 +1,138 @@
+---
+# NATS with JetStream: the bus the local stack runs, on the box too.
+#
+# The local stack runs `nats:${KIT_NATS_TAG:-2.10.24-alpine}` with `-js` plus
+# the one-shot `nats-stream-init` defining stream `cafaye`; this reproduces
+# the broker half in the `data` namespace beside the Postgres Cluster and
+# Redis. (The stream half lives in install.sh step 10, not here: a manifest
+# cannot express check-then-create, and a Job object would need deleting
+# before every re-run to run again.)
+#
+# THE TAG IS A PLACEHOLDER, NOT A PIN. `NATS_IMAGE_PLACEHOLDER` is substituted
+# by install.sh step 10 with `nats:${NATS_VERSION}` in a pipe at apply time
+# (the TLS step's shape for the ACME email) — so the pin lives in exactly one
+# place and this file never carries a second opinion. A literal tag here fails
+# the gate, the way a second pin anywhere else would.
+#
+# THE SHAPE, and each choice, mirroring the local service:
+#   `-js`            JetStream on. Without it a service that publishes and then
+#                    crashes loses the message, and the at-least-once guarantee
+#                    quietly becomes at-most-once. The gate fails a fixture
+#                    without it under the same check this file passes.
+#   `-sd /data`      file storage on the `nats-data` volume, which survives a
+#                    restart the way the local volume survives `bin/dev down`.
+#                    Memory storage would turn at-least-once back into
+#                    at-most-once on every reschedule.
+#   `-m 8222`        the monitoring port, which is what both probes read: the
+#                    local healthcheck probes /healthz on it because it answers
+#                    200 only once JetStream is up, which is a stronger signal
+#                    than a TCP connect to the client port.
+#   replicas: 1      one box, one broker. A second replica without a route is
+#                    a split brain, not capacity (the Redis manifest says the
+#                    same about its own dataset, for the same reason).
+#   ports            4222 client, 8222 monitor — the same two the local stack
+#                    publishes, unrenumbered so a client config moves unchanged.
+#
+# No secret VALUE is a literal anywhere in this file: NATS carries no
+# credentials on this substrate (no clustering, no client TLS — one box, the
+# packet's explicit non-goal), so there is nothing to reference.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nats-data
+  namespace: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # k3s's default provisioner: the box's own disk, like the Postgres Cluster's
+  # and Redis's. 5Gi is the box's disk budget for the bus, not a JetStream
+  # sizing rule — the stream is age-bounded (7d, see step 10), so the volume
+  # holds a week of fleet events and no more.
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats
+  namespace: data
+spec:
+  # Exactly one. See the header: a second replica without a route is a split
+  # brain, not capacity.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats
+    spec:
+      containers:
+        - name: nats
+          # Substituted at apply time by install.sh step 10 — never a literal
+          # tag here (see the header). Renders to nats:<NATS_VERSION>.
+          image: NATS_IMAGE_PLACEHOLDER
+          # The local service's command, flag for flag.
+          command:
+            - "-js"
+            - "-sd"
+            - "/data"
+            - "-m"
+            - "8222"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          # The monitor answers 200 only once the server (and JetStream) is
+          # up — the same signal the local healthcheck probes with wget.
+          # Numeric, not named: the check asserts the literal 8222, and a name
+          # would resolve through one more indirection to the same number.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            # A broker on a shared box: bounded, small, and stated as a share
+            # of the 8GB box, not as a NATS measurement.
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          volumeMounts:
+            - name: nats-data
+              mountPath: /data
+      volumes:
+        - name: nats-data
+          persistentVolumeClaim:
+            claimName: nats-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor

@@ -18,7 +18,7 @@ this file only describes what is here and what is proven.
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
 | `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Loki, Grafana, Prometheus). |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
-| `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — and `redis.yaml` — one Deployment + Service + PVC. |
+| `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
 ## What `install.sh` does
 
@@ -48,6 +48,14 @@ this file only describes what is here and what is proven.
    values are shape-validated and never echoed. Two guarded halves in one
    step, so a half-finished step 9 resumes the secrets without touching
    Redis.
+10. **NATS with JetStream and the fleet's stream** — one Deployment + Service
+    + PVC in `data`, applied from `manifests/data/nats.yaml` with the pinned
+    image substituted at apply time, then the one-shot stream init defining
+    stream `cafaye` (same subjects, retention, storage and replicas as the
+    local `nats-stream-init`; the gate refuses drift). The broker half is
+    guarded like every other step; the stream init runs on every install and
+    is a no-op when the stream exists (`info || add`), failing the install
+    loudly when it does not.
 
 Every version is pinned exactly. The pins were verified against the GitHub
 releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
@@ -206,10 +214,10 @@ rather than planned — the refusal is the contract, and
 validated on the live path only: a plan does not need credentials to print.
 The full plan needs only the database list.
 
-## The data layer: Postgres and Redis
+## The data layer: Postgres, Redis and NATS
 
-`manifests/data/` holds two files, and both are applied by `install.sh`
-(steps 8–9), not by Argo: the Postgres cluster and Redis are platform state,
+`manifests/data/` holds three files, and all three are applied by `install.sh`
+(steps 8–10), not by Argo: the Postgres cluster, Redis and NATS are platform state,
 not services, and the install already carries that class of component
 (cert-manager, CNPG's operator).
 
@@ -247,6 +255,18 @@ sentinel is a split brain) + Service + PVC at the exact tag
 `redis:7.4.1-alpine`, with `--appendonly yes` and the `redis-cli ping`
 healthcheck the local stack runs. The password is a `secretKeyRef` to the
 generated `redis-password` secret, never a literal `--requirepass`.
+
+**NATS** is one Deployment (replicas exactly 1 — one box, one broker) +
+Service + PVC running the broker with `-js` and file storage on the
+`nats-data` volume, with `/healthz` probes on the monitor port — the same
+signal the local stack's healthcheck uses. The manifest carries
+`NATS_IMAGE_PLACEHOLDER` where the tag goes; install.sh step 10 substitutes
+the pinned image at apply time, so the pin lives in exactly one place. The
+fleet's stream (`cafaye`: `identity.>`, `billing.>`, `courier.>`, `muse.>`,
+`darkroom.>` — file storage, `limits` retention, 7d max-age, `old` discard,
+1 replica) is defined by step 10's one-shot init, mirroring the local
+`nats-stream-init` flag for flag; `tests/substrate_test.sh` parses both
+renders and refuses drift.
 
 ## The services' secrets
 
@@ -347,7 +367,7 @@ operator action, and the URL works only when observed.
 
 - `install.sh` parses (`bash -n`) and is shellcheck-clean.
 - `DRY_RUN=1` runs to completion with the database list set,
-  printing the nine steps in order, each with an action.
+  printing the ten steps in order, each with an action.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
@@ -360,6 +380,13 @@ operator action, and the URL works only when observed.
   `install.sh` — a fixture with no default goes **red**.
 - The Redis manifest parses with the exact tag `redis:7.4.1-alpine` and the
   password by `secretKeyRef` only — a floating-tag fixture goes **red**.
+- The NATS manifest carries one Deployment + Service + PVC with `-js` file
+  storage and monitor-port probes, its image the `NATS_IMAGE_PLACEHOLDER`
+  `install.sh` substitutes — fixtures without `-js` or floating on `latest`
+  go **red** — and step 10 defines stream `cafaye` idempotently
+  (`info || add`) with the local stack's subject set and flags, while the
+  drift check parses both renders and refuses divergence (a fixture missing a
+  publisher, or with a drifted `max-age`, goes **red**).
 - The recorded secret name-and-key list matches what `install.sh` creates —
   a fixture with a key removed goes **red** either way (and an unrecorded
   key the other way) — and no operator value is ever echoed.
@@ -418,7 +445,7 @@ this paragraph is unexercised.
 
 The first real run, on a Linux box with 8GB or more:
 
-1. `curl https://kit.cafaye.com | sh` completes all nine steps.
+1. `curl https://kit.cafaye.com | sh` completes all ten steps.
 2. `kubectl get nodes` shows the node Ready.
 3. `kubectl get applications -n argocd` shows all eight Applications synced.
 4. The observability stack is reachable and retaining.

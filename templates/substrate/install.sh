@@ -23,6 +23,10 @@
 #      gateway-secrets, courier-secrets, parlor-secrets, one per namespace,
 #      each exactly the keys its chart reads (see the SECRET RECORD on
 #      install_service_secrets)
+#   10. NATS with JetStream (single instance) and the fleet's stream — one
+#      Deployment + Service + PVC in `data`, plus the one-shot stream init
+#      defining stream `cafaye`, mirroring templates/compose's nats-stream-init
+#      (same subjects, retention, storage, replicas — the gate refuses drift).
 #
 # THE OPERATOR-SUPPLIED VALUES (besides steps 5 and 7):
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
@@ -89,6 +93,14 @@ K3S_VERSION="v1.37.1+k3s1"
 CERT_MANAGER_VERSION="v1.21.2"
 CNPG_VERSION="v1.30.1"
 ARGOCD_VERSION="v3.5.4"
+# NATS pins. The defaults match the local stack's (compose renders
+# `nats:${KIT_NATS_TAG:-2.10.24-alpine}` and
+# `natsio/nats-box:${KIT_NATS_BOX_TAG:-0.20.0}`) — one fact, two renders, and
+# the gate's drift check refuses a divergence. The broker manifest carries
+# NATS_IMAGE_PLACEHOLDER where the tag goes, substituted at apply time, so the
+# pin lives here and nowhere else.
+NATS_VERSION="2.10.24-alpine"
+NATS_BOX_VERSION="0.20.0"
 
 # --- operator-supplied values ----------------------------------------------
 # KIT_SUBSTRATE_PULL_SECRET is the base64 dockerconfigjson GHCR needs. Read
@@ -208,6 +220,12 @@ kit_substrate_guard() {
     redis)
       kubectl --kubeconfig="$KUBECONFIG" get deployment redis -n data >/dev/null 2>&1
       ;;
+    nats)
+      # The broker only. The stream init below it runs on every install —
+      # `info || add` makes that a no-op when the stream exists — so a re-run
+      # heals a missing stream without touching a healthy broker.
+      kubectl --kubeconfig="$KUBECONFIG" get deployment nats -n data >/dev/null 2>&1
+      ;;
     secrets)
       # All four service secrets exist. One missing re-runs the whole step,
       # which reads every existing value back rather than regenerating —
@@ -226,7 +244,7 @@ kit_substrate_guard() {
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
-TOTAL=9
+TOTAL=10
 
 log_step() {
   STEP=$((STEP + 1))
@@ -783,6 +801,74 @@ install_service_secrets() {
   fi
 }
 
+# --- step 10: NATS with JetStream and the fleet's stream -----------------------
+# One Deployment + Service + PVC in `data` (manifests/data/nats.yaml: an
+# accessory like Redis — no clustering, no credentials, no client TLS on one
+# box), plus the stream the fleet publishes to, defined idempotently.
+#
+# THE IMAGE IS SUBSTITUTED, NOT LITERAL. nats.yaml carries
+# NATS_IMAGE_PLACEHOLDER where the tag goes; the apply below replaces it with
+# the pinned image in a pipe (the TLS step's shape for the ACME email), so the
+# pin lives in exactly one place and never reaches disk unsubstituted.
+#
+# THE STREAM INIT MIRRORS nats-stream-init. The local one-shot runs
+# check-then-create (`nats stream info cafaye` exits 1 when the stream is
+# absent, so the `add` runs only then — a plain `add` is NOT idempotent), with
+# the same subjects, storage, retention, max-age, discard and replicas. Here
+# the same command runs in an ephemeral pod (`kubectl run` with the nats-box
+# image and NATS_URL pointed at the in-cluster Service): the guard above
+# skips the BROKER on a re-run, but the stream init runs every time, and
+# `info || add` makes that a no-op when the stream exists.
+#
+# A FAILED INIT FAILS THE INSTALL LOUDLY. The pod runs with Never semantics,
+# it is waited on to the Succeeded phase, and a Failed phase prints the pod's
+# logs and exits non-zero — never hidden behind a restart policy (which is why
+# the pod is deleted only on success; a failed pod is left for diagnosis and
+# removed at the start of the next run by the delete below).
+install_nats() {
+  log_step "NATS with JetStream ${NATS_VERSION} and stream cafaye (in the data namespace)"
+  if kit_substrate_guard nats; then
+    echo "      already installed, skipping the broker (the stream init still runs)"
+  elif dry_run "substitute NATS_IMAGE_PLACEHOLDER with nats:${NATS_VERSION} and apply ${DATA_DIR}/nats.yaml, then wait for deployment nats"; then
+    :
+  else
+    kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
+      kubectl --kubeconfig="$KUBECONFIG" apply -f -
+    sed "s/NATS_IMAGE_PLACEHOLDER/nats:${NATS_VERSION}/" "$DATA_DIR/nats.yaml" |
+      kubectl --kubeconfig="$KUBECONFIG" apply -f -
+    kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment nats -n data --timeout=180s
+  fi
+  if dry_run "run one-shot pod nats-stream-init (image natsio/nats-box:${NATS_BOX_VERSION}) ensuring stream cafaye"; then
+    return 0
+  fi
+  kubectl --kubeconfig="$KUBECONFIG" delete pod nats-stream-init -n data --ignore-not-found >/dev/null
+  kubectl --kubeconfig="$KUBECONFIG" run nats-stream-init -n data \
+    --restart=Never \
+    --image="natsio/nats-box:${NATS_BOX_VERSION}" \
+    --env="NATS_URL=nats://nats.data.svc.cluster.local:4222" \
+    --command -- sh -c 'nats stream info cafaye >/dev/null 2>&1 || nats stream add cafaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
+  local phase="" tries=24
+  while [ "$tries" -gt 0 ]; do
+    phase="$(kubectl --kubeconfig="$KUBECONFIG" get pod nats-stream-init -n data -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    case "$phase" in
+      Succeeded)
+        kubectl --kubeconfig="$KUBECONFIG" delete pod nats-stream-init -n data >/dev/null
+        echo "      stream cafaye exists (created or already present)"
+        return 0
+        ;;
+      Failed)
+        echo "error: the NATS stream init failed — the pod is left in namespace data for diagnosis:" >&2
+        kubectl --kubeconfig="$KUBECONFIG" logs pod/nats-stream-init -n data >&2 || true
+        exit 1
+        ;;
+    esac
+    tries=$((tries - 1))
+    sleep 5
+  done
+  echo "error: timed out waiting for pod nats-stream-init (last phase: '${phase:-unknown}') — the pod is left for diagnosis" >&2
+  exit 1
+}
+
 # --- main -------------------------------------------------------------------
 main() {
   preflight
@@ -795,6 +881,7 @@ main() {
   install_cluster_issuers
   install_postgres_cluster
   install_redis_and_secrets
+  install_nats
   echo
   echo "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   echo "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"
