@@ -2,6 +2,34 @@
 
 ### Added
 
+- **`templates/substrate/`: the customer substrate — the one-command install,
+  and the Applications that make it real.** `install.sh` is the executable
+  half of `DEPLOYMENT.md`: it installs k3s (single node, sqlite), cert-manager,
+  CloudNativePG, Argo CD core, the GHCR image pull secret (from
+  `KIT_SUBSTRATE_PULL_SECRET`, never a literal), and the first Applications, in
+  that order. Every version is pinned exactly — k3s `v1.37.1+k3s1`,
+  cert-manager `v1.21.2`, CloudNativePG `v1.30.1`, Argo CD `v3.5.4` — each
+  verified against the GitHub releases API on 2026-10-07. The script is
+  idempotent (`kit_substrate_guard` is the named per-component guard), fails
+  loudly and early (no root, no curl, non-Linux, unsupported arch, <4GB RAM,
+  unreachable registry each refuse by name before anything is half-installed),
+  and `DRY_RUN=1` prints every step and executes nothing. The eight
+  `Application` manifests are the four launch services (identity, gateway,
+  courier, parlor) and the observability set (Alloy, Loki, Grafana,
+  Prometheus); traces are deferred, so there is no Tempo Application.
+  `tests/substrate_test.sh` proves the parts that need no box — the script
+  parses, DRY_RUN runs to completion printing the six steps in order, every pin
+  is exact, every manifest parses with `spec.source` and `spec.destination`, no
+  image floats on `latest`, and no secret is a literal — and every claim has a
+  control that must answer differently (a `latest` pin, a broken manifest, a
+  planted `:latest` tag and a planted `stringData:` secret each go red under
+  the same check the real tree passes). **What is NOT proven, and is written
+  as unexercised rather than done:** that k3s installs, that Argo syncs, that
+  the charts exist. This machine is macOS and cannot run k3s, so `install.sh`
+  has never been executed here; the proof is `DRY_RUN=1` plus the checks.
+  `templates/substrate/README.md` carries the same sentence, and names what a
+  customer box must still prove.
+
 - **`tests/lint_test.sh`: the four independent lint sections now run
   concurrently.** The go/ruby/node/yaml sections each build their own fixture in
   their own subdirectory of `$WORK` and share nothing but the helper
