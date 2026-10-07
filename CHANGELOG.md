@@ -2,6 +2,62 @@
 
 ### Added
 
+- **The publish end of the pull-based loop: `chart.reusable.yml`, the
+  composed `publish.reusable.yml`, and the caller template.** `DEPLOYMENT.md`'s
+  deploy loop is pull-based — a commit changes a chart, Argo makes the box
+  agree — and only the consume end existed: eight Argo CD `Application`s pull
+  `oci://ghcr.io/cafaye/charts` and nothing in the fleet ever ran `helm push`
+  or `helm package`, so every `Application` pointed at a registry nothing
+  wrote to, and the failure is silent — Argo reports no error, it just never
+  finds the artifact. `.github/workflows/chart.reusable.yml` is a
+  `workflow_call` reusable workflow that packages the chart directory and
+  pushes it to the Helm OCI registry, modelled on `image.reusable.yml`: `push`
+  is an input defaulting to **false** (a reusable workflow that publishes by
+  default is one every caller publishes from by accident); `registry` defaults
+  to `oci://ghcr.io/cafaye/charts`, the exact string every `Application`
+  carries as `source.repoURL`; `chart-dir` defaults to `chart/`, where
+  `caf gen chart` writes. The chart's **name and version are read from
+  `Chart.yaml`, never inputs** — the OCI tag of a Helm chart IS its `version`,
+  so the push tag and the pull `targetRevision` are one fact written twice,
+  and an input is a string a service copies into its own repo, which drifts
+  from the chart it names. The credential is the workflow's own `GITHUB_TOKEN`
+  (`helm registry login ghcr.io`, no PAT, nothing to rotate) with
+  `packages: write` declared in the job and **granted by the caller** — a
+  reusable workflow can request a permission but cannot grant itself one.
+  helm is pinned (`v4.3.0`, via the upstream script's own `--version`
+  mechanism), never `latest`; the job **refuses to publish from a
+  `pull_request`** regardless of what a caller asks, because a fork's token
+  is read-only and publishing from a PR is a registry write by untrusted
+  code; and the chart the repo declares is the chart that is pushed —
+  `version`/`appVersion` are never rewritten from git and no `latest` tag is
+  added. One measured correction from the first draft: `helm push` APPENDS
+  the chart's own name and version to whatever remote it is given, so the
+  push target is the registry (`oci://ghcr.io/cafaye/charts`) and the name
+  read from `Chart.yaml` appears only in the reference the log prints —
+  pushing at `oci://…/charts/<name>` lands the chart at
+  `charts/<name>/<name>:<version>`, which no `helm pull oci://…/charts/<name>`
+  will ever find (measured against a local registry).
+  `.github/workflows/publish.reusable.yml` composes the two halves — one
+  `workflow_call` calling both `image.reusable.yml` and `chart.reusable.yml`
+  with the caller's single `push` threaded through — so a service's
+  `publish.yml` is one `uses:` and the decision "what does a push publish" is
+  made once, in kit. It declares the full `contents: read` + `packages: write`
+  set at top level so the nested jobs keep `packages: write` through two
+  levels of `workflow_call`, and its `concurrency.group` is `kit-`-namespaced
+  per the fleet rule. `templates/publish/publish.yml` is the caller a service
+  copies: `on: push: branches: [master]`, both permissions, a non-colliding
+  concurrency group with `cancel-in-progress: true`, and
+  `uses: cafaye/kit/.github/workflows/publish.reusable.yml@master` with
+  `push: true`. `check_chart_publish` in `tests/validate.sh` proves the
+  publish/consume seam in kit's own gate — the workflow's default registry
+  against every `Application`'s `source.repoURL` — with two controls that
+  must go red (a drifted `repoURL`; `push`'s default flipped to true), and
+  `templates/publish/*` joins the artifact-parses loop. **What remains:** the
+  charts themselves do not exist yet — each service runs `caf gen chart` and
+  commits `chart/`, and copying the caller into gateway, courier, parlor (and
+  migrating identity off its direct `image.reusable.yml` call) is one
+  adoption packet per repo.
+
 - **The two Let's Encrypt `ClusterIssuer`s, and the install step that applies
   them.** A service chart annotated `ingress.clusterIssuer: letsencrypt-prod`
   pointed at nothing: the substrate created no issuer at all, cert-manager had

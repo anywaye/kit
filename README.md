@@ -112,7 +112,10 @@ than something a green run prints.
 | Path | What it is | Who uses it |
 |------|-----------|-------------|
 | `.github/workflows/ci.reusable.yml` | One reusable GitHub Actions workflow. Input `language` picks one of seven jobs — install, lint, test, coverage gate. Opt-in `telemetry` input adds the traceparent conformance job; opt-in `required-tier` demands a tier by gate-variable name. **Plus one opt-in security job: `zizmor`.** No job builds or pushes an image — that is the other file. | Every service, via a 6-line `.github/workflows/ci.yml` |
-| `.github/workflows/image.reusable.yml` | **The second reusable workflow**, and it exists because `ci.reusable.yml` deliberately does not build an artifact: it is the gate, and a gate that publishes is a gate whose failure is a rollback. It builds the service image and publishes it to ghcr.io, and **the caller grants `packages: write`** — a reusable workflow cannot grant itself a permission. "One file per standard" means two files here, not one: `REUSABLE_WORKFLOWS` in `tests/validate.sh` is the list of what a caller may reach, and the gate fails on a file declaring `workflow_call` that is not on it *and* on a duplicate of one that is. | A service that ships a deployable artifact, via a 9-line `publish.yml` |
+| `.github/workflows/image.reusable.yml` | **The second reusable workflow**, and it exists because `ci.reusable.yml` deliberately does not build an artifact: it is the gate, and a gate that publishes is a gate whose failure is a rollback. It builds the service image and publishes it to ghcr.io, and **the caller grants `packages: write`** — a reusable workflow cannot grant itself a permission. "One file per standard" means three files here, not one — the gate, the image, and now the chart — and a caller reaches each by `uses:`, never by copying. Every workflow file is parsed by the gate's artifact loop and linted by zizmor; the old `REUSABLE_WORKFLOWS` enumeration that used to police callable paths was cut with the self-test layer in w21 (ce12131) and has not been replaced. | A service that ships a deployable artifact, via a 9-line `publish.yml` |
+| `.github/workflows/chart.reusable.yml` | **The third reusable workflow — the publish end of the pull-based loop.** `DEPLOYMENT.md`'s loop is pull-based (a commit changes a chart, Argo makes the box agree) and only the consume end existed: eight Argo `Application`s pull `oci://ghcr.io/cafaye/charts` and nothing in the fleet ever ran `helm push`. This workflow packages the chart directory and pushes it to the OCI registry. The chart's **name and version are read from `Chart.yaml`, never inputs** — the OCI tag of a Helm chart IS its `version`, so the push tag and the pull `targetRevision` are one fact written twice. `push` defaults to **false**, exactly as the image workflow's does; the job refuses to publish from a `pull_request`; helm is pinned (`v4.3.0`), not `latest`; the credential is the workflow's own `GITHUB_TOKEN` and **the caller grants `packages: write`**. | A service that ships a chart, via the composed caller below |
+| `.github/workflows/publish.reusable.yml` | **The composition: one caller, two artifacts.** A service publishes the image `config/deploy.yml` deploys and the chart the `Application` pulls; this file calls both `image.reusable.yml` and `chart.reusable.yml` and threads the caller's single `push` input through, so a service's `publish.yml` is one `uses:` and the decision "what does a push publish" is made once, in kit. It declares the full `contents: read` + `packages: write` set at top level so the nested jobs keep `packages: write` through two levels of `workflow_call`, and its `concurrency.group` is `kit-`-namespaced per the fleet rule. | Called by `templates/publish/publish.yml` |
+| `templates/publish/publish.yml` | **The caller, copied into a service's `.github/workflows/publish.yml`.** `on: push: branches: [master]`, `permissions: contents: read` + `packages: write`, a `concurrency` group that does **not** begin with `kit-` (a colliding group is a job refused before it starts — no check-run, no log line), and one `uses: cafaye/kit/.github/workflows/publish.reusable.yml@master` with `push: true`. | Every service that ships an image or a chart |
 | `.github/zizmor.yml` | zizmor's reasoned baselines. One entry. `unpinned-uses` is deliberately **absent** — see `DECISIONS.md`. | Every service, copied verbatim |
 | `lint/yamllint.yml` | YAML style, with the three rules Actions forces us to retune. Read at run time via `yamllint -c`, never copied. | Any repo that lints its own YAML; kit's gate uses it on itself |
 | `lint/golangci.yml` | golangci-lint v2, correctness linters on, `errcheck` excluded only for `Close`/`Flush`. Read at run time via `--config`, never copied. | Go services |
@@ -1196,11 +1199,17 @@ bash <kit>/tests/validate.sh
       invisible: a colliding group means the `uses:` job is never created, so the
       run is `failure` with green jobs and an empty `--log-failed`. See
       [the caller contract](#how-a-service-repo-adopts-kit).
-- [ ] `.github/workflows/publish.yml` calls `cafaye/kit/.github/workflows/image.reusable.yml@master`
-      with `push: true`, and the workflow grants `packages: write`. **Without it
-      nothing builds the image `config/deploy.yml` deploys**, and CI stays green
-      the whole time — a green CI and an unbuilt image are not in tension, they
-      are just both true.
+- [ ] `.github/workflows/publish.yml` is copied from `templates/publish/publish.yml`
+      and calls `cafaye/kit/.github/workflows/publish.reusable.yml@master` with
+      `push: true`; the workflow grants `packages: write`. **Without it nothing
+      builds the image `config/deploy.yml` deploys and nothing pushes the chart
+      the Argo CD `Application` pulls**, and CI stays green the whole time — a
+      green CI and an unpublished artifact are not in tension, they are just
+      both true. A service with no chart deletes the `chart:` job; a service
+      with no image deletes the `image:` one. The chart's name and version are
+      read from `Chart.yaml` by the workflow — the `Application`'s
+      `targetRevision` must equal the chart's `version`, because the OCI tag of
+      a Helm chart is its version and the two are the same fact written twice.
 - [ ] `working-dir` points at the dir holding the manifest
 - [ ] Nothing copied from `lint/` — the workflow passes kit's config at run time.
       If your repo carries a `.golangci.yml`, it must AGREE with kit's; see
