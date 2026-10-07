@@ -5046,27 +5046,31 @@ if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
   # SKIP, because the alternative — running the suite and reporting PASS while
   # the security claim went unexercised — is the shape of a proof nobody ran.
   #
-  # BOUNDED, each tier with its own. Three docker stacks, eight containers apiece,
-  # brought up and torn down in sequence, on a machine that may also be running
-  # five other workers' gates. This is the tier the previous full run was
-  # SIGKILLed inside, and a kill costs the reader every tier after it — so each
-  # of these three carries a bound generous enough for a loaded box and a verdict
-  # of its own if it is reached.
+  # BOUNDED, each tier with its own. The docker stacks are brought up and
+  # torn down in sequence, on a machine that may also be running five other
+  # workers' gates. This is the tier the previous full run was SIGKILLed
+  # inside, and a kill costs the reader every tier after it — so each docker
+  # tier carries a bound generous enough for a loaded box and a verdict of its
+  # own if it is reached (one live tier plus three cluster tiers; failfast is
+  # bounded where it runs).
   #
   # The numbers are ~3x the quiet-machine durations recorded in REPORT-kit-13.md
   # §7, not a guess: a bound set at the observed quiet duration is a bound that
   # fires on any contention at all, and a bound that fires is a tier that proved
   # nothing. That sentence is also why the fix for contention here was NOT to
-  # widen these three: a number widened until it stops firing on a loaded box is
+  # widened until it stops firing on a loaded box is
   # a number that has stopped measuring the thing it was written to measure.
   #
-  # THE THREE BELOW GO THROUGH `live_check`, and the two cluster tiers after them
-  # do not. Measured on this branch (KIT_PROFILE, `--language=ruby
-  # --no-self-test`, an otherwise green run): canary 19.1s +
-  # no_telemetry_in_readiness 63.6s + stack_live 46.1s = 128.8s of a 255.2s run,
-  # against isolation_test 13.5s + tenancy_test 10.4s = 23.9s. So the live tier
-  # is 50.5% of that gate run and the cluster tiers are 9.4% of it, which is
-  # what makes `--no-live` a subset rather than `--no-observability` a synonym.
+  # The ONE below goes through `live_check`, and the three cluster tiers
+  # after it do not. The canary and stack_live live tiers the old comment
+  # named here are gone: the canary is proven by the static literal/output
+  # checks plus the executed canary suite, and `tests/stack_live_test.sh`
+  # is not invoked by this gate. Measured on this tree (KIT_PROFILE,
+  # m114 baseline, 199s wall): no_telemetry_in_readiness 64s against
+  # isolation 16s + tenancy 11s + onecluster 10s = 37s of docker tiers,
+  # 110s with failfast's control run. So the live tier is ~32% of the run
+  # and the cluster tiers ~19% — which is what keeps `--no-live` a subset
+  # rather than a synonym for `--no-observability`.
   if ! have docker; then
     report SKIP 'observability proofs (docker not installed)'
   elif ! docker info >/dev/null 2>&1; then
