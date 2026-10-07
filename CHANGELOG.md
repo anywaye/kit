@@ -2,6 +2,36 @@
 
 ### Added
 
+- **The substrate's data layer and the services' secrets: `install.sh`
+  steps 8–10.** `DEPLOYMENT.md` (manager decision, 2026-10-06) commits the
+  box to a CNPG Postgres `Cluster`, single-instance Redis, and
+  box-created service secrets — and `install.sh` installed the CNPG
+  *operator* with nothing that used it, no Redis, and no service secret.
+  This packet closes that: step 8 applies `manifests/data/
+  postgres-cluster.yaml` (one Cluster, `postgres` in namespace `data`,
+  reproducing `templates/compose/postgres/initdb/10-cluster.sh` through
+  bootstrap `postInitSQL` + `spec.managed.roles`) and creates the eight
+  `postgres-role-*` password secrets it names; step 9 applies
+  `manifests/data/redis.yaml` (one Deployment + Service + PVC at the exact
+  tag `redis:7.4.1-alpine`, password by `secretKeyRef`) with the generated
+  `redis-password` secret; step 10 creates `identity-secrets`,
+  `gateway-secrets`, `courier-secrets` and `parlor-secrets` with exactly
+  the keys each chart reads (the split is by provenance: generated values
+  are once-only with read-back, externally-sourced values are
+  shape-validated and never echoed, and `DATABASE_URL` agrees with the
+  Cluster by construction). `spec.imageName` is unset on purpose — CNPG's
+  standard image already carries pgvector, so there is no custom image and
+  no build step. `tests/substrate_test.sh` grows sections 8–11
+  (`KIT_SUBSTRATE_DATABASES` refusal with the valid environment as
+  control; the Cluster's per-role provisioning with a REVOKE-removed
+  fixture; Redis's exact tag with a `latest` fixture; the SECRET RECORD
+  tripwire with a key-removed fixture), each red-first with its control.
+  **What remains unproven, and is stated rather than hidden:** the live
+  boot. Proven here is a checked script and a set of manifests — not a
+  running cluster. This machine has no root, no Linux kernel and no
+  cluster, so nothing here was installed; whether the Cluster reaches
+  Ready and the secrets boot the services is a customer-box claim.
+
 - **The install host: `kit-install.mjs` serves `install.sh` at
   `kit.cafaye.com`'s root.** `DEPLOYMENT.md` decides the product's front
   door — `curl https://kit.cafaye.com | sh` — and the script it serves has

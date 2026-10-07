@@ -1,3 +1,4 @@
+---
 # The substrate's Postgres: one CNPG Cluster, one database and two roles per
 # service — the local contract in `templates/compose/postgres/initdb/10-cluster.sh`,
 # reproduced through CNPG's own bootstrap.

@@ -1,3 +1,4 @@
+---
 # Redis: an accessory, not a product. One container, one PVC, no sentinel, no
 # cluster — DEPLOYMENT.md's whole Redis decision in one sentence, and this
 # file is its executable form. The local stack runs
