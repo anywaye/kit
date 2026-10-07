@@ -1227,8 +1227,18 @@ ONLY_RAN=0
 # fastest way to make a reader ignore the line entirely.
 bounded_hit=0
 _timeout_bin() {
+  # `command -v`, NEVER `have`. `have` resolves its probe runner through THIS
+  # function (`runner="$(_timeout_bin ...)"`), so calling `have` here is
+  # unbounded mutual recursion: each `$( )` nests a forked child of the same
+  # gate process, and the cache `have` writes is only assigned AFTER the
+  # recursion returns — i.e. never. Measured on the pre-fix tree: one `have`
+  # call grew 427 nested gate processes in 1s (SIGTERMed at 624 in the
+  # focused-publish incident). The timeout binary gets existence, not
+  # runnability: a run-probe here would need a runner, which IS this
+  # function. A missing timeout degrades to unprobed `have` checks, the
+  # pre-Oct-05 behavior, not a hang.
   for candidate in timeout gtimeout; do
-    if have "$candidate"; then
+    if command -v "$candidate" >/dev/null 2>&1; then
       printf '%s' "$candidate"
       return 0
     fi
