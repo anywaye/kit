@@ -2,6 +2,20 @@
 
 ### Added
 
+- **`PROFILE-gate-honest.md`: the measured re-derivation of the gate profile,
+  from one complete run.** 493.30 s wall clock, 157 PASS / 0 FAIL / 5 SKIP,
+  exit 0 — every row a real interval, the 28 `phase` + 2 `par` rows tiling
+  the run to within 0.026 s. The honest top costs: the observability tiers
+  (200.06 s as a phase, `no_telemetry_in_readiness` alone 63.29 s), the parse
+  region (99.20 s, 55 parallel checks, spawn-latency-bound), and `lint_test`
+  (31.62 s). The old table's headline — `self_test` at ~96% — is doubly
+  retired: the tree-copy layer is gone (`32df467`) and the number was a
+  projection from a bad mean. Four of the old rows are gone with it
+  (`self_test`, `stack_live_test` as a tier, `staleness_test`, `gitleaks_gate`)
+  and the rest are re-measured. Also names the one thing the leaf table cannot
+  see: ~99 s in the observability phase and ~22 s in the fetch section that no
+  check row claims — real wall clock outside any `check`/`tier` call.
+
 - **`REPORT-kit-gate-speed-overlap-01.md`: the gate-speed packet's target was
   retired before it was dispatched, and the measurement that proves it.** The
   packet commissioned overlap for the 73 `--only`-filtered child gates; those
