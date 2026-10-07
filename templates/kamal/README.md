@@ -195,8 +195,10 @@ mitigation is bucket access control, not the retention policy.
 
 ## Adopting this
 
-1. Copy `deploy.yml.erb` to `config/deploy.yml` and `kamal-backup.yml.erb` to
-   `config/kamal-backup.yml`.
+1. Copy `deploy.yml.erb` to `config/deploy.yml`, `kamal-backup.yml.erb` to
+   `config/kamal-backup.yml`, and `drill.sh` to `bin/drill`. The drill is not
+   optional: a backup that has never been proven to restore is not a backup,
+   and `bin/drill` is the only thing that proves it.
 2. `kamal init` (creates `.kamal/secrets`), then `kamal registry login
    --password-stdin`.
 3. Export the five non-secret variables and render: `KIT_SERVICE`, `KIT_REGISTRY_ORG`,
@@ -216,8 +218,14 @@ mitigation is bucket access control, not the retention policy.
 | | database adapter | notes |
 |---|---|---|
 | **go**, **rust** | `postgres` | no runtime migrations; nothing else changes |
-| **ruby**, **python**, **node**, **bun**, **elixir** | `postgres` | set the `migrate` command in `deploy.yml.erb` to yours |
+| **ruby**, **python**, **node**, **bun**, **elixir** | `postgres` | migrations run from `.kamal/hooks/pre-deploy`, not a key in this file |
 
 `deploy.yml.erb` is ONE file for all seven, deliberately: a per-language deploy
 config is six files to keep correct, and the only thing that genuinely differs is
 the migration command. Override it; do not fork the file.
+
+**There is no `migrate:` key, and adding one is an error.** `migrate:` was
+Kamal 1's way; Kamal 2.12.0 refuses the config outright with
+`unknown key: migrate` — measured against courier's copy. Migrations run from a
+hook, `.kamal/hooks/pre-deploy`, which is the service's own file to add and is
+not a key in `deploy.yml` at all.

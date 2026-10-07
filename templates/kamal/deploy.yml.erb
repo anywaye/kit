@@ -85,13 +85,22 @@ proxy:
   hosts:
     - <%= app_domain %>
   healthcheck:
-    # A READINESS endpoint, not a liveness one. `/up` must exercise the
-    # service's real dependencies, because this is the signal `kamal deploy`
-    # gates the rollout on: a container that answers 200 while its database is
+    # A READINESS endpoint, not a liveness one. It must exercise the service's
+    # real dependencies, because this is the signal `kamal deploy` gates the
+    # rollout on: a container that answers 200 while its database is
     # unreachable is a container Kamal will happily declare healthy. The
     # interval is deliberately short for the same reason — the window in which
     # a broken release is receiving traffic is interval x timeout.
-    path: /up
+    #
+    # `/readyz` IS THE FLEET'S READINESS PATH, AND `/up` WAS A DEFECT. Every
+    # cafaye service that adopts this template — identity, courier, gateway,
+    # parlor, darkroom, muse — serves `/healthz` (liveness) and `/readyz`
+    # (readiness), and none serves `/up`. `billing` serves `/up` (Rails' boot
+    # check) and does not use this template. A proxy pointed at `/up` reads
+    # 404 and the rollout never goes green: a deploy that cannot succeed.
+    # identity and courier each hand-patched their own copy to `/readyz`; this
+    # is the template catching up to them. Measured 2026-10-07.
+    path: /readyz
     interval: 2
     timeout: 5
   # Do not let kamal-proxy outlive a bad deploy silently. `kamal deploy`
