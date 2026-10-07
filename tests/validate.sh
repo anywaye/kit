@@ -1626,7 +1626,8 @@ PY
     "$ROOT"/templates/database/tenancy/* \
     "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh \
     "$ROOT"/templates/substrate/install.sh \
-    "$ROOT"/templates/substrate/manifests/applications/*; do
+    "$ROOT"/templates/substrate/manifests/applications/* \
+    "$ROOT"/templates/substrate/manifests/tls/*; do
     [ -f "$f" ] || continue
     path="${f#"$ROOT"/}"
     case "$f" in
