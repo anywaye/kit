@@ -4992,6 +4992,52 @@ fi
 # phase: telemetry — execute the traceparent templates
 # ===========================================================================
 
+# The lint proof, started early so it overlaps the docker tiers below.
+#
+# WHY. Measured on this tree (KIT_PROFILE baseline, 199s wall): lint_test
+# costs ~21s (four linters, serial) and the docker tiers cost ~110s. The lint
+# proof is docker-independent — throwaway fixtures in a private tempdir, no
+# containers, no published ports, no daemon — and no docker tier reads
+# anything it writes. So the wait moved and nothing else did: the same
+# command with the same arguments, the same verdict mapping as `check`, and
+# the verdict is still reported at the lint section in the same position, so
+# gate output order is byte-identical to the serial run.
+#
+# WHAT IT IS NOT. It is not parallel docker: the docker tiers stay serial
+# among themselves (they share the daemon and the fixed port block, and the
+# ports-race control exists because concurrent runs collided). This overlaps
+# one NON-docker check with them, which is the shape that rule permits. A
+# `--only` run that excludes lint spawns nothing (mirroring `check`'s early
+# return, including its ONLY_SKIPPED accounting); `--no-lint` is unchanged.
+_lint_label='tests/lint_test.sh  (every linter runs, and its control disagrees)'
+_lint_bg=0
+_lint_pid=""
+_lint_out="$TMP/lint_test.bg.out"
+_lint_t0=0
+if [ "$RUN_LINT" -eq 1 ]; then
+  _lint_wanted=0
+  if [ -z "$ONLY_MATCH" ]; then
+    ONLY_RAN=$((ONLY_RAN + 1))
+    _lint_wanted=1
+  else
+    case "$_lint_label" in
+      *"$ONLY_MATCH"*)
+        ONLY_RAN=$((ONLY_RAN + 1))
+        _lint_wanted=1
+        ;;
+      *)
+        ONLY_SKIPPED=$((ONLY_SKIPPED + 1))
+        ;;
+    esac
+  fi
+  if [ "$_lint_wanted" -eq 1 ]; then
+    [ -n "$_PROFILE" ] && _lint_t0="$(_pf_now)"
+    bash "$ROOT/tests/lint_test.sh" >"$_lint_out" 2>&1 &
+    _lint_pid="$!"
+    _lint_bg=1
+  fi
+fi
+
 kit_phase "30 observability: the claims worth nothing unexercised"
 if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
   section 'observability: the redaction boundary, against a real collector'
@@ -5257,9 +5303,40 @@ kit_phase "50 lint: the four linters, run against fixtures that must fail them"
 section 'lint: kit configs, executed against fixtures that must fail them'
 if [ "$RUN_LINT" -eq 0 ]; then
   report SKIP 'lint_test.sh  (--no-lint)'
+elif [ "$_lint_bg" -eq 1 ]; then
+  # The verdict of the background run started above the observability phase.
+  # `wait` is the CONDITION of an `if` (as in `check`), so under `set -e` a
+  # red lint is a FAIL line, not a truncated run. The duration row is written
+  # explicitly from the spawn timestamp: it is a `check`-kind row for a
+  # command that ran while the phase rows tiled past it, exactly like the
+  # `cpu`/`par` split the profiler already draws. `_pf_mark` is cleared
+  # before `report` (as `par_flush` does) so the deferred verdict does not
+  # charge the wait itself to a stale mark.
+  if wait "$_lint_pid"; then
+    _lint_ec=0
+  else
+    _lint_ec=$?
+  fi
+  _lint_text="$(cat "$_lint_out" 2>/dev/null || true)"
+  if [ -n "$_PROFILE" ] && [ "$_lint_t0" != 0 ]; then
+    kit_profile check "$_lint_label" "$_lint_t0"
+  fi
+  _pf_mark=0
+  _pf_kind=check
+  if [ "$_lint_ec" -eq 0 ]; then
+    report PASS "$_lint_label"
+    [ -z "$_lint_text" ] || printf '%s\n' "$_lint_text" | sed 's/^/       /'
+  elif [ "$_lint_ec" -eq "$SKIP_EXIT" ]; then
+    report SKIP "$_lint_label"
+    [ -z "$_lint_text" ] || printf '%s\n' "$_lint_text" | sed 's/^/       /'
+  else
+    report FAIL "$_lint_label"
+    printf '%s\n' "$_lint_text" | sed 's/^/       /'
+  fi
 else
-  check 'tests/lint_test.sh  (every linter runs, and its control disagrees)' \
-    bash "$ROOT/tests/lint_test.sh"
+  # Excluded by `--only`: counted as ONLY_SKIPPED at spawn, and (as in
+  # `check`'s early return) reported as nothing here.
+  :
 fi
 
 kit_phase "60 summary"
