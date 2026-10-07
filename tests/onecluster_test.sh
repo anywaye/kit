@@ -107,6 +107,91 @@ fail() {
 say() { printf '%s\n' "$1"; }
 
 # ---------------------------------------------------------------------------
+# The port-block claim. Probe-then-bind is a race: `port_block_free` closes the
+# sockets it opened, so between the probe and `bin/dev up` binding the block
+# another run can take it — and the `$$ % 400` seed does not prevent two
+# concurrent runs from starting at the same offset and both seeing the same
+# block free, because NEITHER has bound it yet. Measured 2026-10-07: a
+# onecluster RED (`bin/dev up: exit=1`, postgres shutting down on a taken port)
+# on a tree whose files were absent from the onecluster path, green on master
+# and green on re-run — a false RED that cost a diagnostic cycle.
+#
+# The claim is atomic across concurrent runs: `mkdir` either creates the
+# directory or it does not, so the first run to name a block owns it and the
+# second skips it. A CLAIM (this), not a LOCK (flock around probe *and* bind):
+# a lock held until the stack is up would serialize whole stack startups
+# (minutes); a claim serializes only block selection (milliseconds) and lets
+# two stacks start in parallel on different blocks.
+# ---------------------------------------------------------------------------
+CLAIM_DIR="${KIT_ONECLUSTER_CLAIM_DIR:-${TMPDIR:-/tmp}/kit-onecluster-claims}"
+port_block_free() {
+  local base="$1" off
+  for off in 0 1 2 3 4 5 6 7 8 9; do
+    (exec 3<>"/dev/tcp/127.0.0.1/$(( base + off ))") 2>/dev/null || continue
+    return 1
+  done
+  return 0
+}
+# claim_port_block <base> — search 400 blocks from <base>, `mkdir`-claiming the
+# first free one into $PGPORT. The claim is held until this process exits (the
+# EXIT trap below releases it); the probe still runs, because a block can be
+# unclaimed and yet occupied by a process that is not a kit run.
+claim_port_block() {
+  local base="$1" _p=0 _cand _owner
+  PGPORT=""
+  mkdir -p "$CLAIM_DIR" 2>/dev/null || return 1
+  while [ "$_p" -lt 400 ]; do
+    _cand=$(( base + _p ))
+    if mkdir "$CLAIM_DIR/$_cand" 2>/dev/null; then
+      echo "$$" >"$CLAIM_DIR/$_cand/pid" 2>/dev/null
+      if port_block_free "$_cand"; then
+        PGPORT="$_cand"
+        return 0
+      fi
+      rm -rf "${CLAIM_DIR:?}/${_cand:?}" 2>/dev/null
+    else
+      # Held by a live run — except when its owner is gone (kill -9 between the
+      # mkdir and the EXIT trap), in which case the block would be retired
+      # forever. Reclaim ONLY that case: `kill -0` succeeding means a live
+      # holder and we move on without touching it.
+      _owner="$(cat "$CLAIM_DIR/$_cand/pid" 2>/dev/null)"
+      if [ -n "$_owner" ] && ! kill -0 "$_owner" 2>/dev/null; then
+        rm -rf "${CLAIM_DIR:?}/${_cand:?}" 2>/dev/null
+        if mkdir "$CLAIM_DIR/$_cand" 2>/dev/null; then
+          echo "$$" >"$CLAIM_DIR/$_cand/pid" 2>/dev/null
+          if port_block_free "$_cand"; then
+            PGPORT="$_cand"
+            return 0
+          fi
+          rm -rf "${CLAIM_DIR:?}/${_cand:?}" 2>/dev/null
+        fi
+      fi
+    fi
+    _p=$(( _p + 1 ))
+  done
+  return 1
+}
+
+if [ "${1:-}" = "--select-block" ]; then
+  # TEST SEAM, exercised by tests/onecluster_ports_race_test.sh and by nothing
+  # else: print one claimed block and HOLD it, modelling the probe...bind
+  # window of a live run. The hold is the whole point — without it the first
+  # process would exit and release its claim before the second selects, and the
+  # race would never be exercised. `KIT_ONECLUSTER_SEED` forces the start offset
+  # so the race test can arrange the worst case (same seed, same second);
+  # unset, selection starts at `$$ % 400` as the main path does.
+  SEED="${KIT_ONECLUSTER_SEED:-$$}"
+  if claim_port_block "$(( 15000 + (SEED % 400) ))"; then
+    printf '%s\n' "$PGPORT"
+    trap 'rm -rf "${CLAIM_DIR:?}/${PGPORT:?}" 2>/dev/null' EXIT
+    sleep "${KIT_ONECLUSTER_HOLD:-10}"
+    exit 0
+  fi
+  echo "no free 10-port block" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Environment. Every absence is named, because "SKIP (docker)" tells a reader
 # nothing about which of three things was missing.
 # ---------------------------------------------------------------------------
@@ -162,35 +247,25 @@ PROJECT="kit-onecluster-$$"
 # docker-compose.yml spells out under "MAY — … change a published port", and
 # which kit's gate fails on.
 #
-# The slice is searched rather than assumed, bounded so an occupied block is a
-# NAMED failure rather than a walk off the end of kit's range, and seeded from
-# `$$` so two concurrent runs do not begin in the same place.
-PGPORT_BASE=$(( 15000 + ($$ % 400) ))
-port_block_free() {
-  local base="$1" off
-  for off in 0 1 2 3 4 5 6 7 8 9; do
-    (exec 3<>"/dev/tcp/127.0.0.1/$(( base + off ))") 2>/dev/null || continue
-    return 1
-  done
-  return 0
-}
+# The slice is searched rather than assumed, CLAIMED rather than merely probed
+# (see the claim header above `port_block_free`), bounded so an occupied block
+# is a NAMED failure rather than a walk off the end of kit's range, and seeded
+# from `$$` so two concurrent runs do not begin in the same place.
+# `KIT_ONECLUSTER_SEED` overrides the seed for the race control only.
+PGPORT_BASE=$(( 15000 + (${KIT_ONECLUSTER_SEED:-$$} % 400) ))
 PGPORT=""
-_p=0
-while [ "$_p" -lt 400 ]; do
-  _cand=$(( PGPORT_BASE + _p ))
-  if port_block_free "$_cand"; then
-    PGPORT="$_cand"
-    break
-  fi
-  _p=$(( _p + 1))
-done
-[ -n "$PGPORT" ] || {
+claim_port_block "$PGPORT_BASE" || {
   fail "no free 10-port block in this run's 400-port slice; the tier cannot start without colliding with something"
   exit 1
 }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/kit-onecluster.XXXXXX")"
 cleanup() {
+  # Release this run's port-block claim FIRST, so a block is never held past
+  # the run that named it. A claim whose owner was kill -9'd is reclaimed by
+  # `claim_port_block`'s stale-owner branch instead.
+  [ -n "${PGPORT:-}" ] && [ -n "${CLAIM_DIR:-}" ] && \
+    rm -rf "${CLAIM_DIR:?}/${PGPORT:?}" 2>/dev/null
   # BY COMPOSE PROJECT LABEL, and this is the second version.
   #
   # The first copied `isolation_test.sh`'s teardown: `docker compose

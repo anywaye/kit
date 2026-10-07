@@ -5014,6 +5014,18 @@ check 'tests/classify_test.sh  (19 cases, incl. the fail-closed property)' \
 check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version)' \
   bash "$ROOT/tests/fingerprint_test.sh"
 
+# THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port
+# block and only later binds it; two concurrent runs starting at the same seed
+# offset both saw the same block free and one of them died binding it
+# (2026-10-07, a false RED). The single-run onecluster tier proves one run
+# passes, which is what did not catch it — so this control starts two
+# selections at once with the same forced seed and requires different blocks.
+# No docker, ~10s (the hold modelling the probe...bind window), deliberately
+# OUTSIDE the RUN_STATIC guard with the classifier and the fingerprint test:
+# it is the property rather than the shape.
+check 'tests/onecluster_ports_race_test.sh  (two concurrent selections with the same seed never share a block)' \
+  bash "$ROOT/tests/onecluster_ports_race_test.sh"
+
 # The fetch is a claim about a REAL SUBPROCESS talking to a REAL REMOTE, and it is
 # the only proof that `bin/dev` can obtain the stack it runs at all. A check that
 # parsed bin/dev would pass on a script that fetches nothing, which is why this is

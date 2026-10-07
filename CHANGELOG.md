@@ -291,6 +291,17 @@
 
 ### Fixed
 
+- **Two concurrent onecluster runs could probe the same 10-port block free and
+  one died binding it.** `tests/onecluster_test.sh` probed a block and only
+  later bound it in `bin/dev up`, and the `$$ % 400` seed does not stop two
+  runs starting at the same offset — measured 2026-10-07 as a false RED on a
+  tree absent from the onecluster path. Selection now `mkdir`-claims the block
+  (atomic across runs; a claim, not a lock, so stacks still start in parallel)
+  and releases it in the EXIT trap; stale (owner-dead) claims are reclaimed,
+  live ones skipped. `tests/onecluster_ports_race_test.sh` starts two
+  `--select-block` selectors at once with the same seed and requires different
+  blocks, and runs in the gate's phase 40 (no docker, ~10 s).
+
 - **`KIT_PROFILE` recorded a parallel region's wall clock nowhere, so the
   `phase` row of whatever `section` came next absorbed it whole.** A
   `par_begin`…`par_flush` region's span is now a row of its own — kind `par`,
