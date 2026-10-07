@@ -4461,6 +4461,218 @@ PY
   }
 
   # -------------------------------------------------------------------------
+  # The install host — the Worker that serves install.sh at kit.cafaye.com.
+  #
+  # WHY THIS CHECK EXISTS. `DEPLOYMENT.md` decides the product's front door:
+  # `curl https://kit.cafaye.com | sh`. The script it serves has existed since
+  # W74 and nothing in the fleet served it at that URL — measured: no Worker,
+  # no wrangler config, no static host, and W74's own report named the gap.
+  # `templates/substrate/kit-install.mjs` closes it, and the failure this
+  # check exists to catch is the silent one: `curl | sh` executes WHATEVER
+  # BYTES ARRIVE, so a Worker that reformats, truncates or re-encodes the
+  # script is a Worker that breaks the install and says nothing.
+  #
+  # THE BYTE-EQUALITY MECHANISM, and why it is not a second copy. The Worker
+  # IMPORTS install.sh; wrangler's Text-module rule (wrangler.jsonc) bundles
+  # the file's bytes into the Worker at deploy time. There is no hand-copied
+  # string anywhere in the tree, and the proof is dynamic: the driver loads
+  # the module through a loader hook that stands in for the Text rule, so the
+  # bytes the handler serves are the bytes of the file, read through the
+  # Worker's own import.
+  #
+  # WHAT IT ASSERTS:
+  #   1. The wrangler config is the fleet's shape: name `kit-install`, a PINNED
+  #      compatibility_date, observability on, `main` at the Worker, a
+  #      Text-module rule whose globs name install.sh, and NO `routes` block
+  #      — the fleet does not carry one (measured: site's has none), so
+  #      inventing one here would be a value this repository cannot verify.
+  #   2. The handler, imported as a plain module and called with no wrangler,
+  #      no network and no account, serves the EXACT bytes of install.sh at
+  #      GET / and GET /install.sh — compared by SHA-256, not by a prefix, so
+  #      a truncated or re-encoded body reds — with content-type
+  #      text/x-shellscript; serves 200 at /healthz; and 404s every other
+  #      path, including traversal.
+  #
+  # THE TWO CONTROLS, which must go RED under the same assertions: a fixture
+  # Worker whose install.sh is ONE BYTE SHORTER (the packet's named control —
+  # a truncated body is the defect `curl | sh` would execute) and a fixture
+  # whose content-type is wrong. A control that stays green is a failure of
+  # the test itself rather than a pass.
+  #
+  # WHAT IS NOT PROVEN HERE, and is stated rather than hidden: that
+  # kit.cafaye.com ANSWERS. Binding the host to the Worker is a Cloudflare
+  # route/custom-domain action outside every repository (DEPLOYMENT.md
+  # decides it), so the URL works only when observed.
+  # `templates/substrate/README.md` carries the same sentence.
+  check_install_host() {
+    local worker="$ROOT/templates/substrate/kit-install.mjs"
+    local config="$ROOT/templates/substrate/wrangler.jsonc"
+    local script="$ROOT/templates/substrate/install.sh"
+    local driver="$ROOT/tests/install-host-driver.mjs"
+
+    # The red-first message, before anything else: with no Worker there is
+    # nothing at kit.cafaye.com, and the check says so by name rather than
+    # failing later on an import error.
+    if [ ! -f "$worker" ]; then
+      printf '       the Worker does not exist: %s\n' "$worker"
+      printf '       nothing serves install.sh at kit.cafaye.com — the front door is open\n'
+      return 1
+    fi
+
+    # A missing node is an ENVIRONMENT verdict, not a tree verdict — the
+    # same guard the `node --check` arms of the artifact-parses loop use.
+    # The driver itself exits 78 when node is too old for module.register,
+    # which is the same verdict for the same reason.
+    if ! have node; then
+      return "$SKIP_EXIT"
+    fi
+
+    # 1. The wrangler config. Parsed with the same string-aware JSONC
+    #    stripper the artifact-parses loop uses, then asserted field by
+    #    field — a parse alone would be green on a config that named the
+    #    wrong main or carried an invented routes block.
+    local checker="$TMP/install-host-config-check.py"
+    cat >"$checker" <<'PY'
+import json
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+out, i, n, in_str = [], 0, len(src), False
+while i < n:
+    c = src[i]
+    if in_str:
+        out.append(c)
+        if c == "\\" and i + 1 < n:
+            out.append(src[i + 1]); i += 2; continue
+        if c == '"':
+            in_str = False
+        i += 1
+        continue
+    if c == '"':
+        in_str = True; out.append(c); i += 1; continue
+    if c == "/" and src[i + 1:i + 2] == "/":
+        while i < n and src[i] != "\n":
+            i += 1
+        continue
+    if c == "/" and src[i + 1:i + 2] == "*":
+        i += 2
+        while i + 1 < n and not (src[i] == "*" and src[i + 1] == "/"):
+            i += 1
+        i += 2
+        continue
+    out.append(c); i += 1
+
+try:
+    doc = json.loads("".join(out))
+except Exception as exc:
+    sys.exit(f"wrangler.jsonc does not parse: {exc}")
+if not isinstance(doc, dict):
+    sys.exit("wrangler.jsonc is not an object")
+
+problems = []
+if doc.get("name") != "kit-install":
+    problems.append(f"name is {doc.get('name')!r}, not 'kit-install'")
+compat = doc.get("compatibility_date")
+if not isinstance(compat, str) or not compat:
+    problems.append(f"compatibility_date is {compat!r}, not a pinned date")
+if doc.get("main") != "kit-install.mjs":
+    problems.append(f"main is {doc.get('main')!r}, not 'kit-install.mjs'")
+obs = doc.get("observability")
+if not isinstance(obs, dict) or obs.get("enabled") is not True:
+    problems.append("observability.enabled is not true")
+if "routes" in doc:
+    problems.append(
+        "a `routes` block is present — the fleet does not carry one (measured:"
+        " site's has none); the kit.cafaye.com binding is an operator action,"
+        " not a file"
+    )
+rules = doc.get("rules")
+if not isinstance(rules, list):
+    problems.append(
+        "no `rules` array — nothing bundles install.sh into the Worker, so"
+        " the served bytes would be a hand-copied second file"
+    )
+else:
+    text_rules = [r for r in rules if isinstance(r, dict) and r.get("type") == "Text"]
+    if not text_rules:
+        problems.append(
+            "no Text-module rule — the served bytes would be a hand-copied"
+            " second file"
+        )
+    else:
+        globs = []
+        for r in text_rules:
+            globs.extend(r.get("globs") or [])
+        if not any("install.sh" in g for g in globs):
+            problems.append(f"Text rule globs {globs} do not name install.sh")
+
+if problems:
+    for p in problems:
+        print(f"install host: {p}")
+    sys.exit(1)
+print(
+    "wrangler.jsonc: name, pinned compatibility_date, observability, main,"
+    " Text rule bundling install.sh — and no routes"
+)
+PY
+
+    local out ec=0
+    out="$("$PY" "$checker" "$config" 2>&1)" || ec=$?
+    if [ "$ec" -ne 0 ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return 1
+    fi
+
+    # 2. The dynamic proof: import the Worker's handler and call it. The
+    #    driver registers tests/install-host-loader.mjs — the stand-in for
+    #    wrangler's Text-module rule — then probes the handler and compares
+    #    what it serves against the real file, by hash.
+    out="$(node "$driver" "$worker" "$script" 2>&1)" || ec=$?
+    if [ "$ec" -eq "$SKIP_EXIT" ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return "$SKIP_EXIT"
+    fi
+    if [ "$ec" -ne 0 ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return 1
+    fi
+    printf '%s\n' "$out" | sed 's/^/       /'
+
+    # 3. THE CONTROLS. Each builds a fixture Worker that violates exactly
+    #    one property and requires the same driver to answer RED.
+
+    # (a) THE BYTE control — the packet's named one: a fixture whose
+    #     install.sh is ONE BYTE SHORTER. `curl | sh` executes whatever
+    #     bytes arrive, so a truncated body is the defect this check exists
+    #     to catch, and a whole-body hash (not a prefix) is what sees it.
+    local short_fixture="$TMP/install-host-short"
+    rm -rf "$short_fixture"
+    mkdir -p "$short_fixture"
+    cp "$worker" "$short_fixture/kit-install.mjs"
+    head -c $(( $(wc -c <"$script") - 1 )) "$script" >"$short_fixture/install.sh"
+    if node "$driver" "$short_fixture/kit-install.mjs" "$script" >/dev/null 2>&1; then
+      printf '       control (a) the one-byte-shorter control did not go red — the byte comparison is not measuring what it claims\n'
+      return 1
+    fi
+
+    # (b) THE CONTENT-TYPE control: the right bytes, the wrong type. The
+    #     script still executes under `curl | sh`, but the content-type is
+    #     the contract, and a check whose content-type assertion cannot
+    #     fail is not measuring it.
+    local ct_fixture="$TMP/install-host-content-type"
+    rm -rf "$ct_fixture"
+    mkdir -p "$ct_fixture"
+    sed 's/text\/x-shellscript/text\/plain/' "$worker" >"$ct_fixture/kit-install.mjs"
+    cp "$script" "$ct_fixture/install.sh"
+    if node "$driver" "$ct_fixture/kit-install.mjs" "$script" >/dev/null 2>&1; then
+      printf '       control (b) the content-type control did not go red — the content-type assertion is not measuring what it claims\n'
+      return 1
+    fi
+
+    return 0
+  }
+
+  # -------------------------------------------------------------------------
   # The customer substrate — the install is real, and its pins are exact.
   #
   # `templates/substrate/install.sh` is the one-command customer install. It
@@ -4499,6 +4711,32 @@ PY
   check 'chart publish  (workflow_call, push defaults false, registry == every Application repoURL, name/version not inputs, pull_request refused)' \
     check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
       "$ROOT/templates/substrate/manifests/applications"
+
+  # -------------------------------------------------------------------------
+  # The install host — the Worker that serves install.sh at kit.cafaye.com.
+  #
+  # `DEPLOYMENT.md` decides the front door: `curl https://kit.cafaye.com | sh`.
+  # The script has existed since W74; nothing in the fleet served it at that
+  # URL (measured: no Worker, no wrangler config, no static host — W74's own
+  # report named the gap). `templates/substrate/kit-install.mjs` closes it,
+  # and the failure this check exists to catch is the silent one: `curl | sh`
+  # executes WHATEVER BYTES ARRIVE, so a Worker that reformats, truncates or
+  # re-encodes the script breaks the install and says nothing.
+  #
+  # The check asserts the wrangler config's shape (pinned compatibility_date,
+  # observability on, main at the Worker, a Text-module rule bundling
+  # install.sh, and NO routes block — the fleet carries none), then imports
+  # the handler as a plain module and compares the served bytes against the
+  # file by SHA-256 — not by a prefix, so a truncated or re-encoded body reds.
+  # Two controls must go red: a fixture whose install.sh is one byte shorter,
+  # and a fixture with the wrong content-type.
+  #
+  # WHAT IS NOT PROVEN: that kit.cafaye.com ANSWERS. The binding is a
+  # Cloudflare route/custom-domain action outside every repository, so the
+  # URL works only when observed. `templates/substrate/README.md` says so.
+  section 'static: the install host — the Worker serves the exact bytes of install.sh'
+  check 'install host  (GET / and /install.sh serve install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
+    check_install_host
 fi
 
 # ===========================================================================
