@@ -14,6 +14,8 @@ this file only describes what is here and what is proven.
 | Path | What it is |
 |---|---|
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
+| `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
+| `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
 | `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Loki, Grafana, Prometheus). |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 
@@ -139,6 +141,41 @@ from the customer's side.
 DRY_RUN=1 bash templates/substrate/install.sh
 ```
 
+## The install host: `kit.cafaye.com`
+
+`install.sh` is served at `https://kit.cafaye.com/` (and `/install.sh`) by
+`kit-install.mjs`, a Cloudflare Worker in this directory — the fleet's
+established mechanism (`site` and `parlor` are Workers). The Worker serves
+the **exact bytes** of `install.sh` with `content-type: text/x-shellscript`
+and no transformation: `curl | sh` executes whatever bytes arrive, so a
+Worker that reformats, wraps or minifies the script is a Worker that
+breaks the install. Every other path 404s, including traversal, and
+`GET /healthz` is 200 so the host itself is observable.
+
+The script is **imported, not copied**: `wrangler.jsonc`'s Text-module rule
+bundles `install.sh`'s bytes into the Worker at deploy time, so the served
+bytes and this file are one fact with one author — there is no hand-copied
+second copy of the script in this tree. `check_install_host` in kit's gate
+proves the equality offline, with no wrangler, no network and no account:
+it imports the Worker's handler as a plain module and compares the served
+body's SHA-256 against the file's — not a prefix, so a truncated or
+re-encoded body reds — with a control that truncates one byte and must go
+red. The Worker holds no secret: `install.sh` reads
+`KIT_SUBSTRATE_PULL_SECRET` and `KIT_SUBSTRATE_ACME_EMAIL` from the
+operator's environment at run time.
+
+**The operator step (an action, not a file):** publish the Worker
+(`wrangler deploy` from this directory) and bind `kit.cafaye.com` to it —
+a Cloudflare route / custom domain on `kit-install`, the same way
+`cafaye.com` is bound to `site` today. Measured: `site/wrangler.jsonc`
+carries no `routes` block, so the binding is done outside the repositories
+and **cannot be asserted from this repository** — which is why
+`wrangler.jsonc` does not invent one.
+
+**What is not proven here:** that `https://kit.cafaye.com` answers. The
+Worker, its config and the byte-equality are proven; the binding is an
+operator action, and the URL works only when observed.
+
 ## What is proven, and what is not
 
 **Proven, on any machine, by `tests/substrate_test.sh`:**
@@ -154,6 +191,11 @@ DRY_RUN=1 bash templates/substrate/install.sh
   with a shared key or an empty solver list go **red** under the same check.
 - No image floats on `latest` anywhere in this tree.
 - No secret is a literal in this tree.
+- The install host serves the exact bytes of `install.sh` at `GET /` and
+  `GET /install.sh` (SHA-256, not a prefix), 404s every other path
+  including traversal, and answers `/healthz` — proven by
+  `check_install_host` in kit's gate, with a one-byte-shorter control that
+  must go red.
 
 **NOT proven here — it needs a customer box:**
 
@@ -171,6 +213,10 @@ DRY_RUN=1 bash templates/substrate/install.sh
   the charts themselves are one packet per service.
 - That the observability stack (Alloy, Loki, Grafana, Prometheus) actually
   deploys and retains.
+- That `https://kit.cafaye.com` answers. The Worker, its config and the
+  byte-equality are proven; binding the host to the Worker is a Cloudflare
+  route/custom-domain action outside every repository, so the URL works
+  only when observed.
 
 This machine is macOS. It cannot run k3s, so `install.sh` has never been
 executed here. The proof is `DRY_RUN=1` plus the checks above. **A claim you

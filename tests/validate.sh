@@ -4644,8 +4644,17 @@ else:
         globs = []
         for r in text_rules:
             globs.extend(r.get("globs") or [])
-        if not any("install.sh" in g for g in globs):
-            problems.append(f"Text rule globs {globs} do not name install.sh")
+        # `**/*.sh` and `*.sh` are the patterns that cover install.sh;
+        # naming it literally also counts. `other.sh` does not — it ends in
+        # .sh and covers nothing here.
+        if not any(
+            "install.sh" in g or g == "*.sh" or g.endswith("/*.sh")
+            for g in globs
+        ):
+            problems.append(
+                f"Text rule globs {globs} do not cover install.sh — the"
+                " served bytes would be a hand-copied second file"
+            )
 
 if problems:
     for p in problems:
@@ -4714,6 +4723,87 @@ PY
   }
 
   # -------------------------------------------------------------------------
+  # The install host's BUILD — the optional half of the proof.
+  #
+  # WHY A SECOND CHECK EXISTS. `check_install_host` proves the handler
+  # serves the exact bytes, and it proves it with a loader hook that STANDS
+  # IN for wrangler's Text-module rule — which means it structurally
+  # cannot see that rule being broken. A Text rule whose glob matches
+  # nothing passes every offline assertion and then fails the deploy, and
+  # the failure is silent: the gate is green, the build is red, and nothing
+  # connects the two. Measured on this packet: `globs: ["install.sh"]` —
+  # which names install.sh, and so satisfies the field check — fails the
+  # wrangler build with 'No loader is configured for ".sh" files'. Only
+  # the build sees it.
+  #
+  # WHY IT IS OPTIONAL AND SKIPS LOUDLY. It needs wrangler, which not every
+  # machine has; the required half above needs only node. So this check
+  # runs where wrangler is available (PATH, or the npx cache) and returns
+  # SKIP_EXIT when it is not — a reported SKIP naming the reason, never a
+  # silent pass, per the guard the `node --check` arms already use.
+  #
+  # THE CONTROL: the same build with the Text rule's glob broken. It must
+  # fail the build — that is the defect this check exists to catch, and a
+  # bundle proof that cannot fail is not measuring what it claims.
+  check_install_host_bundle() {
+    if ! have node; then
+      return "$SKIP_EXIT"
+    fi
+    local wrangler_js
+    wrangler_js="$(command -v wrangler 2>/dev/null || true)"
+    if [ -z "$wrangler_js" ]; then
+      # The npx cache layout: _npx/<hash>/node_modules/wrangler/bin/wrangler.js.
+      # A find, not a hardcoded path — the hash is npx's and changes.
+      wrangler_js="$(find "${XDG_CACHE_HOME:-$HOME/.npm}/_npx" -maxdepth 5 \
+        -path '*/node_modules/wrangler/bin/wrangler.js' 2>/dev/null | head -n1 || true)"
+    fi
+    if [ -z "$wrangler_js" ]; then
+      printf '       SKIP: wrangler is not installed — the bundle proof needs it; the offline proof in the check above still ran\n'
+      return "$SKIP_EXIT"
+    fi
+
+    # A COPY of the three files, so the build's own scratch (.wrangler/)
+    # lands in the temp dir and never in the tree.
+    local bundle_dir="$TMP/install-host-bundle"
+    rm -rf "$bundle_dir"
+    mkdir -p "$bundle_dir"
+    cp "$ROOT/templates/substrate/kit-install.mjs" "$bundle_dir/"
+    cp "$ROOT/templates/substrate/wrangler.jsonc" "$bundle_dir/"
+    cp "$ROOT/templates/substrate/install.sh" "$bundle_dir/"
+
+    if ! (cd "$bundle_dir" && node "$wrangler_js" deploy --dry-run --outdir "$bundle_dir/out" >/dev/null 2>&1); then
+      printf '       wrangler could not build the Worker — the Text-module rule is not bundling install.sh\n'
+      return 1
+    fi
+    local bundle
+    bundle="$(ls "$bundle_dir"/out/*.js "$bundle_dir"/out/*.mjs 2>/dev/null | head -n1 || true)"
+    if [ -z "$bundle" ]; then
+      printf '       the wrangler build produced no bundle\n'
+      return 1
+    fi
+
+    # The built artifact, probed by the same driver as the source: the
+    # bytes that would leave the deploy must equal the file's.
+    local out ec=0
+    out="$(node "$ROOT/tests/install-host-driver.mjs" "$bundle" "$ROOT/templates/substrate/install.sh" 2>&1)" || ec=$?
+    if [ "$ec" -ne 0 ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return 1
+    fi
+    printf '%s\n' "$out" | tail -1 | sed 's/^/       /'
+
+    # THE CONTROL: the glob broken to match nothing. The build must fail.
+    sed 's/"globs": \["\*\*\/\*\.sh"\]/"globs": ["**/*.txt"]/' \
+      "$bundle_dir/wrangler.jsonc" >"$bundle_dir/wrangler.jsonc.broken"
+    mv "$bundle_dir/wrangler.jsonc.broken" "$bundle_dir/wrangler.jsonc"
+    if (cd "$bundle_dir" && node "$wrangler_js" deploy --dry-run --outdir "$bundle_dir/out2" >/dev/null 2>&1); then
+      printf '       control: the broken-glob control did not go red — the bundle proof is not measuring what it claims\n'
+      return 1
+    fi
+    return 0
+  }
+
+  # -------------------------------------------------------------------------
   # The customer substrate — the install is real, and its pins are exact.
   #
   # `templates/substrate/install.sh` is the one-command customer install. It
@@ -4778,6 +4868,13 @@ PY
   section 'static: the install host — the Worker serves the exact bytes of install.sh'
   check 'install host  (GET / and /install.sh serve install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
     check_install_host
+
+  # The build half — optional, SKIPs loudly where wrangler is absent. See
+  # check_install_host_bundle for why the offline proof alone cannot see a
+  # broken Text-module rule, with the measured defect named there.
+  section 'static: the install host bundle — wrangler builds it, and the build serves the exact bytes (optional)'
+  check 'install host bundle  (wrangler dry-run builds the Worker; the bundle serves install.sh byte-exact; a broken Text-rule glob fails the build)' \
+    check_install_host_bundle
 fi
 
 # ===========================================================================

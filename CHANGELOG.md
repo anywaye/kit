@@ -2,6 +2,43 @@
 
 ### Added
 
+- **The install host: `kit-install.mjs` serves `install.sh` at
+  `kit.cafaye.com`'s root.** `DEPLOYMENT.md` decides the product's front
+  door — `curl https://kit.cafaye.com | sh` — and the script it serves has
+  existed since W74 with nothing behind the URL: measured fleet-wide,
+  `grep -rln 'kit\.cafaye\.com'` returned only documentation and
+  `install.sh` itself; no Worker, no wrangler config, no static host. W74's
+  own report named the gap. This packet closes it in kit, because the script
+  and its delivery are one fact and belong in one repository and one gate —
+  the same reasoning that put the chart-publish seam control in kit.
+  `templates/substrate/kit-install.mjs` is a Cloudflare Worker (the fleet's
+  established mechanism — `site` and `parlor` are Workers) serving the
+  **exact bytes** of `install.sh` at `GET /` and `GET /install.sh` with
+  `content-type: text/x-shellscript` and no transformation — `curl | sh`
+  executes whatever bytes arrive, so a Worker that reformats, wraps or
+  minifies the script is a Worker that breaks the install. Every other path
+  404s, including traversal (the URL parser resolves `..` before the handler
+  reads the pathname, so `/install.sh/../secrets` arrives as `/secrets`),
+  and `GET /healthz` is 200 so the host is observable. The script is
+  **imported, not copied**: `wrangler.jsonc`'s Text-module rule bundles the
+  file's bytes at deploy time, so the served bytes and the file are one fact
+  with one author and there is no hand-copied second file in the tree. The
+  Worker holds no secret — `install.sh` reads `KIT_SUBSTRATE_PULL_SECRET`
+  and `KIT_SUBSTRATE_ACME_EMAIL` from the operator's environment at run
+  time. `wrangler.jsonc` carries no `routes` block, matching the fleet
+  (measured: `site`'s has none) — binding `kit.cafaye.com` to the Worker is
+  a Cloudflare route/custom-domain **action**, not a file, and cannot be
+  asserted from this repository. `check_install_host` in `tests/validate.sh`
+  proves it in kit's own gate with no network: it imports the handler as a
+  plain module (a loader hook stands in for the Text rule), compares the
+  served body's SHA-256 against the file's — not a prefix, so a truncated or
+  re-encoded body reds — and requires two controls to go red (a fixture
+  whose `install.sh` is one byte shorter; a fixture with the wrong
+  content-type). **What remains unproven, and is stated rather than
+  hidden:** that `https://kit.cafaye.com` answers. The Worker, its config
+  and the byte-equality are proven; the binding is an operator action and
+  the URL works only when observed.
+
 - **The publish end of the pull-based loop: `chart.reusable.yml`, the
   composed `publish.reusable.yml`, and the caller template.** `DEPLOYMENT.md`'s
   deploy loop is pull-based — a commit changes a chart, Argo makes the box

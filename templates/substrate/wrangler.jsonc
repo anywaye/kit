@@ -35,5 +35,5 @@
   "observability": {
     "enabled": true
   },
-  "rules": [{ "type": "Text", "globs": ["install.sh"] }]
+  "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": false }]
 }
