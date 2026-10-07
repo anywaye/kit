@@ -5249,6 +5249,15 @@ check 'tests/classify_test.sh  (19 cases, incl. the fail-closed property)' \
 check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs deleted, one byte changed, a corrupt record, a foreign version)' \
   bash "$ROOT/tests/fingerprint_test.sh"
 
+# The CI path router, executed. Pure bash over synthetic argv, ~0.1s: every
+# routing class (docs, tier, publish, platform, unknown, empty, mixed
+# families, non-PR events) plus the recursion guard that fails if route.sh
+# ever names validate.sh in an executable line. Deliberately OUTSIDE any
+# RUN_* guard with the classifier and the fingerprint test: the route decides
+# which proofs run, so a skipped router is a gate that cannot say what it ran.
+check 'tests/route_test.sh  (19 cases: every routing class fails closed; the router never launches the gate)' \
+  bash "$ROOT/tests/route_test.sh"
+
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port
 # block and only later binds it; two concurrent runs starting at the same seed
 # offset both saw the same block free and one of them died binding it

@@ -864,6 +864,42 @@ stdout and the service points at it:
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 bin/dev
 ```
 
+## Platform boundary: what lives here, what lives in services
+
+kit is a platform repository. Substrate/install/bootstrap,
+platform-level state, the central Argo desired state, and the proofs of
+those platform guarantees live here. Services own their runtime code,
+behavior/unit tests, service charts, and chart publication. The selected
+deployment design is k3s + Argo CD + CNPG/Redis/OCI as recorded in
+`DEPLOYMENT.md`; kit preserves it and does not re-decide it.
+
+Kit's reusable CI/workflow conventions (`ci.reusable.yml`,
+`image.reusable.yml`, `chart.reusable.yml`, `publish.reusable.yml`) are
+optional and versioned — pin them by ref or SHA in the `uses:` line.
+Consuming them is not a condition for a service repo to build: service
+workflows are independent, and nothing in kit's gate reads service
+repositories.
+
+## CI routing and release policy
+
+kit's own CI routes each pull request by its changed paths
+(`tests/route.sh`: pure bash, no venv, proved by `tests/route_test.sh`
+without ever launching the gate). Exactly one proving job runs per run,
+and `gate` — the stable required check (`ci / gate`) — passes iff that
+job passed:
+
+| route | change | what runs |
+| --- | --- | --- |
+| `docs` | prose only (`*.md`, `*.txt`, `LICENSE*`, …) | `git diff --check` and nothing else |
+| `tier` | `templates/tier/**` only | `tests/focused_tier.sh`: family syntax, same tools as the gate |
+| `publish` | `templates/publish/**` only | `tests/focused_publish.sh`: family syntax + the gate's exact `chart publish` check |
+| `full` | everything else: platform/runtime artifacts, workflows, tests, mixed families, unknown or empty diffs | `bash tests/validate.sh` with no flags |
+
+Non-PR events — pushes to `master`, the weekly schedule, manual
+`workflow_dispatch` runs — always take `full`: they are the release proof
+and are never narrowed. A narrowed run says so in its log (`NOT RUN: …`)
+and is never reported as a platform-test pass.
+
 ## How a service repo adopts kit
 
 A service repo does **not** copy the workflow. It calls it, so a fix in kit
