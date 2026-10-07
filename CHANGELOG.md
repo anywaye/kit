@@ -19,6 +19,21 @@
 
 ### Fixed
 
+- **`KIT_PROFILE` recorded a parallel region's wall clock nowhere, so the
+  `phase` row of whatever `section` came next absorbed it whole.** A
+  `par_begin`…`par_flush` region's span is now a row of its own — kind `par`,
+  measured from the last phase marker to the flush — and `_pf_last` is
+  re-armed at the flush, so a phase row covers only the work after the region
+  it follows. Until this, `static: handed-out scripts are executable` profiled
+  at 212.3 s (a `for` loop over ~25 files doing `[ -x "$f" ]`) and
+  `static: templates/otel` at 45.3 s: both were join artifacts — the parse
+  region's and the shellcheck region's wall clock respectively, each charged to
+  the section that merely followed it. The `cpu` rows already overlapped inside
+  the span, so the span itself was the one number nothing recorded. `par` rows
+  tile with `phase` rows (regions never overlap each other) and are summed with
+  them and never with `check`/`cpu`/`tier`; `tests/profile_report.py` reads the
+  new kind. The TSV's four-column shape is unchanged.
+
 - **`bin/dev`: replacing a populated cache RETIRES it instead of deleting it,
   which is the difference between a stack that serves and a stack that reports
   itself broken.** `fetch_stack` used to end with `rm -rf "$dest"; mv "$tmp"
