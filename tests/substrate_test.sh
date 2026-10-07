@@ -458,7 +458,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -472,54 +472,27 @@ else
 fi
 
 # ===========================================================================
-# 8. KIT_SUBSTRATE_DATABASES unset/empty/mismatched refuses in DRY_RUN
+# 8. KIT_SUBSTRATE_DATABASES refuses in DRY_RUN: unset, empty, mismatched
 # ===========================================================================
 #
 # The refusal is the contract: a cluster with no database list is a cluster
 # with no databases, and a list that disagrees with the manifest is a
-# DATABASE_URL pointing at nothing. Each case must refuse (non-zero exit)
-# NAMING the fix. The control is the valid environment, which must be
-# accepted — a refusal that fires unconditionally proves nothing.
+# DATABASE_URL pointing at nothing. (The unset and empty cases are asserted
+# in section 2, beside the success path they gate; this section adds the
+# mismatch and the accepted-control.) Each refusing case must exit non-zero
+# NAMING the fix. The control is the valid list, which must be accepted — a
+# refusal that fires unconditionally proves nothing.
 databases_try() {
-  # $1: __UNSET__, __EMPTY__, a value, or __FULL__ (the valid environment).
+  # $1: __UNSET__, __EMPTY__, or a value.
   local out ec=0
   case "$1" in
     __UNSET__) out="$(env -u KIT_SUBSTRATE_DATABASES DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
     __EMPTY__) out="$(KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
-    __FULL__) out="$(env $FULL_DRY_ENV DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
     *) out="$(KIT_SUBSTRATE_DATABASES="$1" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
   esac
   printf '%s' "$out"
   return "$ec"
 }
-
-refused_out=""; refused_ec=0
-refused_out="$(databases_try __UNSET__)" || refused_ec=$?
-case "$refused_ec:$refused_out" in
-  0:*)
-    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses' "exit 0 — the install would proceed with no database list"
-    ;;
-  *KIT_SUBSTRATE_DATABASES*)
-    pass 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix'
-    ;;
-  *)
-    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix' "$refused_out"
-    ;;
-esac
-
-refused_out=""; refused_ec=0
-refused_out="$(databases_try __EMPTY__)" || refused_ec=$?
-case "$refused_ec:$refused_out" in
-  0:*)
-    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses' "exit 0 — the install would proceed with an empty database list"
-    ;;
-  *KIT_SUBSTRATE_DATABASES*)
-    pass 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix'
-    ;;
-  *)
-    fail 'DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix' "$refused_out"
-    ;;
-esac
 
 refused_out=""; refused_ec=0
 refused_out="$(databases_try 'identity,courier')" || refused_ec=$?
@@ -536,11 +509,11 @@ case "$refused_ec:$refused_out" in
 esac
 
 refused_out=""; refused_ec=0
-refused_out="$(databases_try __FULL__)" || refused_ec=$?
+refused_out="$(databases_try "$DBS")" || refused_ec=$?
 if [ "$refused_ec" -eq 0 ]; then
-  pass 'control: DRY_RUN with the full operator environment is accepted'
+  pass 'control: DRY_RUN with the matching database list is accepted'
 else
-  fail 'control: DRY_RUN with the full operator environment is accepted' "$refused_out"
+  fail 'control: DRY_RUN with the matching database list is accepted' "$refused_out"
 fi
 
 # ===========================================================================
@@ -580,13 +553,21 @@ meta = doc.get("metadata", {})
 if meta.get("name") != "postgres" or meta.get("namespace") != "data":
     problems.append(
         f"is {meta.get('namespace')}/{meta.get('name')}, not data/postgres —"
-        " step 10 builds DATABASE_URL against postgres-rw.data"
+        " step 9 builds DATABASE_URL against postgres-rw.data"
     )
 spec = doc.get("spec", {})
 if "imageName" in spec:
     problems.append(
         "spec.imageName is set — CNPG's standard image already carries"
         " pgvector, so a pinned image here is a second artifact to maintain"
+    )
+initdb = spec.get("bootstrap", {}).get("initdb", {})
+if "postInitApplicationSQL" in initdb or "postInitApplicationSQLRefs" in initdb:
+    problems.append(
+        "postInitApplicationSQL* runs as the non-superuser app owner in the"
+        " single initdb database — CREATE EXTENSION vector there is refused"
+        " ('Must be superuser') and fails the whole bootstrap; the manifest"
+        " header names the gap instead"
     )
 store = spec.get("storageConfiguration", {})
 if not store.get("size"):
@@ -597,7 +578,7 @@ if store.get("storageClass") != "local-path":
         " (k3s's default provisioner)"
     )
 svcs = ("identity", "gateway", "courier", "parlor")
-sql = "\n".join(spec.get("bootstrap", {}).get("initdb", {}).get("postInitSQL", []))
+sql = "\n".join(initdb.get("postInitSQL", []))
 for svc in svcs:
     for needle in (
         f'CREATE DATABASE "{svc}" OWNER "{svc}"',
@@ -611,11 +592,9 @@ for svc in svcs:
     ):
         if needle not in sql:
             problems.append(f"postInitSQL is missing: {needle}")
-appsql = "\n".join(
-    spec.get("bootstrap", {}).get("initdb", {}).get("postInitApplicationSQL", [])
-)
-if "vector" not in appsql:
-    problems.append("postInitApplicationSQL creates no vector extension")
+# No postInitApplicationSQL assertion here: the manifest must NOT carry that
+# hook (asserted above), and the extension list lives in install.sh — the
+# check below it asserts the declaration and its default.
 roles = {r.get("name"): r for r in spec.get("managed", {}).get("roles", [])}
 for svc in svcs:
     owner, app = roles.get(svc), roles.get(f"{svc}_app")
@@ -652,6 +631,44 @@ run 'the Cluster manifest carries the per-role provisioning' green check_cluster
 fixture_no_revoke="$WORK/no-revoke-cluster.yaml"
 grep -v 'REVOKE ALL ON DATABASE' "$DATA_DIR/postgres-cluster.yaml" >"$fixture_no_revoke"
 run 'control: a Cluster without the REVOKE goes red' red check_cluster "$fixture_no_revoke"
+
+# The second control: a fixture RE-ADDING the forbidden
+# postInitApplicationSQL hook. Must go red the same way — an absence the
+# check cannot see violated is not an assertion.
+fixture_app_sql="$WORK/app-sql-cluster.yaml"
+awk '/^      owner: app$/{print; print "      postInitApplicationSQL:"; print "        - SELECT 1"; next}1' \
+  "$DATA_DIR/postgres-cluster.yaml" >"$fixture_app_sql"
+run 'control: a Cluster re-adding postInitApplicationSQL goes red' red check_cluster "$fixture_app_sql"
+
+# The extension list is declared in install.sh with the compose default
+# (`vector`) and validated as identifiers — because no CNPG hook can create
+# extensions per database, the declaration is what the gate can hold. The
+# control drops the default; a declaration the check cannot see missing is
+# documentation, not a check.
+check_extensions() {
+  code="$(sed -e 's/#.*//' "$1")"
+  problems=""
+  case "$code" in
+    *'KIT_SUBSTRATE_POSTGRES_EXTENSIONS:=vector'*) ;;
+    *) problems="no KIT_SUBSTRATE_POSTGRES_EXTENSIONS default of vector" ;;
+  esac
+  case "$code" in
+    *'KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier'*) ;;
+    *) problems="${problems}; no identifier validation on KIT_SUBSTRATE_POSTGRES_EXTENSIONS" ;;
+  esac
+  if [ -n "$problems" ]; then
+    printf '%s\n' "$problems"
+    return 1
+  fi
+  printf 'extensions default to vector, validated as identifiers\n'
+}
+
+run 'the extension list defaults to vector and is validated' green check_extensions "$SUBSTRATE/install.sh"
+
+fixture_no_ext_default="$WORK/install-no-ext-default.sh"
+sed 's/KIT_SUBSTRATE_POSTGRES_EXTENSIONS:=vector/KIT_SUBSTRATE_POSTGRES_EXTENSIONS:=/' \
+  "$SUBSTRATE/install.sh" >"$fixture_no_ext_default"
+run 'control: an extension list with no default goes red' red check_extensions "$fixture_no_ext_default"
 
 # ===========================================================================
 # 10. The Redis manifest — parses, exact tag, password by reference only
@@ -725,17 +742,42 @@ import re
 import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
 records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
 if len(records) != 4:
     print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
+# Conditional keys: set only when the operator sets the surface (identity's
+# OIDC/MFA/OAuth block, its courier credential, courier's mail-from). They
+# are deliberately UNRECORDED — absent is a valid reduced surface, and the
+# record lists the keys every install creates.
+conditional = {
+    "COURIER_TOKEN",
+    "OIDC_SIGNING_KEY",
+    "OIDC_SIGNING_KEY_ID",
+    "MFA_ENCRYPTION_KEY",
+    "OAUTH_ENCRYPTION_KEY",
+    "MAIL_FROM",
+    "MAIL_FROM_NAME",
+}
 problems = []
+recorded = {}
 for secret, keys in records:
-    if f"create secret generic {secret}" not in src:
+    recorded[secret] = set(keys.split())
+    if f"create secret generic {secret}" not in code:
         problems.append(f"{secret} is recorded but never created")
     for key in keys.split():
-        if f"--from-literal={key}=" not in src:
+        if f"--from-literal={key}=" not in code:
             problems.append(f"{secret} records {key} but no --from-literal sets it")
+created = set(re.findall(r"create secret generic (\S+)", code))
+for secret in created:
+    if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor")):
+        problems.append(f"{secret} is created but not recorded")
+for key in set(re.findall(r"--from-literal=([A-Z_]+)=", code)):
+    if key in conditional:
+        continue
+    if not any(key in keys for keys in recorded.values()):
+        problems.append(f"{key} is set by --from-literal but recorded nowhere")
 if problems:
     print("; ".join(problems))
     sys.exit(1)
@@ -749,6 +791,13 @@ run 'the recorded secret name-and-key list matches install.sh' green check_secre
 fixture_dropped_key="$WORK/install-dropped-key.sh"
 grep -v -- '--from-literal=COURIER_SMTP_PASSWORD=' "$SUBSTRATE/install.sh" >"$fixture_dropped_key"
 run 'control: a secret with a key removed goes red' red check_secret_record "$fixture_dropped_key"
+
+# The reverse control: a fixture setting a key the record does not name (and
+# the conditional set does not excuse). Must go red the other way.
+fixture_extra_key="$WORK/install-extra-key.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_extra_key"
+printf '\n--from-literal=EXTRA_UNRECORDED_KEY=x\n' >>"$fixture_extra_key"
+run 'control: a secret with an unrecorded key goes red' red check_secret_record "$fixture_extra_key"
 
 # ===========================================================================
 # Summary

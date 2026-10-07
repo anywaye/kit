@@ -53,9 +53,22 @@
 #     `idle_in_transaction_session_timeout = 30000` on both roles. The app role
 #     deliberately carries NO connection limit: the limit is a service's SHARE
 #     of the cluster budget, and the service connects as `<svc>_app`.
-#   `CREATE EXTENSION vector` in every database. The local default reads empty
-#     in the init script and `vector` in practice (compose writes
-#     `${KIT_POSTGRES_EXTENSIONS:-vector}`); the substrate's contract is vector.
+#
+# WHAT THIS DELIBERATELY DOES NOT REPRODUCE: per-database CREATE EXTENSION.
+# 10-cluster.sh creates the extension list (compose default: vector) inside
+# every service database, running as the cluster admin over one psql session
+# per database. CNPG's bootstrap hooks execute in the SINGLE initdb database
+# (`app` here): postInitSQL runs there as the superuser and cannot reach into
+# `identity`, and postInitApplicationSQL runs there as the non-superuser app
+# owner — which is REFUSED for an untrusted extension like vector
+# ("permission denied … Must be superuser"), failing the whole bootstrap. So
+# a `CREATE EXTENSION vector` in either hook is either useless or fatal, and
+# neither is in this file. The extension LIST is still declared and validated
+# (KIT_SUBSTRATE_POSTGRES_EXTENSIONS, default `vector`, in install.sh step 8),
+# none of the four launch services reads vector, and a service that needs an
+# extension is a named follow-up with the box to prove it on — see README.
+# Claiming per-database extensions here would be the green suite hiding a red
+# box.
 #
 # No secret VALUE is a literal anywhere in this file: role passwords live in
 # `postgres-role-<svc>` secrets made on the box by install.sh step 8, named
@@ -102,10 +115,10 @@ spec:
       database: app
       owner: app
       # One item per statement (see the header: no implicit transaction may
-      # ever wrap a CREATE DATABASE). Each service block is five statements:
-      # database, boundary, limits, timeouts, extension. The roles the
-      # statements name are reconciled by spec.managed.roles below; bootstrap
-      # order inside CNPG applies managed roles before postInitSQL runs.
+      # ever wrap a CREATE DATABASE). Each service block is three statements:
+      # database, boundary, limits. The roles the statements name are
+      # reconciled by spec.managed.roles below; bootstrap order inside CNPG
+      # applies managed roles before postInitSQL runs.
       postInitSQL:
         # --- identity ---
         - CREATE DATABASE "identity" OWNER "identity"
@@ -147,11 +160,6 @@ spec:
         - ALTER ROLE "parlor" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "parlor_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "parlor_app" SET idle_in_transaction_session_timeout = '30000ms'
-      # vector in every database. The image makes the extension POSSIBLE; this
-      # is what creates it, by the superuser, once per database. Runs as the
-      # application owner against each database in turn.
-      postInitApplicationSQL:
-        - CREATE EXTENSION IF NOT EXISTS vector
 
   # The declarative half: every role, its login flag, its password secret, and
   # the one membership. `inRoles: [<svc>_app]` on role `<svc>` IS the

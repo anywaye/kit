@@ -17,14 +17,12 @@
 #   5. the GHCR image pull secret, from a value the OPERATOR supplies
 #   6. the first Applications, so Argo starts syncing
 #   7. the Let's Encrypt ClusterIssuers — staging + prod, from a value the OPERATOR supplies
-#   8. the Postgres Cluster — one CNPG Cluster in the `data` namespace,
-#      reproducing templates/compose/postgres/initdb/10-cluster.sh, plus the
-#      per-role password secrets it names
-#   9. Redis — one Deployment + Service + PVC in `data`, password generated
-#      on the box
-#   10. the services' secrets — identity-secrets, gateway-secrets,
-#      courier-secrets, parlor-secrets, one per service namespace, each exactly
-#      the keys its chart reads (see the SECRET RECORD on install_secrets)
+#   8. the Postgres Cluster — one CNPG Cluster, one database and two roles per
+#      service, reproducing templates/compose/postgres/initdb/10-cluster.sh
+#   9. Redis (single instance) and the services' secrets — identity-secrets,
+#      gateway-secrets, courier-secrets, parlor-secrets, one per namespace,
+#      each exactly the keys its chart reads (see the SECRET RECORD on
+#      install_service_secrets)
 #
 # THE OPERATOR-SUPPLIED VALUES (besides steps 5 and 7):
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
@@ -78,7 +76,10 @@
 #
 # SECRETS
 #   The pull-secret value comes from the environment, never a literal in this
-#   file. It is never echoed, in any mode.
+#   file. It is never echoed, in any mode. The same holds for every operator
+#   value below it and every generated value step 8 and 9 create: a secret
+#   VALUE never reaches an `echo`, in DRY_RUN or live. Refusals name the
+#   VARIABLE (`export KIT_SUBSTRATE_SMTP_HOST=…`), never its value.
 
 set -euo pipefail
 
@@ -104,35 +105,61 @@ ARGOCD_VERSION="v3.5.4"
 # at apply time and never prints the value.
 : "${KIT_SUBSTRATE_ACME_EMAIL:=}"
 
-# KIT_SUBSTRATE_DATABASES names the services the Cluster provisions — one
-# role-and-database per service. Required with NO default (the local
-# contract's KIT_POSTGRES_DATABASES refuses the same way): a default here
-# would provision a fixed set while the operator believed they had named
-# theirs, and a service with no entry has no database. Step 8 refuses empty
-# and refuses a list that disagrees with the manifest, naming the fix.
+# KIT_SUBSTRATE_DATABASES names the services, comma-separated — one
+# role-and-database per name, reproducing
+# templates/compose/postgres/initdb/10-cluster.sh. NO DEFAULT, and empty is
+# refused with the fix named (the way 10-cluster.sh:120 refuses): a service
+# with no entry has no database, and a plan with no names is a plan for
+# nothing. It must name the same services
+# manifests/data/postgres-cluster.yaml provisions — step 8 checks the
+# agreement and refuses a list the manifest does not cover.
 : "${KIT_SUBSTRATE_DATABASES:=}"
 
-# Courier's mail path, all externally sourced. The adapter and relay address
-# are the operator's account with their provider; the passwords and tokens
-# are that account's credentials. None has a default: a default relay is a
-# relay that mails nobody while reporting success (see runtime.exs on
-# adapter `none`), and a default credential is a credential in version
-# control. When the adapter is postmark the SMTP_* variables are unused but
-# still required — one shape, no conditional refusals to misread.
-: "${KIT_SUBSTRATE_SMTP_ADAPTER:=}"
-: "${KIT_SUBSTRATE_SMTP_HOST:=}"
+# KIT_SUBSTRATE_POSTGRES_EXTENSIONS is the extension list, comma-separated,
+# mirroring the local contract (compose writes ${KIT_POSTGRES_EXTENSIONS:-vector}).
+# Validated as identifiers; creation per database is a named gap (see step 8).
+: "${KIT_SUBSTRATE_POSTGRES_EXTENSIONS:=vector}"
+
+# Courier's externally-sourced settings. The relay host, username and password
+# come from the operator's mail relay; the adapter and port have honest
+# defaults (smtp / 587) and are validated non-empty / numeric. The two paired
+# secrets below are NOT generatable: COURIER_IDENTITY_TOKEN is minted by
+# identity itself (POST /v1/accounts/{id}/api-keys) AFTER identity boots, and
+# COURIER_INBOUND_RESEND_SECRET is copied from the provider's dashboard
+# (Resend: the webhook endpoint's Signing Secret, whsec_…). Both are required
+# and refused loudly naming the fix; a re-run resumes through the guards, so
+# mint-then-rerun is the flow. MAIL_FROM/MAIL_FROM_NAME are optional
+# passthroughs — courier falls back to its compiled default without them.
+: "${KIT_SUBSTRATE_SMTP_ADAPTER:=smtp}"
 : "${KIT_SUBSTRATE_SMTP_PORT:=587}"
+: "${KIT_SUBSTRATE_SMTP_HOST:=}"
 : "${KIT_SUBSTRATE_SMTP_USERNAME:=}"
 : "${KIT_SUBSTRATE_SMTP_PASSWORD:=}"
+: "${KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN:=}"
 : "${KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET:=}"
-: "${KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN:=}"
+: "${KIT_SUBSTRATE_MAIL_FROM:=}"
+: "${KIT_SUBSTRATE_MAIL_FROM_NAME:=}"
+
+# Courier's mail path. The relay host, username and password are the
+# operator's account with their provider and have no defaults — a default
+# relay is a relay that mails nobody while reporting success (see runtime.exs
+# on adapter `none`), and a default credential is a credential in version
+# control. The adapter and port default to smtp/587 (validated: adapter
+# non-empty, port numeric); with the postmark adapter the SMTP_* values ride
+# along unused — one shape, no conditional refusals to misread.
+# (The error-relay token is generated on the box — a random self-contained
+# value, like the other generated keys — so it is declared nowhere here.)
 
 # Optional identity surfaces. Unset means the surface stays unwired (no OIDC
-# provider, no MFA, no OAuth) — each lands in identity-secrets only when set.
+# provider, no MFA, no OAuth, no courier calls from identity) — each lands in
+# identity-secrets only when set. COURIER_TOKEN is identity's credential FOR
+# courier (the all-or-nothing pair with COURIER_BASE_URL, which stays unset):
+# absent is the reduced surface the chart documents, not a placeholder.
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID:=}"
 : "${KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY:=}"
+: "${KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN:=}"
 
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -173,8 +200,10 @@ kit_substrate_guard() {
       ;;
     cluster)
       # The CNPG Cluster object exists. The bootstrap SQL ran once at
-      # creation; a re-run must not re-provision, only resume.
-      kubectl --kubeconfig="$KUBECONFIG" get cluster postgres -n data >/dev/null 2>&1
+      # creation; a re-run must not re-provision, only resume. Qualified by
+      # API group: a bare `get cluster` is ambiguous the day another CRD
+      # defines the same kind.
+      kubectl --kubeconfig="$KUBECONFIG" get cluster.postgresql.cnpg.io postgres -n data >/dev/null 2>&1
       ;;
     redis)
       kubectl --kubeconfig="$KUBECONFIG" get deployment redis -n data >/dev/null 2>&1
@@ -197,7 +226,7 @@ kit_substrate_guard() {
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
-TOTAL=10
+TOTAL=9
 
 log_step() {
   STEP=$((STEP + 1))
@@ -460,6 +489,20 @@ install_postgres_cluster() {
     echo "  # adding a service means extending manifests/data/postgres-cluster.yaml AND this variable in the same change" >&2
     exit 1
   fi
+  # The extension list is declared (default: vector, mirroring compose) and
+  # validated here, even though no CNPG hook can create it per database (see
+  # the manifest header): an invalid name must fail here with its own message,
+  # not surface later as a database error. Same identifier rule as
+  # 10-cluster.sh's require_identifier; LC_ALL=C scoped to the grep, because
+  # bracket ranges are collation-dependent (10-cluster.sh:78-110).
+  local ext ext_list
+  IFS=',' read -r -a ext_list <<<"$KIT_SUBSTRATE_POSTGRES_EXTENSIONS"
+  for ext in "${ext_list[@]}"; do
+    if ! printf '%s' "$ext" | LC_ALL=C grep -q '^[a-z_][a-z0-9_]*$'; then
+      echo "error: '$ext' in KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier ([a-z_][a-z0-9_]*)" >&2
+      exit 1
+    fi
+  done
   if kit_substrate_guard cluster; then
     echo "      already installed, skipping"
     return 0
@@ -470,11 +513,12 @@ install_postgres_cluster() {
   kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
   # Role passwords: generated ONCE, read back on a re-run. Each secret holds
-  # `username` and `password` (both keys: CNPG reads the password, and the
-  # username beside it is what makes a `kubectl get` answerable without
-  # consulting the manifest). Hex, so the value is URL-safe for DATABASE_URL
-  # below — base64's `+/=` are reserved in a URL userinfo and would need
-  # escaping at every use site.
+  # `username` and `password` (both keys: the Cluster names the secret for the
+  # password, and the username beside it is what makes a `kubectl get`
+  # answerable without consulting the manifest). Hex from /dev/urandom, so the
+  # value is URL-safe for DATABASE_URL below — base64's `+/=` are reserved in
+  # a URL userinfo and would need escaping at every use site. /dev/urandom and
+  # od are coreutils: no openssl assumption on the box.
   local svc secret_name pw
   for svc in identity gateway courier parlor; do
     for suffix in "" "-app"; do
@@ -482,7 +526,7 @@ install_postgres_cluster() {
       if kubectl --kubeconfig="$KUBECONFIG" get secret "$secret_name" -n data >/dev/null 2>&1; then
         echo "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
       else
-        pw="$(openssl rand -hex 24)"
+        pw="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
         kubectl --kubeconfig="$KUBECONFIG" create secret generic "$secret_name" -n data \
           --from-literal=username="$svc$suffix" --from-literal=password="$pw" >/dev/null
         echo "      secret $secret_name created (generated once — a re-run reads it back)"
@@ -490,58 +534,74 @@ install_postgres_cluster() {
     done
   done
   kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/postgres-cluster.yaml"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=jsonpath='{.status.phase}'=Ready cluster postgres -n data --timeout=600s
+  # The pods, not the Cluster phase: pod Ready means the instance passed its
+  # readiness probe, which is the observable property the services need. A
+  # phase-string wait encodes a CNPG status vocabulary this script does not
+  # own; a label-selected pod wait encodes the contract.
+  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready pod -l cnpg.io/cluster=postgres -n data --timeout=600s
 }
 
-# --- step 9: Redis ------------------------------------------------------------
-# One Deployment + Service + PVC in `data` (manifests/data/redis.yaml): an
-# accessory, not a product — no sentinel, no cluster.
-install_redis() {
-  log_step "Redis (single instance, in the data namespace)"
+# --- step 9: Redis and the services' secrets ----------------------------------
+# One step, two guarded halves. Redis (one Deployment + Service + PVC in
+# `data`: an accessory, not a product — no sentinel, no cluster) must exist
+# before the secrets half runs, because `gateway-secrets`' REDIS_URL is built
+# from the `redis-password` secret — and the secrets half has its own guard,
+# so a half-finished step 9 resumes the secrets without touching Redis.
+install_redis_and_secrets() {
+  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor)"
   if kit_substrate_guard redis; then
     echo "      already installed, skipping"
-    return 0
-  fi
-  if dry_run "create secret redis-password (generated once) and apply ${DATA_DIR}/redis.yaml"; then
-    return 0
-  fi
-  if ! kubectl --kubeconfig="$KUBECONFIG" get secret redis-password -n data >/dev/null 2>&1; then
-    kubectl --kubeconfig="$KUBECONFIG" create secret generic redis-password -n data \
-      --from-literal=password="$(openssl rand -hex 24)" >/dev/null
-    echo "      secret redis-password created (generated once — a re-run reads it back)"
+  elif dry_run "create secret redis-password (generated once) and apply ${DATA_DIR}/redis.yaml"; then
+    :
   else
-    echo "      secret redis-password exists, keeping its password (never regenerated, never printed)"
+    if ! kubectl --kubeconfig="$KUBECONFIG" get secret redis-password -n data >/dev/null 2>&1; then
+      kubectl --kubeconfig="$KUBECONFIG" create secret generic redis-password -n data \
+        --from-literal=password="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >/dev/null
+      echo "      secret redis-password created (generated once — a re-run reads it back)"
+    else
+      echo "      secret redis-password exists, keeping its password (never regenerated, never printed)"
+    fi
+    kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/redis.yaml"
+    kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment redis -n data --timeout=180s
   fi
-  kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/redis.yaml"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment redis -n data --timeout=180s
+  install_service_secrets
 }
 
-# --- helpers for step 10 ------------------------------------------------------
+# --- helpers for the secrets half of step 9 ------------------------------------
 # read_secret_key <namespace> <secret> <key> — the stored value, or empty.
 # Never prints; the caller decides what to do with an absence. A missing
 # SECRET is empty (first run); a present secret with a missing KEY is also
-# empty (an older step-10 wrote fewer keys) — both mean "generate or refuse",
+# empty (an older run wrote fewer keys) — both mean "generate or refuse",
 # never "crash on jsonpath".
 read_secret_key() {
   kubectl --kubeconfig="$KUBECONFIG" get secret "$2" -n "$1" -o jsonpath="{.data.$3}" 2>/dev/null |
     base64 -d 2>/dev/null || true
 }
 
-# database_url_for <service> — postgres://<svc>:<pw>@postgres-rw.data…/<svc>.
-# The password is read back from the role secret step 8 made; a missing role
+# database_url_for <service> — the service's runtime DSN. The role is the
+# LOGIN the application uses (`<svc>_app`, which owns nothing), and the
+# password is read back from the role secret step 8 made; a missing role
 # secret is a refusal naming step 8, not an empty password in a URL.
 # postgres-rw is CNPG's read-write service for the Cluster named `postgres`.
+# The scheme is per service, exactly as each service's own compose file
+# writes it: identity uses postgres://…?sslmode=disable, courier uses
+# ecto:// (its runtime.exs names that spelling in the missing-variable
+# error), parlor is provisioned-but-unread so it takes the postgres form.
 database_url_for() {
   local pw
-  pw="$(read_secret_key data "postgres-role-$1" password)"
+  pw="$(read_secret_key data "postgres-role-$1-app" password)"
   if [ -z "$pw" ]; then
-    echo "error: secret postgres-role-$1 is missing in namespace data — run step 8 first" >&2
+    echo "error: secret postgres-role-$1-app is missing in namespace data — run step 8 first" >&2
     exit 1
   fi
-  printf 'postgres://%s:%s@postgres-rw.data.svc.cluster.local:5432/%s' "$1" "$pw" "$1"
+  if [ "$1" = "courier" ]; then
+    printf 'ecto://%s_app:%s@postgres-rw.data.svc.cluster.local:5432/%s' "$1" "$pw" "$1"
+  else
+    printf 'postgres://%s_app:%s@postgres-rw.data.svc.cluster.local:5432/%s?sslmode=disable' "$1" "$pw" "$1"
+  fi
 }
 
-# --- step 10: the services' secrets -------------------------------------------
+# --- the secrets half of step 9 ------------------------------------------------
 # One secret per service namespace, each exactly the keys its chart reads —
 # because the generated charts use `envFrom: secretRef`, every key becomes
 # an environment variable, so the key list IS the service's env list.
@@ -549,43 +609,49 @@ database_url_for() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY COURIER_TOKEN
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY
 #   RECORD gateway-secrets: REDIS_URL
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
 #
 # THE SPLIT IS BY PROVENANCE:
 #   generated on the box, never printed, generated ONCE and read back —
-#     SIGNUP_SIGNING_KEY (base64url, exactly 32 bytes; identity refuses to
-#     boot without it), SECRET_KEY_BASE, COURIER_SECRET_BOX_KEY, the shared
-#     courier↔identity token (one value in two secrets: identity's
-#     COURIER_TOKEN and courier's COURIER_IDENTITY_TOKEN must be the same
-#     identity-issued key), the Redis password (step 9), each Postgres role's
+#     SIGNUP_SIGNING_KEY (base64url, exactly 32 bytes: identity decodes it
+#     with base64.RawURLEncoding and refuses any other length at boot),
+#     SECRET_KEY_BASE, COURIER_SECRET_BOX_KEY, COURIER_ERROR_RELAY_TOKEN
+#     (a self-contained shared value, generated like the raise text
+#     suggests), the Redis password (redis half above), each Postgres role's
 #     password (step 8).
 #   from the environment, shape-validated, never echoed — courier's SMTP
-#     settings and provider secrets (see the header for the variable names).
+#     settings and provider secrets (see the header for the variable names),
+#     plus COURIER_IDENTITY_TOKEN, which is paired, not generatable: it is an
+#     API key identity itself mints (POST /v1/accounts/{id}/api-keys) AFTER
+#     identity boots, so the first run refuses naming the mint and the
+#     re-run resumes through the guards.
 # `gateway-tls` is NOT created here: cert-manager fills it from the
 # ClusterIssuer. `DATABASE_URL` agrees with the Cluster by construction — the
 # host is CNPG's read-write service, the database and role are the service's
 # own, and the password is read back from step 8's secret.
-install_secrets() {
-  log_step "the services' secrets (identity, gateway, courier, parlor)"
+install_service_secrets() {
   if kit_substrate_guard secrets; then
     echo "      already installed, skipping"
     return 0
   fi
-  # Externally sourced values are validated BEFORE the dry_run early-return,
-  # for the same reason as step 8's refusal: a dry run that cannot see a
-  # missing SMTP host is a plan that would fail at apply time.
-  if [ -z "$KIT_SUBSTRATE_SMTP_ADAPTER" ] || [ -z "$KIT_SUBSTRATE_SMTP_HOST" ] ||
+  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets (generated values once-only, sourced values validated on the live path)"; then
+    return 0
+  fi
+  # Externally sourced values are validated on the LIVE path only — a dry run
+  # is a plan, and a plan does not need credentials to print. A live run
+  # with an incomplete relay refuses here, naming every missing variable,
+  # before any secret is written.
+  if [ -z "$KIT_SUBSTRATE_SMTP_HOST" ] ||
      [ -z "$KIT_SUBSTRATE_SMTP_USERNAME" ] || [ -z "$KIT_SUBSTRATE_SMTP_PASSWORD" ] ||
-     [ -z "$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" ] ||
-     [ -z "$KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN" ]; then
+     [ -z "$KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN" ] ||
+     [ -z "$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" ]; then
     echo "error: courier's externally-sourced settings are incomplete — all of these are required:" >&2
-    echo "  KIT_SUBSTRATE_SMTP_ADAPTER (smtp or postmark)" >&2
     echo "  KIT_SUBSTRATE_SMTP_HOST, KIT_SUBSTRATE_SMTP_USERNAME, KIT_SUBSTRATE_SMTP_PASSWORD" >&2
+    echo "  KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN (minted by identity AFTER it boots: POST /v1/accounts/{id}/api-keys — then re-run; the guards resume)" >&2
     echo "  KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET (the provider's signing secret)" >&2
-    echo "  KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN (the relay's shared secret)" >&2
     exit 1
   fi
   case "$KIT_SUBSTRATE_SMTP_ADAPTER" in
@@ -595,9 +661,12 @@ install_secrets() {
       exit 1
       ;;
   esac
-  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets (generated values once-only, sourced values validated)"; then
-    return 0
-  fi
+  case "$KIT_SUBSTRATE_SMTP_PORT" in
+    '' | *[!0-9]*)
+      echo "error: KIT_SUBSTRATE_SMTP_PORT must be numeric" >&2
+      exit 1
+      ;;
+  esac
 
   local ns
   for ns in identity gateway courier parlor; do
@@ -605,33 +674,22 @@ install_secrets() {
       kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
   done
 
-  # The shared courier↔identity token: read back from whichever secret
-  # already holds it (a half-finished first run must resume, not fork the
-  # credential), else generate once. Both ends are ours — identity's
-  # COURIER_TOKEN and courier's COURIER_IDENTITY_TOKEN carry the same value.
-  local courier_token
-  courier_token="$(read_secret_key identity identity-secrets COURIER_TOKEN)"
-  if [ -z "$courier_token" ]; then
-    courier_token="$(read_secret_key courier courier-secrets COURIER_IDENTITY_TOKEN)"
-  fi
-  if [ -z "$courier_token" ]; then
-    courier_token="$(openssl rand -hex 32)"
-  fi
-
   # identity-secrets. Always: DATABASE_URL (agrees with the Cluster),
-  # SIGNUP_SIGNING_KEY (generated once), COURIER_TOKEN (the shared value).
-  # Conditionally: the OIDC/MFA/OAuth surfaces, only when the operator set
+  # SIGNUP_SIGNING_KEY (generated once). Conditionally: COURIER_TOKEN (only
+  # when the operator set it — identity's credential FOR courier, absent by
+  # default) and the OIDC/MFA/OAuth surfaces, only when the operator set
   # them — an unset surface stays unwired, and an unwired surface contributes
   # no key (envFrom makes every key an env var; a placeholder would be a lie
   # the service would then read as configuration).
   local signup_key identity_args
   signup_key="$(read_secret_key identity identity-secrets SIGNUP_SIGNING_KEY)"
   if [ -z "$signup_key" ]; then
-    signup_key="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+    signup_key="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
   fi
   identity_args=(--from-literal=DATABASE_URL="$(database_url_for identity)"
-    --from-literal=SIGNUP_SIGNING_KEY="$signup_key"
-    --from-literal=COURIER_TOKEN="$courier_token")
+    --from-literal=SIGNUP_SIGNING_KEY="$signup_key")
+  [ -n "$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN" ] &&
+    identity_args+=(--from-literal=COURIER_TOKEN="$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN")
   [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY" ] &&
     identity_args+=(--from-literal=OIDC_SIGNING_KEY="$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY")
   [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID" ] &&
@@ -666,25 +724,31 @@ install_secrets() {
     echo "      secret gateway-secrets created (REDIS_URL only — the chart's one required secretKeyRef)"
   fi
 
-  # courier-secrets. The eight keys chart/values.yaml documents, plus the
-  # three mail-adapter settings runtime.exs refuses to boot without
-  # (COURIER_MAIL_ADAPTER, COURIER_SMTP_HOST, COURIER_SMTP_PORT): adapter
-  # settings are configuration, but the chart's only env injection is this
-  # secret, so they ride along rather than missing the pod. A missing key is
-  # a `System.get_env(…) || raise` at boot — the cheapest possible failure,
-  # and it happens before the first customer request.
-  local secret_base secret_box
+  # courier-secrets. The keys chart/values.yaml documents that this install
+  # can supply, plus the mail-adapter settings runtime.exs refuses to boot
+  # without: adapter settings are configuration, but the chart's only env
+  # injection is this secret, so they ride along rather than missing the pod.
+  # Generated here: SECRET_KEY_BASE (64 bytes — Phoenix refuses shorter),
+  # COURIER_SECRET_BOX_KEY (32 bytes base64, the spelling the comment in
+  # runtime.exs suggests), COURIER_ERROR_RELAY_TOKEN (32 bytes hex, likewise).
+  # From the environment: the relay settings and the identity-minted token.
+  # A missing key is a `System.get_env(…) || raise` at boot — the cheapest
+  # possible failure, and it happens before the first customer request.
+  local secret_base secret_box relay_token
+  local -a courier_extra_args=()
   secret_base="$(read_secret_key courier courier-secrets SECRET_KEY_BASE)"
-  [ -n "$secret_base" ] || secret_base="$(openssl rand -base64 48)"
+  [ -n "$secret_base" ] || secret_base="$(head -c 64 /dev/urandom | base64 | tr -d '\n')"
   secret_box="$(read_secret_key courier courier-secrets COURIER_SECRET_BOX_KEY)"
-  [ -n "$secret_box" ] || secret_box="$(openssl rand -base64 32)"
+  [ -n "$secret_box" ] || secret_box="$(head -c 32 /dev/urandom | base64 | tr -d '\n')"
+  relay_token="$(read_secret_key courier courier-secrets COURIER_ERROR_RELAY_TOKEN)"
+  [ -n "$relay_token" ] || relay_token="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   if kubectl --kubeconfig="$KUBECONFIG" get secret courier-secrets -n courier >/dev/null 2>&1; then
     echo "      secret courier-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic courier-secrets -n courier \
       --from-literal=DATABASE_URL="$(database_url_for courier)" \
       --from-literal=SECRET_KEY_BASE="$secret_base" \
-      --from-literal=COURIER_IDENTITY_TOKEN="$courier_token" \
+      --from-literal=COURIER_IDENTITY_TOKEN="$KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN" \
       --from-literal=COURIER_SECRET_BOX_KEY="$secret_box" \
       --from-literal=COURIER_MAIL_ADAPTER="$KIT_SUBSTRATE_SMTP_ADAPTER" \
       --from-literal=COURIER_SMTP_HOST="$KIT_SUBSTRATE_SMTP_HOST" \
@@ -692,9 +756,18 @@ install_secrets() {
       --from-literal=COURIER_SMTP_USERNAME="$KIT_SUBSTRATE_SMTP_USERNAME" \
       --from-literal=COURIER_SMTP_PASSWORD="$KIT_SUBSTRATE_SMTP_PASSWORD" \
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
-      --from-literal=COURIER_ERROR_RELAY_TOKEN="$KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN" >/dev/null
+      --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
+      "${courier_extra_args[@]}" >/dev/null
     echo "      secret courier-secrets created (generated values once-only; rotate by replacing the secret)"
   fi
+  # Optional mail-from passthrough: courier falls back to its compiled
+  # default without these, so they ride the same conditional pattern as the
+  # OIDC keys above — set at creation, and a later addition means replacing
+  # the secret (the step refuses to overwrite, by design).
+  [ -n "$KIT_SUBSTRATE_MAIL_FROM" ] &&
+    courier_extra_args+=(--from-literal=MAIL_FROM="$KIT_SUBSTRATE_MAIL_FROM")
+  [ -n "$KIT_SUBSTRATE_MAIL_FROM_NAME" ] &&
+    courier_extra_args+=(--from-literal=MAIL_FROM_NAME="$KIT_SUBSTRATE_MAIL_FROM_NAME")
 
   # parlor-secrets. Parlor's chart reads this secret with envFrom but
   # documents no required keys (its runtime reads IDENTITY_URL, BILLING_URL
@@ -721,8 +794,7 @@ main() {
   install_applications
   install_cluster_issuers
   install_postgres_cluster
-  install_redis
-  install_secrets
+  install_redis_and_secrets
   echo
   echo "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   echo "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"
