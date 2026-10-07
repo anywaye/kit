@@ -10,7 +10,8 @@
 #   kernel, a container runtime and a reachable registry — so the claims it
 #   makes are otherwise untested. This script proves the parts that can be
 #   proven without a box: the script parses, DRY_RUN runs to completion
-#   printing the ordered steps, every pin is exact, every manifest parses, no
+#   printing the ordered steps, every pin is exact, every manifest parses, the
+#   two ClusterIssuers are staging and prod with distinct account keys, no
 #   image floats on `latest`, and no secret is a literal in the tree.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
@@ -30,6 +31,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SUBSTRATE="$ROOT/templates/substrate"
 MANIFESTS="$SUBSTRATE/manifests/applications"
+TLS_DIR="$SUBSTRATE/manifests/tls"
 
 if [ ! -r "$ROOT/tests/bootstrap.sh" ]; then
   echo "substrate_test.sh: tests/bootstrap.sh is missing — cannot resolve a python" >&2
@@ -108,25 +110,29 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The six steps, in order. The markers are `[1/6]` … `[6/6]`; the check reads
+# The seven steps, in order. The markers are `[1/7]` … `[7/7]`; the check reads
 # them out of the output in the order they appear and compares against the
 # expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all six.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/6\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ')"
+# one — would go red here rather than passing on the presence of all seven.
+# The `|| true` is load-bearing: with no `[n/7]` markers printed yet, grep
+# exits 1, and under `set -o pipefail` a failing command substitution would
+# take the harness down before the status is ever read — the same shape the
+# `run` helper's comment describes four lines below.
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/7\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6" ]; then
-  pass 'DRY_RUN prints the six steps in order'
+if [ "$found" = "1 2 3 4 5 6 7" ]; then
+  pass 'DRY_RUN prints the seven steps in order'
 else
-  fail 'DRY_RUN prints the six steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the seven steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
 # and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
-if [ "$dry_count" -ge 6 ]; then
+if [ "$dry_count" -ge 7 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
 else
-  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 6"
+  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 7"
 fi
 
 # ===========================================================================
@@ -229,7 +235,148 @@ printf 'apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: 
 run 'control: a manifest missing spec.source goes red' red check_manifests "$fixture_broken"
 
 # ===========================================================================
-# 5. No image floats on `latest` anywhere in the substrate tree
+# 5. The ClusterIssuers — staging and prod, HTTP-01 through Traefik
+# ===========================================================================
+#
+# A separate check from check_manifests, and the reason is the kind: that one
+# asserts `kind: Application` over manifests/applications, and folding a
+# ClusterIssuer into it would force the wrong kind on one of the two
+# directories. Without this note the next reader "simplifies" the two back
+# together and breaks one of them.
+#
+# Each assertion is a specific mistake a copy-paste makes — a shared account
+# key, a real email committed, one solver — and each failure names the
+# document and the field, so a red line is actionable.
+check_issuers() {
+  "$PY" - "$1" <<'PY'
+import os
+import sys
+
+import yaml
+
+d = sys.argv[1]
+if not os.path.isdir(d):
+    print(f"{d}: no such directory — the tls manifests do not exist")
+    sys.exit(1)
+files = sorted(f for f in os.listdir(d) if f.endswith((".yaml", ".yml")))
+if not files:
+    print("no YAML manifests found")
+    sys.exit(1)
+docs = []
+for f in files:
+    path = os.path.join(d, f)
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError as e:
+        print(f"{f}: unreadable ({e})")
+        sys.exit(1)
+    try:
+        parsed = list(yaml.safe_load_all(text))
+    except yaml.YAMLError as e:
+        print(f"{f}: does not parse ({e})")
+        sys.exit(1)
+    for i, doc in enumerate(parsed):
+        label = f if len(parsed) == 1 else f"{f} doc {i + 1}"
+        if not isinstance(doc, dict):
+            print(f"{label}: not a mapping")
+            sys.exit(1)
+        docs.append((label, doc))
+
+problems = []
+names = []
+servers = []
+keys = []
+for label, doc in docs:
+    if doc.get("kind") != "ClusterIssuer":
+        problems.append(f"{label}: kind is {doc.get('kind')!r}, not 'ClusterIssuer'")
+        continue
+    name = doc.get("metadata", {}).get("name")
+    names.append(name)
+    acme = doc.get("spec", {}).get("acme", {})
+    server = acme.get("server")
+    if not isinstance(server, str) or not server.startswith("https://"):
+        problems.append(f"{label}: spec.acme.server is {server!r}, not an https:// URL")
+    else:
+        servers.append((name, server))
+    email = acme.get("email")
+    if email != "ACME_EMAIL_PLACEHOLDER":
+        problems.append(
+            f"{label}: spec.acme.email is {email!r}, not the placeholder"
+            " 'ACME_EMAIL_PLACEHOLDER' — a real address committed here lands on"
+            " a customer's ACME account"
+        )
+    key = acme.get("privateKeySecretRef", {}).get("name")
+    if not key:
+        problems.append(f"{label}: spec.acme.privateKeySecretRef.name missing")
+    else:
+        keys.append((name, key))
+    solvers = acme.get("solvers")
+    if not isinstance(solvers, list) or not solvers:
+        problems.append(
+            f"{label}: spec.acme.solvers is empty or not a list — this issuer"
+            " can solve no challenge"
+        )
+    else:
+        for solver in solvers:
+            if "http01" not in solver:
+                problems.append(f"{label}: a solver carries no http01")
+
+if sorted(names) != ["letsencrypt-prod", "letsencrypt-staging"]:
+    problems.append(
+        f"issuer names are {sorted(names)}, expected ['letsencrypt-prod', 'letsencrypt-staging']"
+    )
+
+if len(servers) == 2 and servers[0][1] == servers[1][1]:
+    problems.append(
+        "both issuers share one ACME server URL — staging and production are"
+        " separate directories"
+    )
+if len(servers) == 2:
+    prod = [s for n, s in servers if n == "letsencrypt-prod"]
+    if prod and "acme-v02" not in prod[0]:
+        problems.append(f"letsencrypt-prod server {prod[0]!r} does not contain 'acme-v02'")
+
+if len(keys) == 2 and keys[0][1] == keys[1][1]:
+    problems.append(
+        f"both issuers share privateKeySecretRef.name {keys[0][1]!r} — staging"
+        " and production are separate ACME accounts"
+    )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(
+    f"{len(docs)} ClusterIssuers ({', '.join(sorted(names))}), HTTP-01"
+    " solvers, email still the placeholder"
+)
+PY
+}
+
+run 'the ClusterIssuers are staging and prod, distinct in every field' green check_issuers "$TLS_DIR"
+
+# The controls derive from the real manifests, so they need them to exist;
+# the green check above is the one that says what is missing when they do not.
+if ls "$TLS_DIR"/*.yaml >/dev/null 2>&1; then
+  # The control: a fixture whose issuers share one account key. Must go red.
+  fixture_shared_key="$WORK/issuers-shared-key"
+  mkdir -p "$fixture_shared_key"
+  sed 's/letsencrypt-staging-account-key/letsencrypt-prod-account-key/' \
+    "$TLS_DIR"/*.yaml >"$fixture_shared_key/clusterissuer.yaml"
+  run 'control: issuers sharing one account key go red' red check_issuers "$fixture_shared_key"
+
+  # The control: a fixture whose issuers carry no solver. Must go red.
+  fixture_no_solvers="$WORK/issuers-no-solvers"
+  mkdir -p "$fixture_no_solvers"
+  sed -e 's/^    solvers:/    solvers: []/' \
+    -e '/^      - http01:/,/ingressClassName: traefik/d' \
+    "$TLS_DIR"/*.yaml >"$fixture_no_solvers/clusterissuer.yaml"
+  run 'control: an issuer with no solver goes red' red check_issuers "$fixture_no_solvers"
+else
+  fail 'controls: the issuer fixtures need the real manifests' "$TLS_DIR has no YAML — the green check above names what is missing"
+fi
+
+# ===========================================================================
+# 6. No image floats on `latest` anywhere in the substrate tree
 # ===========================================================================
 #
 # A floating tag in an install script is the defect this fleet exists to
@@ -251,7 +398,7 @@ else
 fi
 
 # ===========================================================================
-# 6. No secret is a literal in the tree
+# 7. No secret is a literal in the tree
 # ===========================================================================
 #
 # Two forms: `stringData:` in a manifest (the inline-secret mechanism) and an
