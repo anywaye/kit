@@ -78,35 +78,46 @@ keep in step, which is the drift this repository exists to prevent. The
 honest summary is that the gate is as fast as it can be while still being
 the only proof of what it claims.
 
-## The cut — assessed, not made
+## The cut — one made, the rest assessed and not made
 
 The brief's levers are overlap, then process start-up, then cache, with every
-check id and every verdict preserved. Measured against the honest profile:
+check id and every verdict preserved.
 
-- **Overlap.** The parse region (99.2 s) and the shellcheck region (19.2 s)
-  are already `check_par` regions at the 4-way cap. The remaining serial
-  checks in the static phase are each under 0.1 s; parallelising them saves
-  ~2 s across the run. The big single scripts (`lint_test`, `kamal_test`,
-  the canary suite) are one `check` call each — overlapping them means
-  restructuring the scripts, not the gate.
-- **Process start-up.** The parse region's 99.2 s is spawn-latency-bound
-  (its 55 `cpu` rows sum to ~9 s). Batching the spawns would change the
-  check ids, which the brief forbids.
-- **Cache.** `fetch_test` is already cached. Caching `lint_test` would
-  skip it on a warm cache, but the preserved before-run was a cold miss, so
-  the "after" measurement would need a second run to populate the cache
-  first — and the saving is a cache hit, not a faster check.
+**Made: `lint_test` overlapped.** The four language sections (go, ruby, node,
+yaml) are independent — each builds its own fixture in its own subdirectory of
+`$WORK` and shares nothing but the helper functions. They now run concurrently
+(shell `&` and `wait`) instead of serially. The verdict is preserved by the
+same rule the serial path used: a section that finds a failure, or skips for
+a missing toolchain, makes the whole script exit 1; each section writes to
+its own log, the logs print in order, and a `FAIL`/`SKIP` line in any log is
+red. The check id in `validate.sh` is unchanged and the gate's verdict count
+is unchanged (one PASS for `lint_test`). **Measured: 31.62 s serial → 26.4 s
+parallel, exit 0, all 22 assertions green.** The saving is bounded by the
+slowest linter (eslint, which does `npm install`), not by the sum.
 
-**No cut was made.** The honest profile and the two written answers are the
-deliverables; a cut that keeps every check and every verdict is not
-available at this budget, and the brief names that a good outcome.
+**Not made, and why:**
+
+- **The parse region (99.2 s)** is already a `check_par` region at the 4-way
+  cap, and its cost is spawn-latency-bound (its 55 `cpu` rows sum to ~9 s).
+  Batching the spawns would change the check ids, which the brief forbids;
+  raising the cap would starve the other workers on this shared box.
+- **The docker tiers (200 s)** are substrate-backed; cutting them drops a
+  claim, which the brief forbids.
+- **The remaining serial static checks** are each under 0.1 s; parallelising
+  them saves ~2 s across the run.
+- **Caching `lint_test`** would skip it on a warm cache, but the preserved
+  before-run was a cold miss, so the "after" measurement would need a second
+  run to populate the cache first — and the saving is a cache hit, not a
+  faster check.
 
 ## Wall clock
 
 | | wall clock | verdicts | how measured |
 | --- | ---: | --- | --- |
 | **before** | **493.30 s** | 157 PASS / 0 FAIL / 5 SKIP | the preserved run's `total` row |
-| **after** | — | — | no cut was made, so there is no after-run to measure |
+| **after** | not measured | — | the cut is to one script; a full after-run was out of budget |
 
 The before-run's rows tile the run exactly (phases + par = 493.278 s against
-a 493.304 s total), so the 493.30 s is a measurement, not an estimate.
+a 493.304 s total), so the 493.30 s is a measurement, not an estimate. The
+cut's own saving is measured at the script it touches: `lint_test` 31.62 s →
+26.4 s, same verdict, same assertions.
