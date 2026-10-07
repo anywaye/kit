@@ -2746,7 +2746,7 @@ if not services:
 # with its volume, its port and its collector exporter rather than being left
 # half-wired. A name added to this tuple without a service behind it is a red
 # gate, which is the point.
-for required in ("postgres", "nats", "redis", "otel-collector", "tempo", "loki", "grafana", "clickstack"):
+for required in ("postgres", "nats", "nats-stream-init", "redis", "otel-collector", "tempo", "loki", "grafana", "clickstack"):
     if required not in services:
         problems.append(f"missing service: {required}")
 
@@ -2795,6 +2795,7 @@ if published:
 INFRASTRUCTURE = (
     "postgres",
     "nats",
+    "nats-stream-init",
     "redis",
     "otel-collector",
     "tempo",
@@ -2952,6 +2953,42 @@ if problems:
 PY
   }
   check 'compose + bin/dev  (telemetry is never in a readiness path)' readiness_check
+
+  # -------------------------------------------------------------------------
+  # THE EVENT BUS — ONE STREAM, DEFINED BY THE STACK, IDEMPOTENTLY.
+  #
+  # Every cafaye service with an outbox publishes each event to a subject equal
+  # to its event type — `identity.user.created`, `billing.subscription.started` —
+  # with no mapping table and no prefix rewriting (core/docs/event-outbox.md).
+  # The type IS the subject, and a subject no stream claims is a publish the
+  # broker neither acks nor refuses: the row stays in outbox_events with
+  # `attempts` climbing and no event ever leaves the table. The stack ran NATS
+  # with `-js` and defined no streams, so on a fresh clone the bus was a black
+  # hole — the heart does not beat until a stream exists.
+  #
+  # The publisher does not create the stream, and that stays: a stream's name,
+  # retention and replication are a deployment decision, not a service's. What
+  # the stack owes is the stream itself, defined once, idempotently, and checked
+  # — `tests/nats_stream_test.sh` proves the parts that need no docker: the
+  # service exists, its image is pinned, it waits for a healthy broker, its
+  # command covers the fleet's publishers, it is idempotent by construction, and
+  # the compose default and .env.example agree on the CLI's tag. Every claim has
+  # a control that must answer differently — a `latest` pin, a missing
+  # depends_on, a dropped `identity.>`, a bare `>` subject, a plain
+  # non-idempotent `stream add`, memory storage and a tag disagreement each go
+  # red under the same check the real tree passes.
+  #
+  # WHAT IS NOT PROVEN HERE, stated rather than hidden: that the stream is
+  # actually created on a real broker, that the second `bin/dev up` is a no-op,
+  # and that a publish reaches a subscriber. Those need docker. They were
+  # measured on this machine during the packet — the check-then-create exits 0
+  # on a second run, `up --wait` is green with the one-shot service, and a
+  # publish to `identity.user.created` was received by a subscriber — and they
+  # are recorded in the packet's report rather than as a tier, because the
+  # packet's proof list is the static one above.
+  section 'static: the event bus — the stream the fleet publishes to'
+  check 'tests/nats_stream_test.sh  (nats-stream-init exists, is pinned, waits for a healthy nats, covers the fleet publishers, and is idempotent by construction — each with a control that goes red)' \
+    bash "$ROOT/tests/nats_stream_test.sh"
 
   # -------------------------------------------------------------------------
   # THE CONNECTION CONTRACT, ASSERTED AGAINST GENERATED OUTPUT, PER LANGUAGE.
