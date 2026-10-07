@@ -11,8 +11,11 @@
 #   makes are otherwise untested. This script proves the parts that can be
 #   proven without a box: the script parses, DRY_RUN runs to completion
 #   printing the ordered steps, every pin is exact, every manifest parses, the
-#   two ClusterIssuers are staging and prod with distinct account keys, no
-#   image floats on `latest`, and no secret is a literal in the tree.
+#   two ClusterIssuers are staging and prod with distinct account keys, the
+#   Postgres Cluster reproduces the local provisioning contract, the Redis
+#   image is pinned exact, the recorded secret name-and-key list matches what
+#   install.sh creates, no image floats on `latest`, and no secret is a
+#   literal in the tree.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
 #   A check that passes against an empty directory is not a check. So each
@@ -102,13 +105,14 @@ run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 # ===========================================================================
 # 2. DRY_RUN=1 runs to completion, printing the ordered steps
 # ===========================================================================
-# The full operator environment is what reaches step 10: steps 8 and 10
-# refuse before their dry_run early-return (an empty database list or missing
-# SMTP settings are refusals even in DRY_RUN), so a bare DRY_RUN without
-# KIT_SUBSTRATE_DATABASES never completes — section 8 asserts that refusal,
-# and this runs the plan that passes it.
-FULL_DRY_ENV="KIT_SUBSTRATE_DATABASES=identity,gateway,courier,parlor KIT_SUBSTRATE_SMTP_ADAPTER=smtp KIT_SUBSTRATE_SMTP_HOST=smtp.example.com KIT_SUBSTRATE_SMTP_USERNAME=relay KIT_SUBSTRATE_SMTP_PASSWORD=x KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET=x KIT_SUBSTRATE_COURIER_ERROR_RELAY_TOKEN=x"
-dry_run_out="$(env $FULL_DRY_ENV DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
+# The install needs KIT_SUBSTRATE_DATABASES even to plan: step 8 provisions
+# one role-and-database per named service, so a plan with no names is a plan
+# for nothing. The success path below sets it; the refusal controls after it
+# prove an unset or empty value is refused with the fix named. (SMTP and the
+# paired courier values are validated on the live path only — a plan does not
+# need credentials to print.)
+DBS="identity,gateway,courier,parlor"
+dry_run_out="$(KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
 if [ "$dry_run_ec" -ne 0 ]; then
   fail 'DRY_RUN=1 runs to completion' "$dry_run_out"
@@ -116,29 +120,48 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The ten steps, in order. The markers are `[1/10]` … `[10/10]`; the check reads
+# The nine steps, in order. The markers are `[1/9]` … `[9/9]`; the check reads
 # them out of the output in the order they appear and compares against the
 # expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all ten.
-# The `|| true` is load-bearing: with no `[n/10]` markers printed yet, grep
+# one — would go red here rather than passing on the presence of all nine.
+# The `|| true` is load-bearing: with no `[n/9]` markers printed yet, grep
 # exits 1, and under `set -o pipefail` a failing command substitution would
 # take the harness down before the status is ever read — the same shape the
 # `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/10\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9]/9\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9 10" ]; then
-  pass 'DRY_RUN prints the ten steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9" ]; then
+  pass 'DRY_RUN prints the nine steps in order'
 else
-  fail 'DRY_RUN prints the ten steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the nine steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
 # and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
-if [ "$dry_count" -ge 10 ]; then
+if [ "$dry_count" -ge 9 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
 else
-  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 10"
+  fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 9"
+fi
+
+# The refusal: KIT_SUBSTRATE_DATABASES unset or empty is a refusal in DRY_RUN
+# too, with a message naming the fix — mirroring 10-cluster.sh:120. A plan
+# that cannot name its databases is not a plan. Both the unset and the empty
+# spelling must refuse; either one completing is a gate that waves through
+# the exact state the local contract refuses.
+refuse_unset="$(DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && refuse_unset_ec=0 || refuse_unset_ec=$?
+if [ "$refuse_unset_ec" -ne 0 ] && printf '%s\n' "$refuse_unset" | grep -q 'KIT_SUBSTRATE_DATABASES'; then
+  pass 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix'
+else
+  fail 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix' "exit=${refuse_unset_ec}: ${refuse_unset}"
+fi
+
+refuse_empty="$(KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && refuse_empty_ec=0 || refuse_empty_ec=$?
+if [ "$refuse_empty_ec" -ne 0 ] && printf '%s\n' "$refuse_empty" | grep -q 'KIT_SUBSTRATE_DATABASES'; then
+  pass 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix'
+else
+  fail 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix' "exit=${refuse_empty_ec}: ${refuse_empty}"
 fi
 
 # ===========================================================================
