@@ -2746,7 +2746,7 @@ if not services:
 # with its volume, its port and its collector exporter rather than being left
 # half-wired. A name added to this tuple without a service behind it is a red
 # gate, which is the point.
-for required in ("postgres", "nats", "redis", "otel-collector", "tempo", "loki", "grafana", "clickstack"):
+for required in ("postgres", "nats", "nats-stream-init", "redis", "otel-collector", "tempo", "loki", "grafana", "clickstack"):
     if required not in services:
         problems.append(f"missing service: {required}")
 
@@ -2795,6 +2795,7 @@ if published:
 INFRASTRUCTURE = (
     "postgres",
     "nats",
+    "nats-stream-init",
     "redis",
     "otel-collector",
     "tempo",
