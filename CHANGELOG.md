@@ -9,7 +9,11 @@
   gate) and runs exactly one proving job: `docs` runs `git diff --check`
   and nothing else; `tier` runs `tests/focused_tier.sh` and `publish`
   runs `tests/focused_publish.sh` (family syntax with the gate's own
-  tools, plus the gate's exact `chart publish` check for publish); all
+  tools, plus the gate's exact `chart publish` check for publish —
+  `tests/chart_publish_check.sh`, one file called by both the gate's
+  `check_chart_publish` and the focused script, so the two verdicts cannot
+  drift; the focused script never invokes `tests/validate.sh`, whose
+  bootstrap self-tests would re-enter the gate recursively); all
   platform/runtime artifacts, workflows, tests, mixed families, unknown
   or empty diffs, and every non-PR event take `full` — the unchanged
   reusable workflow running `bash tests/validate.sh` with no flags.

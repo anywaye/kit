@@ -892,7 +892,7 @@ job passed:
 | --- | --- | --- |
 | `docs` | prose only (`*.md`, `*.txt`, `LICENSE*`, …) | `git diff --check` and nothing else |
 | `tier` | `templates/tier/**` only | `tests/focused_tier.sh`: family syntax, same tools as the gate |
-| `publish` | `templates/publish/**` only | `tests/focused_publish.sh`: family syntax + the gate's exact `chart publish` check |
+| `publish` | `templates/publish/**` only | `tests/focused_publish.sh`: family syntax + `tests/chart_publish_check.sh` (the same file the gate calls; it never invokes the gate) |
 | `full` | everything else: platform/runtime artifacts, workflows, tests, mixed families, unknown or empty diffs | `bash tests/validate.sh` with no flags |
 
 Non-PR events — pushes to `master`, the weekly schedule, manual
