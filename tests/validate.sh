@@ -5129,6 +5129,16 @@ check 'tests/fingerprint_test.sh  (the skip is proven able to be WRONG: outputs 
 check 'tests/route_test.sh  (19 cases: every routing class fails closed; the router never launches the gate)' \
   bash "$ROOT/tests/route_test.sh"
 
+# The probe self-recursion guard, executed. `have()` resolves its probe
+# runner through `_timeout_bin()`, so `_timeout_bin()` calling `have()` back
+# is unbounded mutual recursion — one forked gate child per `$( )` level,
+# measured at 427 nested processes in 1s on the pre-fix tree (the
+# focused-publish fork bomb). Static text only, never the gate itself.
+# Deliberately OUTSIDE any RUN_* guard with the classifier and the router:
+# the probes decide what every other check can run.
+check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gate: _timeout_bin never calls have)' \
+  bash "$ROOT/tests/have_timeout_test.sh"
+
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port
 # block and only later binds it; two concurrent runs starting at the same seed
 # offset both saw the same block free and one of them died binding it

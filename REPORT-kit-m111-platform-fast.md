@@ -18,17 +18,33 @@ and manual runs always take `full`, the unfiltered release proof.
 ## The recursion incident (this continuation's reason to exist)
 
 The prior attempt's `tests/focused_publish.sh` called
-`bash tests/validate.sh --only='chart publish'`. `tests/bootstrap.sh` holds
-gate self-tests that invoke the gate, so the focused run re-entered the
-gate: the manager observed ~624 nested `validate.sh --only=chart publish`
-processes in ~8s — a real recursive process tree, SIGTERMed — and stopped
-the worker before it could retry the same command.
+`bash tests/validate.sh --only='chart publish'`. The manager observed ~624
+nested `validate.sh --only=chart publish` processes in seconds — a real
+recursive process tree, SIGTERMed — and stopped the worker before it could
+retry the same command.
 
-The fix, landed here: the chart-publish proof now lives in ONE standalone
-file, `tests/chart_publish_check.sh`, called by both the gate and the
-focused script. Neither focused path invokes the gate in any form — no
-full run, no `--only` — so the bootstrap self-tests are unreachable from a
-focused run by construction, not by flag discipline.
+The cause, traced by reading executable lines (not comments): it was NOT
+`tests/bootstrap.sh` — every `bash tests/validate.sh` match there is inert
+heredoc help text — and it was NOT the focused script calling the gate
+(one hop is not a cycle). It was mutual recursion INSIDE the gate:
+`have()` (rewritten Oct 5, `f177557f`) resolves its probe runner via
+`runner="$(_timeout_bin ...)"`, while `_timeout_bin()` still resolved its
+candidates via `have()`. Neither branch has a base case and `have`'s cache
+is assigned only after the recursion returns — i.e. never — so the FIRST
+`have` call in ANY gate run nests one forked child of the same gate
+process per `$( )` level. Under `--only='chart publish'` the detonation
+point is line 2148 (`if have kamal ...`, probed BEFORE the `only_wanted`
+filter inside it), which precedes the chart-publish section — so the
+filtered run never reached its one check.
+
+The fix, in two halves across two commits: `e4d280a` extracted the
+chart-publish proof into ONE standalone file,
+`tests/chart_publish_check.sh`, called by both the gate and the focused
+script (necessary: the focused run no longer enters the gate at all).
+`7d9ecd8` (this continuation) broke the actual cycle: `_timeout_bin()`
+resolves by `command -v`, never `have` — a run-probe there would need a
+runner, which IS that function. `tests/have_timeout_test.sh` pins the
+property (fails on the pre-fix body, silent on the fixed one).
 
 ## What landed
 
@@ -72,6 +88,18 @@ focused run by construction, not by flag discipline.
 - `focused_tier.sh`: pass=8 fail=0 skip=3 (2 TS + skip-allowlist loud).
 - `ci.yml` + `publish.yml` parse; `git diff --check` clean;
   `shellcheck -S warning` clean on all five scripts.
+- The recursion proof (this continuation, functions extracted to a
+  worktree-keyed temp file — the gate itself never executed):
+  pre-fix `have echo` grew 427 nested processes in 1s, killed by
+  `timeout 3` (exit 124, non-termination); post-fix `have echo` → 0,
+  `have nonexistent-tool` → 1, `_timeout_bin` → `timeout`, all in 0.015s.
+- `have_timeout_test.sh`: both PASS lines, 0.030s; its awk/grep logic
+  detects `have` in the pre-fix `_timeout_bin` body and is silent on the
+  fixed one (negative control proved, not asserted).
+- Extraction fidelity: the helper's python block is the removed gate
+  block plus blank-line separators only (diff shows eight added blank
+  lines, zero content changes) — the earlier "byte-identical md5 both
+  sides" claim overstated by whitespace; corrected here.
 
 ## What is NOT proven and not claimed
 
@@ -88,7 +116,11 @@ focused run by construction, not by flag discipline.
 ## Successor's first move
 
 Run the full gate on the merged tree (`bash tests/validate.sh`, no flags,
-bounded per worktree-log convention). If green, open one PR per route class
-to watch each CI path execute. If the gate's chart-publish check disagrees
-with the standalone proof, the delegation line is the suspect — the python
-is proved identical, so suspect plumbing, not assertions.
+bounded per worktree-log convention). The fork bomb that made any gate run
+lethal is fixed at its root (`_timeout_bin` no longer calls `have`), so a
+full run is back to being slow-or-green rather than unbounded — but keep
+the bound anyway: a gate SIGKILLed by the OOM killer reports nothing.
+If green, open one PR per route class to watch each CI path execute. If
+the gate's chart-publish check disagrees with the standalone proof, the
+delegation line is the suspect — the python is proved identical modulo
+blank lines, so suspect plumbing, not assertions.

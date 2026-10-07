@@ -18,9 +18,12 @@
 # it directly. One copy of the proof; two callers. A second implementation
 # here would be one assertion that can drift.
 #
-# WHAT IT NEVER DOES. It never invokes tests/validate.sh — the recursion
-# this packet exists to remove. tests/bootstrap.sh's gate self-tests call
-# the gate; this file is reachable without ever entering them.
+# WHAT IT NEVER DOES. It never invokes tests/validate.sh — neither the full
+# gate nor `--only`. The re-entrancy this packet removes lived INSIDE the
+# gate itself: `have()` resolves its probe runner through `_timeout_bin()`,
+# so `_timeout_bin()` calling `have()` back nested one forked gate child
+# per `$( )` level (a 624-deep validate.sh tree from one focused run).
+# This file proves the seam without entering that tree at all.
 #
 # Exit 0: the real tree passes and both controls go red.
 # Exit 1: an assertion fails, or a control stays green (a failure of the

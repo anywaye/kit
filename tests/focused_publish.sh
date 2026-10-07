@@ -18,10 +18,12 @@
 #      same verdict; no second implementation to drift.
 #
 # WHAT IT NEVER DOES. It never invokes tests/validate.sh — not the full gate
-# and not `--only`. tests/bootstrap.sh holds gate self-tests that invoke the
-# gate; reaching them from here re-entered the gate recursively (a 624-deep
-# validate.sh process tree, measured). This script stays out of that tree by
-# calling the shared checker directly.
+# and not `--only`. The re-entrancy this packet removes lived INSIDE the
+# gate itself (`have()` ↔ `_timeout_bin()` mutual recursion: one forked
+# gate child per `$( )` level, a 624-deep validate.sh tree from one focused
+# run — not the bootstrap help texts, whose validate.sh matches are inert
+# heredocs). This script stays out of that tree by calling the shared
+# checker directly.
 #
 # WHAT IT DOES NOT RUN. Everything else in tests/validate.sh: tier,
 # telemetry, observability, lint, tenancy, substrate, obs chart sources. The
