@@ -1,5 +1,22 @@
 ## Unreleased
 
+### Added
+
+- **`REPORT-kit-gate-speed-overlap-01.md`: the gate-speed packet's target was
+  retired before it was dispatched, and the measurement that proves it.** The
+  packet commissioned overlap for the 73 `--only`-filtered child gates; those
+  lived in `tests/self_test.sh`, which `32df467` deleted on 2026-10-05 by the
+  owner's explicit "no tree copies at all" decision — a breakage *was* a tree
+  copy, so the layer went whole. Measured twice with `KIT_PROFILE` on
+  `08dcccd`: the gate is now 869.9 s / 968.9 s end-to-end (was a projected
+  ~5,103 s), with zero `self_test` rows in the profile. No change was made to
+  the gate; the report is the deliverable, per the packet's "a measured
+  blocker is a good outcome" clause. It also names the one environmental
+  flake seen en route — `onecluster_test.sh` failing with "the database
+  system is shutting down" on this shared box, green on re-run — and records
+  that the remaining big items are docker-backed tiers this packet's own
+  flakiness constraint puts out of scope.
+
 ### Fixed
 
 - **`bin/dev`: replacing a populated cache RETIRES it instead of deleting it,
