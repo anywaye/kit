@@ -1,0 +1,127 @@
+# Redis: an accessory, not a product. One container, one PVC, no sentinel, no
+# cluster — DEPLOYMENT.md's whole Redis decision in one sentence, and this
+# file is its executable form. The local stack runs
+# `redis:${KIT_REDIS_TAG:-7.4.1-alpine}` with `--appendonly yes`, a
+# `redis-cli ping` healthcheck and a `redis-data` volume; this reproduces all
+# three, in the `data` namespace beside the Postgres Cluster.
+#
+# THE TAG IS EXACT. `redis:7.4.1-alpine`, never `latest`: a floating tag in an
+# install manifest is the defect kit exists to avoid, and the gate fails a
+# `:latest` fixture under the same check this file passes.
+#
+# THE PASSWORD IS A secretKeyRef, NEVER A LITERAL. The Deployment carries no
+# `--requirepass <value>`: the password lives in the `redis-password` secret
+# (key `password`, made on the box by install.sh step 9, generated once and
+# read back on a re-run), reaches the container as the `REDIS_PASSWORD` env
+# var, and is expanded by the shell form of the command. A literal password
+# in this file would be a credential in git, which is the one thing the
+# pull-based loop exists to prevent — and the gate greps for exactly that.
+#
+# WHO READS IT. gateway's chart takes `REDIS_URL` as a required secretKeyRef
+# from `gateway-secrets` (key `REDIS_URL`); install.sh step 10 builds that URL
+# from this secret, so the password has one writer (step 9) and the URL has
+# one reader per service. `redis://:<password>@redis.data.svc.cluster.local:6379`.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # k3s's default provisioner: the box's own disk, like the Postgres Cluster's.
+  # 5Gi is the box's disk budget for Redis, not a Redis sizing rule — an
+  # appendonly cache that outgrows its disk stops the box, so the bound is
+  # small on purpose.
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: data
+spec:
+  # Exactly one. A second replica would hold a second, divergent dataset:
+  # there is no sentinel and no cluster bus, so replicas is not a scaling
+  # knob here, it is a split brain. Raise it only with a sentinel beside it,
+  # which is a different packet.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4.1-alpine
+          # Shell form so $REDIS_PASSWORD expands: exec form passes no shell
+          # and a literal --requirepass would be a credential in git. The
+          # value is never a literal here, only the variable name.
+          command:
+            - sh
+            - -c
+            - exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-password
+                  key: password
+          ports:
+            - name: redis
+              containerPort: 6379
+          # The local stack's healthcheck, with auth: an unauthenticated
+          # PING against a passworded server answers NOAUTH, so the probe
+          # authenticates the same way every client does.
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            # A cache on a shared box: bounded, small, and stated as a share
+            # of the 8GB box, not as a Redis measurement.
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: data
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
