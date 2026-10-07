@@ -1,5 +1,31 @@
 # REPORT-kit-platform-fast-01 — proportional CI routing
 
+## ADDENDUM (later same night, after 390d889 by the parallel m111 worker)
+
+Three commits landed on this branch on top of d023cf2 while this report was
+being written — same packet, parallel worker, shared worktree. They supersede
+parts of the record below; this addendum corrects it rather than rewriting
+history:
+
+- The full-gate crashes and nested SIGTERMs I attributed to "environment"
+  have a found cause: a `have()` ↔ `_timeout_bin()` mutual recursion in
+  tests/validate.sh (Oct 5, f177557f completing the loop) that fork-bombed
+  the gate — 427 nested bash processes in 1s isolated-measured — detonating
+  under `--only='chart publish'` at the unfiltered `have kamal` probe.
+  Fixed in 7d9ecd8 (`_timeout_bin` uses `command -v`), pinned by
+  tests/have_timeout_test.sh in 390d889 (verified 2xPASS above).
+- e4d280a extracted the chart-publish assertions into
+  tests/chart_publish_check.sh, shared verbatim by gate and focused run.
+  My nested `--only` design for focused_publish is superseded: the focused
+  publish proof now runs in 0.27s (verified above), not 2:34. The <60s
+  warm limitation below is WITHDRAWN for publish.
+- Combined-tree verification just now: route_test 19/19, have_timeout pinned,
+  focused_publish green 0.27s, focused_tier 8/0/3 in 1.8s, shellcheck/diff-check/
+  bash -n clean. Full no-flags green on the fixed tree is still owed —
+  successor's first move: one `bash tests/validate.sh` foreground run.
+
+Original report follows, read with the above corrections.
+
 Branch `kit-platform-fast` from master `e0d2363`. Two commits: `dee3358`
 (router + proof), `d023cf2` (CI routing, focused proofs, gate hook, docs).
 `ci.reusable.yml` untouched. No service repo touched. No new dependency.
