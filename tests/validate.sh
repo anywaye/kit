@@ -4793,7 +4793,12 @@ PY
     printf '%s\n' "$out" | tail -1 | sed 's/^/       /'
 
     # THE CONTROL: the glob broken to match nothing. The build must fail.
-    sed 's/"globs": \["\*\*\/\*\.sh"\]/"globs": ["**/*.txt"]/' \
+    # A `|` delimiter, not `/`: the replacement contains `**/*.txt`, whose
+    # slashes terminate a `/`-delimited substitute command early — measured,
+    # the sed died with "bad flag in substitute command", left the config
+    # EMPTY, and the build then failed for the wrong reason (no config at
+    # all), so the control went red without measuring what it claims.
+    sed 's|\*\*\/\*\.sh|**/*.txt|' \
       "$bundle_dir/wrangler.jsonc" >"$bundle_dir/wrangler.jsonc.broken"
     mv "$bundle_dir/wrangler.jsonc.broken" "$bundle_dir/wrangler.jsonc"
     if (cd "$bundle_dir" && node "$wrangler_js" deploy --dry-run --outdir "$bundle_dir/out2" >/dev/null 2>&1); then
