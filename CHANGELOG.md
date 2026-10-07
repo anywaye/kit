@@ -2,6 +2,40 @@
 
 ### Added
 
+- **`nats-stream-init`: the stream the fleet publishes to, defined once, by the
+  stack, idempotently.** Every outbox publisher sends each event to a subject
+  equal to its event type — no mapping table, no prefix rewriting — and a
+  subject no stream claims is a publish the broker neither acks nor refuses:
+  the row stays in `outbox_events` with `attempts` climbing and no event ever
+  leaves the table. The stack ran NATS with `-js` and defined no streams, so
+  on a fresh clone the bus was a black hole. A one-shot service now creates
+  the stream on every `bin/dev up` and exits 0: subjects `identity.>`,
+  `billing.>`, `courier.>`, `muse.>`, `darkroom.>` (one prefix per publishing
+  service, enumerated rather than a bare `>`, which would claim `$JS.>` and
+  `$SYS.>` traffic and make the coverage unauditable); storage `file`, retention
+  `limits`, max-age `7d` (the replay window a consumer's replay rests on),
+  discard `old`, replicas `1`, ack on. It is idempotent by construction —
+  `nats stream info cafaye || nats stream add …` — because a plain `add` exits
+  1 on the second run ("stream name already in use with a different
+  configuration (10058)", measured), and `--defaults` is load-bearing because
+  the CLI asks for confirmation and exits 1 with no terminal. It waits for the
+  broker with `depends_on: nats: condition: service_healthy`, and runs
+  `restart: "no"` — `unless-stopped` would loop, `always` would hide a failed
+  add. The publisher still creates no stream: a stream's name, retention and
+  replication are a deployment decision, not a service's. The image is
+  `natsio/nats-box:0.20.0` — the Docker Hub spelling of the GitHub release
+  `v0.20.0`, whose `v` is a GitHub convention; `natsio/nats-box:v0.20.0` does
+  not resolve (measured). `tests/nats_stream_test.sh` proves the static half
+  with a control per claim (a `latest` pin, a missing `depends_on`, a dropped
+  `identity.>`, a bare `>`, a plain non-idempotent `add`, memory storage and a
+  tag disagreement each go red under the same check the real tree passes); the
+  live half — the stream is created, the second `up` is a no-op, a publish
+  reaches a subscriber — was measured on this machine and is recorded in the
+  packet's report, not as a tier. An event whose prefix is not covered does not
+  leave its publisher's outbox table; pantry, core and gateway are deliberately
+  uncovered (pantry's manifest states it publishes nothing, core is the spec
+  repository, gateway declares `events: []`).
+
 - **`templates/substrate/`: the customer substrate — the one-command install,
   and the Applications that make it real.** `install.sh` is the executable
   half of `DEPLOYMENT.md`: it installs k3s (single node, sqlite), cert-manager,
