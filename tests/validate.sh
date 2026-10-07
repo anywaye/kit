@@ -1624,7 +1624,9 @@ PY
     "$ROOT"/templates/compose/postgres/Dockerfile \
     "$ROOT"/templates/database/contract.json \
     "$ROOT"/templates/database/tenancy/* \
-    "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh; do
+    "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh \
+    "$ROOT"/templates/substrate/install.sh \
+    "$ROOT"/templates/substrate/manifests/applications/*; do
     [ -f "$f" ] || continue
     path="${f#"$ROOT"/}"
     case "$f" in
@@ -1887,6 +1889,7 @@ PY
   # `chmod -x` is a one-character diff.
   for f in "$ROOT"/templates/bin-prime/* "$ROOT"/templates/bin/* \
     "$ROOT"/templates/kamal/drill.sh \
+    "$ROOT"/templates/substrate/install.sh \
     "$ROOT"/docker/entrypoint.sh \
     "$ROOT"/tests/zizmor_gate.sh; do
     [ -f "$f" ] || continue
@@ -1914,7 +1917,8 @@ PY
     section 'static: shellcheck -S warning'
     par_begin
     for f in "$ROOT"/templates/bin-prime/* "$ROOT"/templates/bin/* \
-      "$ROOT"/templates/kamal/*.sh "$ROOT"/docker/*.sh "$ROOT"/tests/*.sh; do
+      "$ROOT"/templates/kamal/*.sh "$ROOT"/templates/substrate/install.sh \
+      "$ROOT"/docker/*.sh "$ROOT"/tests/*.sh; do
       [ -f "$f" ] || continue
       path="${f#"$ROOT"/}"
       # SC2317 (unreachable command) is excluded deliberately: the `check`
@@ -4232,6 +4236,31 @@ print(prefix + ("notarealsecret" * 3)[:32])
     return 0
   }
   check 'the canary suite  (never prints the value it planted)' canary_output_check
+
+  # -------------------------------------------------------------------------
+  # The customer substrate — the install is real, and its pins are exact.
+  #
+  # `templates/substrate/install.sh` is the one-command customer install. It
+  # cannot be EXECUTED on a development machine (it needs root, Linux, a
+  # container runtime and a reachable registry), so the claims it makes are
+  # proven here by the parts that need no box: the script parses, DRY_RUN runs
+  # to completion printing the ordered steps, every pin is exact, every
+  # Application manifest parses with the fields Argo needs, no image floats
+  # on `latest`, and no secret is a literal in the tree.
+  #
+  # Every claim has a CONTROL that must answer differently — a fixture with a
+  # `latest` pin, a broken manifest, a planted `:latest` tag and a planted
+  # `stringData:` secret each go RED under the same check the real tree
+  # passes. A check that passes against an empty directory is not a check.
+  #
+  # What is NOT proven here is stated rather than hidden: that k3s installs,
+  # that Argo syncs, that the charts exist. `templates/substrate/README.md`
+  # carries the same sentence. This is a static-phase check because it needs
+  # no docker and no cluster — it runs the script's own DRY_RUN mode, which
+  # executes nothing.
+  section 'static: templates/substrate — the install is real, and its pins are exact'
+  check 'tests/substrate_test.sh  (install.sh parses, DRY_RUN runs, pins are exact, manifests parse, no :latest, no inline secret)' \
+    bash "$ROOT/tests/substrate_test.sh"
 fi
 
 # ===========================================================================
