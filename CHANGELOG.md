@@ -2,6 +2,35 @@
 
 ### Added
 
+- **The two Let's Encrypt `ClusterIssuer`s, and the install step that applies
+  them.** A service chart annotated `ingress.clusterIssuer: letsencrypt-prod`
+  pointed at nothing: the substrate created no issuer at all, cert-manager had
+  no `Certificate` to issue, and Traefik served its own self-signed fallback —
+  the customer's first impression of the product was a browser warning, with
+  no error an operator would ever be shown. `manifests/tls/clusterissuer.yaml`
+  now holds `letsencrypt-staging` and `letsencrypt-prod`, identical but for
+  the ACME directory URL, solved with HTTP-01 through Traefik's ingress class
+  by `ingressClassName` — the field the pinned cert-manager v1.21.2 CRD
+  recommends, verified against the release asset rather than memory. The
+  solver decision is HTTP-01 because it needs no credential (`DEPLOYMENT.md:28`
+  makes Cloudflare a DNS change, never infrastructure), because Traefik is
+  already there, and because the cost — wildcards — is a capability this
+  product does not need; DNS-01 is not implemented and the README says why.
+  Staging exists because Let's Encrypt's production limits (5 duplicate
+  certificates a week, 5 failed validations an hour) let one afternoon of
+  debugging burn a week of TLS, and the two account keys are distinct because
+  staging and production are separate ACME accounts. `install.sh` step 7
+  applies them: `KIT_SUBSTRATE_ACME_EMAIL` is read from the environment,
+  validated by shape (exactly one `@`, something either side, not the
+  `example.com` family — a refused registration reads as a network error from
+  the customer's side), substituted into the manifests in a pipe so the value
+  reaches the API server and is never written to disk, and never printed. The
+  manifests carry the `ACME_EMAIL_PLACEHOLDER` token, never an address: a
+  literal would put cafaye's address, or a made-up one, on a customer's ACME
+  account. `tests/substrate_test.sh` proves the static half with a control per
+  claim (a shared account key, an empty solver list), and the README records
+  that whether Let's Encrypt actually issues remains a box-level claim.
+
 - **`nats-stream-init`: the stream the fleet publishes to, defined once, by the
   stack, idempotently.** Every outbox publisher sends each event to a subject
   equal to its event type — no mapping table, no prefix rewriting — and a

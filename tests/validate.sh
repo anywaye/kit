@@ -349,6 +349,10 @@ kit_phase "00 bootstrap: resolve the interpreter and install deps"
 # ---------------------------------------------------------------------------
 
 # A parse error is one line, not a traceback: the gate is read by humans.
+# safe_load_all, not safe_load: Kubernetes manifests are routinely
+# multi-document streams — `kubectl apply -f` consumes them as a stream —
+# and safe_load rejects a valid two-document file. This still rejects every
+# invalid document in the stream; it accepts strictly more VALID YAML.
 yaml_ok() {
   "$PY" - "$1" <<'PY'
 import sys
@@ -357,7 +361,7 @@ import yaml
 
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
-        yaml.safe_load(fh)
+        list(yaml.safe_load_all(fh))
 except Exception as exc:
     sys.exit(f"yaml: {exc}")
 PY
@@ -1632,7 +1636,7 @@ PY
     path="${f#"$ROOT"/}"
     case "$f" in
       *.sh) check_par "$path  (bash -n)" bash -n "$f" ;;
-      *.yml | *.yaml) check_par "$path  (yaml.safe_load)" yaml_ok "$f" ;;
+      *.yml | *.yaml) check_par "$path  (yaml.safe_load_all)" yaml_ok "$f" ;;
       *.json)
         # contract.json is where the connection check reads its requirements
         # from, so a syntax error in it would be a check reading nothing rather
