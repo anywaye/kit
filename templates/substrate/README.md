@@ -73,6 +73,46 @@ Ingresses with `ingress.clusterIssuer: letsencrypt-prod`, and caf's chart
 tests use that exact string — an issuer named anything else here is an
 annotation pointing at nothing, and every chart's TLS breaks at once.
 
+## The publication half of the loop
+
+The deploy loop this substrate serves is **pull-based**: a commit changes a
+chart, Argo makes the box agree. The consume end is the eight `Application`
+manifests in `manifests/applications/`, each pulling
+`oci://ghcr.io/cafaye/charts` at `targetRevision: 0.1.0`. **The publish end
+is kit's `.github/workflows/chart.reusable.yml`**, and a service adopts it by
+copying `templates/publish/publish.yml` to `.github/workflows/publish.yml` —
+one caller that publishes both the image and the chart.
+
+Three facts about that loop, each load-bearing:
+
+- **The OCI tag is the chart's `version`.** `Chart.yaml`'s `version` is what
+  `helm push` tags the artifact with, and it is what the `Application`'s
+  `targetRevision` names. The two are the same fact written twice: a chart
+  pushed as `0.1.1` while the `Application` says `0.1.0` is a service that
+  never deploys, and Argo reports no error — it just never finds the artifact.
+  The workflow therefore reads the name and version from `Chart.yaml` and
+  refuses when either is empty; neither is an input, because an input is a
+  string a service copies into its own repo and a copied string drifts from
+  the chart it names.
+- **The registry string is one fact in two files.** The workflow's default
+  `registry` input is `oci://ghcr.io/cafaye/charts`, the exact string every
+  `Application` carries as `source.repoURL`. Both files are in kit, which is
+  what makes the seam provable: `check_chart_publish` in kit's gate compares
+  them and fails on a disagreement, with a control that drifts one
+  `repoURL` and must go red.
+- **Publishing is opt-in and refuses forks.** `push` defaults to `false`, so
+  a caller that only meant to check the chart still packages it but publishes
+  nothing; the job refuses to publish from a `pull_request` regardless of what
+  the caller asks, because a fork's token is read-only and publishing from a
+  PR is a registry write by untrusted code. The credential is the workflow's
+  own `GITHUB_TOKEN` — no PAT, nothing to rotate — and the caller grants
+  `packages: write`.
+
+**What is still true:** the charts themselves do not exist yet. Each service
+runs `caf gen chart` and commits `chart/`; until then `targetRevision: 0.1.0`
+is a promise, not a published artifact, and the publish workflow has nothing
+to push. That is one packet per service, not this one.
+
 ## How to run it
 
 ```sh
@@ -125,7 +165,10 @@ DRY_RUN=1 bash templates/substrate/install.sh
   certificate lands is a box-level claim, not a property of these manifests.
 - That the Applications actually sync — **the charts they point at do not
   exist yet.** `caf gen chart` (m72) generates them; until then the
-  `targetRevision: 0.1.0` is a promise, not a published artifact.
+  `targetRevision: 0.1.0` is a promise, not a published artifact. The
+  publish path that would push them now exists (kit's `chart.reusable.yml`,
+  see [The publication half of the loop](#the-publication-half-of-the-loop));
+  the charts themselves are one packet per service.
 - That the observability stack (Alloy, Loki, Grafana, Prometheus) actually
   deploys and retains.
 
