@@ -1631,7 +1631,8 @@ PY
     "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh \
     "$ROOT"/templates/substrate/install.sh \
     "$ROOT"/templates/substrate/manifests/applications/* \
-    "$ROOT"/templates/substrate/manifests/tls/*; do
+    "$ROOT"/templates/substrate/manifests/tls/* \
+    "$ROOT"/templates/publish/*; do
     [ -f "$f" ] || continue
     path="${f#"$ROOT"/}"
     case "$f" in
@@ -4280,6 +4281,186 @@ print(prefix + ("notarealsecret" * 3)[:32])
   check 'the canary suite  (never prints the value it planted)' canary_output_check
 
   # -------------------------------------------------------------------------
+  # The chart publish path — the publish/consume seam, both ends in kit.
+  #
+  # WHY THIS CHECK EXISTS. `DEPLOYMENT.md`'s deploy loop is pull-based: a
+  # commit changes a chart, Argo makes the box agree. The consume end is the
+  # eight Argo CD `Application`s in `templates/substrate/manifests/
+  # applications/`, every one pulling `oci://ghcr.io/cafaye/charts`; the
+  # publish end is `.github/workflows/chart.reusable.yml`. The loop fails
+  # SILENTLY when the two disagree — Argo reports no error, it just never
+  # finds the artifact — and the fact that BOTH ends of that seam live in
+  # this repository is what makes it provable here rather than documented.
+  #
+  # WHAT IT ASSERTS, each with the reason:
+  #   1. `chart.reusable.yml` exists, parses, and is a `workflow_call`. A
+  #      reusable workflow that is not callable is a file nobody can adopt.
+  #   2. Its `push` input DEFAULTS TO FALSE, exactly as the image workflow's
+  #      does. A reusable workflow that publishes by default is one every
+  #      caller publishes from by accident, including the caller that only
+  #      meant to check the chart still packages.
+  #   3. Its default `registry` equals the `source.repoURL` of EVERY
+  #      Application manifest. The seam itself: the string the push writes
+  #      to and the string the pull reads from are one fact, and a chart
+  #      pushed to a registry no Application names is a service that never
+  #      deploys.
+  #   4. The chart name and version are NOT inputs. An input is a string a
+  #      service copies into its own repo, and a copied string drifts from
+  #      the chart it names; the OCI tag of a Helm chart IS its `version`,
+  #      so the workflow reads both from `Chart.yaml` and refuses when
+  #      either is empty.
+  #   5. The `pull_request` refusal is present. Publishing from a fork is a
+  #      registry write by untrusted code, and a fork's token is read-only
+  #      anyway — refusing before the attempt beats failing after it.
+  #
+  # THE TWO CONTROLS, which must go RED under the same check the real tree
+  # passes: a fixture with one Application's `repoURL` altered (the seam
+  # control) and a fixture with `push`'s default flipped to true. A control
+  # that does not go red is a failure of the test itself — the discipline
+  # `substrate_test.sh`'s `run` helper enforces, applied here.
+  #
+  # The check is PARAMETERISED (`<workflow> <applications-dir>`) so the
+  # controls run the same assertions against fixtures rather than a second
+  # copy of them: two copies of an assertion is one assertion that can drift.
+  check_chart_publish() {
+    local workflow="$1" apps_dir="$2"
+    # The assertions live in ONE python program, written to a temp file so the
+    # real run and both controls run the SAME code: two copies of an assertion
+    # is one assertion that can drift, and a control that re-measures with a
+    # second implementation is a control that can disagree with the check.
+    local checker="$TMP/chart-publish-check.py"
+    cat >"$checker" <<'PY'
+import glob
+import re
+import sys
+
+import yaml
+
+workflow_path, apps_dir = sys.argv[1], sys.argv[2]
+problems = []
+
+# 1. Exists, parses, and is a workflow_call. PyYAML parses the bare `on:`
+# key as boolean True (YAML 1.1), so both spellings are read.
+try:
+    with open(workflow_path, encoding="utf-8") as fh:
+        doc = yaml.safe_load(fh)
+except Exception as exc:
+    sys.exit(f"{workflow_path} does not parse: {exc}")
+if not isinstance(doc, dict):
+    sys.exit(f"{workflow_path} is not a mapping")
+on = doc.get("on") or doc.get(True)
+inputs = {}
+if isinstance(on, dict):
+    inputs = ((on.get("workflow_call") or {}).get("inputs")) or {}
+if not inputs and not (isinstance(on, dict) and "workflow_call" in on):
+    problems.append("not a workflow_call reusable workflow")
+
+# 2. `push` defaults to false.
+push = inputs.get("push")
+if not isinstance(push, dict):
+    problems.append("no `push` input")
+elif push.get("default") is not False:
+    problems.append(f"`push` default is {push.get('default')!r}, not false")
+
+# 3. The default registry equals every Application's source.repoURL.
+registry = inputs.get("registry")
+default_registry = registry.get("default") if isinstance(registry, dict) else None
+apps = sorted(glob.glob(apps_dir + "/*.yaml")) + sorted(glob.glob(apps_dir + "/*.yml"))
+if not apps:
+    problems.append(f"no Application manifests found in {apps_dir}")
+for app in apps:
+    try:
+        with open(app, encoding="utf-8") as fh:
+            adoc = yaml.safe_load(fh)
+    except Exception as exc:
+        problems.append(f"{app} does not parse: {exc}")
+        continue
+    repo = ((adoc.get("spec") or {}).get("source") or {}).get("repoURL")
+    if repo != default_registry:
+        problems.append(
+            f"{app}: source.repoURL is {repo!r} but the workflow's default "
+            f"registry is {default_registry!r} — the publish/consume seam"
+        )
+
+# 4. The name and version are not inputs.
+for banned in ("chart-name", "chart-version"):
+    if banned in inputs:
+        problems.append(
+            f"`{banned}` is an input — the chart's name and version must be "
+            f"read from Chart.yaml, never copied into a service repo"
+        )
+
+# 5. The pull_request refusal is present. Comments are stripped BEFORE the
+# grep: a check that a comment can satisfy is not a check, and this
+# workflow's own header explains the refusal in prose.
+with open(workflow_path, encoding="utf-8") as fh:
+    code = "\n".join(
+        line for line in fh.read().splitlines() if not line.lstrip().startswith("#")
+    )
+if not re.search(r"github\.event_name\s*==\s*'pull_request'", code):
+    problems.append("no pull_request refusal (github.event_name == 'pull_request')")
+
+if problems:
+    for problem in problems:
+        print(f"chart publish: {problem}")
+    sys.exit(1)
+print(f"seam: default registry == source.repoURL in {len(apps)} Application(s)")
+PY
+
+    # The `|| ec=$?` shape is load-bearing rather than defensive: a bare
+    # `out="$(cmd)"` that fails takes the shell down under `set -e` before the
+    # status is ever read, so a check that correctly REJECTS a broken tree
+    # would take the gate with it. The guard makes the assignment part of a
+    # list, which `set -e` does not apply to.
+    local out ec=0
+    out="$("$PY" "$checker" "$workflow" "$apps_dir" 2>&1)" || ec=$?
+    if [ "$ec" -ne 0 ]; then
+      printf '%s\n' "$out" | sed 's/^/       /'
+      return 1
+    fi
+
+    # THE CONTROLS. Each builds a fixture that violates exactly one property
+    # and requires the same assertions to answer RED. A control that stays
+    # green means the check is not measuring what it claims, and that is
+    # reported as a failure of the test itself rather than passed over.
+
+    # (a) THE SEAM CONTROL: one Application's repoURL drifted from the
+    # workflow's default registry. The publish end and the consume end
+    # disagreeing is the defect this check exists to catch, so the fixture
+    # is that disagreement, in one file, with everything else identical.
+    local seam_fixture="$TMP/chart-publish-seam"
+    rm -rf "$seam_fixture"
+    mkdir -p "$seam_fixture"
+    cp "$apps_dir"/*.yaml "$seam_fixture"/
+    # A temp file and `mv`, not `sed -i`: BSD sed (macOS) requires a backup
+    # argument after `-i` and GNU sed does not, so the in-place spelling is
+    # one platform's bug and the other's no-op.
+    sed 's|oci://ghcr.io/cafaye/charts|oci://ghcr.io/cafaye/charts-drifted|' \
+      "$seam_fixture/gateway.yaml" >"$seam_fixture/gateway.yaml.drifted"
+    mv "$seam_fixture/gateway.yaml.drifted" "$seam_fixture/gateway.yaml"
+    if "$PY" "$checker" "$workflow" "$seam_fixture" >/dev/null 2>&1; then
+      printf '       control (a) the seam control did not go red — the registry comparison is not measuring what it claims\n'
+      return 1
+    fi
+
+    # (b) THE DEFAULT CONTROL: `push` flipped to default-true. A reusable
+    # workflow that publishes by default is one every caller publishes from
+    # by accident, so the fixture is the one-line flip.
+    local push_fixture="$TMP/chart-publish-push-default.yml"
+    sed 's/default: false/default: true/' "$workflow" >"$push_fixture"
+    if "$PY" "$checker" "$push_fixture" "$apps_dir" >/dev/null 2>&1; then
+      printf '       control (b) the push-default control did not go red — the default comparison is not measuring what it claims\n'
+      return 1
+    fi
+
+    # The proof, on the way out: the seam the check measured, so a green run
+    # prints the number of Applications the registry string was compared
+    # against rather than asserting it in a comment.
+    printf '%s\n' "$out" | sed 's/^/       /'
+    return 0
+  }
+
+  # -------------------------------------------------------------------------
   # The customer substrate — the install is real, and its pins are exact.
   #
   # `templates/substrate/install.sh` is the one-command customer install. It
@@ -4303,6 +4484,21 @@ print(prefix + ("notarealsecret" * 3)[:32])
   section 'static: templates/substrate — the install is real, and its pins are exact'
   check 'tests/substrate_test.sh  (install.sh parses, DRY_RUN runs, pins are exact, manifests parse, no :latest, no inline secret)' \
     bash "$ROOT/tests/substrate_test.sh"
+
+  # -------------------------------------------------------------------------
+  # The chart publish path — the publish/consume seam, both ends in kit.
+  #
+  # The substrate's Applications are the consume end of a loop whose publish
+  # end is chart.reusable.yml, and the two ends disagreeing is a SILENT
+  # failure: Argo reports no error, it just never finds the artifact. Both
+  # ends live in this repository, so the seam is provable here — the check
+  # compares the workflow's default registry against every Application's
+  # source.repoURL, and its two controls (a drifted repoURL, a flipped push
+  # default) must go red under the same assertions the real tree passes.
+  section 'static: the chart publish path — the publish/consume seam, both ends in kit'
+  check 'chart publish  (workflow_call, push defaults false, registry == every Application repoURL, name/version not inputs, pull_request refused)' \
+    check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
+      "$ROOT/templates/substrate/manifests/applications"
 fi
 
 # ===========================================================================
