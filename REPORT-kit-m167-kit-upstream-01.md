@@ -73,3 +73,70 @@ Kit's tree, subtrees, submodules, forced updates, or sync bots.
    readers not to assume fetch works until announced.
 3. **Fleet stays on `@master`**: the pin contract is customer-only;
    no internal caller was touched.
+
+---
+
+## Continuation (2026-10-08) — corrections against actual upstreams
+
+The three claims above were wrong, and this packet corrects them. No
+other repository touched; worktree/branch unchanged.
+
+### What was wrong
+
+1. **External access.** `gh repo view cafaye/kit --json
+   nameWithOwner,visibility,url` returned `visibility: PUBLIC` on
+   2026-10-08 — Kit was already public. There was no access decision
+   pending and nothing to announce.
+2. **Renovate/tag path.** The `github-tags` config needed `v*` tags
+   that did not exist (`git tag` empty), so the page promised PRs
+   "from the first tag" — a decision it then waited on. Per
+   Renovate's current `github-actions` manager docs, a SHA pin with a
+   branch comment (`@<sha> # master`) routes to the `github-digest`
+   datasource (non-semver refs fetch branches, exact versioning,
+   digest-only updates); bare SHAs without the comment are disabled
+   by default. No tag or release is needed — the update path works
+   today.
+3. **Contribution gate.** The page told customers to run
+   `bash tests/validate.sh` before every commit. Kit CI has a docs
+   fast path (`docs` route runs `git diff --check` and nothing else);
+   the page now asks narrow local verification and names CI as the
+   full-gate owner.
+
+### What was delivered (2 commits, this worktree only, not pushed)
+
+- `042dbfa` — rewrote `docs/customer-upstream.md` (§2 pin contract
+  with `# master` comments + bare-`kit.ref` rationale read off
+  `stack_ref`/`validate_ref` in `templates/bin/dev.sh`; §3
+  `github-digest` Renovate block with `currentValueTemplate` for
+  `kit.ref` and branch-capture for `kit-lint-ref`, plus a `groupName`
+  batching rule stated as unverified; §4 narrow verification;
+  §5 reduced to the one honest unverified claim) and rewrote
+  `tests/customer_upstream_check.sh` (10 cases: linkage, three pin
+  sites, forbidden mechanisms, Kit-is-public fixed text, JSON parse,
+  matchStrings-vs-shape on captured groups, digest-not-tags,
+  `# master` comments, retracted-caveat absence, gate ownership).
+- `a54b677` — README table row + adoption section and the
+  `## Unreleased` CHANGELOG entry rewritten to the corrected claims.
+
+### Evidence (commands and actual output)
+
+- `gh repo view cafaye/kit --json nameWithOwner,visibility,url` →
+  `{"nameWithOwner":"cafaye/kit","url":"https://github.com/cafaye/kit","visibility":"PUBLIC"}`.
+- `git tag | wc -l` → `0`, kept as a measurement only: with
+  `github-digest` it no longer gates anything.
+- `bash tests/customer_upstream_check.sh` → 10/10 PASS.
+- `shellcheck -S warning tests/customer_upstream_check.sh` → clean;
+  `bash -n` clean.
+- Red probes (restored after each): deleting every `# master` fails
+  only the ref-comments case; replacing `github-digest` with
+  `github-tags` fails only the digest case — each fix is load-bearing
+  on its own claim.
+- Full `tests/validate.sh`, Docker, release/tag, publish, push: not
+  run, per the brief; manager gates the merged tree.
+
+### What remains honestly unverified
+
+No end-to-end Renovate run observed — the custom managers and the
+`groupName` batching are configured, patterns matched locally, live
+behavior unproven. The page says exactly this; expect a PR per
+pin/update set until the batch is seen landing together.
