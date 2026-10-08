@@ -213,18 +213,42 @@ services:
       PORT: "8080"
       LOG_LEVEL: debug
       # Over the compose network, by service name — `postgres` is the cluster and
-      # `identity` after the slash is identity's OWN database on it. AS THE
-      # `identity` ROLE AND NOT THE CLUSTER'S SUPERUSER: on the shared cluster
-      # the superuser is `postgres`, so a DSN connecting as it would be a service
+      # `identity` after the slash is identity's OWN database on it.
+      #
+      # `identity_app` BEFORE THE SLASH AND `identity` AFTER IT ARE TWO DIFFERENT
+      # ROLES, and the distinction is the point of this line rather than a detail
+      # of it. kit's `10-cluster.sh` provisions both per service from
+      # `KIT_POSTGRES_DATABASES`: `identity` OWNS the database and every table in
+      # it and is what `bin/migrate` connects as (the launcher, section 3a), and
+      # `identity_app` owns NOTHING and is what the RUNNING SERVICE logs in as.
+      # That split is the whole account boundary — Postgres exempts a table's
+      # owner from its own row-level-security policies, so a pool running as the
+      # owner reads every account's rows while every policy on the table sits in
+      # the catalog looking like a boundary. This DSN is the LOGIN role, exactly
+      # as identity's own `docker-compose.yml` declares it, and the owner appears
+      # NOWHERE in the running service's environment: the migration credential
+      # and the request credential are two roles, not one variable apart.
+      #
+      # `identity_app` is granted what it needs, and that is not a hope: 00016
+      # grants it DML on the five protected tables (and the schema usage and the
+      # sequence usage a protected table needs), 00019 grants it DML on the
+      # twelve the service reads and writes that no policy protects, 00022 grants
+      # it the two privileges `user_audit_log` carries, and 00018 re-issues the
+      # same set. Every table in the schema is covered, and none of these tables
+      # has a serial column — every id is `gen_random_uuid()` — so there is no
+      # sequence the login role lacks.
+      #
+      # It is NOT the cluster's superuser either: on the shared cluster the
+      # superuser is `postgres`, so a DSN connecting as it would be a service
       # holding an administrative credential on a cluster holding another
-      # service's database. This DSN cannot reach `courier` at all — kit's
-      # script revoked CONNECT from PUBLIC on every database it created and
-      # granted it back to `identity` on `identity` only.
+      # service's database. This DSN cannot reach `courier` at all — kit's script
+      # revoked CONNECT from PUBLIC on every database it created and granted it
+      # back to `identity` and `identity_app` on `identity` only.
       #
       # THE PASSWORD IS THE CLUSTER'S, interpolated from kit's own variable
       # rather than hard-coded: isolation here is by privilege and never by
       # secret.
-      DATABASE_URL: "postgres://identity:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/identity?sslmode=disable"
+      DATABASE_URL: "postgres://identity_app:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/identity?sslmode=disable"
       # The outbox bus. kit's NATS with JetStream (`-js`): without it a service
       # that publishes and then crashes loses the message, and courier's
       # at-least-once guarantee quietly becomes at-most-once. The broker being
@@ -288,12 +312,47 @@ services:
       COURIER_TOKEN: "${COURIER_TOKEN:?set COURIER_TOKEN — bin/launch mints it from identity's API and writes it to launch/.env}"
       PASSWORD_RESET_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/reset-password?token={token}"
       EMAIL_VERIFICATION_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/verify-email/confirm?token={token}"
-      # RECOVERY_LINK_TEMPLATE is the DEFAULT that applies to every purpose.
-      # Without it, identity refuses to boot when a purpose's own variable is
-      # unset — measured: "a deployment that can send mail needs at least one
-      # link template". One variable covers password reset, verify-email, and
-      # email-change.
-      RECOVERY_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/reset?token={token}"
+      # EMAIL_CHANGE_LINK_TEMPLATE is the THIRD per-purpose variable, and
+      # identity has had it since the courier adapter learned both halves of an
+      # address change (`linkTemplateVariables`, `internal/config/config.go`).
+      # Leaving it unset is what put a 404 here: `RECOVERY_LINK_TEMPLATE` is the
+      # fallback for any purpose with no variable of its own, so with only the
+      # two above set the email-change confirmation link was rendered as
+      # `…/reset?token={token}` — a path PARLOR DOES NOT SERVE. The mail sent,
+      # the 202 answered, and the reader's button was a 404.
+      #
+      # PARLOR CARRIES NO EMAIL-CHANGE SCREEN. Its routes are `/login`,
+      # `/register`, `/forgot-password`, `/reset-password`, `/verify-email`,
+      # `/verify-email/confirm`, `/invitations/{token}`, `/accounts`, `/settings`,
+      # `/admin`, `/healthz`, `/readyz` — and nothing for an address change, so
+      # there is no perfect target to name and the honest one is the closest
+      # served path. It is `/verify-email/confirm`: identity's own words for
+      # EMAIL_VERIFICATION_LINK_TEMPLATE are "the screen that redeems an address
+      # confirmation", and an email change IS one. The token is minted for the
+      # email-change flow, so spending it there answers identity's single
+      # `ErrTokenNotFound` and parlor's confirm screen renders its one generic
+      # "this link cannot be used" sentence — a wrong-flow dead end on a served
+      # page, which is a materially better failure than a 404 and is not dressed
+      # up here as more than it is.
+      #
+      # IDENTITY'S OWN COMPOSE NAMES `/email-change/confirm`, and parlor does
+      # not serve that either. It is not copied here for that reason: this
+      # overlay's front door is PARLOR, and a path the front door does not serve
+      # is the defect this block is being corrected for.
+      EMAIL_CHANGE_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/verify-email/confirm?token={token}"
+      # RECOVERY_LINK_TEMPLATE is the DEFAULT that applies to every purpose
+      # with no variable of its own. Without it identity refuses to boot —
+      # measured: "a deployment that can send mail needs at least one link
+      # template" — and it is validated at boot even when nothing falls back to
+      # it, so a broken default is a startup failure rather than a 404 in a mail.
+      #
+      # WITH ALL THREE PURPOSES SET ABOVE, nothing falls back to this today. It
+      # is still pointed at a path PARLOR SERVES, because the default is what a
+      # purpose identity adds tomorrow resolves to, and a default that 404s is a
+      # defect that arrives without anybody editing this file. The old value
+      # `/reset` was exactly that: it served nothing, and the only reason it went
+      # unnoticed is that the two purposes anybody exercises had variables.
+      RECOVERY_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/verify-email/confirm?token={token}"
       # INVITATION_LINK_TEMPLATE is the FOURTH link, REQUIRED whenever the
       # courier block above is wired — identity refuses to boot without it.
       # It has NO default and falls back to nothing: an invitation is not a
@@ -325,9 +384,20 @@ services:
     networks: [platform]
 
   # ----------------------------------------------------------------- gateway
-  # The API edge. The build arg is gateway's own: `BUN_VERSION` pins the
-  # toolchain gateway's Dockerfile builds with, and an image built without
-  # the pin is one no deploy path has ever produced.
+  # The API edge. The build arg is gateway's own: `GO_VERSION` pins the Go
+  # toolchain gateway's Dockerfile builds with, and it is the ONE arg that
+  # Dockerfile declares. It is not a second source of truth — the Dockerfile's
+  # own `ARG GO_VERSION=1.26` default is what a deploy builds with, and the
+  # value here is the same one, written out so the launch image is the image a
+  # deploy produces rather than whatever the default moves to.
+  #
+  # WHAT WAS HERE, and why it was a defect: `BUN_VERSION: "1.3.12"` — a pin for
+  # a toolchain gateway's Dockerfile no longer builds with. Gateway is Go and
+  # distroless now; there is no Bun stage anywhere in the file. An unconsumed
+  # `--build-arg` is a BuildKit WARNING and not an error, so the build proceeded
+  # while the comment above it asserted a pin that did not exist. A reader who
+  # trusted that comment believed the image was toolchain-pinned when the pin
+  # was inert.
   #
   # NO `ROUTE_TABLE`: the launch deploys no service for gateway to route to,
   # and a route table naming a service that is not running is a gateway that
@@ -338,7 +408,7 @@ services:
       context: ${LAUNCH_GATEWAY_DIR:-../../gateway}
       dockerfile: Dockerfile
       args:
-        BUN_VERSION: "1.3.12"
+        GO_VERSION: "1.26"
     image: cafaye/gateway:dev
     environment:
       PORT: "8080"

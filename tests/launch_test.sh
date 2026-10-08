@@ -33,6 +33,14 @@
 #                         secrets fail closed on `:?`; the project name is
 #                         kit-launch, never the live site-launch stack's; the
 #                         database list is the literal this tier decided)
+#     contract fixes    (identity's runtime DSN is the LOGIN role
+#                        `identity_app` and not the owner — extracted as a
+#                        token, because `postgres://identity_app:` contains
+#                        `postgres://identity:`; every build arg is one the
+#                        service's own Dockerfile consumes; every link
+#                        template resolves to a path parlor serves — checked
+#                        on the literal AND on the `compose config` render;
+#                        the launcher reads no committed kit pin)
 #     installer split    (no k3s/kubectl/argo/acme/ghcr/cloudflare claim in
 #                         the harness; the README says the customer installer
 #                         is separate and names what this harness does not
@@ -292,6 +300,110 @@ project_is_kit_launch() {
     ! grep -q 'site-launch' "$1"
 }
 
+# service_block <service> <path> — the body of one service block, and nothing
+# else. A range rather than a `grep -A`, because the four services each name
+# `DATABASE_URL` and a check that reads the whole file answers for whichever
+# block it happened to match first.
+service_block() {
+  awk -v svc="$1" '
+    /^  [a-z][a-z0-9_-]*:$/ { inblock = ($0 == "  " svc ":"); next }
+    inblock { print }
+  ' "$2"
+}
+
+# ---- F2: identity's runtime DSN is the LOGIN role, never the owner --------
+# The role is extracted as the run of characters between `postgres://` and the
+# next colon, and that is the whole point of the test: `postgres://identity_app:`
+# CONTAINS `postgres://identity:`, so a substring match answers "owner" for both
+# spellings and a check that cannot tell the login role from the owner is not a
+# check. Two roles, one prefix — the trap this exists to close.
+dsn_role() {
+  service_block identity "$1" |
+    sed -n 's/^      DATABASE_URL: "postgres:\/\/\([^:/]*\):.*/\1/p' | head -1
+}
+identity_login_role() { [ "$(dsn_role "$1")" = "identity_app" ]; }
+
+# ---- F3: every build arg is one the service's Dockerfile consumes ---------
+# The four services are built from sibling checkouts this repository cannot
+# see, so the overlay cannot be diffed against their Dockerfiles here. What it
+# can be checked against is the LIST of args those Dockerfiles declare, with its
+# provenance below — because the defect was not a wrong value, it was an arg for
+# a toolchain the image does not build with. `BUN_VERSION` sat on a Go,
+# distroless gateway, BuildKit warned rather than refused, and the build
+# proceeded under a comment asserting a pin that did not exist.
+BUILD_ARGS_CONSUMED="identity/SERVICE_NAME identity/GO_VERSION \
+gateway/GO_VERSION \
+courier/ELIXIR_VERSION courier/OTP_VERSION courier/DEBIAN_VERSION"
+build_args_of() {
+  awk '/^  [a-z][a-z0-9_-]*:$/ { svc = substr($0, 3, length($0) - 3) }
+       /^      args:$/ { inargs = 1; next }
+       /^      [a-z_]+:$/ { inargs = 0 }
+       inargs && /^        [A-Za-z_]+:/ { k = $1; sub(/:.*/, "", k); print svc "/" k }' "$1"
+}
+build_args_consumed() {
+  local a
+  for a in $(build_args_of "$1"); do
+    case " $BUILD_ARGS_CONSUMED " in
+      *" $a "*) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+gateway_toolchain_pinned() { build_args_of "$1" | grep -qx 'gateway/GO_VERSION'; }
+
+# ---- F4: every link template points at a path parlor serves --------------
+# The paths are the front door's routes, read from `parlor/src/app` (one
+# `page.tsx` per route) on 2026-10-08 and listed here because the launch stack
+# cannot read parlor. What it can be checked against is the list, because the
+# defect was a template pointing at `/reset` — a path parlor has never served.
+# `/verify-email/confirm` appears twice on purpose: parlor carries no
+# email-change screen, so the email-change purpose resolves there, which is the
+# closest served path and is what F4's comment in the overlay says.
+PARLOR_PATHS=" / /login /register /forgot-password /reset-password /verify-email \
+/verify-email/confirm /invitations /invitations/{token} /settings /accounts \
+/admin /healthz /readyz "
+link_template_paths() {
+  grep -oE '[A-Z_]+_LINK_TEMPLATE: "[^"]*"' "$1" |
+    sed -e 's/^[A-Z_]*_LINK_TEMPLATE: "//' -e 's/"$//' \
+        -e 's|^\${APP_BASE_URL:-[^}]*}||' -e 's|?token={token}$||'
+}
+link_paths_served() {
+  local p
+  for p in $(link_template_paths "$1"); do
+    case "$PARLOR_PATHS" in
+      *" $p "*) ;;
+      *) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# strip_comments <path> — the launcher's EXECUTABLE lines, and only those.
+#
+# A check that greps the whole file is falsified by the comment explaining a
+# removal: the paragraph recording why `kit_ref()` is gone names the file it
+# read, and the first version of this check went red on the prose. That is kit's
+# own lesson from the other side — a check that a comment can SATISFY is not a
+# check, and a check a comment can FALSIFY is worse, because it teaches its
+# reader to delete the explanation.
+strip_comments() { sed 's/^[[:space:]]*#.*$//' "$1"; }
+
+# ---- F5: no reader for a committed pin the tree does not carry -----------
+# `kit_ref()` read a committed pin file, was never called, and this worktree
+# carries no such file. A reader who believed the launcher honoured a pin was
+# reading a function that did not participate, so the function is deleted and
+# no executable line may name the file again: `resolve_stack`'s three sources
+# are the whole resolution.
+no_committed_pin_reader() {
+  local body
+  body="$(strip_comments "$1")"
+  case "$body" in
+    *kit.ref*) return 1 ;;
+  esac
+  return 0
+}
+
 run 'the overlay owns exactly six service blocks' green services_match "$OVERLAY"
 mut="$WORK/mut.yml"
 cp "$OVERLAY" "$mut"
@@ -325,6 +437,49 @@ run 'the database list is the literal this tier decided' green \
   bash -c "grep -q 'KIT_POSTGRES_DATABASES: \"identity,courier\"' \"\$0\"" "$OVERLAY"
 
 # ===========================================================================
+# 5b. The contract corrections — the overlay against the services' own current
+#     declarations. Each is a check the packet m199 added, and each carries a
+#     control built to violate exactly that one property.
+# ===========================================================================
+run "identity's runtime DSN logs in as identity_app (the login role)" green \
+  identity_login_role "$OVERLAY"
+sed 's|postgres://identity_app:|postgres://identity:|' "$OVERLAY" >"$mut"
+run 'CONTROL: the OWNER role on the runtime DSN is caught' red identity_login_role "$mut"
+# The two spellings share a prefix — `postgres://identity_app:` CONTAINS
+# `postgres://identity:` — so a check that could not tell them apart would pass
+# on the defect. This asserts the extraction answers differently for each.
+run 'the owner and the login role extract as different tokens' green \
+  test "$(dsn_role "$OVERLAY")" != "$(dsn_role "$mut")"
+
+run 'every build arg is one the service Dockerfile consumes' green \
+  build_args_consumed "$OVERLAY"
+run 'gateway pins the Go toolchain its Dockerfile declares' green \
+  gateway_toolchain_pinned "$OVERLAY"
+sed 's|        GO_VERSION: "1.26"|        BUN_VERSION: "1.3.12"|' "$OVERLAY" >"$mut"
+run 'CONTROL: an unconsumed build arg is caught' red build_args_consumed "$mut"
+
+run 'every link template points at a path parlor serves' green \
+  link_paths_served "$OVERLAY"
+sed 's|/verify-email/confirm?token={token}|/reset?token={token}|' "$OVERLAY" >"$mut"
+run 'CONTROL: a link template pointing at an unserved path is caught' red \
+  link_paths_served "$mut"
+
+run 'the launcher carries no reader for a committed kit pin' green \
+  no_committed_pin_reader "$SCRIPT"
+mut_launch="$WORK/mut-launch-kitref"
+cp "$SCRIPT" "$mut_launch"
+cat >>"$mut_launch" <<'EOF'
+
+# The pin reader, the way kit's own stack_ref reads it: the first
+# non-blank, non-comment line, trimmed.
+kit_ref() {
+  sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' kit.ref 2>/dev/null |
+    grep -v '^#' | grep -v '^$' | head -1 || true
+}
+EOF
+run 'CONTROL: a committed-pin reader is caught' red no_committed_pin_reader "$mut_launch"
+
+# ===========================================================================
 # 6. The overlay renders: `docker compose config` (client-side, no daemon)
 # ===========================================================================
 # A throwaway project directory holding a COPY of the overlay, sibling dirs
@@ -350,8 +505,35 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (cd "$RENDER" && render config --services 2>/dev/null |
       sort | tr '\n' ' ' | grep -q 'courier gateway identity mailpit .*parlor.*postgres')
   }
+  # The RESOLVED DSN, not the literal: `${KIT_POSTGRES_PASSWORD:-cafaye}` and
+  # `${APP_BASE_URL:-…}` are interpolated by compose, so what a container would
+  # actually receive is only visible here. The role token is read the same way
+  # the static check reads it — between `postgres://` and the next colon.
+  rendered_dsn_role() {
+    (cd "$RENDER" && render config |
+      sed -n 's|^      DATABASE_URL: postgres://\([^:/]*\):.*|\1|p' | head -1)
+  }
+  rendered_link_paths() {
+    (cd "$RENDER" && render config |
+      sed -n 's|^      [A-Z_]*_LINK_TEMPLATE: http://[^/]*\(/.*\)$|\1|p' |
+      sed 's|?token={token}$||')
+  }
+  rendered_paths_served() {
+    local p
+    for p in $(rendered_link_paths); do
+      case " $PARLOR_PATHS " in
+        *" $p "*) ;;
+        *) return 1 ;;
+      esac
+    done
+    return 0
+  }
   run 'the overlay renders against this checkout (compose config)' green render_config
   run 'the render carries all six services' green render_services
+  run 'the RENDERED identity DSN logs in as the login role' green \
+    test "$(rendered_dsn_role)" = identity_app
+  run 'every RENDERED link template resolves onto a path parlor serves' green \
+    rendered_paths_served
 else
   skip 'compose config render (2)' 'no docker compose on PATH'
 fi

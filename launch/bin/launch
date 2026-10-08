@@ -69,13 +69,18 @@ LAUNCH_COURIER_DIR="${LAUNCH_COURIER_DIR:-$KIT_ROOT/../courier}"
 LAUNCH_PARLOR_DIR="${LAUNCH_PARLOR_DIR:-$KIT_ROOT/../parlor}"
 export LAUNCH_IDENTITY_DIR LAUNCH_GATEWAY_DIR LAUNCH_COURIER_DIR LAUNCH_PARLOR_DIR
 
-# The pin reader, the way kit's own `stack_ref` reads it: the first
-# non-blank, non-comment line, trimmed.
-kit_ref() {
-  sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' kit.ref 2>/dev/null |
-    grep -v '^#' | grep -v '^$' | head -1 || true
-}
-
+# THERE IS NO FOURTH SOURCE, and the absence is deliberate rather than an
+# omission. A `kit_ref()` reader used to sit here, reading a committed `kit.ref`
+# the way kit's own `stack_ref` does — and it was never called: this function's
+# three sources below are the whole resolution, and this worktree holds no
+# `kit.ref` for it to read. It is deleted rather than wired up, because wiring
+# it up would make the lowest-precedence source something other than "this
+# checkout", which is the documented decision the third source states: the
+# harness runs the stack it ships with, so there is no fetch, no cache, and no
+# pin that can drift from the overlay beside it. A committed pin would also be
+# a pin this repository cannot honour — kit ships none, and a service that
+# adopted `launch/` by copy would inherit a reference to a file nobody has.
+#
 # validate_pin <ref> — a sha or a tag, never a branch. The same rule kit's
 # own `bin/dev` enforces: a branch is a MOVING reference, and the stack you
 # get on Tuesday would not be the stack you reviewed on Monday. `case` and
@@ -124,7 +129,7 @@ validate_pin() {
       ;;
   esac
   if [ -z "$ref" ]; then
-    die "no kit pin — LAUNCH_KIT_REF is empty and no kit.ref names one."
+    die "no kit pin — LAUNCH_KIT_REF is empty."
   fi
   die "pin '$ref' is not a pin.
    Accepted: a 40-character commit sha (lowercase hex), or a v<MAJOR>.<MINOR>.<PATCH> tag.
@@ -420,9 +425,14 @@ done
 # ---------------------------------------------------------------------------
 # identity never migrates itself: its image is distroless and its entrypoint is
 # the server, so the schema is the bring-up's job. The DSN is kit's published
-# cluster port, composed the way identity's own DATABASE_URL is: the
-# `identity` role, kit's cluster password, identity's own database.
-# `bin/migrate` is identity's own — the same files, the same order.
+# cluster port, and the role is `identity` — the OWNER, which is what
+# `bin/migrate` connects as and the ONLY place this role appears: identity's
+# own file says nothing the running process reads gives it the owner role, and
+# that holds here too. The runtime DSN in the overlay's identity block is
+# `identity_app`, the login role, and the two are different roles on purpose —
+# Postgres exempts a table's owner from its own row-level-security policies, so
+# the pool must not be the role that owns the tables. `bin/migrate` is
+# identity's own — the same files, the same order.
 POSTGRES_PORT="${KIT_POSTGRES_PORT:-15500}"
 log "applying identity's migrations from the host"
 DATABASE_URL="postgres://identity:${KIT_POSTGRES_PASSWORD:-cafaye}@127.0.0.1:$POSTGRES_PORT/identity?sslmode=disable" \
