@@ -103,8 +103,8 @@ Underneath them sit Kit's infrastructure: `KIT_POSTGRES_PORT` (15500),
 ### This stack cannot run at the same time as the protected `site-launch-*` stack
 
 **Said plainly, because it is the failure that looks like something else.**
-The defaults above are the very ports the retired stack's overlay published
-(`site-launch-*`: 15025, 15080-15083), and both stacks layer over the same Kit
+The defaults above are the very ports the protected `site-launch-*` stack's
+overlay publishes (15025, 15080-15083), and both stacks layer over the same Kit
 base stack, so 15500/15600/15700/15800 collide too. There is nothing to
 disambiguate them by: both are `docker compose` on the loopback.
 
