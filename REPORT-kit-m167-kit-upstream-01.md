@@ -140,3 +140,38 @@ No end-to-end Renovate run observed — the custom managers and the
 `groupName` batching are configured, patterns matched locally, live
 behavior unproven. The page says exactly this; expect a PR per
 pin/update set until the batch is seen landing together.
+
+---
+
+## Follow-up (2026-10-08) — the application-upstream direction
+
+The page separated the customer's source updates from Kit's platform
+updates but said nothing about improvements to the application itself:
+a reader with a fix belonging in the canonical app (for example,
+Parlor) had no path for it. §1 now carries it, kept distinct from §4's
+PRs to Kit.
+
+### What was delivered (2 commits, this worktree only, not pushed)
+
+- Q1: `docs/customer-upstream.md` §1 gains **"Sending an application
+  fix upstream — not a Kit change"**: general fixes go to the
+  canonical app as fork + PR, branched off `upstream/main` on the same
+  named `upstream` remote the section's Jumpstart Pro model already
+  uses; app-specific branding/features stay downstream; upstream takes
+  general fixes, not every customization (no claim every
+  customization is accepted, no CAF command, no automation invented).
+  `tests/customer_upstream_check.sh` gains the 11th case guarding the
+  separation (header + branch needles, not common words).
+- Q2: README table row + adoption section and the `## Unreleased`
+  CHANGELOG entry rewritten to name both upstream directions distinctly
+  (app fixes to the canonical app, Kit improvements to Kit).
+
+### Evidence (commands and actual output)
+
+- `bash tests/customer_upstream_check.sh` → 11/11 PASS.
+- `bash -n` + `shellcheck -S warning` clean on the check script.
+- Red probe (restored after): deleting the "PRs to Kit itself are the
+  separate" line fails only the new separation case — the case is
+  load-bearing on its own claim.
+- Full `tests/validate.sh`, Docker, network, tags/releases, push: not
+  run, per the brief; manager gates the merged tree.

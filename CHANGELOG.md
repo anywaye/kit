@@ -18,16 +18,20 @@
   the opt-in Renovate block (JSON parses; every `matchStrings` matched
   locally against its §2 pin shape on the captured groups; no
   end-to-end Renovate run observed — managers configured, live behavior
-  and PR grouping unverified) and sends Kit improvements back as
-  fork + PR with narrow local verification (`git diff --check` plus the
+  and PR grouping unverified) and keeps the two upstream directions
+  apart: general app fixes go to the canonical app (§1, fork + PR off
+  the named `upstream` remote, branding stays downstream — upstream
+  takes general fixes, not every customization), Kit improvements back
+  as fork + PR (§4) with narrow local verification (`git diff --check` plus the
   focused check for what changed; CI owns the full gate, docs-only
   changes take the fast `docs` route). Held by
-  `tests/customer_upstream_check.sh` (10 cases), wired into the static
+  `tests/customer_upstream_check.sh` (11 cases), wired into the static
   phase: README linkage, all three pin sites named, Kit-is-public
   stated, the Renovate block parses and its patterns match, digest
   shape with no `github-tags`, `# master` comments on the YAML
   examples, no retracted tag/access caveat, narrow-verification
-  guidance with the forbidden mechanisms named.
+  guidance with the forbidden mechanisms named, and the §1/§4 upstream
+  separation (app fixes to the canonical app, Kit improvements to Kit).
 
 - **`bin/dev live`: the staged-launcher entrypoint for the service-owned
   live snapshot (m162).** Site's staged `bin/launch` calls

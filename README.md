@@ -166,7 +166,7 @@ than something a green run prints.
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
 | `RESERVED` | **Tombstones: a retired name stays dead.** In the `skip-allowlist` dialect, and the fourth hygiene rule is **inverted** — a reserved path that exists in the tree is the failure. buf's `reserved` and k8s's `+k8s:deprecated` are *not* the same mechanism (a wire tombstone vs a lifecycle marker on a still-present field); kit has no encoding, so only the shared weaker half transfers. See `DECISIONS.md` (MD27). | kit's gate; read before reintroducing any path |
 | `LICENSE` | **kit's own grant: MIT.** The whole grant — kit has no package manifest, so there is no metadata field that could disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
-| `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate). Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside cafaye |
+| `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, sends general app fixes upstream to the canonical app as fork + PR (branding stays downstream), and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate) — the two upstream directions kept apart. Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside cafaye |
 
 ## Secrets — what kit checks, and what it does not
 
@@ -914,7 +914,9 @@ back — is a separate path with its own page:
 [`docs/customer-upstream.md`](docs/customer-upstream.md). It covers the
 two update directions (your source merges from a named upstream remote;
 Kit's pieces are pinned SHAs with branch comments, moved by Renovate PRs
-via `github-digest` — no tags needed, Kit is public), the opt-in Renovate
+via `github-digest` — no tags needed, Kit is public), the two upstream
+contribution paths kept apart (general app fixes to the canonical app,
+branding stays downstream; Kit improvements to Kit per §4), the opt-in Renovate
 block, and what the page does not promise (no end-to-end Renovate proof).
 
 A service repo does **not** copy the workflow. It calls it, so a fix in kit
