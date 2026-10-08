@@ -2,6 +2,25 @@
 
 ### Fixed
 
+- **The launch preflight did not check for `psql`, the one tool the launch
+  shells out to on the host, and failed after the build (m201).** Identity's
+  image is distroless and migrates nothing itself, so the bring-up runs
+  identity's own `bin/migrate` from the host against the published cluster
+  port, and identity's migrate pipes each migration's Up section into `psql`
+  (`identity/bin/migrate:82-83`). `--check` required `curl`, `git`,
+  `openssl` and `jq` and reported "every prerequisite is in place" on a
+  machine where the launch could not succeed — the manager hit this for real:
+  the failure arrived after both images were built, at `psql: command not
+  found`. `REPORT-kit-launch-contract-audit-m195b.md` §3 had named the exact
+  gap in advance. `--check` now fails closed on a missing `psql` naming the
+  tool, the host-side migration step, and the install; `launch/README.md`
+  gains a Prerequisites table that is the same list, tool for tool, with the
+  reason each is needed. The test adds a hermetic red control — a bench
+  holding only the launcher's stubs plus `bash`/`dirname`/`basename`, with no
+  `/usr/bin` in PATH at all, because a PATH of "stubs minus psql" is not
+  hermetic on a machine whose `postgresql-client` package puts `psql` in
+  `/usr/bin` — plus a second assertion that the refusal names `psql` AND the
+  migration, so a red arriving from any other check cannot satisfy it.
 - **The launch overlay contradicted the service contracts; four corrections,
   each with a test (m199).** A read-only audit of `launch/` against the current
   Identity, Gateway, Courier and Parlor checkouts

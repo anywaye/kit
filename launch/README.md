@@ -41,6 +41,29 @@ Run from anywhere inside the Kit checkout:
 | What is running | `launch/bin/launch status` |
 | Stop, delete volumes (`.env` survives) | `launch/bin/launch down` |
 
+## Prerequisites
+
+Everything the launch needs on the **host**, and nothing it does not.
+`launch/bin/launch --check` verifies this exact list by name and fails with
+the tool and the fix — a preflight that passes on a machine where the launch
+cannot succeed is a preflight that fails after the build, which is the
+expensive place for it:
+
+| Tool | Why the launch needs it |
+|------|-------------------------|
+| `docker` (+ the compose v2 plugin) | the whole stack: `up --wait`, `down`, `run`, `exec` |
+| `git` | resolves a `LAUNCH_KIT_REF` pin through `templates/bin/dev.sh live` (only when set — the default stack is this checkout and needs no network) |
+| `curl` | polls identity's `/readyz`, mints the courier key from identity's API |
+| `openssl` | generates the signing keys and the courier secrets into `launch/.env` |
+| `jq` | reads the minted key and the signup-timestamp pair out of identity's responses |
+| `psql` | applies **identity's migrations from the host** — identity's image is distroless and migrates nothing itself, so the bring-up runs identity's own `bin/migrate` on this machine and that file pipes into `psql` (`identity/bin/migrate:82-83`) |
+
+Install what is missing (`brew install postgresql` on macOS, the
+`postgresql-client` package on Linux) and re-run `--check`. Alongside the
+tools, the four service checkouts must exist — see the layout below; that is
+also part of what `--check` reports on, and a missing one is a build failure
+rather than a fetch failure.
+
 ## Repository layout
 
 The four services are built from source, so their checkouts must exist.
@@ -153,9 +176,9 @@ The bring-up is two-phase because the courier key does not exist until
 identity is up to mint it, and identity will not boot without the key:
 
 1. `postgres + identity` up, bounded readiness poll on `/readyz`,
-   identity's migrations from the host, mint the courier key (register →
-   session → account → api-key, with the signup-timestamp pair aged past
-   `signup.MinAge`).
+   identity's migrations from the host (psql on the host — see
+   Prerequisites), mint the courier key (register → session → account →
+   api-key, with the signup-timestamp pair aged past `signup.MinAge`).
 2. `nats` up, the `cafaye` JetStream stream created by Kit's one-shot
    (`compose run --rm nats-stream-init`, bounded, required), then the full
    long-running set — explicitly named, never a blanket wait that would
