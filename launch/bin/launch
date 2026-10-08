@@ -268,6 +268,17 @@ need curl "curl is used to poll /readyz from the host and to mint the courier ke
 need git "git fetches kit's stack at a pinned ref (LAUNCH_KIT_REF only; the default path needs no network)."
 need openssl "openssl generates the signing keys and the courier secrets."
 need jq "jq reads the minted courier key out of identity's response."
+# psql — THE ONE THAT ARRIVED AFTER THE BUILD. The migrations are a deploy
+# step run from the HOST (§3a below): identity's image is distroless and its
+# entrypoint is the server, so the schema is the bring-up's job, and the
+# bring-up runs identity's own `bin/migrate` against the published cluster
+# port. Identity's migrate pipes each migration's Up section into psql
+# (identity/bin/migrate:82-83), so a machine with no psql passes this
+# preflight, builds BOTH images, and then dies — measured once, for real.
+# A preflight that passes where the launch cannot succeed is the defect, and
+# the failure landing after the build is what made it expensive. The
+# companion control is in tests/launch_test.sh.
+need psql "psql is used to apply identity's migrations from the host, through identity's own bin/migrate (identity's image is distroless and migrates nothing itself). Install the PostgreSQL client — 'brew install postgresql' on macOS, or the postgresql-client package on Linux."
 
 # The sibling checkouts are required, and a missing one is a BUILD failure
 # rather than a fetch failure: the launch file's build contexts are the

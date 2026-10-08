@@ -13,9 +13,9 @@
 #   replaced by stubs on PATH:
 #
 #     layout validation  (--check is green on a complete fixture layout,
-#                         red on a missing sibling, a branch pin, and a
-#                         stack dir that is not a kit tree; an unknown verb
-#                         exits 2)
+#                         red on a missing sibling, a PATH without psql, a
+#                         branch pin, and a stack dir that is not a kit
+#                         tree; an unknown verb exits 2)
 #     pin behavior       (a sha and a v<semver> tag pass validation; a branch
 #                         name is refused naming the pin rule; KIT_STACK_DIR
 #                         wins over a pin)
@@ -158,7 +158,7 @@ fi
 exit 0
 EOF
 chmod +x "$STUB/docker"
-for t in curl jq openssl git; do
+for t in curl jq openssl git psql; do
   printf '#!/usr/bin/env bash\nexit 0\n' >"$STUB/$t"
   chmod +x "$STUB/$t"
 done
@@ -202,6 +202,47 @@ run '--check resolves the stack to this kit checkout by default' green \
   grep -q "kit stack: $ROOT" "$check_out"
 run 'CONTROL: KIT_STACK_DIR at a non-kit tree is refused' red \
   launch_env env KIT_STACK_DIR="$WORK" bash "$SCRIPT" --check
+
+# ---- the migration client: psql on the HOST, needed by identity's migrate --
+# Identity's image is distroless and migrates nothing itself, so the launcher
+# runs identity's own bin/migrate on the host (§3a) against the published
+# cluster port, and identity's migrate pipes each migration's Up section into
+# psql (identity/bin/migrate:82-83). This is the prerequisite the manager hit
+# for real: every other tool was in place, `--check` said so, and the run died
+# at 'psql: command not found' AFTER both images were built.
+#
+# The control bench is HERMETIC rather than merely PATH-edited, and that is
+# deliberate: a PATH of "$STUB:/usr/bin:/bin minus psql" is not hermetic,
+# because a machine whose postgresql-client package puts psql in /usr/bin
+# (Debian) would resolve the real tool and answer green where the fixture
+# means red. So this bench carries ONLY the launcher's own stubs plus the
+# three real utilities the script shells out to before the check — bash,
+# dirname, basename — and no /usr/bin, no /bin, no psql.
+STUB_NO_PSQL="$WORK/stub-bin-no-psql"
+mkdir -p "$STUB_NO_PSQL"
+cp "$STUB/docker" "$STUB_NO_PSQL/docker"
+for t in curl jq openssl git; do
+  cp "$STUB/$t" "$STUB_NO_PSQL/$t"
+done
+for u in bash dirname basename; do
+  ln -s "$(command -v "$u")" "$STUB_NO_PSQL/$u"
+done
+nopsql_env() {
+  env -i PATH="$STUB_NO_PSQL" HOME="$WORK" TMPDIR="$WORK" \
+    STUB_LOG="$STUB_LOG" \
+    LAUNCH_IDENTITY_DIR="$SIBS/identity" LAUNCH_GATEWAY_DIR="$SIBS/gateway" \
+    LAUNCH_COURIER_DIR="$SIBS/courier" LAUNCH_PARLOR_DIR="$SIBS/parlor" \
+    "$@"
+}
+run 'CONTROL: --check is red when psql is missing from PATH' red \
+  nopsql_env bash "$SCRIPT" --check
+# The refusal must NAME the tool and the host-side step, not merely exit
+# non-zero: a preflight that dies elsewhere (a sibling test's refusal, a
+# broken fixture) would answer red without proving the psql check exists.
+nopsql_out="$WORK/nopsql-out.txt"
+nopsql_env bash "$SCRIPT" --check >"$nopsql_out" 2>&1 || true
+run 'the psql refusal names the tool and the host-side migration' green \
+  bash -c "grep -q 'psql' \"\$0\" && grep -q 'migration' \"\$0\"" "$nopsql_out"
 
 # ===========================================================================
 # 3. Pin behavior
