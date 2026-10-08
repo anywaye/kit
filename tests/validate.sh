@@ -2181,6 +2181,23 @@ OTEL
     fi
   fi
 
+  # The customer upstream page is STATIC for the same reason the kamal
+  # agreement is: it reads the doc and the README and asserts they agree,
+  # so it runs with no toolchain beyond an optional python3 for the JSON
+  # block (a loud SKIP when absent, never a silent pass). The check that
+  # makes the two m167 promises unable to rot silently: the page stays
+  # linked, keeps naming every pin site it contracts, keeps carrying a
+  # Renovate block that parses, and keeps stating the no-tags caveat
+  # while `git tag` is empty.
+  if only_wanted 'customer_upstream_check'; then
+    if bash "$ROOT/tests/customer_upstream_check.sh" >"$TMP/customer_upstream_check.log" 2>&1; then
+      report PASS "$(sed 's/^PASS: //' "$TMP/customer_upstream_check.log" | tail -1)"
+    else
+      report FAIL 'customer_upstream_check  (the customer path is linked and agrees)'
+      sed 's/^/       /' "$TMP/customer_upstream_check.log" | tail -20
+    fi
+  fi
+
   # -------------------------------------------------------------------------
   # The canary harness's Go sources must PARSE, and must parse in Go's own
   # parser rather than in a regex.

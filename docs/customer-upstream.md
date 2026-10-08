@@ -114,8 +114,10 @@ and opens one PR moving every Kit pin together:
 }
 ```
 
-Verification status, stated honestly: the JSON parses and both patterns
-match the pin shapes in §2 (checked locally with Python). No
+Verification status, stated honestly: the JSON parses (`python3 -c
+json.load`) and both patterns match the pin shapes in §2 — checked by
+translating JavaScript `(?<name>…)` groups to Python `(?P<name>…)`
+(characters and anchors identical) and matching a sample SHA. No
 end-to-end Renovate run has been observed from this file. And it
 produces **no PRs today by design**: `github-tags` yields versions only
 once Kit publishes `v*` tags, and none exist yet (see §5). Adopt the
