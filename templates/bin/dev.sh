@@ -12,6 +12,15 @@
 #   bin/dev stack      # resolve the pinned kit ref and print where it landed
 #                      #   (no side effects; reaching the resolution needs no
 #                      #    docker, which is what tests/fetch_test.sh drives)
+#   bin/dev live       # resolve the pinned kit ref, sync the service-owned
+#                      #   live snapshot into `.kit/live/<ref>`, and print where
+#                      #   it landed (`resolved: .kit/live/<ref>`). The staged-
+#                      #   launcher entrypoint: a launcher resolves, reads the
+#                      #   `resolved:` line, and composes from the snapshot,
+#                      #   never from the cache. `stack` stays read-only; this
+#                      #   is the only command besides `up` that writes the
+#                      #   snapshot, and it reuses `resolve_stack` and
+#                      #   `sync_live_stack` rather than a copy of either.
 #   bin/dev pin <ref>  # DELIBERATELY move to another kit ref, and say what moved
 #   bin/dev down       # stop the stack, keep the volumes
 #   bin/dev nuke       # stop the stack and DELETE the volumes
@@ -1657,6 +1666,36 @@ stack_cmd() {
 }
 
 # --------------------------------------------------------------------------
+# live: resolve, snapshot into the service-owned tree, and say where it landed
+# --------------------------------------------------------------------------
+
+# The staged-launcher entrypoint. Site's staged `bin/launch` calls
+# `templates/bin/dev.sh stack` and then composes using the shared cache
+# directly — so anything that retires, prunes or deletes that cache moves a
+# byte a live mount resolves to. `up` already snapshots into
+# `.kit/live/<ref>` and composes from there, but `stack` is intentionally
+# read-only and `up` also starts containers, migrates and seeds. A launcher
+# that only stages needs the snapshot without the side effects, so this is
+# the smallest Kit-owned command that does exactly that: `resolve_stack`
+# (the same five-source resolution `stack` and `up` share), then
+# `sync_live_stack` (the same content-addressed snapshot `up` writes), then
+# the same machine-readable `resolved: <path>` line `stack` prints — except
+# the path is ALWAYS the service-owned `.kit/live/<ref>`, never the cache.
+#
+# No `compose config` here on purpose. `stack` renders the merged config for
+# a human; a launcher parses `^resolved: ` and composes itself, so config
+# output on stdout is noise on the line it reads.
+live_cmd() {
+  step "resolving kit"
+  resolve_stack
+  sync_live_stack "$(stack_ref)" "$STACK_DIR"
+  local dest
+  dest="$(live_dir_for "$(stack_ref)")"
+  printf 'resolved: %s\n' "$dest"
+  printf 'ref: %s\n' "$(stack_ref)"
+}
+
+# --------------------------------------------------------------------------
 # pin: the deliberate upgrade
 # --------------------------------------------------------------------------
 #
@@ -1798,6 +1837,7 @@ main() {
       up
       ;;
     stack) stack_cmd ;;
+    live) live_cmd ;;
     pin)
       shift
       pin_cmd "${1:-}"
