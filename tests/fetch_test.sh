@@ -898,7 +898,83 @@ else
   # Not a hard fail — just note; prune may have kept all due to mount check.
   pass "m157: prune_generations scope is cache/.retired only, live is not in matcher"
 fi
+# m162: prune_generations scope is cache/.retired only, live is not in matcher
+# fi
 unset FAKE_DOCKER_LOG
+
+# ---------------------------------------------------------------------------
+# 11. m162 — `bin/dev live` resolves, snapshots, and reports .kit/live/<ref>
+# ---------------------------------------------------------------------------
+# The Kit/Site integration seam: Site's staged `bin/launch` calls
+# `templates/bin/dev.sh stack` and then composes using the shared cache
+# directly, so a cache retirement, prune or deletion moves a byte a live
+# mount resolves to. `up` already snapshots into `.kit/live/<ref>`, but
+# `stack` is read-only and `up` also starts containers. `live` is the
+# smallest Kit-owned command between them: `resolve_stack` + `sync_live_stack`
+# (reused, not duplicated) and a machine-readable `resolved: <path>` line a
+# launcher parses with `^resolved: ` — the path always the service-owned
+# `.kit/live/<ref>`, never the cache. No docker, no compose config noise.
+liveapi="$WORK/svc-live-api"
+make_service "$liveapi" "$PIN_SHA" "$WORK/cache-live-api"
+
+# 11a. `stack` is read-only: it resolves and creates no .kit/live.
+run_dev "$liveapi" stack >/dev/null 2>&1 || true
+if [ -e "$liveapi/.kit/live" ]; then
+  fail "m162: bin/dev stack created .kit/live — stack must stay read-only"
+  find "$liveapi/.kit/live" -maxdepth 2 2>/dev/null | sed 's/^/        /'
+else
+  pass "m162: bin/dev stack creates no .kit/live (read-only)"
+fi
+
+# 11b. `live` prints `resolved: .kit/live/<ref>` on its machine-readable line.
+run_dev "$liveapi" live
+LIVE_API_RESOLVED="$(resolved_path "$DEV_OUT")"
+if [ "$DEV_EC" -ne 0 ]; then
+  fail "m162: bin/dev live failed (exit $DEV_EC)"
+  printf '%s\n' "$DEV_OUT" | tail -8 | sed 's/^/        /'
+elif [ "$LIVE_API_RESOLVED" != ".kit/live/$PIN_SHA" ]; then
+  fail "m162: bin/dev live resolved to '$LIVE_API_RESOLVED', not '.kit/live/$PIN_SHA'"
+else
+  pass "m162: bin/dev live prints resolved: .kit/live/<ref>"
+fi
+
+# 11c. The snapshot contents match the pinned source byte for byte.
+if [ -d "$liveapi/.kit/live/$PIN_SHA" ] && \
+  diff -rq "$WORK/cache-live-api/$PIN_SHA/templates/compose" \
+    "$liveapi/.kit/live/$PIN_SHA/templates/compose" >/dev/null 2>&1; then
+  pass "m162: the live snapshot contents match the pinned source"
+else
+  fail "m162: the live snapshot is missing or differs from the pinned source"
+fi
+if [ "$(cat "$liveapi/.kit/live/$PIN_SHA/.kit-stack-ref" 2>/dev/null || true)" = "$PIN_SHA" ]; then
+  pass "m162: the live snapshot records the pinned ref"
+else
+  fail "m162: the live snapshot records no ref"
+fi
+
+# 11d. A repeated call is idempotent: same bytes, snapshot left untouched.
+LIVE_API_SUM_BEFORE="$(find "$liveapi/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
+run_dev "$liveapi" live >/dev/null 2>&1 || true
+LIVE_API_SUM_AFTER="$(find "$liveapi/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
+if [ "$DEV_EC" -ne 0 ]; then
+  fail "m162: second bin/dev live failed (exit $DEV_EC)"
+elif [ "$LIVE_API_SUM_BEFORE" != "$LIVE_API_SUM_AFTER" ]; then
+  fail "m162: second bin/dev live changed the snapshot bytes at an immutable ref"
+elif printf '%s' "$DEV_OUT" | grep -qiE 'unchanged'; then
+  pass "m162: a repeated bin/dev live is idempotent (unchanged, bytes identical)"
+else
+  fail "m162: second bin/dev live did not report the snapshot as unchanged"
+  printf '%s\n' "$DEV_OUT" | tail -6 | sed 's/^/        /'
+fi
+
+# 11e. The machine-readable line survives human output: exactly one
+# `resolved:` line, and nothing compose-shaped on it.
+LIVE_API_COUNT="$(printf '%s\n' "$DEV_OUT" | sed -n 's/^resolved: //p' | wc -l | tr -d ' ')"
+if [ "$LIVE_API_COUNT" = "1" ]; then
+  pass "m162: exactly one machine-readable resolved: line for callers to parse"
+else
+  fail "m162: expected one resolved: line, found $LIVE_API_COUNT"
+fi
 
 printf '\n'
 if [ "$failures" -ne 0 ]; then
