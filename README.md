@@ -325,6 +325,11 @@ git -C <kit> rev-parse HEAD > kit.ref      # the pin — see below
 
 bin/dev            # fetch kit, compose up --wait, migrate, seed, print URLs
 bin/dev stack      # resolve the pin and show what the two files merged into
+                   #   (read-only; creates nothing)
+bin/dev live       # resolve the pin, sync the service-owned snapshot into
+                   #   .kit/live/<ref>, print `resolved: .kit/live/<ref>` —
+                   #   the staged-launcher entrypoint: compose from that
+                   #   directory, never from the cache
 bin/dev pin v0.4.0 # move the pin DELIBERATELY; prints the stack diff first
 bin/dev status     # what is running
 bin/dev logs tempo # tail one service

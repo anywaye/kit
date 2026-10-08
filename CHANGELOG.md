@@ -2,6 +2,28 @@
 
 ### Added
 
+- **`bin/dev live`: the staged-launcher entrypoint for the service-owned
+  live snapshot (m162).** Site's staged `bin/launch` calls
+  `templates/bin/dev.sh stack` and then composes using the shared cache
+  directly, so a cache retirement, prune or deletion moves a byte a live
+  mount resolves to. `live` closes that seam from Kit's side without
+  touching Site: it runs the existing `resolve_stack` (same five-source
+  resolution `stack` and `up` share) and the existing `sync_live_stack`
+  (the same content-addressed snapshot `up` writes — no duplicated
+  fetch/cache/snapshot logic), then prints the machine-readable
+  `resolved: .kit/live/<ref>` line a launcher parses with `^resolved: `,
+  plus `ref: <ref>`. The path is always the service-owned
+  `.kit/live/<ref>`, never the cache. `stack` stays read-only (creates
+  nothing); `live` is the only command besides `up` that writes the
+  snapshot, and unlike `up` it starts no containers, runs no preflight,
+  migrates nothing and renders no `compose config` — config output on
+  stdout would be noise on the line the launcher parses. Section 11 in
+  `tests/fetch_test.sh` proves the contract with no docker: `stack`
+  creates no `.kit/live`, `live` prints exactly one `resolved:
+  .kit/live/<ref>` line, the snapshot is byte-identical to the pinned
+  source and records the ref, and a repeated call reports unchanged with
+  identical bytes.
+
 - **`bin/dev up` composes from a service-owned live snapshot, never from the
   Kit cache.** `up` copies the resolved `templates/compose` subtree into
   `.kit/live/<ref>` (ref recorded in `.kit-stack-ref`, bytes compared before
