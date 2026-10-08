@@ -25,7 +25,7 @@
 #   and the report says so: it is one `git ls-remote` away from being, but a
 #   gate that depends on github.com is a gate that goes red when github is down.
 #
-# THE SIX CLAIMS
+# THE NINE CLAIMS
 #   1. A PINNED ref (a 40-hex commit, or a `v<semver>` tag) fetches, and the
 #      resolved tree is byte-identical to the checkout it was fetched from.
 #   2. A MOVING ref (`master`, a branch name, an empty value, a short sha) is
@@ -56,6 +56,11 @@
 #      serving off descriptors it already holds while every NEW open through the
 #      mount path fails. See `REPORT-kit-cachemount-01.md` for the measurement
 #      and `templates/bin/dev.sh`'s retired-generations header for the mechanism.
+#   9. `up` composes from a SERVICE-OWNED snapshot (`.kit/live/<ref>`), never
+#      from the cache — so deleting the whole cache with the network forbidden
+#      still brings the stack up byte-identical. This is the live-mount half
+#      section 8 does not cover: section 8 keeps the old tree's INODES, this
+#      keeps the old tree's PATH out of the cache entirely.
 #
 # NO SLEEPS. Every wait is a poll with a deadline, and the only thing polled for
 # is this script's own subprocesses.
@@ -503,6 +508,126 @@ else
     pass "the previous generation is retained and its files still open — the filesystem form of 'a running container's bind mount survives the fetch'"
   fi
 fi
+
+# ---------------------------------------------------------------------------
+# 9. `up` composes from a SERVICE-OWNED snapshot, never from the cache
+# ---------------------------------------------------------------------------
+# Section 8 proved a REPLACEMENT retires the old tree. What it did not prove
+# is the path the RUNNING stack was rendered from: every `-f` and every bind
+# source still points into `<cache>/<ref>`, so anything that removes that
+# directory — a retention sweep, a cleaner, a hand — invalidates the live
+# mount while the containers are still up. Measured on a protected local
+# stack: the collector's bind source
+# `<cache>/<sha>/templates/compose/otel-collector.yml` gone, healthcheck
+# `open /etc/otel/otel-collector.yml: no such file or directory`, recovery
+# (`up --wait`) reporting the fault the cache had caused.
+#
+# So `up` snapshots the fetched compose subtree into `.kit/live/<ref>` — a
+# directory the SERVICE owns — and composes from there. The cache can then be
+# replaced, pruned or deleted outright without moving a byte any live mount
+# resolves to. The snapshot is content-addressed (ref recorded inside, bytes
+# compared before any rewrite), bounded (one directory per deliberate pin,
+# never rewritten for a fixed ref), and deterministic (a re-sync from the
+# same ref is byte-identical).
+#
+# No daemon: a stub `docker` records the `-f` paths and KIT_COMPOSE_DIR the
+# real `compose()` computed, and a stub `bin/migrate` lets the real `up`
+# run to its end. Asserted on the FINDING (which tree compose was pointed
+# at), never on the exit status — a script that dies before asserting
+# anything exits nonzero too.
+live9="$WORK/svc-live"
+make_service "$live9" "$PIN_SHA" "$WORK/cache-live"
+printf 'KIT_POSTGRES_DATABASES=svc9\n' >>"$live9/.env"
+cat >"$live9/bin/migrate" <<'MIGRATE'
+#!/usr/bin/env bash
+exit 0
+MIGRATE
+chmod +x "$live9/bin/migrate"
+mkdir -p "$WORK/fakebin9"
+cat >"$WORK/fakebin9/docker" <<'DOCK'
+#!/usr/bin/env bash
+log="${FAKE_DOCKER_LOG:?no log}"
+if [ "${1:-}" = "compose" ]; then
+  shift
+  if [ "${1:-}" = "version" ]; then exit 0; fi
+  printf 'KIT_COMPOSE_DIR=%s\n' "${KIT_COMPOSE_DIR:-}" >>"$log"
+  printf 'argv:' >>"$log"
+  printf ' %s' "$@" >>"$log"
+  printf '\n' >>"$log"
+  exit 0
+fi
+exit 0
+DOCK
+chmod +x "$WORK/fakebin9/docker"
+
+run_dev "$live9" stack >/dev/null 2>&1 || true
+export FAKE_DOCKER_LOG="$WORK/docker9.log"
+: >"$FAKE_DOCKER_LOG"
+PATH="$WORK/fakebin9:$PATH" run_dev "$live9" up
+if [ "$DEV_EC" -ne 0 ]; then
+  fail "bin/dev up with a stubbed docker failed (exit $DEV_EC), so the compose source cannot be read"
+  printf '%s\n' "$DEV_OUT" | tail -8 | sed 's/^/        /'
+else
+  pass "bin/dev up runs end to end against a stubbed docker"
+fi
+
+LIVE9_F="$(grep '^argv:' "$FAKE_DOCKER_LOG" | head -1 || true)"
+if printf '%s' "$LIVE9_F" | grep -qF "$live9/.kit/live/$PIN_SHA/templates/compose/docker-compose.yml"; then
+  pass "compose is pointed at the service-owned snapshot, not at the cache"
+elif [ -n "$LIVE9_F" ]; then
+  fail "compose was pointed at the CACHE, so any cache cleanup invalidates the live mount: $LIVE9_F"
+else
+  fail "the stubbed docker saw no compose invocation, so nothing about the compose source was proven"
+fi
+if grep -qF "KIT_COMPOSE_DIR=$live9/.kit/live/$PIN_SHA/templates/compose" "$FAKE_DOCKER_LOG" 2>/dev/null; then
+  pass "KIT_COMPOSE_DIR resolves bind sources into the service-owned snapshot"
+else
+  fail "KIT_COMPOSE_DIR does not resolve into the service-owned snapshot — bind sources still come from the cache"
+  grep '^KIT_COMPOSE_DIR' "$FAKE_DOCKER_LOG" 2>/dev/null | head -3 | sed 's/^/        /'
+fi
+
+if [ -f "$live9/.kit/live/$PIN_SHA/templates/compose/otel-collector.yml" ] &&
+  [ -d "$live9/.kit/live/$PIN_SHA/templates/compose/grafana/provisioning" ] &&
+  diff -rq "$WORK/cache-live/$PIN_SHA/templates/compose" \
+    "$live9/.kit/live/$PIN_SHA/templates/compose" >/dev/null 2>&1; then
+  pass "the live snapshot is byte-identical to the fetched tree it was rendered from"
+else
+  fail "the live snapshot is missing or differs from the fetched tree — the stack would not be the pinned one"
+fi
+if [ "$(cat "$live9/.kit/live/$PIN_SHA/.kit-stack-ref" 2>/dev/null || true)" = "$PIN_SHA" ]; then
+  pass "the live snapshot records the pinned ref"
+else
+  fail "the live snapshot records no ref, so a later run cannot tell which stack it is"
+fi
+LIVE9_SUM="$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f 2>/dev/null | sort | xargs cat </dev/null 2>/dev/null | wc -c | tr -d ' ')"
+
+# THE CLEANUP. The whole cache goes away — the retention-sweep shape — and the
+# remote with it; offline is set so nothing may reach the network. A stack
+# rendered from the cache would now compose from paths that do not exist.
+rm -rf "$WORK/cache-live"
+mv "$REMOTE" "$REMOTE.moved9"
+: >"$FAKE_DOCKER_LOG"
+KIT_STACK_OFFLINE=1 PATH="$WORK/fakebin9:$PATH" run_dev "$live9" up
+if [ "$DEV_EC" -ne 0 ]; then
+  fail "bin/dev up with the cache DELETED and the network forbidden failed (exit $DEV_EC) — the live stack did not survive its cache"
+  printf '%s\n' "$DEV_OUT" | tail -10 | sed 's/^/        /'
+else
+  pass "bin/dev up survives a deleted cache with the network forbidden, from the service-owned snapshot"
+fi
+mv "$REMOTE.moved9" "$REMOTE"
+if [ "$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f 2>/dev/null | sort | xargs cat </dev/null 2>/dev/null | wc -c | tr -d ' ')" = "$LIVE9_SUM" ] &&
+  [ -d "$live9/.kit/live/$PIN_SHA/templates/compose/grafana/provisioning" ] &&
+  [ "$(wc -l <"$live9/.kit/live/$PIN_SHA/templates/compose/otel-collector.yml" | tr -d ' ')" -ge 10 ]; then
+  pass "the old active source still reads back whole after the cache is gone — deterministic across the cleanup"
+else
+  fail "the live snapshot changed or lost files across the cache cleanup"
+fi
+if grep -qF "$live9/.kit/live/" "$FAKE_DOCKER_LOG" 2>/dev/null; then
+  pass "the post-cleanup up composed from the service-owned snapshot, not from a re-fetched cache"
+else
+  fail "the post-cleanup up did not compose from the service-owned snapshot"
+fi
+unset FAKE_DOCKER_LOG
 
 printf '\n'
 if [ "$failures" -ne 0 ]; then
