@@ -2,6 +2,23 @@
 
 ### Added
 
+- **`bin/dev up` composes from a service-owned live snapshot, never from the
+  Kit cache.** `up` copies the resolved `templates/compose` subtree into
+  `.kit/live/<ref>` (ref recorded in `.kit-stack-ref`, bytes compared before
+  any write, own `.gitignore` so it is never committed) and every `-f` and
+  every bind source resolves from there. Replacing, pruning or outright
+  deleting the cache can no longer invalidate a live Compose file mount —
+  with the whole cache deleted and the network forbidden, `up` still resolves
+  (the snapshot is a resolution source below the cache, above the vendored
+  copy) and brings the stack up byte-identical. One directory per deliberate
+  pin, written once per ref and never rewritten for a fixed ref; a snapshot
+  that differs at an immutable ref is kept aside as a single `.stale`
+  generation rather than deleted. `tests/fetch_test.sh` section 9 proves all
+  of it against a stubbed docker with no daemon: compose pointed at the
+  snapshot with the cache home nowhere in the invocation, byte-identity,
+  post-cleanup survival and determinism — red on the old code, green on the
+  new, with sections 1–8 untouched.
+
 - **The substrate install generates `MFA_ENCRYPTION_KEY` by default.**
   `templates/substrate/install.sh` now always writes `MFA_ENCRYPTION_KEY`
   into `identity-secrets` on first creation: a cryptographically random
