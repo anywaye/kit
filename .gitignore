@@ -12,3 +12,9 @@ __pycache__/
 # The fingerprint cache: one gate's verdicts, keyed by content. Local, never
 # committed, and safe to delete at any time -- deleting it costs one slow run.
 .kit/cache/
+# Live stack snapshots — derived, never committed (#m154). Without this the
+# sync's own `.kit/live/<ref>/.gitignore` (`*` + `!.gitignore`) leaves its
+# `.gitignore` untracked, so `git status --untracked-files=all` would report
+# the snapshot rather than ignoring it. This line ignores the whole subtree in
+# one place, so a snapshot can never become a tracked or dirty state.
+.kit/live/

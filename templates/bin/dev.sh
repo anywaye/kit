@@ -748,9 +748,40 @@ sync_live_stack() {
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     # Reachable only through corruption: at an immutable ref the bytes cannot
     # have changed, so a usable-but-different snapshot means something rewrote
-    # one side. Kept aside as ONE generation and never deleted — it may still
-    # be mounted, and the retired-generations lesson applies here too.
-    rm -rf "$dest.stale"
+    # one side. Kept aside and never deleted while mounted — it may still be
+    # bind-mounted, and the retired-generations lesson applies here too.
+    #
+    # The naive `rm -rf "$dest.stale" && mv "$dest" "$dest.stale"` deletes a
+    # generation an older stack still bind-mounts on repeated corruption. A
+    # rename keeps inodes but `docker inspect` still reports the PRE-rename
+    # path, so a later `rm -rf "$dest.stale"` deletes the live mount's bytes
+    # (measured in m154 §2: blind prefix test + `rm -rf` of the stale). The
+    # safe rule: never delete a stale that is (or may be) mounted. If docker
+    # is unavailable we cannot tell, so we keep conservatively and place the
+    # current dest into the next numbered slot instead.
+    if [ -e "$dest.stale" ] || [ -L "$dest.stale" ]; then
+      _stale_abs=""; case "$dest.stale" in /*) _stale_abs="$dest.stale" ;; *) _stale_abs="$PWD/$dest.stale" ;; esac
+      _dest_abs=""; case "$dest" in /*) _dest_abs="$dest" ;; *) _dest_abs="$PWD/$dest" ;; esac
+      _sources=""; _known=1; _sources="$(mount_sources 2>/dev/null)" || _known=0
+      _keep=0
+      if [ "$_known" -eq 0 ]; then
+        _keep=1
+      elif generation_is_mounted "$_stale_abs" "$_sources" || generation_is_mounted "$_dest_abs" "$_sources"; then
+        _keep=1
+      fi
+      if [ "$_keep" -eq 1 ]; then
+        _n=0; while [ -e "$dest.stale.$_n" ] || [ -L "$dest.stale.$_n" ]; do _n=$((_n + 1)); [ "$_n" -lt 10000 ] || break; done
+        mv "$dest" "$dest.stale.$_n"
+        info "previous live snapshot kept at $dest.stale.$_n (previous .stale still mounted or docker unavailable — not deleted)"
+        mv "$tmp" "$dest"
+        info "live stack: $dest (snapshotted from kit@$ref)"
+        unset _stale_abs _dest_abs _sources _known _keep _n
+        return 0
+      else
+        rm -rf "$dest.stale"
+      fi
+      unset _stale_abs _dest_abs _sources _known _keep
+    fi
     mv "$dest" "$dest.stale"
     info "previous live snapshot kept at $dest.stale (it differed at an immutable ref — one side was rewritten)"
   fi
