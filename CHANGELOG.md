@@ -2,6 +2,29 @@
 
 ### Added
 
+- **`license_check` for the Cafaye proprietary grant (m172).** m168
+  re-pointed the prose — README.md's `## License` section and AGENTS.md's
+  licence rule both describe a `license_check` that reads the grant and
+  walks every root manifest — but added no check, so the prose described
+  a gate that did not exist. `tests/validate.sh` now carries it, in the
+  static phase, under the label
+  `LICENSE  (Cafaye proprietary, and nothing in the tree can disagree with it)`:
+  `LICENSE` must contain the grant's own sentences (`All rights reserved`,
+  `proprietary property of Cafaye`, `separate written Cafaye agreement`)
+  rather than the bare word `Proprietary`, must not still contain MIT's
+  permission grant, and must name Cafaye as the holder; README's own
+  `## License` section must state the proprietary grant, name Cafaye, link
+  the file, and still name AGPL (the backends distinction); every root
+  manifest that can carry a licence field must agree — proprietary has no
+  single SPDX token, so agreement is `Proprietary`, `UNLICENSED`, or
+  `SEE LICENSE ...`, and an `MIT` left over from the fleet's earlier
+  decision fails. A manifest with no licence field is not a disagreement,
+  and `templates/` stays out of scope: a licence there is that template's
+  business. Red-proved both directions (a root `package.json` declaring
+  `MIT`, a `LICENSE` with the reservation edited out, and an MIT
+  permission sentence appended all fail the named check; `UNLICENSED`
+  passes), then restored.
+
 - **Customer upstream path: `docs/customer-upstream.md` (m167).** The
   customer-facing adoption and contribution page, linked from
   [How a service repo adopts kit](#how-a-service-repo-adopts-kit). Your

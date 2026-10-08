@@ -1994,6 +1994,202 @@ json.loads("".join(out))
     report SKIP 'shellcheck (not installed)'
   fi
 
+  # kit's own licence, and the one property about it that can rot.
+  #
+  # WHY THIS EXISTS. kit's grant used to be MIT (kit-19) and is now the Cafaye
+  # proprietary text (m168). m168 re-pointed the prose — README.md's `## License`
+  # section and AGENTS.md's licence rule both describe a `license_check` that
+  # reads the grant and walks every root manifest — but added no check, so the
+  # prose described a gate that did not exist. This is that check, against the
+  # proprietary sentences rather than MIT's.
+  #
+  # The interesting half is not the file. It is that a licence is only
+  # unambiguous when there is exactly ONE place in a repository that can declare
+  # one, and that place is easy to lose: a `package.json` appears, it carries
+  # `"license": "MIT"` left over from the fleet's earlier decision, and now the
+  # repository says proprietary in one file and MIT in another. Both are true
+  # statements about different fields, and the reader has no way to tell which
+  # one a licence compliance tool reads.
+  #
+  # So this asserts the AGREEMENT, not the presence of a file:
+  #
+  #   1. `LICENSE` exists and grants the Cafaye proprietary terms, recognised by
+  #      the grant's own sentences rather than by the word "Proprietary" — that
+  #      word is also how a summary, a badge line, or a note about some *other*
+  #      work's terms is spelled, and matching it passes on all three. It also
+  #      refuses MIT's permission sentence, because a file granting both grants
+  #      nothing unambiguously and the MIT text is what this file used to be.
+  #   2. it names Cafaye as the copyright holder, because a reservation of rights
+  #      has to belong to somebody, and a grant with no holder is a grant nobody
+  #      can attribute.
+  #   3. README says proprietary and links the file, IN ITS OWN `## License`
+  #      SECTION rather than anywhere in the document. The AGPL paragraph names
+  #      licences that are *not* kit's (the backends kit ships unmodified), so a
+  #      whole-file search is satisfied by the exact conflation the section split
+  #      exists to prevent — the same reason kit-19 scoped it, and the scoping
+  #      survived the re-grant.
+  #   4. every root manifest that CAN carry a licence field agrees with the grant.
+  #
+  # Point 4 is deliberately a check for AGREEMENT and not a ban on the file. A
+  # check satisfied by "kit has no package.json" would train the next contributor
+  # to delete a manifest rather than to fix its licence field, and would be a
+  # FAIL the day kit legitimately grew one. A manifest with no licence field is
+  # not a disagreement: the LICENSE file still governs. Proprietary has no
+  # single SPDX token, so agreement means the declared value says proprietary in
+  # one of the spellings compliance tooling recognises (`Proprietary`,
+  # `UNLICENSED`, `SEE LICENSE ...`) — an `MIT` left over from the fleet's
+  # earlier decision is the disagreement this fails on. Today it finds zero
+  # manifests and prints that count, because "0 manifests, none of which can
+  # disagree" is a measurement and silence is not.
+  license_check() {
+    "$PY" - "$ROOT" <<'PY'
+import glob
+import os
+import re
+import sys
+
+root = sys.argv[1]
+problems = []
+
+# (1) and (2): the grant itself.
+path = os.path.join(root, "LICENSE")
+if not os.path.isfile(path):
+    problems.append(
+        "LICENSE does not exist. kit's grant is the proprietary Cafaye text, and a "
+        "repository with no grant file is not covered by it — the grant is one file "
+        "and it is the whole grant"
+    )
+else:
+    text = open(path, encoding="utf-8").read()
+    # The grant's own sentences, not the identifier. `Proprietary` as a bare word is
+    # also how a summary or a note about some OTHER work's terms is spelled, and
+    # matching it would pass on all three.
+    for phrase, why in (
+        (
+            "All rights reserved",
+            "the reservation of rights is what makes the grant proprietary rather "
+            "than permissive",
+        ),
+        (
+            "proprietary property of Cafaye",
+            "the sentence that names whose property the tree is",
+        ),
+        (
+            "separate written Cafaye agreement",
+            "the only path to rights beyond viewing, which is what distinguishes a "
+            "proprietary grant from a redacted permissive one",
+        ),
+    ):
+        if phrase not in text:
+            problems.append(
+                f"LICENSE does not contain {phrase!r} — {why}. If kit's grant changed, "
+                f"say so in README.md instead of leaving the two files to disagree"
+            )
+    if "Permission is hereby granted, free of charge" in text:
+        problems.append(
+            "LICENSE still contains MIT's permission grant. The grant in force is the "
+            "Cafaye proprietary text, and a file granting both grants nothing "
+            "unambiguously"
+        )
+    if not re.search(r"^Copyright \(c\) \d{4} Cafaye", text, re.M):
+        problems.append(
+            "LICENSE names no Cafaye copyright holder. A reservation of rights has to "
+            "belong to somebody, and a grant with no holder is a grant nobody can "
+            "attribute"
+        )
+
+# (3): the README, against kit's OWN section.
+readme = open(os.path.join(root, "README.md"), encoding="utf-8").read()
+# The `## License` section, not the whole file: the AGPL paragraph names licences
+# that are NOT kit's, and a substring search over the document is satisfied by
+# those — which is the exact conflation the section split exists to prevent.
+section = re.split(r"^## ", readme, flags=re.M)
+own = next((s for s in section if s.startswith("License")), "")
+if not own:
+    problems.append(
+        "README.md has no `## License` section. A grant nobody reads is not "
+        "published, and this is the section a reader is looking for"
+    )
+else:
+    if not re.search(r"\bProprietary\b", own):
+        problems.append("README.md's License section does not state the proprietary grant")
+    if "Cafaye" not in own:
+        problems.append(
+            "README.md's License section does not name Cafaye as the grant holder"
+        )
+    if not re.search(r"\]\(LICENSE\)", own):
+        problems.append(
+            "README.md's License section does not link to the LICENSE file, so a "
+            "reader has to go looking for it"
+        )
+# The separation itself, which is a claim rather than a file.
+if "AGPL" not in own:
+    problems.append(
+        "README.md's License section does not name AGPL anywhere. kit shipping "
+        "AGPL-3.0 backends unmodified and kit itself being proprietary are two "
+        "different questions, and the section that answers the second has to say why "
+        "the first does not change the answer"
+    )
+
+# (4): anything in the tree root that can carry a licence field.
+# Deliberately ROOT-ONLY and deliberately not a ban. `templates/` holds
+# manifests for other people — `go.mod` files, a service's package.json — and a
+# licence declared in a template is that template's business. What cannot be
+# allowed is a licence declared about KIT, and only the root can be about kit.
+FIELDS = {
+    "package.json": r'"license"\s*:\s*"([^"]*)"',
+    "Cargo.toml": r'^\s*license\s*=\s*"([^"]*)"',
+    "pyproject.toml": r'^\s*license\s*=\s*(?:\{[^}]*text\s*=\s*)?"([^"]*)"',
+    "composer.json": r'"license"\s*:\s*"([^"]*)"',
+    "setup.cfg": r"^license\s*=\s*(\S+)",
+    "bower.json": r'"license"\s*:\s*"([^"]*)"',
+}
+# Proprietary has no single SPDX token, so agreement is one of the spellings
+# compliance tooling recognises for "not licensed to the public".
+AGREES = re.compile(r"proprietary|unlicensed|see license", re.I)
+found = 0
+for name, pattern in FIELDS.items():
+    for full in sorted(glob.glob(os.path.join(root, name))):
+        found += 1
+        body = open(full, encoding="utf-8").read()
+        m = re.search(pattern, body, re.M)
+        if not m:
+            # No field is not a disagreement: the LICENSE file still governs, and
+            # the check above already asserted what it grants.
+            continue
+        declared = m.group(1)
+        if not AGREES.search(declared):
+            problems.append(
+                f"{name} declares license {declared!r} while LICENSE grants the Cafaye "
+                f"proprietary terms. A licence compliance tool reads the manifest, a "
+                f"reader reads the file, and the repository now says two different "
+                f"things about the same grant"
+            )
+for full in sorted(glob.glob(os.path.join(root, "*.gemspec"))):
+    found += 1
+    m = re.search(r"\.license\s*=\s*[\"']([^\"']+)[\"']", open(full, encoding="utf-8").read())
+    if m and not AGREES.search(m.group(1)):
+        problems.append(
+            f"{os.path.basename(full)} declares license {m.group(1)!r} while LICENSE "
+            f"grants the Cafaye proprietary terms — same disagreement, same reason"
+        )
+
+if problems:
+    sys.exit("; ".join(problems))
+
+# Printed on PASS, because "no manifest could disagree" and "nobody looked" are
+# the same output otherwise.
+print(
+    "LICENSE grants the Cafaye proprietary terms and names Cafaye; README states it "
+    "and links the file; "
+    f"{found} root manifest(s) inspected, none declaring a licence that disagrees "
+    f"with the grant (kit has {'none' if found == 0 else str(found)}, so the file is "
+    "the only place a grant can be declared)"
+)
+PY
+  }
+  check 'LICENSE  (Cafaye proprietary, and nothing in the tree can disagree with it)' license_check
+
   # -------------------------------------------------------------------------
   section 'static: templates/otel — every artifact is present'
   # This runs on a machine with no language toolchains at all. A template that
