@@ -8,18 +8,26 @@
   application source merges from a named upstream remote (the Jumpstart
   Pro model, commands verified against its README); Kit's platform
   pieces are pinned to one shared commit SHA across `uses:`,
-  `kit-lint-ref` and `kit.ref` and bumped in one reviewable PR; Kit
-  improvements come back as fork + PR. Ships the opt-in Renovate block
-  (JSON parses, patterns match the pin shapes; no end-to-end Renovate
-  run observed) and names the two pending manager decisions it does not
-  pre-empt: no `v*` tags exist yet (`git tag` empty 2026-10-08, no
-  release workflow, and none is added here) and external access to Kit
-  is undecided — so the page promises SHAs today and PRs from the
-  first tag, and nothing that needs either decision to already exist.
-  Held by `tests/customer_upstream_check.sh`, wired into the static
-  phase: README linkage, all three pin sites named, the Renovate block
-  parses, the forbidden mechanisms named, the no-tags caveat present
-  while `git tag` is empty.
+  `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines
+  (Renovate ignores bare SHAs by default), bare SHA in `kit.ref`
+  (`bin/dev` reads the whole line as the ref) — and moved by Renovate
+  PRs via the `github-digest` datasource, which follows `master`
+  directly: no tags or releases needed, and an empty `git tag` is not
+  a missing update path. Kit is public (verified via `gh repo view`
+  2026-10-08), so everything is fetchable with no grant. The page ships
+  the opt-in Renovate block (JSON parses; every `matchStrings` matched
+  locally against its §2 pin shape on the captured groups; no
+  end-to-end Renovate run observed — managers configured, live behavior
+  and PR grouping unverified) and sends Kit improvements back as
+  fork + PR with narrow local verification (`git diff --check` plus the
+  focused check for what changed; CI owns the full gate, docs-only
+  changes take the fast `docs` route). Held by
+  `tests/customer_upstream_check.sh` (10 cases), wired into the static
+  phase: README linkage, all three pin sites named, Kit-is-public
+  stated, the Renovate block parses and its patterns match, digest
+  shape with no `github-tags`, `# master` comments on the YAML
+  examples, no retracted tag/access caveat, narrow-verification
+  guidance with the forbidden mechanisms named.
 
 - **`bin/dev live`: the staged-launcher entrypoint for the service-owned
   live snapshot (m162).** Site's staged `bin/launch` calls
