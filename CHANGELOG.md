@@ -2,6 +2,27 @@
 
 ### Added
 
+- **Kit owns the local launch harness: `launch/` (m186).** The retired
+  `cafaye/site` launcher (`bin/launch` + `e2e/docker-compose.launch.yml`)
+  moves to Kit as `launch/bin/launch` + `launch/docker-compose.launch.yml`
+  plus `launch/README.md`: the same four product services (identity,
+  gateway, courier, parlor) built from source on Kit's stack with mailpit
+  as the SMTP sink, the same stable-secrets/mint-after-ready/bounded-waits
+  semantics — generalized so sibling checkouts are explicit `LAUNCH_*_DIR`
+  paths (Website and Site are never required; the front door is Parlor, not
+  Website) and the stack defaults to this checkout itself, with
+  `KIT_STACK_DIR`/`LAUNCH_KIT_REF` overrides resolved by Kit's own
+  `templates/bin/dev.sh live` (the pin validated with `bin/dev`'s rule,
+  never a second copy of the resolution). `tests/launch_test.sh` proves the
+  shape with stubbed tools and no daemon — 46 cases covering layout
+  validation, pin behavior, command construction, teardown safety
+  (exactly one `down -v`, both compose files, the launch project directory,
+  no generated `.env`), compose/schema invariants each with a control that
+  must go red, a real `compose config` render, and the installer split (the
+  harness names no k3s/Argo/ACME/GHCR/Cloudflare; the customer installer in
+  `templates/substrate/` is separate and unproven here) — wired into the
+  gate's static phase. See `REPORT-kit-launch-harness-m186.md`.
+
 - **`license_check` for the Cafaye proprietary grant (m172).** m168
   re-pointed the prose — README.md's `## License` section and AGENTS.md's
   licence rule both describe a `license_check` that reads the grant and

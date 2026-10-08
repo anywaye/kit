@@ -5138,6 +5138,30 @@ PY
     bash "$ROOT/tests/substrate_test.sh"
 
   # -------------------------------------------------------------------------
+  # The launch harness — the developer-only four-service stack, owned by kit.
+  #
+  # `launch/bin/launch` + `launch/docker-compose.launch.yml` are the retired
+  # `cafaye/site` launcher's successor: same four services plus mailpit, same
+  # mint-after-ready and bounded waits, but sibling checkouts by explicit
+  # path (Website and Site never required) and the stack defaulting to this
+  # checkout itself. Actually bringing the stack up needs the sibling
+  # checkouts and a daemon, so the gate proves the shape only — layout
+  # validation, pin behavior, command construction, teardown safety, and the
+  # compose/schema invariants, each with a control that must go red — with
+  # stubbed tools. `docker compose config` is the one real-docker contact,
+  # and it is client-side rendering that starts nothing.
+  #
+  # What is NOT proven here is stated rather than hidden: that the stack
+  # comes up, that identity mints, that mail flows, and — separately — that
+  # the customer installer (`templates/substrate/install.sh`) deploys. The
+  # harness proves none of k3s/Argo/ACME/GHCR/Cloudflare, and the test fails
+  # the tree if it ever claims to. `launch/README.md` carries the same
+  # sentence.
+  section 'static: launch/ — the developer harness is shaped right, without running it'
+  check 'tests/launch_test.sh  (layout validation, pin behavior, command construction, teardown safety, compose/schema invariants with red controls, installer split)' \
+    bash "$ROOT/tests/launch_test.sh"
+
+  # -------------------------------------------------------------------------
   # The chart publish path — the publish/consume seam, both ends in kit.
   #
   # The substrate's Applications are the consume end of a loop whose publish
