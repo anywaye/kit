@@ -756,14 +756,15 @@ if len(records) != 4:
     print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
 # Conditional keys: set only when the operator sets the surface (identity's
-# OIDC/MFA/OAuth block, its courier credential, courier's mail-from). They
+# OIDC/OAuth block, its courier credential, courier's mail-from). They
 # are deliberately UNRECORDED — absent is a valid reduced surface, and the
-# record lists the keys every install creates.
+# record lists the keys every install creates. MFA_ENCRYPTION_KEY is NOT
+# conditional: the installer generates it on first creation, so every
+# install creates it and the record must name it.
 conditional = {
     "COURIER_TOKEN",
     "OIDC_SIGNING_KEY",
     "OIDC_SIGNING_KEY_ID",
-    "MFA_ENCRYPTION_KEY",
     "OAUTH_ENCRYPTION_KEY",
     "MAIL_FROM",
     "MAIL_FROM_NAME",
@@ -1053,6 +1054,370 @@ run 'the substrate stream spec equals the compose stack nats-stream-init args' g
 fixture_drift="$WORK/install-nats-drift.sh"
 sed 's/--max-age 7d/--max-age 30d/' "$SUBSTRATE/install.sh" >"$fixture_drift"
 run 'control: a substrate with a drifted max-age goes red' red check_nats_drift "$COMPOSE_STACK" "$fixture_drift"
+
+# ===========================================================================
+# 13. identity-secrets carries a generated MFA key by default
+# ===========================================================================
+#
+# A fresh substrate install with the documented minimum inputs must still
+# produce a usable Identity MFA surface: identity mounts GET /v1/mfa and the
+# enrollment routes only when MFA_ENCRYPTION_KEY is present, so an
+# identity-secrets without it boots an identity that cannot show the truthful
+# `Off` state or enroll a factor. The installer therefore generates a
+# cryptographically random 32-byte base64url-no-padding key on first creation
+# (the exact shape identity's config parser accepts — base64.RawURLEncoding,
+# exactly 32 bytes, the same generation as SIGNUP_SIGNING_KEY), keeps an
+# operator-supplied KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY override
+# (validated, never printed), and never rotates or patches an existing
+# secret — a legacy identity-secrets without the key is left alone, because
+# an imported database could hold ciphertext sealed under a key no longer
+# present.
+#
+# install.sh needs root, Linux and k3s, so none of this runs here. Instead the
+# installer is sourced with its trailing `main` call removed and
+# install_service_secrets is executed against a mocked kubectl backed by
+# files — local only, no cluster, no network. Each case gets a fresh store
+# under $WORK, swept by the EXIT trap. Every assertion below reads a
+# captured variable with a shell `case`, never a pipe (AGENTS.md: a piped
+# read flips on the pipe buffer, not on the content).
+fixture_sourced="$WORK/install-sourced.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$fixture_sourced"
+
+# mock_seed <namespace> <secret> <key> <value> — plant one stored value.
+mock_seed() {
+  local d="$MOCK_ROOT/$1/$2"
+  mkdir -p "$d"
+  printf '%s' "$4" >"$d/$3"
+}
+
+# mock_get <namespace> <secret> <key> — the stored plaintext, or empty.
+mock_get() {
+  cat "$MOCK_ROOT/$1/$2/$3" 2>/dev/null || true
+}
+
+# mock_kubectl — the file-backed kubectl. Emulates only what
+# install_service_secrets uses: `create namespace` (prints a stub down the
+# pipe to `apply`), `create secret generic … --from-literal=K=V …`,
+# `get secret …` (existence), and `get secret … -o jsonpath={.data.KEY}`
+# (base64 of the stored value, the shape read_secret_key decodes).
+# Anything else is a loud failure, not a silent success.
+mock_kubectl() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kubeconfig=*) shift ;;
+      *) break ;;
+    esac
+  done
+  local verb="${1:-}"
+  shift || true
+  case "$verb" in
+    create)
+      local resource="${1:-}"
+      shift || true
+      if [ "$resource" = "namespace" ]; then
+        printf 'namespace-stub\n'
+        return 0
+      fi
+      if [ "$resource" != "secret" ]; then
+        echo "mock_kubectl: unhandled create $resource" >&2
+        return 1
+      fi
+      if [ "${1:-}" = "generic" ]; then shift; fi
+      local name="${1:-}"
+      shift || true
+      local ns=""
+      local -a lits=()
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) ns="$2"; shift 2 ;;
+          --from-literal=*) lits+=("${1#--from-literal=}"); shift ;;
+          *) shift ;;
+        esac
+      done
+      local d="$MOCK_ROOT/$ns/$name"
+      mkdir -p "$d"
+      local e k v
+      for e in ${lits[@]+"${lits[@]}"}; do
+        k="${e%%=*}"
+        v="${e#*=}"
+        printf '%s' "$v" >"$d/$k"
+      done
+      return 0
+      ;;
+    get)
+      if [ "${1:-}" != "secret" ]; then
+        echo "mock_kubectl: unhandled get ${1:-}" >&2
+        return 1
+      fi
+      shift || true
+      local name="${1:-}"
+      shift || true
+      local ns="" tmpl=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) ns="$2"; shift 2 ;;
+          -o) tmpl="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      local dir="$MOCK_ROOT/$ns/$name"
+      if [ -z "$tmpl" ]; then
+        if [ -d "$dir" ]; then return 0; else return 1; fi
+      fi
+      local key="${tmpl#jsonpath={.data.}"
+      key="${key%\}}"
+      if [ -z "$key" ] || [ "$key" = "$tmpl" ] || [ ! -f "$dir/$key" ]; then
+        return 1
+      fi
+      base64 <"$dir/$key" | tr -d '\n'
+      return 0
+      ;;
+    apply)
+      cat >/dev/null
+      return 0
+      ;;
+    *)
+      echo "mock_kubectl: unhandled verb $verb" >&2
+      return 1
+      ;;
+  esac
+}
+
+# mfa_shape_ok <value> — exit 0 iff the value is exactly what identity's
+# config parser accepts: 43 base64url-no-padding characters decoding to
+# 32 bytes (32 bytes is 3*10+2, so RawURLEncoding prints 10*4+3).
+mfa_shape_ok() {
+  "$PY" - "$1" <<'PY'
+import base64
+import re
+import sys
+s = sys.argv[1]
+if not re.fullmatch(r"[A-Za-z0-9_-]{43}", s):
+    print("shape: %r is not 43 base64url-no-padding characters" % (s,))
+    sys.exit(1)
+try:
+    raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+except Exception as e:
+    print("shape: does not decode (%s)" % (e,))
+    sys.exit(1)
+if len(raw) != 32:
+    print("shape: decodes to %d bytes, want exactly 32" % (len(raw),))
+    sys.exit(1)
+print("shape: 43 base64url characters, 32 bytes")
+PY
+}
+
+# mfa_seed_roles — the passwords install_service_secrets reads back: the
+# four <svc>_app role passwords (step 8 made them) and the redis password
+# (step 9's first half made it). Without them the step refuses naming step
+# 8, which is a different contract from the one proven here.
+mfa_seed_roles() {
+  local svc
+  for svc in identity gateway courier parlor; do
+    mock_seed data "postgres-role-$svc-app" password "pw-$svc-app"
+  done
+  mock_seed data redis-password password "redis-pw"
+}
+
+# mfa_smtp_env — the externally-sourced courier values the live path
+# requires. Dummy relay values: the shape of the refusal is proven
+# elsewhere; here they only open the gate to the secrets half.
+mfa_smtp_env() {
+  export DRY_RUN=0
+  export KIT_SUBSTRATE_SMTP_HOST="relay.example.com"
+  export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
+  export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass"
+  export KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN="identity-minted-token"
+  export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="provider-signing-secret"
+  # Empty, not unset: the sourced installer runs under `set -u` and reads
+  # these unconditionally, so an unset variable is a fatal rather than an
+  # absent surface. Empty is the absent surface the installer documents.
+  export KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY=""
+  export KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID=""
+  export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
+  export KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN=""
+}
+
+# Case A: no override — first creation generates a correctly shaped key.
+MOCK_ROOT="$WORK/mfa-a"
+mkdir -p "$MOCK_ROOT"
+mfa_a_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
+  install_service_secrets >"$WORK/mfa-a.log" 2>&1
+) || mfa_a_ec=$?
+mfa_key_a="$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)"
+if [ "$mfa_a_ec" -ne 0 ]; then
+  fail 'default: first creation succeeds with no MFA override' "$(cat "$WORK/mfa-a.log")"
+elif [ -z "$mfa_key_a" ]; then
+  fail 'default: first creation stores an MFA_ENCRYPTION_KEY' "$(cat "$WORK/mfa-a.log")"
+else
+  pass 'default: first creation stores an MFA_ENCRYPTION_KEY'
+fi
+run 'default: the generated key is 43 base64url chars decoding to 32 bytes' green mfa_shape_ok "$mfa_key_a"
+run 'control: a short key fails the same shape check' red mfa_shape_ok "not-a-key"
+case "$(cat "$WORK/mfa-a.log")" in
+  *"$mfa_key_a"*)
+    fail 'default: the installer output never contains the generated key' "the generated value appears in the log"
+    ;;
+  *)
+    pass 'default: the installer output never contains the generated key'
+    ;;
+esac
+
+# Case B: a valid override is stored exactly, and never printed.
+MFA_OVERRIDE="Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
+MOCK_ROOT="$WORK/mfa-b"
+mkdir -p "$MOCK_ROOT"
+mfa_b_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY="$MFA_OVERRIDE"
+  install_service_secrets >"$WORK/mfa-b.log" 2>&1
+) || mfa_b_ec=$?
+mfa_key_b="$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)"
+if [ "$mfa_b_ec" -ne 0 ]; then
+  fail 'override: a valid supplied key is accepted' "$(cat "$WORK/mfa-b.log")"
+elif [ "$mfa_key_b" != "$MFA_OVERRIDE" ]; then
+  fail 'override: the stored key equals the supplied override' "stored: '${mfa_key_b}'"
+else
+  pass 'override: the stored key equals the supplied override'
+fi
+case "$(cat "$WORK/mfa-b.log")" in
+  *"$MFA_OVERRIDE"*)
+    fail 'override: the installer output never contains the supplied key' "the override appears in the log"
+    ;;
+  *)
+    pass 'override: the installer output never contains the supplied key'
+    ;;
+esac
+
+# Case C: an invalid override is refused, naming the variable — and no
+# secret is written. A key the installer would happily store is a key
+# identity refuses at boot, so the refusal belongs here, not on the box.
+MOCK_ROOT="$WORK/mfa-c"
+mkdir -p "$MOCK_ROOT"
+mfa_c_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY="not-a-key"
+  install_service_secrets >"$WORK/mfa-c.log" 2>&1
+) || mfa_c_ec=$?
+mfa_log_c="$(cat "$WORK/mfa-c.log")"
+if [ "$mfa_c_ec" -eq 0 ]; then
+  fail 'override: an invalid supplied key is refused' "exit 0 — identity would refuse this value at boot"
+else
+  pass 'override: an invalid supplied key is refused'
+fi
+case "$mfa_log_c" in
+  *KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY*)
+    pass 'override: the refusal names the variable, not the value'
+    ;;
+  *)
+    fail 'override: the refusal names the variable, not the value' "$mfa_log_c"
+    ;;
+esac
+case "$mfa_log_c" in
+  *not-a-key*)
+    fail 'override: the refusal never prints the rejected value' "the value appears in the log"
+    ;;
+  *)
+    pass 'override: the refusal never prints the rejected value'
+    ;;
+esac
+if [ -d "$MOCK_ROOT/identity/identity-secrets" ]; then
+  fail 'override: a refused run writes no identity-secrets' "the secret was created despite the refusal"
+else
+  pass 'override: a refused run writes no identity-secrets'
+fi
+
+# Case D: reruns never rotate — the stored key survives a second run even
+# when the operator passes a different override. The whole fleet's
+# once-only rule applies: rotation is replace-the-secret, never re-run.
+MOCK_ROOT="$WORK/mfa-d"
+mkdir -p "$MOCK_ROOT"
+mfa_d_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
+  install_service_secrets >"$WORK/mfa-d1.log" 2>&1
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY="z-thread-is-long-enough-0123456789-_Xab"
+  install_service_secrets >"$WORK/mfa-d2.log" 2>&1
+) || mfa_d_ec=$?
+mfa_key_d1="$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)"
+if [ "$mfa_d_ec" -ne 0 ]; then
+  fail 'rerun: two consecutive installs succeed' "$(cat "$WORK/mfa-d1.log" "$WORK/mfa-d2.log")"
+elif [ -z "$mfa_key_d1" ]; then
+  fail 'rerun: the first run stores a key' "no MFA_ENCRYPTION_KEY after the first run"
+else
+  pass 'rerun: the first run stores a key'
+fi
+run 'rerun: the stored key keeps its shape' green mfa_shape_ok "$mfa_key_d1"
+case "$mfa_key_d1" in
+  "z-thread-is-long-enough-0123456789-_Xab")
+    fail 'rerun: a second run never replaces the stored key' "the override replaced the stored value"
+    ;;
+  *)
+    pass 'rerun: a second run never replaces the stored key'
+    ;;
+esac
+if [ "$mfa_key_a" != "$mfa_key_d1" ]; then
+  pass 'rerun: two fresh installs generate distinct keys (never a constant)'
+else
+  fail 'rerun: two fresh installs generate distinct keys (never a constant)' "both stores hold the same value"
+fi
+
+# Case E: a legacy identity-secrets without the key is left alone. The
+# guard's per-secret refusal — not a patch — is the contract: an imported
+# database could hold ciphertext sealed under a key no longer present, so
+# guessing a fresh one in would fork it. (The other three secrets are
+# absent here, so the step runs its per-secret path rather than skipping.)
+MOCK_ROOT="$WORK/mfa-e"
+mkdir -p "$MOCK_ROOT"
+mfa_e_ec=0
+(
+  mfa_seed_roles
+  mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
+  mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
+  install_service_secrets >"$WORK/mfa-e.log" 2>&1
+) || mfa_e_ec=$?
+if [ "$mfa_e_ec" -ne 0 ]; then
+  fail 'legacy: the step still completes around a pre-existing secret' "$(cat "$WORK/mfa-e.log")"
+else
+  pass 'legacy: the step still completes around a pre-existing secret'
+fi
+if [ -n "$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)" ]; then
+  fail 'legacy: a pre-existing secret without the key is not patched' "MFA_ENCRYPTION_KEY appeared in the legacy secret"
+else
+  pass 'legacy: a pre-existing secret without the key is not patched'
+fi
+if [ "$(mock_get identity identity-secrets SIGNUP_SIGNING_KEY)" = "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8" ]; then
+  pass 'legacy: the pre-existing secret keeps its own values'
+else
+  fail 'legacy: the pre-existing secret keeps its own values' "SIGNUP_SIGNING_KEY changed"
+fi
 
 # ===========================================================================
 # Summary

@@ -775,7 +775,7 @@ install_service_secrets() {
       --from-literal=COURIER_SMTP_PASSWORD="$KIT_SUBSTRATE_SMTP_PASSWORD" \
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
-      "${courier_extra_args[@]}" >/dev/null
+      ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
     echo "      secret courier-secrets created (generated values once-only; rotate by replacing the secret)"
   fi
   # Optional mail-from passthrough: courier falls back to its compiled
