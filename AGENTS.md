@@ -17,7 +17,7 @@
 ```
 kit/
 ├── README.md                             # what kit is, how a repo adopts it
-├── LICENSE                               # MIT. The whole grant, and nothing can disagree
+├── LICENSE                               # Proprietary (Cafaye). The whole grant, and nothing can disagree
 ├── DECISIONS.md                          # the trades this repo has NOT made
 ├── VERSION                               # the version, and the ONLY place it is written
 ├── RESERVED                              # tombstones: a retired name stays dead
@@ -1139,7 +1139,7 @@ See `DECISIONS.md` (MD26, MD27).
 - **Pins are placeholders.** `templates/mise.toml` and the Dockerfiles carry
   placeholder versions on purpose. A service raises them in its own repo; kit
   does not become an org-wide lockfile.
-- **The licence is MIT, and it lives in exactly one place.** `LICENSE` is the
+- **The licence is Cafaye proprietary, and it lives in exactly one place.** `LICENSE` is the
   grant, and `license_check` asserts it *and* walks every root manifest that can
   carry a licence field. It does not ban those manifests — it requires them to
   agree, because a check satisfied by "kit has no `package.json`" would be
