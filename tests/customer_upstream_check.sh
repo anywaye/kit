@@ -32,7 +32,9 @@
 #   examples carry their `# master` branch comments; the retracted
 #   tag/access caveats are absent; the contribution path asks for narrow
 #   local verification and names CI — not the customer — as the owner of
-#   the full gate; and it forbids the history-rewriting mechanisms by name.
+#   the full gate; it separates §1 app fixes upstream (fork + PR to the
+#   canonical app, branding stays downstream) from §4 Kit PRs; and it
+#   forbids the history-rewriting mechanisms by name.
 #   NOT proven: that a Renovate run produces PRs (none observed; the page
 #   says the managers are configured but live behavior is unverified, and
 #   the grouping batch is unverified too).
@@ -220,6 +222,28 @@ PY
   else
     no 'customer-upstream  (asks narrow verification; CI owns the full gate)' \
       'the page neither shows narrow verification nor names CI as the gate owner.'
+  fi
+
+  # Two upstream directions, kept apart: §1 sends general app fixes to
+  # the canonical APP (fork + PR off the named `upstream` remote,
+  # branding stays downstream); §4 sends Kit improvements to canonical
+  # Kit. A page merging them tells a customer to PR branding to Kit or
+  # app fixes to Kit's repo — both wrong. The needles are the §1
+  # subsection header and its stay-downstream sentence, not common
+  # words, so ordinary prose cannot trip them.
+  if grep -q 'Sending an application fix upstream' "$DOC" \
+    && grep -q 'fork + PR' "$DOC" \
+    && grep -qiE 'branding.*stay|stay.*downstream' "$DOC" \
+    && grep -q 'upstream.*remote' "$DOC"; then
+    if grep -q 'PRs to Kit itself are the separate' "$DOC"; then
+      ok 'customer-upstream  (separates app fixes upstream from Kit PRs in §4)'
+    else
+      no 'customer-upstream  (separates app fixes upstream from Kit PRs in §4)' \
+        'the §1 app-fix path never says Kit PRs are the separate §4 path — the two directions blur.'
+    fi
+  else
+    no 'customer-upstream  (separates app fixes upstream from Kit PRs in §4)' \
+      '§1 never names the app-upstream path (fork + PR off the named upstream remote, branding stays downstream).'
   fi
 fi
 

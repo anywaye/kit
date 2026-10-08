@@ -47,6 +47,16 @@ than from discipline:
   overwrites your tree is the thing this page forbids.
 - Never force-push a branch someone else pulls from.
 
+**Sending an application fix upstream — not a Kit change.** If a fix or
+general improvement belongs in the canonical app itself (for example,
+Parlor), send it upstream to that app's canonical repository as a
+fork + PR, using the same named `upstream` remote above as the source
+of truth: branch off `upstream/main`, push to your `origin`, and open
+the PR against the canonical repo — the Jumpstart Pro contributor
+model this section follows. App-specific branding and features stay in
+your downstream repo; upstream takes general fixes, not every
+customization. (PRs to Kit itself are the separate §4 path.)
+
 ## 2. Kit's platform pieces inside your app: call, pin, review the bump
 
 Kit reaches your repo through three mechanisms, and each updates
