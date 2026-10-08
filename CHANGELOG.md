@@ -2,6 +2,30 @@
 
 ### Added
 
+- **The substrate install generates `MFA_ENCRYPTION_KEY` by default.**
+  `templates/substrate/install.sh` now always writes `MFA_ENCRYPTION_KEY`
+  into `identity-secrets` on first creation: a cryptographically random
+  32-byte base64url-no-padding key (the exact shape identity's config
+  parser accepts — `base64.RawURLEncoding`, exactly 32 bytes, the same
+  generation spelling as `SIGNUP_SIGNING_KEY`), so a clean
+  `curl https://kit.cafaye.com | sh` install boots an identity whose MFA
+  surface works (GET /v1/mfa and enrollment routes mount only when the key
+  is present). An operator-supplied `KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY`
+  override is preserved for compatibility, validated by shape on the live
+  path (charset, 43 characters, decodes to 32 bytes), and never printed —
+  refusals name the variable, never the value. The stored key is persistent:
+  reruns read it back and never rotate or replace it, and a pre-existing
+  `identity-secrets` without the key is deliberately not patched (an imported
+  database could hold ciphertext sealed under a key no longer present;
+  `templates/substrate/README.md` documents the operator's safe
+  existing-install path). OIDC signing and OAuth encryption keys stay
+  optional. `tests/substrate_test.sh` section 13 proves all of it locally
+  via a file-backed mocked kubectl (no k3s, no box): default generation and
+  shape, override honored verbatim, invalid override refused with nothing
+  written, rerun persistence under a competing override, distinct keys
+  across fresh installs, legacy no-patch, and no key material in installer
+  output — each with red-first controls.
+
 - **Proportional CI: route docs/tier/publish changes to focused proofs,
   everything else to the full gate.** `.github/workflows/ci.yml` now
   classifies each pull request with `tests/route.sh` (pure bash, argv in,
