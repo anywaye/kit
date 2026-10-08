@@ -18,3 +18,6 @@ __pycache__/
 # the snapshot rather than ignoring it. This line ignores the whole subtree in
 # one place, so a snapshot can never become a tracked or dirty state.
 .kit/live/
+# The launch harness's generated credentials — stable dev secrets, never
+# committed. launch/bin/launch writes this; the overlay reads it.
+launch/.env

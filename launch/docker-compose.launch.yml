@@ -1,0 +1,569 @@
+---
+# The LAUNCH overlay — identity + gateway + courier + parlor, on kit's stack.
+#
+#   launch/bin/launch      resolve kit, generate the credentials, mint the
+#                          courier key, bring the stack up, print where to look
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE IS, AND WHAT IT IS NOT
+# ---------------------------------------------------------------------------
+# It is an OVERRIDE on kit's stack, in exactly the shape every cafaye
+# service's own `docker-compose.yml` is: kit ships the infrastructure (one
+# Postgres cluster, NATS with JetStream, Redis, the OTel collector), and this
+# file adds the four launch services and the one thing the launch needs that
+# nothing provides — an SMTP sink a person can read. It is brought up by
+# `launch/bin/launch`, which layers it over the stack:
+#
+#   docker compose --project-directory launch/ \
+#     -f <kit>/templates/compose/docker-compose.yml \
+#     -f launch/docker-compose.launch.yml up -d --wait
+#
+# `KIT_COMPOSE_DIR` is not optional, and omitting it is silent: kit's compose
+# resolves its own build contexts and its postgres initdb bind through
+# `${KIT_COMPOSE_DIR:-.}`, and compose resolves a relative path against the
+# PROJECT DIRECTORY — which `--project-directory launch/` sets to this file's
+# own directory. Drop the variable and kit's initdb mount resolves to
+# `launch/postgres/initdb`, a directory that does not exist, which Docker
+# creates as an empty one. The cluster then comes up healthy holding none of
+# the fleet's databases. `bin/launch` sets the variable rather than trusting
+# a reader to.
+#
+# WHAT THIS FILE OWNS, and it is four things:
+#
+#   1. the `postgres` service's database list — kit ships the CLUSTER; the
+#      DATABASE is the isolation boundary, so naming the launch's databases is
+#      the whole of this file's postgres block.
+#   2. the four launch services: their images, their ports, their environment.
+#   3. the SMTP sink (mailpit), copied from courier's own definition.
+#   4. nothing at all about the collector, NATS, or Redis — kit's stack is the
+#      whole of those, and a second copy of any of them is two opinions about
+#      one thing.
+#
+# WHAT IT DOES NOT REDECLARE: postgres (beyond the database list), nats,
+# redis, nats-stream-init, the collector, tempo, loki, grafana. They are
+# kit's, they are not in this file because they are in kit's, and a service
+# that re-declares a kit service has to be told every time kit moves.
+#
+# ---------------------------------------------------------------------------
+# THE PORT BLOCK — kit's 15000-15999, and this tier's share of it
+# ---------------------------------------------------------------------------
+# kit claims 15000-15999 for the whole stack, and every published port is a
+# `${VAR:-default}` inside it. The block's taken ports are kit's own:
+#
+#   15000  grafana            15500  postgres
+#   15600  nats (client)      15700  nats (monitoring)
+#   15800  redis
+#
+# The launch tier's five, each a variable with a default in the block:
+#
+#   ${KIT_MAILPIT_PORT:-15025}      mailpit's web UI — the SMTP sink a person
+#                                   reads. The variable name is COURIER'S OWN,
+#                                   copied with the definition below.
+#   ${LAUNCH_IDENTITY_PORT:-15080}  identity, the auth service
+#   ${LAUNCH_GATEWAY_PORT:-15081}   gateway, the API edge
+#   ${LAUNCH_COURIER_PORT:-15082}   courier, the mail service
+#   ${LAUNCH_PARLOR_PORT:-15083}    parlor, the product UI — the front door
+#
+# A literal port in a compose file is a collision the second developer on the
+# machine hits; the variable is the mechanism. The container-side ports are
+# not parameterized — those are fixed by the images and by the service
+# contracts.
+#
+# ---------------------------------------------------------------------------
+# THE BUILD CONTEXTS, AND WHY THEY ARE VARIABLES
+# ---------------------------------------------------------------------------
+# The four services are built from source checkouts, and no two developers
+# keep them in the same place. Each context is a `${LAUNCH_*_DIR}` variable
+# whose default is the fleet layout — the checkout beside the kit checkout
+# that owns this file — resolved against the PROJECT DIRECTORY
+# (`launch/`), so `../../identity` names `<kit>/../identity`:
+#
+#   LAUNCH_IDENTITY_DIR / LAUNCH_GATEWAY_DIR / LAUNCH_COURIER_DIR /
+#   LAUNCH_PARLOR_DIR, each defaulting to `../../<name>`.
+#
+# `launch/bin/launch` exports absolute paths for all four, so the defaults
+# below fire only for a manual `docker compose` invocation. A bare `../name`
+# literal would be wrong here: against this file's project directory it would
+# name a directory INSIDE the kit checkout. The app selection is explicit in
+# the same place: the front door is PARLOR, the customer-stack app. Website
+# is the Cafaye app derived from Parlor and is never built by this file.
+#
+# ---------------------------------------------------------------------------
+# THE CREDENTIALS, AND WHERE THEY LIVE
+# ---------------------------------------------------------------------------
+# Three generated values are this stack's own, and they live in `launch/.env`
+# — git-ignored, never committed, and `bin/launch` is what writes them:
+#
+#   SIGNUP_SIGNING_KEY        identity refuses to boot without it. base64url,
+#                             no padding, of exactly 32 bytes. Generated ONCE
+#                             and kept stable across a teardown: it HMACs signup
+#                             timestamps, and a key that moves under a browser
+#                             tab turns a form the person is filling in into
+#                             a 422.
+#   COURIER_TOKEN             the A3 contract's one value, held by BOTH
+#                             identity (as COURIER_TOKEN) and courier (as
+#                             COURIER_IDENTITY_TOKEN). Minted by `bin/launch`
+#                             from identity's own API after identity is up.
+#                             Re-minted on a fresh database; kept when the
+#                             database survives.
+#   COURIER_SECRET_BOX_KEY    seals courier's webhook secrets. openssl, once,
+#                             stable — a dev stack has no customers to seal.
+#
+# Plus courier's COURIER_ERROR_RELAY_TOKEN (hex, once, stable) and the OIDC
+# signing key, which `bin/launch` generates per run and EXPORTS rather than
+# writing to `.env` — a multi-line PEM does not belong in an env file.
+#
+# `.env` is read by compose automatically from the project directory, which
+# `bin/launch` sets to `launch/`.
+#
+# ---------------------------------------------------------------------------
+# THE FRONT DOOR, AND THE TWO DIALECTS OF EVERY ADDRESS
+# ---------------------------------------------------------------------------
+# Every address in this file is one of two dialects, and confusing them is the
+# one mistake this topology invites:
+#
+#   * COMPOSE-NETWORK addresses (service names: `identity`, `courier`,
+#     `postgres`, `redis`, `nats`, `mailpit`, `otel-collector`) are for
+#     containers talking to containers. A browser cannot resolve them.
+#   * BROWSER-CONTEXT addresses (`http://127.0.0.1:<published port>`) are for
+#     links a person clicks and pages a browser loads. The front door is
+#     PARLOR on ${LAUNCH_PARLOR_PORT:-15083}, and identity's link templates
+#     point there, NOT at a container name, because those links are clicked
+#     in a browser.
+#
+# `APP_BASE_URL` is the one variable that moves the front door: `bin/launch`
+# writes it to `.env` from the actual parlor port.
+#
+# ---------------------------------------------------------------------------
+# WHY THE FOUR ARE BUILT FROM SOURCE AND NOT PULLED
+# ---------------------------------------------------------------------------
+# This tier's subject is a developer's local stack, built from the checkouts
+# the `LAUNCH_*_DIR` variables name — the same shape as every service's own
+# `bin/dev`. The tags are `:dev`, the services' own compose convention for a
+# source build, so no image here collides with a published artifact.
+#
+# ---------------------------------------------------------------------------
+# READINESS, AND THE FINDINGS
+# ---------------------------------------------------------------------------
+# identity's image is distroless (no shell, no HTTP client), so it carries no
+# `healthcheck:` — a probe nothing can answer is worse than no probe. Its
+# readiness is polled from the host by `bin/launch`. The same is true of
+# courier's release image. gateway and parlor have runtimes that can fetch,
+# and their healthchecks are the liveness kind: a restart means "this process
+# is not answering", never "a dependency is unhappy" — a dependency outage is
+# /readyz's to report and must not take the service out of rotation.
+#
+# No service here waits on the collector. A service that refuses to serve while
+# a dependency is down teaches people to run without the dependency, which is
+# worse than serving traffic with no traces — kit's own rule, and the reason
+# `depends_on` names only postgres, redis, mailpit and identity.
+
+name: ${LAUNCH_STACK_NAME:-kit-launch}
+
+services:
+  # ---------------------------------------------------------------- postgres
+  # kit ships the CLUSTER — one database and one role per service, created by
+  # `initdb/10-cluster.sh`, with `REVOKE ALL ON DATABASE … FROM PUBLIC` applied
+  # to every database in it. This block is the launch tier's whole of that.
+  #
+  # THE LIST, and why it is two names: identity and courier each get a database
+  # and two roles (`<svc>` the owner, `<svc>_app` the login that owns nothing).
+  # gateway and parlor get NONE — gateway's state is Redis and parlor is a BFF
+  # that holds no database of its own. A name here is a database; a service
+  # that does not need one does not get one.
+  #
+  # A LITERAL, and not a `${VAR:-default}` — kit's own rule: a shared fixture
+  # that hardcodes one tenant's name silently provisions COURIER'S database
+  # for whoever adopts it, and the init script refuses an empty value with a
+  # message naming the fix. The list is this tier's decision, not a default
+  # somebody can forget to override.
+  #
+  # `KIT_POSTGRES_ROLE_CONNECTIONS: 20` is COURIER'S requirement, applied
+  # cluster-wide because kit's init script applies one value to every role.
+  # Courier measured 11 connections at rest (pool_size 10 plus one Oban holds)
+  # and kit's default of 10 refuses to start it. 20 is a ceiling, not a
+  # setting: identity runs comfortably under it, and the launch stack's two
+  # services at 20 is 40 against the cluster's 200.
+  postgres:
+    environment:
+      KIT_POSTGRES_DATABASES: "identity,courier"
+      KIT_POSTGRES_ROLE_CONNECTIONS: "20"
+
+  # ---------------------------------------------------------------- identity
+  # The auth service. FINDING, and the reason there is no `healthcheck:` here:
+  # identity's image is distroless (no shell, no `wget`, no `curl`). A compose
+  # healthcheck runs *inside* the container it is declared on, so there is
+  # nothing in that image that can answer a probe. Its readiness is
+  # established from the host, by `bin/launch` polling the published
+  # `/readyz` with a bounded budget — the only mechanism that can see a
+  # container that cannot see itself.
+  #
+  # The build args are identity's own: `SERVICE_NAME` selects
+  # `./cmd/identity` in a monorepo `go build`, and an undeclared
+  # `--build-arg` is a WARNING, not an error — so omitting it would build an
+  # image that looks fine and is not the one a deploy builds.
+  identity:
+    build:
+      context: ${LAUNCH_IDENTITY_DIR:-../../identity}
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: identity
+    image: cafaye/identity:dev
+    environment:
+      PORT: "8080"
+      LOG_LEVEL: debug
+      # Over the compose network, by service name — `postgres` is the cluster and
+      # `identity` after the slash is identity's OWN database on it. AS THE
+      # `identity` ROLE AND NOT THE CLUSTER'S SUPERUSER: on the shared cluster
+      # the superuser is `postgres`, so a DSN connecting as it would be a service
+      # holding an administrative credential on a cluster holding another
+      # service's database. This DSN cannot reach `courier` at all — kit's
+      # script revoked CONNECT from PUBLIC on every database it created and
+      # granted it back to `identity` on `identity` only.
+      #
+      # THE PASSWORD IS THE CLUSTER'S, interpolated from kit's own variable
+      # rather than hard-coded: isolation here is by privilege and never by
+      # secret.
+      DATABASE_URL: "postgres://identity:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/identity?sslmode=disable"
+      # The outbox bus. kit's NATS with JetStream (`-js`): without it a service
+      # that publishes and then crashes loses the message, and courier's
+      # at-least-once guarantee quietly becomes at-most-once. The broker being
+      # absent is NOT a boot failure — the publisher connects with
+      # RetryOnFailedConnect — so this is not in `depends_on`.
+      NATS_URL: "nats://nats:4222"
+      # ------------------------------------------------------------------
+      # OIDC, ON — because the gateway made it non-optional.
+      #
+      # With this block absent, identity serves its /v1 surface and its probes
+      # and publishes no key set, and the gateway — configured below with
+      # `IDENTITY_ISSUER: http://identity:8080` — answers /readyz with
+      # `{"deps":{"identity":"unavailable","redis":"ok"}}` forever: its identity
+      # probe fetches the issuer's JWKS, gets a 404 for a path this service
+      # does define, and reports a dependency failure. Measured, not predicted.
+      #
+      # `OIDC_ISSUER` is `http://identity:8080` and NOT a published port: it is
+      # the compose service name because every verifier on the platform compares
+      # `iss` for equality against the token, and the gateway's
+      # `IDENTITY_ISSUER` below is the same string.
+      #
+      # `OIDC_SIGNING_KEY` is generated per run by `bin/launch` and EXPORTED,
+      # so no private key enters the repository. The `${VAR:-}` shape is what
+      # lets an operator pin a fixed key.
+      OIDC_ISSUER: "http://identity:8080"
+      OIDC_SIGNING_KEY: "${OIDC_SIGNING_KEY:-}"
+      OIDC_SIGNING_KEY_ID: "launch-signing-key"
+      # The localhost case the variable exists for: identity refuses to boot on
+      # an http issuer without it (internal/config, ErrInsecureOIDCIssuer).
+      OIDC_ALLOW_INSECURE: "true"
+      # Where a browser goes to authenticate — BROWSER-CONTEXT, the front door.
+      OIDC_LOGIN_UI_URL: "http://127.0.0.1:${LAUNCH_PARLOR_PORT:-15083}/login"
+      # ------------------------------------------------------------------
+      # THE MAIL PATH, AND THE A3 CONTRACT
+      #
+      # identity sends no mail itself: every recovery message goes out as
+      # `POST /v1/messages` to courier over HTTP, authenticated by the bearer
+      # token below. Without this block a composed stack boots with no mail
+      # path and every recovery route answers 503 with a sentence naming a
+      # problem the developer was never told to configure.
+      #
+      # `COURIER_TOKEN` IS THE ONE VALUE BOTH SIDES SHARE, and this file reads
+      # it for BOTH — identity here and courier below, so the seam cannot
+      # diverge by operator error. This must be the SAME identity-issued API
+      # key courier holds as COURIER_IDENTITY_TOKEN: courier introspects the
+      # token identity presented on the inbound request, and identity's
+      # introspection endpoint lets a token caller introspect ONLY ITSELF —
+      # so the seam works when one key is held by both services, and two
+      # distinct keys produce identity's 403 and courier's 503.
+      #
+      # IT IS MINTED, NOT INVENTED, and `bin/launch` does it after identity is
+      # up. A random string here satisfies compose's `:?` and boots identity —
+      # the mail path answers 503 until the real key lands, which is identity's
+      # own "unavailable" state and the honest one.
+      #
+      # THE LINK TEMPLATES point at the front door — parlor, on the browser-
+      # context origin — and NOT at a container name, because those links are
+      # clicked in a browser. Each carries `{token}`, which config.Load
+      # requires: a template without it is refused.
+      COURIER_BASE_URL: "http://courier:4000"
+      COURIER_TOKEN: "${COURIER_TOKEN:?set COURIER_TOKEN — bin/launch mints it from identity's API and writes it to launch/.env}"
+      PASSWORD_RESET_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/reset-password?token={token}"
+      EMAIL_VERIFICATION_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/verify-email/confirm?token={token}"
+      # RECOVERY_LINK_TEMPLATE is the DEFAULT that applies to every purpose.
+      # Without it, identity refuses to boot when a purpose's own variable is
+      # unset — measured: "a deployment that can send mail needs at least one
+      # link template". One variable covers password reset, verify-email, and
+      # email-change.
+      RECOVERY_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/reset?token={token}"
+      # INVITATION_LINK_TEMPLATE is the FOURTH link, REQUIRED whenever the
+      # courier block above is wired — identity refuses to boot without it.
+      # It has NO default and falls back to nothing: an invitation is not a
+      # recovery purpose. THE SHAPE IS PARLOR'S accept route,
+      # `/invitations/{token}` — a PATH SEGMENT — which is the screen this
+      # stack serves. BROWSER-CONTEXT, like the other three.
+      INVITATION_LINK_TEMPLATE: "${APP_BASE_URL:-http://127.0.0.1:15083}/invitations/{token}"
+      # THE SIGNUP SIGNING KEY: identity refuses to boot without
+      # SIGNUP_SIGNING_KEY — a process with no key would serve its /v1
+      # surface and verify nothing. `bin/launch` generates it (base64url, no
+      # padding, of exactly 32 bytes) and writes it to `launch/.env`, stable
+      # across a teardown.
+      SIGNUP_SIGNING_KEY: "${SIGNUP_SIGNING_KEY:-}"
+      # Seals the TOTP secrets of second-factor users. WITHOUT IT identity
+      # boots but does not mount the MFA management routes, so a sign-in
+      # with MFA cannot run. `bin/launch` generates it and writes it to
+      # `launch/.env`, stable across a teardown.
+      MFA_ENCRYPTION_KEY: "${MFA_ENCRYPTION_KEY:-}"
+    ports:
+      - "${LAUNCH_IDENTITY_PORT:-15080}:8080"
+    depends_on:
+      # `service_healthy` waits on the cluster's own probe, which checks the
+      # ADMIN database — so it says the cluster is up and nothing about whether
+      # identity's own database was provisioned. `bin/launch` polls the
+      # published port before a single migration runs, and that is the check
+      # which would notice.
+      postgres:
+        condition: service_healthy
+    networks: [platform]
+
+  # ----------------------------------------------------------------- gateway
+  # The API edge. The build arg is gateway's own: `BUN_VERSION` pins the
+  # toolchain gateway's Dockerfile builds with, and an image built without
+  # the pin is one no deploy path has ever produced.
+  #
+  # NO `ROUTE_TABLE`: the launch deploys no service for gateway to route to,
+  # and a route table naming a service that is not running is a gateway that
+  # answers 503 for paths somebody believes are working. The table is one
+  # variable when a launch service needs one.
+  gateway:
+    build:
+      context: ${LAUNCH_GATEWAY_DIR:-../../gateway}
+      dockerfile: Dockerfile
+      args:
+        BUN_VERSION: "1.3.12"
+    image: cafaye/gateway:dev
+    environment:
+      PORT: "8080"
+      NODE_ENV: production
+      # Where the /auth surface sends its calls, and what its readiness probe
+      # checks. By service name over the compose network.
+      IDENTITY_URL: "http://identity:8080"
+      # The issuer tokens are *verified* against. gateway appends
+      # /.well-known/jwks.json itself.
+      IDENTITY_ISSUER: "http://identity:8080"
+      # The shared counter store, so the limiter's counters are shared with
+      # every gateway replica rather than living in one process's memory.
+      # That `redis` is KIT'S, out of the fetched stack.
+      REDIS_URL: "redis://redis:6379"
+      # How many proxies append to X-Forwarded-For: "0" here is a thought-out
+      # zero — this local stack runs no ingress in front of gateway, so the
+      # socket peer is the right key. Behind a real proxy the number is the
+      # proxy count.
+      TRUSTED_PROXIES: "0"
+      # Where gateway's spans go: the collector's gRPC receiver on the
+      # `platform` network. Unset it and the collector that ships with the
+      # stack is the default.
+      GATEWAY_OTEL_ENDPOINT: "http://otel-collector:4317"
+    ports:
+      - "${LAUNCH_GATEWAY_PORT:-15081}:8080"
+    depends_on:
+      # `service_started` on identity, not `service_healthy`: identity's image
+      # cannot carry a healthcheck, and compose would otherwise wait forever
+      # for a signal that can never arrive. gateway does not need identity to
+      # be *ready* to boot — the pool is lazy and the readiness probe reports
+      # an unavailable dependency rather than refusing to start.
+      identity:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # /healthz, NOT /readyz: a dependency outage is /readyz's to report and
+      # must not take the gateway out of rotation. `/app/service
+      # -healthcheck`, and NOT a request from outside the container, because
+      # the runtime image is distroless: no shell, no curl, no wget, no bun.
+      test: ["CMD", "/app/service", "-healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks: [platform]
+
+  # ----------------------------------------------------------------- courier
+  # The mail service. courier's release image is distroless, so nothing inside
+  # the container can answer an HTTP probe. Its healthcheck is the release
+  # binary's `eval`, which needs no shell and no HTTP client.
+  #
+  # `COURIER_IDENTITY_TOKEN` READS `${COURIER_TOKEN}` — the SAME variable
+  # identity's block above reads. One variable, one value, no second place to
+  # forget: the A3 contract is structural in this file rather than a
+  # convention two operators must keep in step. The mint is `bin/launch`'s,
+  # from identity's API.
+  courier:
+    build:
+      context: ${LAUNCH_COURIER_DIR:-../../courier}
+      dockerfile: Dockerfile
+    image: cafaye/courier:dev
+    environment:
+      PORT: "4000"
+      # Over the compose network, by service name. THE RUNTIME ROLE IS
+      # `courier_app`, which owns nothing and holds DML per table — kit's
+      # `10-cluster.sh` provisions two logins per service, and the application
+      # running as the role that owns its own tables would bypass every
+      # row-level-security policy in the migrations. The password is the
+      # cluster's, interpolated from kit's variable.
+      DATABASE_URL: "ecto://courier_app:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/courier"
+      # THE OWNER, FOR MIGRATIONS ONLY. Read by `Courier.OwnerRepo` and by
+      # nothing else — the application never opens a connection with it.
+      COURIER_OWNER_DATABASE_URL: "ecto://courier:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/courier"
+      # Telemetry, by the kit convention. Unset it and the collector that ships
+      # with the stack is the default.
+      COURIER_OTEL_ENDPOINT: "http://otel-collector:4318"
+      OTEL_SERVICE_VERSION: "0.0.0-dev"
+      DEPLOYMENT_ENVIRONMENT: development
+      # Seals per-endpoint webhook secrets. `bin/launch` writes a generated
+      # one to `launch/.env` before the first `up`.
+      COURIER_SECRET_BOX_KEY: "${COURIER_SECRET_BOX_KEY:?set COURIER_SECRET_BOX_KEY — bin/launch generates it and writes it to launch/.env}"
+      # THE A3 KEY. See identity's block above for the contract.
+      COURIER_IDENTITY_TOKEN: "${COURIER_TOKEN:?set COURIER_TOKEN — bin/launch mints it from identity's API and writes it to launch/.env}"
+      # ------------------------------------------------------------------
+      # THE MAIL ADAPTER, AND WHY IT IS A CATCHER
+      #
+      # `Courier.MailerAdapter.adapter!/1` raises when COURIER_MAIL_ADAPTER is
+      # unset, and refuses `none` in `:prod` — the container is a prod release,
+      # so the Local adapter is not available here. The adapter is `smtp`
+      # pointed at the mailpit service below: the only configuration that
+      # makes the dev stack work with zero credentials and makes mail VISIBLE.
+      #
+      # `COURIER_SMTP_AUTH=never` and `COURIER_SMTP_TLS=never` because mailpit
+      # accepts everything unauthenticated on a development machine. No
+      # credential is committed here: there is none to commit.
+      COURIER_MAIL_ADAPTER: smtp
+      COURIER_SMTP_HOST: mailpit
+      COURIER_SMTP_PORT: "1025"
+      COURIER_SMTP_AUTH: never
+      COURIER_SMTP_TLS: never
+      COURIER_SMTP_SSL: "false"
+      # ------------------------------------------------------------------
+      # THE TWO DEVELOPMENT VALUES WITH COMMITTED DEFAULTS, and the
+      # distinction that keeps them honest: a local substitute exists for each.
+      #
+      # `SECRET_KEY_BASE` signs courier's OWN cookies and endpoint tokens, on a
+      # machine with no users and no reachable network — the same shape
+      # courier's own `config/dev.exs` and `config/test.exs` already commit.
+      #
+      # `COURIER_INBOUND_RESEND_SECRET` is the PROVIDER's signing secret, so a
+      # committed value is the sharpest thing on this list. It is safe here for
+      # one measured reason: COURIER'S PORT IS PUBLISHED BUT THE INBOUND ROUTE
+      # IS NOT REACHABLE FROM OUTSIDE in this stack's posture — and the value
+      # is the same base64 blob `config/test.exs` commits, a sentence about
+      # being a fake. The moment courier's inbound path is exercised against a
+      # real provider, this becomes a `:?` and the real `whsec_` value goes in
+      # `launch/.env`.
+      SECRET_KEY_BASE: "N0hG2os3k49qghyM9nsz+v7uuI6N8Msgch1e1YE9lmjC2n5bahmQKOrq2a5Up+aj"
+      COURIER_INBOUND_RESEND_SECRET: "${COURIER_INBOUND_RESEND_SECRET:-whsec_Y291cmllciBkZXYgc3RhY2sgcGxhY2Vob2xkZXIsIG5vdCBhIHJlYWwgcmVzZW5kIHNpZ25pbmcgc2VjcmV0}"
+      # The crash layer's relay token. Required by a different shape from the
+      # others — bound to a variable, then refused later by an `if is_nil` — so
+      # it is a `:?` and `bin/launch` writes a generated one to `launch/.env`.
+      COURIER_ERROR_RELAY_TOKEN: "${COURIER_ERROR_RELAY_TOKEN:?set COURIER_ERROR_RELAY_TOKEN — bin/launch generates it and writes it to launch/.env}"
+    ports:
+      - "${LAUNCH_COURIER_PORT:-15082}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      # `/readyz` over the container's own loopback: readiness rather than
+      # liveness because readiness is the one that consults the database.
+      # The release binary's `eval` is the one probe that can run in a
+      # distroless image — a `CMD-SHELL` probe cannot run at all.
+      test:
+        - CMD
+        - /app/bin/courier
+        - eval
+        - "IO.puts(:ok)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [platform]
+
+  # ------------------------------------------------------------------ parlor
+  # The product UI, and the front door. This block is parlor's only service
+  # definition — parlor ships no compose file of its own.
+  #
+  # `IDENTITY_URL` is REQUIRED and `BILLING_URL` IS DELIBERATELY ABSENT. The
+  # launch deploys identity + gateway + courier + parlor with no billing, and
+  # parlor's own deploy.yml says why an empty value is correct rather than a
+  # workaround: "an empty value does not fail the render — it omits
+  # BILLING_URL from env.clear entirely, and the app answers its billing routes
+  # with a distinct 'not configured' state rather than dialing a default."
+  parlor:
+    build:
+      context: ${LAUNCH_PARLOR_DIR:-../../parlor}
+      dockerfile: Dockerfile
+    image: cafaye/parlor:dev
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      # identity's address on the compose network, by service name. A name
+      # rather than an IP, so the container does not have to be reconfigured
+      # when its address changes, and unresolvable from the host — which is the
+      # point: if the browser ever tried to call this address directly, it
+      # would fail, so the only way this sign-in can work is through the app.
+      IDENTITY_URL: "http://identity:8080"
+    ports:
+      - "${LAUNCH_PARLOR_PORT:-15083}:3000"
+    depends_on:
+      identity:
+        condition: service_started
+    healthcheck:
+      # Liveness, for the same reason as gateway's: a restart should mean "this
+      # process is not answering", never "a dependency is unhappy".
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    networks: [platform]
+
+  # ------------------------------------------------------------------ mailpit
+  # THE SMTP SINK, and the one thing the launch needs that nothing provides:
+  # mail a person can read. THE DEFINITION IS COURIER'S OWN, copied rather
+  # than invented — including the variable name, which is why this one port
+  # is a `KIT_*` among the `LAUNCH_*` ones. Two things in it are load-bearing
+  # and were measured:
+  #
+  #   * THE HEALTHCHECK SPELLS OUT THE FULL PATH. The image is distroless (no
+  #     shell), so a `CMD-SHELL` probe cannot run at all — and a healthcheck's
+  #     CMD form execs the command DIRECTLY, without prepending the image's
+  #     ENTRYPOINT. `["CMD", "readyz"]` fails every check with `exec: "readyz":
+  #     executable file not found in $PATH` and the container sits `unhealthy`
+  #     while the server inside it is perfectly fine. Measured on
+  #     axllent/mailpit:v1.22.0.
+  #   * THE SMTP PORT (1025) IS NOT PUBLISHED. Only the web UI is. Publishing
+  #     1025 would let anything on the machine send mail through the catcher.
+  #
+  # 15025 is inside kit's 15000-15999 block and collides with nothing the block
+  # has already given away — see the port allocation in this file's header.
+  mailpit:
+    image: axllent/mailpit:v1.22.0
+    ports:
+      - "${KIT_MAILPIT_PORT:-15025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    networks: [platform]
+
+  # NO `nats-stream-init` BLOCK, and the absence is the fix. Kit's one-shot
+  # (`restart: "no"`, exits 0 once the `cafaye` stream exists) is run bounded
+  # by `bin/launch` instead, and every wait set in that script names its
+  # long-running services explicitly, so there is no set for a completed
+  # container to fail. A wait set containing a completed container exits 1 by
+  # the orchestrator's own accounting — measured twice, two ways — so do not
+  # re-add a probe override and do not restart the one-shot.
