@@ -132,3 +132,41 @@ packet: `xargs cat` over an empty `find` blocks on stdin (replaced with
   are re-rendered.
 - Commits on `kit-m150-default-mfa`: `6c98ad3` (m154 Q1, red test),
   `ad11020` (m154 Q2, fix, green) + changelog/report commit.
+
+## 7. Addendum (m157, 2026-10-08 — closes two retained risks, no push)
+
+m157 (`f884478`, `4cb9999`) kept the m154 substrate byte-untouched and
+closed the two risks §2 flagged as "deliberately left":
+
+* **`sync_live_stack` stale is now mount-safe.** `rm -rf "$dest.stale"`
+  before `mv "$dest" "$dest.stale"` could delete a generation an older
+  stack still bind-mounts on repeated corruption (rename keeps inodes,
+  `docker inspect` still reports the pre-rename path). m157 asks the
+  daemon what is mounted via `mount_sources`/`generation_is_mounted`
+  (absolute paths, conservative on unknown) and, when stale or dest
+  appears mounted or docker is unavailable, spills `DEST` to
+  `DEST.stale.<n>` instead of deleting `DEST.stale`. Proven in
+  `tests/fetch_test.sh` §10a with a fake `docker inspect` reporting
+  `DEST/...` as mounted and a marker file in `DEST.stale` surviving
+  the second corruption.
+* **Derived `.kit/live` is now fully ignored.** The per-snapshot
+  `DEST/.gitignore` (`*` + `!.gitignore`) left its own `.gitignore`
+  untracked, so `git status --untracked-files=all` would report the
+  snapshot. Root `.gitignore` now carries `.kit/live/` (with comment,
+  `4cb9999`+`f884478`) so the whole subtree, and that file, are
+  ignored in every `git status --porcelain` and
+  `--untracked-files=all`. §10b proves it in a temp `git init`
+  fixture.
+* **Scope honestly bounded.** New snapshots live at `.kit/live/<ref>`,
+  outside `$KIT_STACK_HOME/.retired` that `prune_generations` globs
+  (`$home/$ref.*`), so they never enter that matcher — proven in §10c
+  by creating retired generations and a live snapshot for the same ref
+  and asserting the live path survives prune. Legacy cache-mounted
+  stacks (pre-m154) until their first `up` from the new tree remain
+  on the old path and remain reachable by the matcher, with its
+  existing blind spot. The manager's `site-launch-*` stack is that
+  bounded example; re-rendering it onto `.kit/live/<new-ref>` is the
+  migration.
+
+See `REPORT-m157-kit-live-stack-safety-01.md` for the full packet;
+this file is otherwise untouched.

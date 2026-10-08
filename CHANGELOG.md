@@ -19,6 +19,26 @@
   post-cleanup survival and determinism — red on the old code, green on the
   new, with sections 1–8 untouched.
 
+- **Live snapshot stale retention is mount-safe and the derived subtree is
+  fully ignored (m157).** `sync_live_stack` no longer `rm -rf
+  .kit/live/<ref>.stale` before `mv .kit/live/<ref> .kit/live/<ref>.stale` on
+  repeated corruption — repeated `rm -rf` would delete a generation an older
+  stack still bind-mounts (rename keeps inodes, `docker inspect` still
+  reports the pre-rename path). It now asks the daemon via `mount_sources` /
+  `generation_is_mounted` (absolute paths, conservative when docker is
+  unavailable) and, when stale or dest appears mounted, spills the current
+  dest to a numbered `.stale.<n>` instead of deleting `.stale`. Root
+  `.gitignore` now ignores `.kit/live/` as a whole, so the per-snapshot
+  `.gitignore` (`*` + `!.gitignore`) no longer leaves itself untracked and
+  `git status --untracked-files=all` never reports a derived snapshot.
+  New snapshots live outside `$KIT_STACK_HOME/.retired` and never enter
+  `prune_generations`'s glob scope; legacy cache-mounted stacks (pre-m154)
+  remain reachable by that matcher until their first `up` from the new tree
+  re-renders them — the bounded limitation stated honestly. §10 in
+  `tests/fetch_test.sh` proves all three: mounted stale survives repeated
+  corruption, `git status` is empty for a derived snapshot, and prune never
+  touches `.kit/live`.
+
 - **The substrate install generates `MFA_ENCRYPTION_KEY` by default.**
   `templates/substrate/install.sh` now always writes `MFA_ENCRYPTION_KEY`
   into `identity-secrets` on first creation: a cryptographically random
