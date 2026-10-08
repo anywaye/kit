@@ -907,6 +907,14 @@ and is never reported as a platform-test pass.
 
 ## How a service repo adopts kit
 
+Building your **own** application on Kit — outside cafaye, keeping your
+commits, taking Kit updates as a reviewable PR, and sending improvements
+back — is a separate path with its own page:
+[`docs/customer-upstream.md`](docs/customer-upstream.md). It covers the
+two update directions (your source merges from a named upstream remote;
+Kit's pieces are pinned SHAs bumped in one PR), the opt-in Renovate
+block, and the two decisions still pending (tags, external access).
+
 A service repo does **not** copy the workflow. It calls it, so a fix in kit
 reaches every service on the next run without a per-repo PR.
 

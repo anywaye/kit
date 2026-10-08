@@ -2,6 +2,21 @@
 
 ### Added
 
+- **Customer upstream path: `docs/customer-upstream.md` (m167).** The
+  customer-facing adoption and contribution page, linked from
+  [How a service repo adopts kit](#how-a-service-repo-adopts-kit). Your
+  application source merges from a named upstream remote (the Jumpstart
+  Pro model, commands verified against its README); Kit's platform
+  pieces are pinned to one shared commit SHA across `uses:`,
+  `kit-lint-ref` and `kit.ref` and bumped in one reviewable PR; Kit
+  improvements come back as fork + PR. Ships the opt-in Renovate block
+  (JSON parses, patterns match the pin shapes; no end-to-end Renovate
+  run observed) and names the two pending manager decisions it does not
+  pre-empt: no `v*` tags exist yet (`git tag` empty 2026-10-08, no
+  release workflow, and none is added here) and external access to Kit
+  is undecided — so the page promises SHAs today and PRs from the
+  first tag, and nothing that needs either decision to already exist.
+
 - **`bin/dev live`: the staged-launcher entrypoint for the service-owned
   live snapshot (m162).** Site's staged `bin/launch` calls
   `templates/bin/dev.sh stack` and then composes using the shared cache
