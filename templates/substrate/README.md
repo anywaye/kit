@@ -192,8 +192,15 @@ bash templates/substrate/install.sh
 
 `KIT_SUBSTRATE_SMTP_ADAPTER` (default `smtp`) and `KIT_SUBSTRATE_SMTP_PORT`
 (default `587`) are validated, not required. `KIT_SUBSTRATE_MAIL_FROM` /
-`_NAME`, identity's `COURIER_TOKEN`, and the OIDC/MFA/OAuth keys are optional
+`_NAME`, identity's `COURIER_TOKEN`, and the OIDC/OAuth keys are optional
 passthroughs — unset stays unwired (a reduced surface, never a placeholder).
+`KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY` is an optional override with a
+different default: unset means the install **generates** a random 32-byte
+base64url-no-padding key on first creation (the exact shape identity's
+config parser accepts), so a clean install always boots an identity whose
+MFA surface works. A supplied value is validated by shape and refused,
+naming the variable, when it is not 43 base64url characters decoding to
+32 bytes — a key identity would refuse at boot is refused here instead.
 
 `KIT_SUBSTRATE_ACME_EMAIL` is the ACME account contact address — the one
 Let's Encrypt sends expiry notices to. It is not a secret, but the script
@@ -276,7 +283,7 @@ environment variable and the key list IS the service's env list:
 
 | Secret | Keys | Provenance |
 |---|---|---|
-| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY` (+ `COURIER_TOKEN`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `MFA_ENCRYPTION_KEY`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | generated, except the parenthesised five (environment) |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` (+ `COURIER_TOKEN`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated; the parenthesised four from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
@@ -292,15 +299,19 @@ without); parlor's `process.env.*` reads (no secret keys — the secret exists
 because the chart's `envFrom` requires it to).
 
 **The split is by provenance.** A random, self-contained value
-(`SIGNUP_SIGNING_KEY`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`,
+(`SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`,
 `COURIER_ERROR_RELAY_TOKEN`, the Redis password, each Postgres role's
 password) is **generated on the box, never printed, generated ONCE and read
 back on a re-run** — a second `install.sh` never rotates a live system's
 keys, and no step overwrites an existing secret (rotation is replace-the-
-secret plus restart-the-pods, never re-run-the-install). Anything externally
+secret plus restart-the-pods, never re-run-the-install). The MFA override
+(`KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY`) is honoured only at creation:
+once `identity-secrets` exists its stored key wins over any override, because
+the stored key is a persistent encryption key and re-running with a different
+value must not fork it. Anything externally
 sourced — courier's SMTP settings and provider secrets, the
 identity-minted `COURIER_IDENTITY_TOKEN`, identity's optional
-`COURIER_TOKEN`/OIDC/MFA/OAuth surfaces — comes **from the environment,
+`COURIER_TOKEN`/OIDC/OAuth surfaces — comes **from the environment,
 shape-validated and never echoed**, in the `KIT_SUBSTRATE_PULL_SECRET`
 pattern. `DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
 `postgres-rw.data` service, the service's own database, the `<svc>_app`
@@ -320,6 +331,30 @@ documents. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
 *shared* secret every service presents to the relay — sibling services do
 not read it yet, so wiring them to this value is a named follow-up, not a
 second copy of it.
+
+**An install that predates the generated MFA key keeps running unwired,
+and the installer will not fix that for you.** A re-run refuses to
+overwrite (or patch) an existing `identity-secrets`, so a legacy secret
+without `MFA_ENCRYPTION_KEY` stays without it — deliberately, because an
+imported database could hold TOTP ciphertext sealed under a key that is no
+longer present, and writing a fresh key in would fork it rather than heal
+it. The operator path, when the install never carried the key (so no factor
+was ever enrolled and no ciphertext exists under it):
+
+```sh
+MFA="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+kubectl -n identity get secret identity-secrets -o yaml >identity-secrets.backup.yaml
+kubectl -n identity patch secret identity-secrets -p \
+  "$(printf '{"stringData":{"MFA_ENCRYPTION_KEY":"%s"}}' "$MFA")"
+kubectl -n identity rollout restart deployment/identity  # the chart's deployment name
+```
+
+Generate the value with the same spelling the installer uses, back up the
+existing secret before touching it, and restart identity's pods afterwards
+(the chart reads secrets through `envFrom`, so a patch without a restart
+changes nothing). If the database was imported from anywhere that may have
+sealed factors under a *different* key, do not invent one — recover that
+key instead; a second key does not decrypt the first key's rows.
 
 The SECRET RECORD comment block on `install_secrets` is the drift tripwire:
 `tests/substrate_test.sh` parses it and fails if any recorded name is not
@@ -390,6 +425,16 @@ operator action, and the URL works only when observed.
 - The recorded secret name-and-key list matches what `install.sh` creates —
   a fixture with a key removed goes **red** either way (and an unrecorded
   key the other way) — and no operator value is ever echoed.
+- `identity-secrets` always carries `MFA_ENCRYPTION_KEY`: first creation
+  generates a random 32-byte base64url-no-padding key (the exact shape
+  identity's config parser accepts, proven by decoding it in the test), a
+  valid `KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY` override is stored
+  exactly, an invalid override is refused naming the variable with no secret
+  written, reruns never rotate the stored value even under a different
+  override, two fresh installs generate distinct keys, and a legacy
+  `identity-secrets` without the key is left unpatched — proven locally by
+  running `install_service_secrets` against a file-backed mocked kubectl
+  (no k3s, no box), each case with red-first controls.
 - Every pin is exact — a fixture with a `latest` or floating pin goes **red**
   under the same check that the real tree passes.
 - Every `Application` manifest parses and carries the fields Argo needs

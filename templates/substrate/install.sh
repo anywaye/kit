@@ -46,8 +46,11 @@
 #                                  end holds it too, so generating one here
 #                                  would fork it).
 #   KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY / _OIDC_SIGNING_KEY_ID /
-#   _MFA_ENCRYPTION_KEY / _OAUTH_ENCRYPTION_KEY — optional identity surfaces;
-#                                  each lands in identity-secrets only when set.
+#   _OAUTH_ENCRYPTION_KEY — optional identity surfaces; each lands in
+#   identity-secrets only when set. MFA_ENCRYPTION_KEY is NOT optional: it
+#   is generated on first creation (or taken from
+#   KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY when the operator sets it),
+#   because identity mounts its MFA surface only when the key is present.
 # Every value above is validated by shape and never echoed, the way
 # KIT_SUBSTRATE_PULL_SECRET already works.
 #
@@ -163,10 +166,15 @@ NATS_BOX_VERSION="0.20.0"
 # value, like the other generated keys — so it is declared nowhere here.)
 
 # Optional identity surfaces. Unset means the surface stays unwired (no OIDC
-# provider, no MFA, no OAuth, no courier calls from identity) — each lands in
-# identity-secrets only when set. COURIER_TOKEN is identity's credential FOR
-# courier (the all-or-nothing pair with COURIER_BASE_URL, which stays unset):
-# absent is the reduced surface the chart documents, not a placeholder.
+# provider, no OAuth, no courier calls from identity) — each lands in
+# identity-secrets only when set. MFA is the exception: MFA_ENCRYPTION_KEY is
+# GENERATED on first creation (or taken from the override below), because
+# identity mounts GET /v1/mfa and the enrollment routes only when the key is
+# present — an install without it boots an identity that can neither show the
+# truthful `Off` state nor enroll a factor. COURIER_TOKEN is identity's
+# credential FOR courier (the all-or-nothing pair with COURIER_BASE_URL, which
+# stays unset): absent is the reduced surface the chart documents, not a
+# placeholder.
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID:=}"
 : "${KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY:=}"
@@ -619,6 +627,42 @@ database_url_for() {
   fi
 }
 
+# validate_mfa_override — the operator-supplied MFA key, when set, must be
+# exactly what identity's config parser accepts: base64url without padding
+# decoding to 32 bytes (43 characters from A-Z a-z 0-9 - _). A refused value
+# names the VARIABLE, never its value. Unset (empty) means "generate on the
+# box". Called on the LIVE path only, beside the other externally-sourced
+# validations — a dry run is a plan and does not need the key to print it.
+validate_mfa_override() {
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY" ]; then
+    return 0
+  fi
+  local key="$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY"
+  local why=""
+  case "$key" in
+    *[!A-Za-z0-9_-]*)
+      why="it carries characters outside base64url (A-Z a-z 0-9 - _), or padding"
+      ;;
+  esac
+  if [ -z "$why" ] && [ "${#key}" -ne 43 ]; then
+    why="it is ${#key} characters, want 43 (32 bytes as base64url, no padding)"
+  fi
+  if [ -z "$why" ]; then
+    local n=""
+    if n="$(printf '%s=' "$key" | tr -- '-_' '+/' | base64 -d 2>/dev/null | wc -c | tr -d ' \n')"; then
+      [ "$n" = "32" ] || why="it decodes to ${n:-0} bytes, want exactly 32"
+    else
+      why="it does not base64-decode"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    echo "error: KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY is not a 32-byte base64url-no-padding key — $why" >&2
+    echo "  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY='<43 base64url characters>'" >&2
+    echo "  # or leave it unset: the install generates one on first creation and keeps it" >&2
+    exit 1
+  fi
+}
+
 # --- the secrets half of step 9 ------------------------------------------------
 # One secret per service namespace, each exactly the keys its chart reads —
 # because the generated charts use `envFrom: secretRef`, every key becomes
@@ -627,15 +671,18 @@ database_url_for() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY
 #   RECORD gateway-secrets: REDIS_URL
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
 #
 # THE SPLIT IS BY PROVENANCE:
 #   generated on the box, never printed, generated ONCE and read back —
-#     SIGNUP_SIGNING_KEY (base64url, exactly 32 bytes: identity decodes it
-#     with base64.RawURLEncoding and refuses any other length at boot),
+#     SIGNUP_SIGNING_KEY and MFA_ENCRYPTION_KEY (base64url, exactly 32 bytes:
+#     identity decodes both with base64.RawURLEncoding and refuses any other
+#     length at boot; MFA falls back to the validated
+#     KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY override when the operator
+#     sets one),
 #     SECRET_KEY_BASE, COURIER_SECRET_BOX_KEY, COURIER_ERROR_RELAY_TOKEN
 #     (a self-contained shared value, generated like the raise text
 #     suggests), the Redis password (redis half above), each Postgres role's
@@ -693,27 +740,47 @@ install_service_secrets() {
   done
 
   # identity-secrets. Always: DATABASE_URL (agrees with the Cluster),
-  # SIGNUP_SIGNING_KEY (generated once). Conditionally: COURIER_TOKEN (only
-  # when the operator set it — identity's credential FOR courier, absent by
-  # default) and the OIDC/MFA/OAuth surfaces, only when the operator set
-  # them — an unset surface stays unwired, and an unwired surface contributes
-  # no key (envFrom makes every key an env var; a placeholder would be a lie
-  # the service would then read as configuration).
-  local signup_key identity_args
+  # SIGNUP_SIGNING_KEY (generated once) and MFA_ENCRYPTION_KEY (generated
+  # once, or the validated operator override). Conditionally: COURIER_TOKEN
+  # (only when the operator set it — identity's credential FOR courier,
+  # absent by default) and the OIDC/OAuth surfaces, only when the operator
+  # set them — an unset surface stays unwired, and an unwired surface
+  # contributes no key (envFrom makes every key an env var; a placeholder
+  # would be a lie the service would then read as configuration). MFA has no
+  # unwired state on a fresh install: without the key identity never mounts
+  # its MFA routes.
+  # A pre-existing identity-secrets is NEVER patched — not with a generated
+  # key and not with an override. The stored key is a persistent encryption
+  # key: an imported database could hold ciphertext sealed under a key no
+  # longer present, so guessing a fresh one in would fork it. A legacy
+  # secret without the key keeps running unwired; the operator path to MFA
+  # on such an install is in README.md, not guessed here.
+  # The generation is SIGNUP_SIGNING_KEY's own spelling (32 random bytes as
+  # base64url, no padding): identity decodes MFA_ENCRYPTION_KEY with
+  # base64.RawURLEncoding and refuses any other length at boot.
+  validate_mfa_override
+  local signup_key mfa_key identity_args
   signup_key="$(read_secret_key identity identity-secrets SIGNUP_SIGNING_KEY)"
   if [ -z "$signup_key" ]; then
     signup_key="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
   fi
+  if [ -n "$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY" ]; then
+    mfa_key="$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY"
+  else
+    mfa_key="$(read_secret_key identity identity-secrets MFA_ENCRYPTION_KEY)"
+    if [ -z "$mfa_key" ]; then
+      mfa_key="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
+    fi
+  fi
   identity_args=(--from-literal=DATABASE_URL="$(database_url_for identity)"
-    --from-literal=SIGNUP_SIGNING_KEY="$signup_key")
+    --from-literal=SIGNUP_SIGNING_KEY="$signup_key"
+    --from-literal=MFA_ENCRYPTION_KEY="$mfa_key")
   [ -n "$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN" ] &&
     identity_args+=(--from-literal=COURIER_TOKEN="$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN")
   [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY" ] &&
     identity_args+=(--from-literal=OIDC_SIGNING_KEY="$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY")
   [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID" ] &&
     identity_args+=(--from-literal=OIDC_SIGNING_KEY_ID="$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID")
-  [ -n "$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY" ] &&
-    identity_args+=(--from-literal=MFA_ENCRYPTION_KEY="$KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY")
   [ -n "$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY" ] &&
     identity_args+=(--from-literal=OAUTH_ENCRYPTION_KEY="$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY")
   if kubectl --kubeconfig="$KUBECONFIG" get secret identity-secrets -n identity >/dev/null 2>&1; then
