@@ -69,6 +69,18 @@
 # not parameterized — those are fixed by the images and by the service
 # contracts.
 #
+# THE ONE STACK THIS CANNOT SHARE A MACHINE WITH, and this paragraph rather
+# than a footnote: the defaults above are the same five ports the retired
+# `site-launch-*` overlay published, and both stacks layer over this same base
+# stack, so 15500/15600/15700/15800 collide too. Two compose projects on one
+# loopback with one port block is a BIND failure — `port is already allocated`,
+# naming the port and not the stack, so it reads as a machine problem — or, in
+# the partial case where only some of the other stack is up, a run that answers
+# on the ports it could bind and reads the wrong container on the ports it
+# could not. Moving this block's variables (and `LAUNCH_STACK_NAME`) is how both
+# run; `launch/README.md` carries the recipe. No default here changes for it,
+# and none should — they are the documented escape hatch, not the defect.
+#
 # ---------------------------------------------------------------------------
 # THE BUILD CONTEXTS, AND WHY THEY ARE VARIABLES
 # ---------------------------------------------------------------------------

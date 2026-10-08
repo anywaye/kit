@@ -295,9 +295,25 @@ seam_secrets_closed() {
 # check that fires on that paragraph teaches its reader to delete the
 # explanation. A claim in executable text or YAML values is what fails.
 substrate_free() { grep -v '^[[:space:]]*#' "$1" | grep -Ei 'k3s|kubectl|argo( |-)?cd|acme|ghcr|cloudflare'; test $? -ne 0; }
+# project_is_kit_launch — the project name, and NEVER the protected live name.
+#
+# THE COMMENT IS NOT THE CLAIM, and that is not a technicality. This file's
+# header explains the port collision with the `site-launch-*` stack — which is
+# the one thing a reader of the port block most needs told — so the string is
+# present in PROSE, and a check grepping the whole file reads that prose as the
+# project name. It went red on exactly that the moment the explanation landed,
+# which is the same lesson `substrate_free` above already encodes from the other
+# side: a check that a comment can satisfy is not a check, and a check a comment
+# can FALSIFY is worse, because it teaches its reader to delete the explanation.
+# Comments are stripped, and the executable `name:` line is what is asserted.
 project_is_kit_launch() {
-  grep -q '^name: ${LAUNCH_STACK_NAME:-kit-launch}$' "$1" &&
-    ! grep -q 'site-launch' "$1"
+  local body
+  grep -q '^name: ${LAUNCH_STACK_NAME:-kit-launch}$' "$1" || return 1
+  body="$(grep -v '^[[:space:]]*#' "$1")"
+  case "$body" in
+    *site-launch*) return 1 ;;
+  esac
+  return 0
 }
 
 # service_block <service> <path> — the body of one service block, and nothing
@@ -432,6 +448,14 @@ run 'the project name is kit-launch (never the live site-launch stack)' green \
   project_is_kit_launch "$OVERLAY"
 sed 's/:-kit-launch}/:-site-launch}/' "$OVERLAY" >"$mut"
 run 'CONTROL: the protected live project name is caught' red project_is_kit_launch "$mut"
+# The mirror of that control, and it is the one that failed first: this file's
+# header names the protected stack to explain the port collision, and stripping
+# comments is what keeps that prose from being read as the project name. With
+# the whole-file grep this fixture is RED.
+cp "$OVERLAY" "$mut"
+printf '\n# the retired site-launch stack published these same five ports\n' >>"$mut"
+run 'CONTROL: a comment naming the protected stack is not the project name' green \
+  project_is_kit_launch "$mut"
 
 run 'the database list is the literal this tier decided' green \
   bash -c "grep -q 'KIT_POSTGRES_DATABASES: \"identity,courier\"' \"\$0\"" "$OVERLAY"

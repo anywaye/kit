@@ -78,7 +78,64 @@ cache, no pin to keep in step when the harness itself changes. `LAUNCH_KIT_REF`
 is the escape hatch for running the harness against a different Kit ref; it
 is validated with the same pin-shape rule `bin/dev` enforces (40-char sha or
 `v<semver>`, never a branch) and resolved by Kit's own `live` command, never
-by a second copy of the resolution.
+by a second copy of the resolution. There is no committed pin file: the three
+sources `resolve_stack` reads are `KIT_STACK_DIR`, `LAUNCH_KIT_REF`, and this
+checkout, in that order, and nothing else participates.
+
+## Ports
+
+Every published port is a `${VAR:-default}`, and the defaults are Kit's own
+block (15000-15999):
+
+| Variable | Default | Container |
+|----------|---------|-----------|
+| `LAUNCH_IDENTITY_PORT` | `15080` | identity 8080 |
+| `LAUNCH_GATEWAY_PORT` | `15081` | gateway 8080 |
+| `LAUNCH_COURIER_PORT` | `15082` | courier 4000 |
+| `LAUNCH_PARLOR_PORT` | `15083` | parlor 3000 |
+| `KIT_MAILPIT_PORT` | `15025` | mailpit 8025 (web UI; SMTP 1025 is not published) |
+
+The container-side ports are fixed by the images and are not parameters.
+Underneath them sit Kit's infrastructure: `KIT_POSTGRES_PORT` (15500),
+`KIT_NATS_CLIENT_PORT` (15600), `KIT_NATS_MONITOR_PORT` (15700),
+`KIT_REDIS_PORT` (15800) — inherited from the stack, overridable the same way.
+
+### This stack cannot run at the same time as the protected `site-launch-*` stack
+
+**Said plainly, because it is the failure that looks like something else.**
+The defaults above are the very ports the retired stack's overlay published
+(`site-launch-*`: 15025, 15080-15083), and both stacks layer over the same Kit
+base stack, so 15500/15600/15700/15800 collide too. There is nothing to
+disambiguate them by: both are `docker compose` on the loopback.
+
+- **It is a port collision and not a composition error.** `up` fails on the
+  first bind Docker refuses — `port is already allocated` — and the message
+  names the port, not the stack, so it reads as a machine problem.
+- **The partial case is worse than the failure.** With some of the other
+  stack's services up and some down, the ports that are still free bind here
+  and the ones that are taken keep serving *that* stack. A browser on
+  `http://127.0.0.1:15080` then talks to whichever container won, and a run
+  can look green while exercising the wrong services. This is the case to
+  guard against, and the guard is knowing the port block.
+
+Run both by moving this stack's block — the escape hatch above is the
+mechanism, and `LAUNCH_STACK_NAME` keeps the two projects apart so a `down`
+can never name the other one's volumes:
+
+```sh
+LAUNCH_STACK_NAME=kit-launch-iso \
+LAUNCH_IDENTITY_PORT=15091 LAUNCH_GATEWAY_PORT=15092 \
+LAUNCH_COURIER_PORT=15093  LAUNCH_PARLOR_PORT=15094 \
+KIT_MAILPIT_PORT=15090 \
+KIT_POSTGRES_PORT=15550 KIT_NATS_CLIENT_PORT=15650 \
+KIT_NATS_MONITOR_PORT=15750 KIT_REDIS_PORT=15850 \
+launch/bin/launch
+```
+
+`launch/bin/launch down` is `compose down -v` under this project's name, so it
+removes this stack's containers and volumes and nothing else. Use it, and not a
+bare `docker compose down` typed in a directory that happens to hold a compose
+file.
 
 ## Secrets
 

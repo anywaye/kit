@@ -1,5 +1,66 @@
 ## Unreleased
 
+### Fixed
+
+- **The launch overlay contradicted the service contracts; four corrections,
+  each with a test (m199).** A read-only audit of `launch/` against the current
+  Identity, Gateway, Courier and Parlor checkouts
+  (`REPORT-kit-launch-contract-audit-m195b.md`) found no blocker that fails
+  after an image build — every readiness URL, bootstrap endpoint, response
+  field, migration path, required environment variable and port is satisfied —
+  and one definite contradiction plus three quality gaps:
+  - **identity's runtime `DATABASE_URL` named the OWNER role `identity`**
+    (`launch/docker-compose.launch.yml`). Postgres exempts a table's owner
+    from its own row-level-security policies, so a pool running as the owner
+    reads every account's row while every policy sits in the catalog looking
+    like a boundary — and identity's own `docker-compose.yml` has said
+    `identity_app` since the switch, with migration 00019 granting the login
+    role the DML it needs. It is now `postgres://identity_app:…`, and the
+    comment that presented the owner as the safe choice is corrected. The
+    login role was VERIFIED rather than assumed: all 18 tables in the schema
+    carry a DML grant to `identity_app` (00016 on the five protected ones,
+    00019 on twelve more, 00022 on the audit log, 00018 re-issuing), no table
+    has a serial or identity column, and kit's `10-cluster.sh` grants the app
+    role `CONNECT` on its own database.
+  - **gateway carried `BUN_VERSION: "1.3.12"`** for a Dockerfile declaring
+    only `ARG GO_VERSION=1.26` and no Bun stage. An unconsumed build arg is a
+    BuildKit warning, so the build proceeded under a comment asserting a pin
+    that did not exist. Now the arg gateway's Dockerfile consumes, at the
+    value identity's own compose pins.
+  - **`RECOVERY_LINK_TEMPLATE` pointed at `/reset`**, a path Parlor does not
+    serve, and only the email-change purpose falls back to it — so its
+    confirmation link was a 404. `EMAIL_CHANGE_LINK_TEMPLATE` (identity's
+    third per-purpose variable, previously unset) and the default both name
+    `/verify-email/confirm`, the address-confirmation screen and the closest
+    path Parlor serves; Parlor carries no email-change screen and the comment
+    says so rather than implying the token redeems there.
+  - **`kit_ref()` read a committed `kit.ref` that does not exist in this tree
+    and was never called** — `resolve_stack`'s three sources are the whole
+    resolution. DELETED rather than wired up: wiring it up would make the
+    lowest-precedence source something other than "this checkout", the
+    documented decision that the harness runs the stack it ships with, and kit
+    ships no `kit.ref` for a service to adopt by copy.
+  `tests/launch_test.sh` goes 46 → 58 cases, each new check with a control
+  built to violate exactly that property. Two are worth naming: the role is
+  extracted as the token between `postgres://` and the next colon, because
+  `postgres://identity_app:` CONTAINS `postgres://identity:` and a substring
+  check answers "owner" for both; and the pin check strips comments before
+  reading, because its first version went red on the paragraph recording why
+  the function was deleted. Two render checks assert the RESOLVED DSN and link
+  paths after `docker compose config` interpolation.
+
+- **`launch/README.md` now states the port collision with `site-launch-*`
+  plainly (m199).** This stack's defaults are the same five ports the retired
+  stack's overlay published (15025, 15080-15083) and both layer over the same
+  Kit base stack, so 15500/15600/15700/15800 collide too. It is a port
+  collision and not a composition error: `up` fails on the first bind Docker
+  refuses, naming the port and not the stack — and in the partial case a run
+  answers on the ports it could bind and reads the wrong container on the ports
+  it could not, which is worse than the failure. The recipe for running both
+  (a distinct block plus `LAUNCH_STACK_NAME`) is in the README and in the
+  overlay's port-block header; the defaults do not change, because they are the
+  documented escape hatch and not the defect.
+
 ### Added
 
 - **Kit owns the local launch harness: `launch/` (m186).** The retired
