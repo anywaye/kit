@@ -134,7 +134,10 @@ run 'CONTROL: a broken launcher fails the parse' red bash -n "$broken"
 # ===========================================================================
 # docker is a log plus canned answers: `compose version` succeeds, `ps`
 # prints rows iff $STUB_PS_UP is set, everything else exits 0. curl/jq/
-# openssl/git merely exist — --check/down/status never call them for real.
+# openssl/git/psql merely exist — --check/down/status never call them for
+# real. psql is on the bench because `--check` requires it: the launcher
+# runs identity's migrations on the host through identity's own bin/migrate
+# (m201), so a bench WITHOUT the stub would fail the green layout case.
 STUB="$WORK/stub-bin"
 mkdir -p "$STUB"
 cat >"$STUB/docker" <<'EOF'
