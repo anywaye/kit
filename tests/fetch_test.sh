@@ -572,14 +572,22 @@ else
 fi
 
 LIVE9_F="$(grep '^argv:' "$FAKE_DOCKER_LOG" | head -1 || true)"
-if printf '%s' "$LIVE9_F" | grep -qF "$live9/.kit/live/$PIN_SHA/templates/compose/docker-compose.yml"; then
+if printf '%s' "$LIVE9_F" | grep -qF ".kit/live/$PIN_SHA/templates/compose/docker-compose.yml"; then
   pass "compose is pointed at the service-owned snapshot, not at the cache"
 elif [ -n "$LIVE9_F" ]; then
   fail "compose was pointed at the CACHE, so any cache cleanup invalidates the live mount: $LIVE9_F"
 else
   fail "the stubbed docker saw no compose invocation, so nothing about the compose source was proven"
 fi
-if grep -qF "KIT_COMPOSE_DIR=$live9/.kit/live/$PIN_SHA/templates/compose" "$FAKE_DOCKER_LOG" 2>/dev/null; then
+# The recorded path is RELATIVE (compose runs with --project-directory . from
+# the service root), so the anti-assertion matters as much as the match: the
+# cache home must appear NOWHERE in what compose was pointed at.
+if printf '%s' "$LIVE9_F" | grep -qF "$WORK/cache-live"; then
+  fail "compose was pointed into the cache home: $LIVE9_F"
+else
+  pass "the cache home appears nowhere in the compose invocation"
+fi
+if grep -qF "KIT_COMPOSE_DIR=.kit/live/$PIN_SHA/templates/compose" "$FAKE_DOCKER_LOG" 2>/dev/null; then
   pass "KIT_COMPOSE_DIR resolves bind sources into the service-owned snapshot"
 else
   fail "KIT_COMPOSE_DIR does not resolve into the service-owned snapshot — bind sources still come from the cache"
@@ -599,7 +607,7 @@ if [ "$(cat "$live9/.kit/live/$PIN_SHA/.kit-stack-ref" 2>/dev/null || true)" = "
 else
   fail "the live snapshot records no ref, so a later run cannot tell which stack it is"
 fi
-LIVE9_SUM="$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f 2>/dev/null | sort | xargs cat </dev/null 2>/dev/null | wc -c | tr -d ' ')"
+LIVE9_SUM="$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
 
 # THE CLEANUP. The whole cache goes away — the retention-sweep shape — and the
 # remote with it; offline is set so nothing may reach the network. A stack
@@ -615,14 +623,14 @@ else
   pass "bin/dev up survives a deleted cache with the network forbidden, from the service-owned snapshot"
 fi
 mv "$REMOTE.moved9" "$REMOTE"
-if [ "$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f 2>/dev/null | sort | xargs cat </dev/null 2>/dev/null | wc -c | tr -d ' ')" = "$LIVE9_SUM" ] &&
+if [ "$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)" = "$LIVE9_SUM" ] &&
   [ -d "$live9/.kit/live/$PIN_SHA/templates/compose/grafana/provisioning" ] &&
   [ "$(wc -l <"$live9/.kit/live/$PIN_SHA/templates/compose/otel-collector.yml" | tr -d ' ')" -ge 10 ]; then
   pass "the old active source still reads back whole after the cache is gone — deterministic across the cleanup"
 else
   fail "the live snapshot changed or lost files across the cache cleanup"
 fi
-if grep -qF "$live9/.kit/live/" "$FAKE_DOCKER_LOG" 2>/dev/null; then
+if grep -qF ".kit/live/" "$FAKE_DOCKER_LOG" 2>/dev/null; then
   pass "the post-cleanup up composed from the service-owned snapshot, not from a re-fetched cache"
 else
   fail "the post-cleanup up did not compose from the service-owned snapshot"

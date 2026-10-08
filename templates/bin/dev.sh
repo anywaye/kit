@@ -60,6 +60,19 @@
 #   contract, and it is why nine services stopped each carrying its own copy of
 #   the same 400 lines.
 #
+#   FETCHED, THEN SNAPSHOTTED. `up` copies the fetched compose subtree into
+#   `.kit/live/<ref>` — a directory this repository owns — and composes from
+#   THERE, never from the cache. The cache is shared mutable state: fetches
+#   retire generations out of it, pruning reclaims them, and anything else on
+#   the machine may sweep it. A live container bind-mounted into any of that
+#   stops resolving its config the moment the sweep runs. The snapshot is
+#   written once per ref and never rewritten for a fixed ref (a ref is
+#   immutable, so identical bytes mean nothing to do), which keeps every mount
+#   source stable no matter what the cache does afterwards — including being
+#   deleted outright. The snapshot is derived, not committed: it records its
+#   ref in `.kit-stack-ref` like every other tree here, and carries its own
+#   `.gitignore` so it is never added by accident.
+#
 #   `kit.ref` MUST BE A PIN. A 40-character commit sha, or a `v<semver>` tag. A
 #   branch name is refused, loudly, before any network call — because a moving
 #   reference is a gate that changes under you, and by the time a fetch has
@@ -425,9 +438,17 @@ validate_ref() {
 #   1. KIT_STACK_DIR   an explicit directory. Highest precedence because it is
 #                      the only one a person typed on this run.
 #   2. the cache       <KIT_STACK_HOME>/<ref>, with the ref recorded inside it.
-#   3. the vendored    .kit/stack, ALSO with the ref recorded inside it.
+#   3. the live        .kit/live/<ref>, ALSO with the ref recorded inside it:
+#      snapshot        the tree a previous `up` rendered from, owned by this
+#                      service. Below the cache because a freshly fetched tree
+#                      is authoritative; above the vendored copy because it is
+#                      the stack this machine actually ran. This is what lets a
+#                      stack survive its cache: with the cache deleted outright
+#                      and the network forbidden, `up` still resolves — to the
+#                      bytes it already runs.
+#   4. the vendored    .kit/stack, ALSO with the ref recorded inside it.
 #      copy
-#   4. a fetch         the only one that touches the network, and the only one
+#   5. a fetch         the only one that touches the network, and the only one
 #                      that can fail because of the network.
 #
 # 2 and 3 both carry a recorded ref, and that is the load-bearing detail. A
@@ -629,6 +650,114 @@ prune_generations() {
   return 0
 }
 
+# --------------------------------------------------------------------------
+# THE LIVE SNAPSHOT
+# --------------------------------------------------------------------------
+# The tree the RUNNING stack was rendered from, owned by the service.
+#
+# The cache is the wrong directory to compose from, and section 8's
+# retired-generation machinery is why this paragraph exists rather than
+# contradicting it. Retiring keeps the old tree's INODES — a running
+# container keeps serving off descriptors it already holds. What it does not
+# keep is the PATH being out of the cache: the cache is shared mutable state
+# (per-ref directories, retired generations, mount-aware pruning), and every
+# `-f` and every bind source still points into it. Anything that removes that
+# directory — a retention sweep, a cleaner, a hand — invalidates the live
+# mount while the containers are still up, and the healthcheck (which re-reads
+# the config through the mount on every probe) is what reports it:
+#
+#   open /etc/otel/otel-collector.yml: no such file or directory
+#
+# So `up` snapshots `$STACK_DIR/templates/compose` into `.kit/live/<ref>`
+# and `compose()` runs from the snapshot whenever it is usable for the pinned
+# ref. Cache replacement, pruning and outright deletion then move no byte any
+# live mount resolves to.
+#
+# THREE PROPERTIES, each load-bearing:
+#
+#   - CONTENT-ADDRESSED. The snapshot records the ref in `.kit-stack-ref` and
+#     is byte-compared against the resolved tree before any write. A snapshot
+#     at a different ref — or a corrupt one — is never composed from, and a
+#     snapshot that already IS the resolved tree is left untouched, because
+#     the snapshot directory is itself bind-mounted into running containers
+#     and a rewrite would churn the very mounts it exists to keep stable.
+#   - BOUNDED. One directory per deliberate pin, written once per ref and
+#     never rewritten for a fixed ref (a ref is immutable, so identical bytes
+#     mean nothing to do). A snapshot that exists but differs at an immutable
+#     ref is corruption, and it is kept aside as ONE `.stale` directory rather
+#     than deleted — it may still be mounted. Siblings from older pins are
+#     never reaped here: an unchanged service keeps its mounts across an
+#     upgrade, so reaping the old pin's snapshot would break exactly what this
+#     section exists to keep. Each generation is a few hundred KB of YAML.
+#   - DERIVED, NOT COMMITTED. The snapshot carries its own `.gitignore`
+#     ignoring everything beneath it, so `git add -A` can never commit a copy
+#     of the fetched tree. `resolve_stack` also ACCEPTS the snapshot as a
+#     resolution source (below the cache, above the vendored copy), which is
+#     what lets a stack survive its cache being deleted outright.
+
+# live_dir_for <ref> — the snapshot path for that ref, under the service root.
+live_dir_for() { printf '.kit/live/%s' "$1"; }
+
+# live_is_usable <dir> <ref> — the compose-subtree half of `stack_is_usable`.
+# The snapshot holds ONLY `templates/compose` (that is everything compose
+# bind-mounts), so the kamal files are deliberately NOT required here:
+# requiring them would refuse a snapshot that has every byte the stack mounts.
+live_is_usable() {
+  local dir="$1" ref="$2" have
+  [ -d "$dir" ] || return 1
+  have="$(read_stack_ref "$dir")" || return 1
+  [ "$have" = "$ref" ] || return 1
+  [ -f "$dir/templates/compose/docker-compose.yml" ] &&
+    [ -f "$dir/templates/compose/otel-collector.yml" ] &&
+    [ -d "$dir/templates/compose/tempo" ] &&
+    [ -d "$dir/templates/compose/loki" ] &&
+    [ -d "$dir/templates/compose/grafana/provisioning" ]
+}
+
+# sync_live_stack <ref> <stack-dir> — bring the snapshot to the resolved tree.
+# Called by `up` after `resolve_stack`, so SRC is always a usable tree at REF.
+sync_live_stack() {
+  local ref="$1" src="$2" dest tmp
+  dest="$(live_dir_for "$ref")"
+  # The common case — every `up` after the first on a fixed pin — touches
+  # nothing. A ref is immutable, so identical bytes mean there is nothing to
+  # do, and leaving the directory alone leaves every live mount alone with it.
+  if live_is_usable "$dest" "$ref" &&
+    diff -rq "$src/templates/compose" "$dest/templates/compose" >/dev/null 2>&1; then
+    info "live stack: $dest (unchanged — the snapshot already is this ref)"
+    return 0
+  fi
+  # Staged beside the destination, like `fetch_stack` stages beside the cache:
+  # a second `bin/dev` in another terminal never sees a half-copied tree.
+  tmp="$dest.tmp.$$"
+  rm -rf "$tmp"
+  mkdir -p "$tmp/templates/compose"
+  cp -a "$src/templates/compose/." "$tmp/templates/compose/"
+  printf '%s\n' "$ref" >"$tmp/.kit-stack-ref"
+  # Derived, not committed. This file is created BY the sync, alongside the
+  # bytes it describes, and it edits no file the service owns — so a service
+  # that never ignores `.kit/` still never commits a copy of the fetched tree.
+  {
+    printf '%s\n' '*' '!.gitignore'
+  } >"$tmp/.gitignore"
+  if ! live_is_usable "$tmp" "$ref"; then
+    rm -rf "$tmp"
+    die "could not stage the live stack snapshot for kit@$ref from $src.
+    The snapshot was left untouched; nothing was started."
+  fi
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    # Reachable only through corruption: at an immutable ref the bytes cannot
+    # have changed, so a usable-but-different snapshot means something rewrote
+    # one side. Kept aside as ONE generation and never deleted — it may still
+    # be mounted, and the retired-generations lesson applies here too.
+    rm -rf "$dest.stale"
+    mv "$dest" "$dest.stale"
+    info "previous live snapshot kept at $dest.stale (it differed at an immutable ref — one side was rewritten)"
+  fi
+  mv "$tmp" "$dest"
+  info "live stack: $dest (snapshotted from kit@$ref)"
+}
+
 fetch_stack() {
   # `git init` + `fetch --depth 1` + `checkout --detach FETCH_HEAD`, not
   # `git clone --branch`. Three reasons, and the third is the one that matters:
@@ -733,7 +862,19 @@ resolve_stack() {
     return 0
   fi
 
-  # 3. The vendored copy. Checked against the ref, and the check is the feature:
+  # 3. The live snapshot: the tree a previous `up` rendered from, owned by
+  #    this service and checked against the ref like the cache. A snapshot at
+  #    a different ref is not this stack, so it is skipped rather than used —
+  #    the same rule as every other recorded tree here.
+  local live
+  live="$(live_dir_for "$ref")"
+  if live_is_usable "$live" "$ref"; then
+    STACK_DIR="$live"
+    info "stack: $STACK_DIR (live snapshot — the tree this service rendered)"
+    return 0
+  fi
+
+  # 4. The vendored copy. Checked against the ref, and the check is the feature:
   # this is the offline path, and an offline path that cannot tell you which
   # version it is running is worse than no offline path.
   local vendor
@@ -765,13 +906,14 @@ resolve_stack() {
     return 0
   fi
 
-  # 4. The network.
+  # 5. The network.
   if [ "$(stack_setting KIT_STACK_OFFLINE 0)" = "1" ]; then
     die "offline (KIT_STACK_OFFLINE=1) and kit@$ref is not available locally.
    Tried, in order:
      KIT_STACK_DIR          not set
      $cached
                           not present, or not at this ref
+     $live      not present (no previous up rendered this ref here)
      $vendor        not present
    Fix it with any one of:
      bin/dev pin <ref>                              # on a machine with the network, first
@@ -868,12 +1010,30 @@ compose() {
   # the wrong tree — a failure that produces an image, so nothing complains.
   #
   # `KIT_COMPOSE_DIR` is exported so the base file's own `${KIT_COMPOSE_DIR:-.}`
-  # mount prefixes resolve back to the fetched tree, whichever directory compose
+  # mount prefixes resolve back to the composed tree, whichever directory compose
   # runs from. The default `.` in the template is what keeps a hand-copied stack
   # working, and this is the line that stops that default from being wrong in the
-  # fetched case.
+  # composed case.
+  #
+  # THE COMPOSE ROOT IS THE LIVE SNAPSHOT WHEN THERE IS ONE. `up` snapshots the
+  # resolved tree into `.kit/live/<ref>` and every `-f` and every bind source
+  # below follows that root — so a running stack's mounts never point into the
+  # cache, and no cache replacement, pruning or deletion moves them. Computed
+  # here (rather than carried in a global from `up`) so `down`, `status` and
+  # `logs` resolve the same tree the running stack was rendered from; the
+  # snapshot is accepted only when it records the PINNED ref and carries every
+  # file compose mounts, so a stale or corrupt one falls back to the resolved
+  # tree rather than being composed from.
+  local root="$STACK_DIR" live_ref live_root
+  live_ref="$(stack_ref)"
+  if [ -n "$live_ref" ]; then
+    live_root="$(live_dir_for "$live_ref")"
+    if live_is_usable "$live_root" "$live_ref"; then
+      root="$live_root"
+    fi
+  fi
   local -a base=()
-  base=(--project-directory . -f "$STACK_DIR/templates/compose/docker-compose.yml")
+  base=(--project-directory . -f "$root/templates/compose/docker-compose.yml")
   [ -f docker-compose.yml ] && base+=(-f ./docker-compose.yml)
   # The COMPOSE directory, not the kit root: that is what the base file's
   # `${KIT_COMPOSE_DIR:-.}` prefixes mean, and `.` is the directory the file
@@ -881,7 +1041,7 @@ compose() {
   # `<kit>/grafana/provisioning`, which does not exist, and Docker's answer to a
   # missing bind source is to create a directory — so the failure arrives four
   # containers later as `read /etc/tempo/tempo.yaml: is a directory`.
-  export KIT_COMPOSE_DIR="$STACK_DIR/templates/compose"
+  export KIT_COMPOSE_DIR="$root/templates/compose"
 
   if [ -n "$KIT_DEV_PROFILES" ]; then
     if docker compose version >/dev/null 2>&1; then
@@ -1087,6 +1247,12 @@ up() {
   # seeded from whatever stale copy happened to be in the working directory.
   step "resolving kit"
   resolve_stack
+  # Snapshot BEFORE anything composes: from here on every `-f` and every bind
+  # source resolves into `.kit/live/<ref>`, owned by this service, and no
+  # cache lifecycle afterwards can move a byte a running container resolves
+  # to. After `ensure_env` so the `.env` the message below tells the developer
+  # to edit is about the stack, not the snapshot.
+  sync_live_stack "$(stack_ref)" "$STACK_DIR"
   ensure_env
   warn_stale_env_example
 
