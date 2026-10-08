@@ -16,6 +16,10 @@
   release workflow, and none is added here) and external access to Kit
   is undecided — so the page promises SHAs today and PRs from the
   first tag, and nothing that needs either decision to already exist.
+  Held by `tests/customer_upstream_check.sh`, wired into the static
+  phase: README linkage, all three pin sites named, the Renovate block
+  parses, the forbidden mechanisms named, the no-tags caveat present
+  while `git tag` is empty.
 
 - **`bin/dev live`: the staged-launcher entrypoint for the service-owned
   live snapshot (m162).** Site's staged `bin/launch` calls
