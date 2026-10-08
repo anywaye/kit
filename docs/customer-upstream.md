@@ -54,9 +54,13 @@ differently. Reuse them; do not invent a fourth (in particular: no
 subtree/submodule of Kit, which would fuse the two directions above
 into one tree that can no longer be merged cleanly).
 
+Kit is public — `github.com/cafaye/kit`, verified 2026-10-08 — so every
+mechanism below is fetchable from any repo, inside or outside the org,
+with no grant to request.
+
 | Piece | How it reaches you | How an update lands |
 |---|---|---|
-| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: cafaye/kit/.github/workflows/<file>@<ref>` — never copied | One PR bumping the ref |
+| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: cafaye/kit/.github/workflows/<file>@<ref>` — never copied | A PR bumping the ref |
 | Lint configs (`lint/`) | **Fetched at run time** by the workflow (`kit-lint-ref` input) | With the workflow bump; nothing in your tree |
 | Local stack (`templates/compose/`) | **Fetched** by `bin/dev` from your committed `kit.ref` | `bin/dev pin <new-sha>` (prints the stack diff first) |
 | Copied files (`docker/Dockerfile`, `bin/prime`, `mise.toml`, `AGENTS.md`, …) | **Copied** once | Re-copy + review the diff. Nothing automates this; a fix in Kit sits un-copied until you copy it — the documented cost of copy-adoption |
@@ -68,9 +72,9 @@ branch moves under you between two runs of the same command):
 
 ```yaml
 # .github/workflows/ci.yml
-uses: cafaye/kit/.github/workflows/ci.reusable.yml@<40-char-sha>
+uses: cafaye/kit/.github/workflows/ci.reusable.yml@<40-char-sha> # master
 with:
-  kit-lint-ref: '<the same 40-char-sha>'
+  kit-lint-ref: '<the same 40-char-sha>' # master
 ```
 
 ```sh
@@ -79,17 +83,31 @@ $ cat kit.ref
 <the same 40-char-sha>
 ```
 
-Get the SHA with `git -C <kit-checkout> rev-parse HEAD`. The workflow
-file's own header warns that a `kit-lint-ref` left at `master` beside a
-pinned `uses:` mixes one revision's workflow with another revision's
-lint policy — the contract above is what closes that seam.
+Three facts about the `# master` comments, all load-bearing:
 
-## 3. Receiving Kit updates as a PR: the opt-in Renovate block
+- On the two YAML lines the comment is what makes the pin updatable, not
+  a note. Renovate's built-in `github-actions` manager leaves a bare SHA
+  alone — with no ref it cannot tell which branch the SHA belongs to —
+  and moves a SHA carrying a branch comment against that branch.
+  `master` there does not move you; it tells Renovate what to follow.
+  The `uses:` line needs nothing else: the manager recognises it
+  natively. The `kit-lint-ref` line needs the regex manager in §3,
+  because it is a `with:` value, not a `uses:` ref.
+- `kit.ref` stays a **bare SHA with no trailing comment**. `bin/dev`
+  reads the whole line as the ref and refuses anything that is not 40
+  hex characters, so `<sha> # master` in that file is a refused pin, not
+  a documented one. The branch it follows lives in the Renovate config
+  (`currentValueTemplate` in §3), not in the file.
+- Get the SHA with `git -C <kit-checkout> rev-parse HEAD`. The workflow
+  file's own header warns that a `kit-lint-ref` left at `master` beside a
+  pinned `uses:` mixes one revision's workflow with another revision's
+  lint policy — the contract above is what closes that seam.
 
-Renovate's built-in `github-actions` manager already bumps `uses:
-…@<sha>` pins natively. For the other two pins, copy this
-`renovate.json` into your repo root — it watches this repository's tags
-and opens one PR moving every Kit pin together:
+## 3. Receiving Kit updates as PRs: the opt-in Renovate block
+
+Copy this `renovate.json` into your repo root. It tracks Kit's `master`
+branch and opens PRs moving the pins forward — a PR per pin/update set
+(see the grouping note below):
 
 ```json
 {
@@ -99,30 +117,54 @@ and opens one PR moving every Kit pin together:
     {
       "customType": "regex",
       "managerFilePatterns": ["/(^|/)kit\\.ref$/"],
-      "matchStrings": ["^(?<currentValue>[0-9a-f]{40})\\s*$"],
+      "matchStrings": ["(?<currentDigest>[0-9a-f]{40})"],
       "depNameTemplate": "cafaye/kit",
-      "datasourceTemplate": "github-tags"
+      "packageNameTemplate": "cafaye/kit",
+      "currentValueTemplate": "master",
+      "datasourceTemplate": "github-digest"
     },
     {
       "customType": "regex",
       "managerFilePatterns": ["/\\.github/workflows/[^/]*\\.ya?ml$/"],
-      "matchStrings": ["kit-lint-ref:\\s*['\"]?(?<currentValue>[0-9a-f]{40})['\"]?"],
+      "matchStrings": ["kit-lint-ref:\\s*['\"]?(?<currentDigest>[0-9a-f]{40})['\"]?\\s*#\\s*(?<currentValue>\\S+)"],
       "depNameTemplate": "cafaye/kit",
-      "datasourceTemplate": "github-tags"
+      "packageNameTemplate": "cafaye/kit",
+      "datasourceTemplate": "github-digest"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchDepNames": ["cafaye/kit"],
+      "groupName": "kit pins"
     }
   ]
 }
 ```
 
+Why this shape, per Renovate's current docs (the `github-actions`
+manager page; the `github-digest` datasource page):
+
+- `master` is a non-semver ref, so the built-in manager routes the
+  `uses:` pin to the `github-digest` datasource, which follows the
+  branch and updates only the digest. The two regex managers do the same
+  for the other pins: `github-digest` tracks a branch and moves a
+  digest, so each rule names the branch — `kit-lint-ref` reads it off
+  its `# master` comment, `kit.ref` carries it as
+  `currentValueTemplate` because the file itself must stay a bare SHA.
+- Tags and releases play no role here. Digest tracking follows `master`
+  directly, so whether Kit has cut any tag changes nothing — an empty
+  `git tag` is not a missing update path. The branch SHA plus the
+  comment/digest above is the update path, and it works today.
+
 Verification status, stated honestly: the JSON parses (`python3 -c
-json.load`) and both patterns match the pin shapes in §2 — checked by
-translating JavaScript `(?<name>…)` groups to Python `(?P<name>…)`
-(characters and anchors identical) and matching a sample SHA. No
-end-to-end Renovate run has been observed from this file. And it
-produces **no PRs today by design**: `github-tags` yields versions only
-once Kit publishes `v*` tags, and none exist yet (see §5). Adopt the
-pin contract now; the PRs begin with the first tag, with no change to
-your config.
+json.load`) and every `matchStrings` matches the pin shapes in §2 —
+checked locally by translating JavaScript `(?<name>…)` groups to Python
+`(?P<name>…)` (characters and anchors identical) and matching sample
+lines. No end-to-end Renovate run has been observed from this file, so
+the custom managers are configured but their live behavior is
+unverified. The `groupName` rule asks Renovate to batch the three Kit
+pins into one PR, but that batching is likewise unverified — expect a PR
+per pin/update set until you have seen them land together.
 
 ## 4. Sending Kit improvements upstream: fork + PR
 
@@ -134,28 +176,27 @@ git clone https://github.com/<you>/kit.git
 cd kit
 git remote add canonical https://github.com/cafaye/kit.git
 git checkout -b <what-you-are-changing>
-# …edit, then:
-bash tests/validate.sh   # Kit's gate; must be green before any commit
+# …edit, then verify narrowly:
+git diff --check
+# plus the focused check for what you touched, if one exists —
+# e.g. bash tests/customer_upstream_check.sh after editing this page
 git push -u origin <what-you-are-changing>
 # open the PR against cafaye/kit
 ```
 
-What the PR needs: a `CHANGELOG.md` entry, and agreement rather than
-presence — if you touch a template, the check that would catch its
-absence travels in the same commit. Docs-only changes take the fast
-`docs` CI route. What Kit will not take: a second copy of a standard,
-a per-repo preference promoted to shared policy, or a weakened check
-made green by weakening (see `AGENTS.md`).
+Kit's CI owns the full gate — `tests/validate.sh` runs there, and
+docs-only changes take the fast `docs` CI route — so do not run the
+whole gate before every commit. Narrow local verification plus a green
+CI run is the contract. What the PR needs: a `CHANGELOG.md` entry, and
+agreement rather than presence — if you touch a template, the check
+that would catch its absence travels in the same commit. What Kit will
+not take: a second copy of a standard, a per-repo preference promoted
+to shared policy, or a weakened check made green by weakening (see
+`AGENTS.md`).
 
-## 5. What is not decided yet — follow-ups, not promises
+## 5. What this page does not promise
 
-- **Tags / releases.** Verified 2026-10-08: `git tag` is empty and no
-  release workflow exists in `.github/workflows/`. The `v<semver>` pin
-  shape and the Renovate PRs in §3 activate on Kit's first tag. Until
-  then, pin to SHAs. Whether and when Kit tags is a manager decision;
-  this page claims nothing that needs one to exist.
-- **External access.** A reusable-workflow `uses:` line resolves in
-  private repositories *inside the organisation*. Customers outside it
-  need Kit public or explicitly granted — likewise a manager decision.
-  Do not assume you can fetch Kit until that is announced; the
-  commands above are the path for when you can.
+- **No end-to-end Renovate proof.** The §3 block is configured and its
+  patterns are matched locally, but no Renovate run has been observed
+  producing PRs from it — neither the digest moves nor the grouping.
+  Until one is, treat the PR flow as set up, not proven.
