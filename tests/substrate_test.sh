@@ -1553,11 +1553,13 @@ pull_secret_ec=0
   # The exchange, mocked: the registry answers with one short-lived
   # dockerconfigjson. The fake is a LABEL, not a credential.
   curl() { printf '%s' "$CAP_B64_PULL_SECRET"; }
-  DRY_RUN=0
-  KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
-  KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  KIT_SUBSTRATE_REGISTRY_URL="https://registry.cafaye.test"
-  REGISTRY_DOCKERCONFIGJSON=""
+  # Exported, not assigned: the sourced installer reads them through the
+  # environment, and a plain assignment inside a subshell is a variable this
+  # shell appears not to use (SC2034) while the installer reads it.
+  export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.cafaye.test"
+  export REGISTRY_DOCKERCONFIGJSON=""
   install_pull_secret >"$WORK/pull-secret.log" 2>&1
 ) || pull_secret_ec=$?
 if [ "$pull_secret_ec" -ne 0 ]; then
@@ -1584,13 +1586,10 @@ applied_pull_secret() {
   local want f found
   want="$(printf '%s' "$CAP_B64_PULL_SECRET" | tr -d '\n')"
   found=""
-  for f in "$MOCK_ROOT"/applied.yaml; do
-    [ -r "$f" ] || continue
-    if grep -q 'kubernetes.io/dockerconfigjson' "$f" && grep -Fq "$want" "$f"; then
-      found="$f"
-      break
-    fi
-  done
+  f="$MOCK_ROOT/applied.yaml"
+  if [ -r "$f" ] && grep -q 'kubernetes.io/dockerconfigjson' "$f" && grep -Fq "$want" "$f"; then
+    found="$f"
+  fi
   if [ -z "$found" ]; then
     printf 'no applied manifest carries the redeemed dockerconfigjson\n'
     return 1
