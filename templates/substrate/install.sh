@@ -6,7 +6,8 @@
 #
 # or, from a kit checkout:
 #
-#   KIT_SUBSTRATE_PULL_SECRET=<value> \
+#   KIT_SUBSTRATE_BOX_ID=<uuid> \
+#   KIT_SUBSTRATE_REGISTRY_CAPABILITY=<token> \
 #   KIT_SUBSTRATE_ACME_EMAIL=<value> bash templates/substrate/install.sh
 #
 # WHAT THIS INSTALLS, IN ORDER
@@ -14,7 +15,8 @@
 #   2. cert-manager
 #   3. CloudNativePG
 #   4. Argo CD core   no Dex, no SSO, no Redis HA
-#   5. the GHCR image pull secret, from a value the OPERATOR supplies
+#   5. the GHCR image pull secret, redeemed from the box's own short-lived
+#      capability — no long-lived registry credential is ever handed over
 #   6. the first Applications, so Argo starts syncing
 #   7. the Let's Encrypt ClusterIssuers — staging + prod, from a value the OPERATOR supplies
 #   8. the Postgres Cluster — one CNPG Cluster, one database and two roles per
@@ -27,13 +29,48 @@
 #      Deployment + Service + PVC in `data`, plus the one-shot stream init
 #      defining stream `cafaye`, mirroring templates/compose's nats-stream-init
 #      (same subjects, retention, storage, replicas — the gate refuses drift).
+#   11. courier's identity credential, MINTED ON THE BOX from identity's own
+#      API and patched in place — the install → boot → mint → patch → restart
+#      loop nothing outside this box takes part in.
 #
-# THE OPERATOR-SUPPLIED VALUES (besides steps 5 and 7):
+# NO LONG-LIVED SECRET IS AN INPUT TO THIS SCRIPT.
+#   Two values used to be: a GHCR dockerconfigjson and identity's OIDC signing
+#   key. Both violated invariant 3 ("secrets are born where they are used") on
+#   the INPUT side, and both are gone — the first because a box-bound,
+#   single-use, minutes-lived capability buys exactly one short-lived registry
+#   credential and nothing else, the second because an OIDC signing key is the
+#   customer's own key and a private RSA key that has been in someone's shell
+#   history is not their own any more. What the operator now hands over is
+#   configuration and a capability whose value expires in minutes:
+#
+# THE OPERATOR-SUPPLIED VALUES (none of them a long-lived secret):
+#   KIT_SUBSTRATE_BOX_ID           required, no default: the enrolled identity
+#                                  of THIS box (a UUID). Not a secret — it is
+#                                  the box's name — and it is what the
+#                                  capability is BOUND TO, so a capability
+#                                  minted for another box is refused rather
+#                                  than silently used.
+#   KIT_SUBSTRATE_REGISTRY_CAPABILITY required, no default: the single-use,
+#                                  minutes-lived, box-bound capability the
+#                                  box's enrolled identity presents to redeem
+#                                  ONE short-lived registry credential. It is
+#                                  never written to disk and never echoed.
+#   KIT_SUBSTRATE_REGISTRY_URL     default https://registry.cafaye.com — where
+#                                  a capability is redeemed. Configuration,
+#                                  not a secret; a self-hosted fleet points it
+#                                  at its own registry.
+#   KIT_SUBSTRATE_ACME_EMAIL       required, no default (see step 7).
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
 #                                  service names; must equal the service set the
 #                                  Cluster manifest provisions
 #                                  (identity,gateway,courier,parlor). Refused
 #                                  empty, naming the fix.
+#   KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER optional: the URL identity publishes as
+#                                  its OIDC issuer. NOT a secret — and when it
+#                                  is set the signing key and its id are
+#                                  GENERATED ON THE BOX beside it, because
+#                                  identity's OIDC surface is all-or-nothing
+#                                  (issuer + key + id, or none of them).
 #   KIT_SUBSTRATE_SMTP_ADAPTER     courier's mail adapter: smtp or postmark.
 #   KIT_SUBSTRATE_SMTP_HOST        the SMTP relay host (when the adapter is smtp).
 #   KIT_SUBSTRATE_SMTP_PORT        default 587, the submission port.
@@ -45,14 +82,23 @@
 #                                  error relay (externally sourced: the other
 #                                  end holds it too, so generating one here
 #                                  would fork it).
-#   KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY / _OIDC_SIGNING_KEY_ID /
-#   _OAUTH_ENCRYPTION_KEY — optional identity surfaces; each lands in
-#   identity-secrets only when set. MFA_ENCRYPTION_KEY is NOT optional: it
-#   is generated on first creation (or taken from
-#   KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY when the operator sets it),
-#   because identity mounts its MFA surface only when the key is present.
-# Every value above is validated by shape and never echoed, the way
-# KIT_SUBSTRATE_PULL_SECRET already works.
+#   KIT_SUBSTRATE_MAIL_FROM / KIT_SUBSTRATE_MAIL_FROM_NAME — optional courier
+#                                  passthroughs (courier falls back to its
+#                                  compiled default without them).
+#   KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY / _OAUTH_ENCRYPTION_KEY /
+#                                  _COURIER_TOKEN — optional identity surfaces;
+#                                  each lands in identity-secrets only when
+#                                  set, except COURIER_TOKEN, which step 11
+#                                  writes with the value it minted itself (see
+#                                  below). MFA_ENCRYPTION_KEY is NOT optional:
+#                                  it is generated on first creation (or taken
+#                                  from the override when the operator sets it),
+#                                  because identity mounts its MFA surface only
+#                                  when the key is present.
+# Every value above is validated by shape and never echoed, the way the
+# capability already works. The values this script GENERATES — every key in
+# the SECRET RECORD's generated half, the OIDC signing key, and the courier
+# credential step 11 mints — are born here, stored here, and never printed.
 #
 # The decisions are in DEPLOYMENT.md. This file is the executable half of it:
 # Argo core (not HA), Traefik (k3s's default) for ingress, traces deferred —
@@ -82,11 +128,16 @@
 #   developer machine is not one.
 #
 # SECRETS
-#   The pull-secret value comes from the environment, never a literal in this
-#   file. It is never echoed, in any mode. The same holds for every operator
-#   value below it and every generated value step 8 and 9 create: a secret
-#   VALUE never reaches an `echo`, in DRY_RUN or live. Refusals name the
-#   VARIABLE (`export KIT_SUBSTRATE_SMTP_HOST=…`), never its value.
+#   NO LONG-LIVED SECRET ENTERS THIS SCRIPT. The registry credential is
+#   REDEEMED, per run, from a capability that is single-use, minutes-lived and
+#   bound to this box: it buys one short-lived dockerconfigjson, which is held
+#   in a shell variable and reaches the cluster through a pipe. It is never
+#   echoed, in any mode, and never written to disk. The OIDC signing key and
+#   the courier credential are GENERATED OR MINTED ON THIS BOX. The same holds
+#   for every operator value above and every generated value steps 8, 9 and 11
+#   create: a secret VALUE never reaches an `echo`, in DRY_RUN or live.
+#   Refusals name the VARIABLE (`export KIT_SUBSTRATE_SMTP_HOST=…`), never its
+#   value.
 
 set -euo pipefail
 
@@ -106,10 +157,29 @@ NATS_VERSION="2.10.24-alpine"
 NATS_BOX_VERSION="0.20.0"
 
 # --- operator-supplied values ----------------------------------------------
-# KIT_SUBSTRATE_PULL_SECRET is the base64 dockerconfigjson GHCR needs. Read
-# from the environment; never printed. The script validates its shape (it must
-# decode and carry an `auths` object) without ever showing the value.
-: "${KIT_SUBSTRATE_PULL_SECRET:=}"
+# --- the box's own identity and capability ------------------------------------
+# KIT_SUBSTRATE_BOX_ID is the enrolled identity of THIS box — a UUID the
+# capability below is BOUND TO, so a capability minted for another box is
+# refused by the registry rather than used here. It is the box's name, not a
+# secret, and it is what makes the redeemed credential single-purpose: a
+# credential issued to box A is worthless on box B, which is invariant 2
+# ("possession alone is useless") buying invariant 1 back.
+: "${KIT_SUBSTRATE_BOX_ID:=}"
+
+# KIT_SUBSTRATE_REGISTRY_CAPABILITY is the capability the box presents. It is
+# the one value the operator hands over that is credential-shaped, and it is
+# deliberately the only one left: single-use (a redemption consumes it),
+# minutes-lived (15, by the mint's own TTL), and bound to the box above. It
+# buys exactly ONE short-lived registry credential and nothing else — not a
+# deploy, not a shell, not another box's artifacts. Validated by shape (the
+# minted spelling `cap_` plus 64 hex) and never echoed.
+: "${KIT_SUBSTRATE_REGISTRY_CAPABILITY:=}"
+
+# KIT_SUBSTRATE_REGISTRY_URL is where a capability is redeemed. Configuration,
+# not a secret: a cafaye-operated fleet is the default and a self-hosted one
+# points it at the registry it runs. No default of `localhost` — a silently
+# local URL is how a box redeems against itself.
+: "${KIT_SUBSTRATE_REGISTRY_URL:=https://registry.cafaye.com}"
 
 # KIT_SUBSTRATE_ACME_EMAIL is the ACME account contact address. Read from the
 # environment like the pull secret and validated by shape, but it is not a
@@ -137,20 +207,24 @@ NATS_BOX_VERSION="0.20.0"
 
 # Courier's externally-sourced settings. The relay host, username and password
 # come from the operator's mail relay; the adapter and port have honest
-# defaults (smtp / 587) and are validated non-empty / numeric. The two paired
-# secrets below are NOT generatable: COURIER_IDENTITY_TOKEN is minted by
-# identity itself (POST /v1/accounts/{id}/api-keys) AFTER identity boots, and
+# defaults (smtp / 587) and are validated non-empty / numeric. The two companion
+# secrets are NOT generatable and NOT inputs either:
 # COURIER_INBOUND_RESEND_SECRET is copied from the provider's dashboard
-# (Resend: the webhook endpoint's Signing Secret, whsec_…). Both are required
-# and refused loudly naming the fix; a re-run resumes through the guards, so
-# mint-then-rerun is the flow. MAIL_FROM/MAIL_FROM_NAME are optional
-# passthroughs — courier falls back to its compiled default without them.
+# (Resend: the webhook endpoint's Signing Secret, whsec_…) — the provider is
+# the only party that can hold it, so it is the one long-lived secret this
+# install takes from outside the box.
+# COURIER_IDENTITY_TOKEN is no longer an input at all: it was minted by
+# identity itself after it booted, so the operator had to carry a freshly
+# minted API key between two terminals and paste it into a second run. Step 11
+# performs that mint ON THIS BOX — the same API, the same four calls, the same
+# patch-and-restart — and nothing crosses a boundary to make it happen.
+# MAIL_FROM/MAIL_FROM_NAME are optional passthroughs — courier falls back to
+# its compiled default without them.
 : "${KIT_SUBSTRATE_SMTP_ADAPTER:=smtp}"
 : "${KIT_SUBSTRATE_SMTP_PORT:=587}"
 : "${KIT_SUBSTRATE_SMTP_HOST:=}"
 : "${KIT_SUBSTRATE_SMTP_USERNAME:=}"
 : "${KIT_SUBSTRATE_SMTP_PASSWORD:=}"
-: "${KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN:=}"
 : "${KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET:=}"
 : "${KIT_SUBSTRATE_MAIL_FROM:=}"
 : "${KIT_SUBSTRATE_MAIL_FROM_NAME:=}"
@@ -171,15 +245,19 @@ NATS_BOX_VERSION="0.20.0"
 # GENERATED on first creation (or taken from the override below), because
 # identity mounts GET /v1/mfa and the enrollment routes only when the key is
 # present — an install without it boots an identity that can neither show the
-# truthful `Off` state nor enroll a factor. COURIER_TOKEN is identity's
-# credential FOR courier (the all-or-nothing pair with COURIER_BASE_URL, which
-# stays unset): absent is the reduced surface the chart documents, not a
-# placeholder.
-: "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY:=}"
-: "${KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID:=}"
+# truthful `Off` state nor enroll a factor.
+#
+# The OIDC signing key is NOT on the list above, and that is the whole point of
+# this packet: it used to be an operator input, which made identity's private
+# RSA key a value in somebody's shell history and somebody else's transcript.
+# It is the customer's own key, so it is BORN ON THIS BOX — generated on first
+# creation, read back once-only thereafter, and printed never. It is written
+# beside an issuer the operator may set, because identity's OIDC surface is
+# all-or-nothing (issuer + key + key id, or none of the three): a lone key is
+# a boot-time refusal, not a half-configured provider.
+: "${KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER:=}"
 : "${KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY:=}"
-: "${KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN:=}"
 
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -252,7 +330,7 @@ kit_substrate_guard() {
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
-TOTAL=10
+TOTAL=11
 
 log_step() {
   STEP=$((STEP + 1))
@@ -274,7 +352,7 @@ dry_run() {
 # worse than no substrate, because it looks like it works.
 preflight() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "DRY_RUN: would check root, curl, Linux, arch, memory, registry reachability"
+    echo "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
     return 0
   fi
 
@@ -285,6 +363,21 @@ preflight() {
 
   if ! command -v curl >/dev/null 2>&1; then
     echo "error: curl is required — every component is fetched over HTTPS" >&2
+    exit 1
+  fi
+
+  # openssl generates identity's OIDC signing key ON THIS BOX (it is the
+  # customer's own key and never travels), and jq reads step 11's mint
+  # response. Both are refusals, not warnings: the first would otherwise be
+  # discovered by an operator with a copy-paste runbook to fall back on, which
+  # is exactly the invariant-3 violation this install exists to remove.
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "error: openssl is required — identity's OIDC signing key is generated on this box rather than supplied" >&2
+    exit 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "error: jq is required — step 11 reads the minted credential out of identity's response" >&2
     exit 1
   fi
 
@@ -385,35 +478,88 @@ install_argocd() {
 }
 
 # --- step 5: the image pull secret ------------------------------------------
-# The value comes from the environment. It is validated by shape — it must
-# decode from base64 and carry an `auths` object — and never echoed.
+# The credential is REDEEMED, never handed over. The box presents its own
+# single-use, minutes-lived, box-bound capability and receives ONE short-lived
+# dockerconfigjson — the value lives in a shell variable, reaches the cluster
+# through a pipe, and is never written to disk or echoed. The step is
+# re-run and therefore re-redeems: a credential with minutes of life is
+# supposed to be replaced, and `apply` is the mechanism.
+#
+# The capability is validated by SHAPE before any network call, so a pasted
+# dockerconfigjson (the value this step used to take, and the mistake an
+# operator following an older runbook would make) is refused here with the fix
+# named, rather than sent somewhere as an opaque bearer.
+REGISTRY_DOCKERCONFIGJSON=""
+
+registry_capability_shape_ok() {
+  [[ "${1:-}" =~ ^cap_[0-9a-f]{64}$ ]]
+}
+
+# redeem_registry_credential — sets REGISTRY_DOCKERCONFIGJSON.
+#
+# The redemption request names the purpose and the box, so the registry can
+# refuse a capability minted for another purpose or another box without having
+# to trust this script to have checked. The response body IS the base64
+# dockerconfigjson: one line, one shape, no JSON to parse on a box with no jq —
+# and the same shape check the old operator-supplied value had to pass.
+redeem_registry_credential() {
+  if [ -z "$KIT_SUBSTRATE_BOX_ID" ]; then
+    echo "error: KIT_SUBSTRATE_BOX_ID is not set" >&2
+    echo "  export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'" >&2
+    echo "  # the box's own identity, and what the registry capability is bound to" >&2
+    exit 1
+  fi
+  if ! registry_capability_shape_ok "$KIT_SUBSTRATE_REGISTRY_CAPABILITY"; then
+    echo "error: KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability" >&2
+    echo "  export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'" >&2
+    echo "  # a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted" >&2
+    exit 1
+  fi
+  local response decoded
+  # `curl -f` turns a 401/403/410 into a non-zero exit with the body on stderr;
+  # a registry refusal is a refusal about the capability, and the operator's
+  # next step is to enroll again — never to try another value.
+  if ! response="$(curl -fsS -X POST \
+    -H "Authorization: Bearer ${KIT_SUBSTRATE_REGISTRY_CAPABILITY}" \
+    -H 'Content-Type: application/json' \
+    --data "$(printf '{"purpose":"registry.pull","box_id":"%s"}' "$KIT_SUBSTRATE_BOX_ID")" \
+    "${KIT_SUBSTRATE_REGISTRY_URL}/v1/boxes/${KIT_SUBSTRATE_BOX_ID}/registry-credentials" 2>/dev/null)"; then
+    echo "error: the registry refused this box's capability — expired, already redeemed, or minted for another box" >&2
+    echo "  re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" >&2
+    exit 1
+  fi
+  if ! decoded="$(printf '%s' "$response" | base64 -d 2>/dev/null)"; then
+    echo "error: the registry's response is not a base64 dockerconfigjson" >&2
+    exit 1
+  fi
+  case "$decoded" in
+    *'"auths"'*) ;;
+    *)
+      echo "error: the registry's response has no \"auths\" key — it is not a dockerconfigjson" >&2
+      exit 1
+      ;;
+  esac
+  REGISTRY_DOCKERCONFIGJSON="$response"
+}
+
 install_pull_secret() {
-  log_step "GHCR image pull secret (from KIT_SUBSTRATE_PULL_SECRET)"
-  if dry_run "create secret ghcr-pull-secret in: argocd identity gateway courier parlor observability"; then
+  log_step "the GHCR image pull secret, redeemed for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
+  if dry_run "redeem one short-lived registry credential from KIT_SUBSTRATE_REGISTRY_CAPABILITY and apply ghcr-pull-secret in: argocd identity gateway courier parlor observability"; then
     return 0
   fi
-  if [ -z "$KIT_SUBSTRATE_PULL_SECRET" ]; then
-    echo "error: KIT_SUBSTRATE_PULL_SECRET is not set" >&2
-    echo "  export KIT_SUBSTRATE_PULL_SECRET='<base64 dockerconfigjson>'" >&2
-    echo "  # the value is never written to disk by this script" >&2
-    exit 1
-  fi
-  # Shape check without echoing: decode and look for the `auths` key. The
-  # decoded value is captured into a variable and never printed.
-  local decoded
-  if ! decoded="$(printf '%s' "$KIT_SUBSTRATE_PULL_SECRET" | base64 -d 2>/dev/null)"; then
-    echo "error: KIT_SUBSTRATE_PULL_SECRET is not valid base64" >&2
-    exit 1
-  fi
-  if ! printf '%s' "$decoded" | grep -q '"auths"'; then
-    echo "error: KIT_SUBSTRATE_PULL_SECRET is not a dockerconfigjson (no \"auths\" key)" >&2
-    exit 1
-  fi
-  local ns
+  redeem_registry_credential
+  # The secret is rendered and applied THROUGH A PIPE — no `--docker-config`
+  # file, no `--from-file=<(...)`, and no value in any argv. The
+  # process-substitution form this step used to carry looks equivalent and is
+  # not: it hands kubectl a `/dev/fd/N` path that exists only for the lifetime
+  # of one command, which is a thing that works on the machine it was written
+  # on and nowhere else. `data` is base64 by the Secret contract, and the
+  # credential is already base64, so it is substituted as-is.
+  local ns encoded
+  encoded="$(printf '%s' "$REGISTRY_DOCKERCONFIGJSON" | tr -d '\n')"
   for ns in argocd identity gateway courier parlor observability; do
-    kubectl --kubeconfig="$KUBECONFIG" create secret docker-registry ghcr-pull-secret \
-      --from-file=.dockerconfigjson=<(printf '%s' "$KIT_SUBSTRATE_PULL_SECRET" | base64 -d) \
-      --namespace="$ns" --dry-run=client -o yaml |
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: ghcr-pull-secret\n  namespace: %s\ntype: kubernetes.io/dockerconfigjson\ndata:\n  .dockerconfigjson: %s\n' \
+      "$ns" "$encoded" |
       kubectl --kubeconfig="$KUBECONFIG" apply -f -
   done
 }
@@ -627,6 +773,56 @@ database_url_for() {
   fi
 }
 
+# --- identity's OIDC signing key, born on this box ---------------------------
+# ONE key, generated here, read back once-only, never printed.
+#
+# It used to be an operator input (KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY /
+# _ID), which made identity's private RSA key a value in a shell history and a
+# transcript. It is the CUSTOMER's key: it signs the tokens their users hold,
+# and a key that has been through somebody else's terminal is not theirs. So it
+# is generated on the box, stored in identity-secrets, and — exactly like
+# SIGNUP_SIGNING_KEY and MFA_ENCRYPTION_KEY — never regenerated on a re-run,
+# because gateway caches JWKS entries by `kid` and a service that signs with a
+# new key every boot is a service nobody can verify.
+#
+# The id is DERIVED FROM THE KEY rather than invented: it is a public
+# thumbprint (16 hex of the key's SHA-256), so it is stable for as long as the
+# key is, and a cached verifier's `kid` keeps matching. It also means no clock,
+# no counter, and nothing to get out of step on a re-run.
+#
+# RSA at 2048 is the floor: identity refuses a shorter key at boot
+# (MinKeyBits), and a published JWKS is a durable commitment.
+oidc_key_id_for() {
+  printf 'box-%s' "$(printf '%s' "$1" | openssl dgst -sha256 -hex | sed 's/^.*= *//' | cut -c1-16)"
+}
+
+# resolve_oidc_signing_key — sets OIDC_SIGNING_KEY / OIDC_SIGNING_KEY_ID.
+# Called on the LIVE path, and only when the surface is wired (the issuer is
+# set): identity's OIDC config is all-or-nothing — an issuer without a key is a
+# boot refusal, and a key without an issuer is the same refusal, so a half
+# answer is not an answer.
+resolve_oidc_signing_key() {
+  local stored
+  stored="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY)"
+  if [ -n "$stored" ]; then
+    OIDC_SIGNING_KEY="$stored"
+    stored="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY_ID)"
+    # A stored key with no stored id (a legacy secret, or a key id an operator
+    # removed) gets the id the key itself implies, not a fresh one.
+    if [ -n "$stored" ]; then
+      OIDC_SIGNING_KEY_ID="$stored"
+    else
+      OIDC_SIGNING_KEY_ID="$(oidc_key_id_for "$OIDC_SIGNING_KEY")"
+    fi
+    return 0
+  fi
+  OIDC_SIGNING_KEY="$(openssl genrsa 2048 2>/dev/null)" || {
+    echo "error: openssl could not generate identity's OIDC signing key on this box" >&2
+    exit 1
+  }
+  OIDC_SIGNING_KEY_ID="$(oidc_key_id_for "$OIDC_SIGNING_KEY")"
+}
+
 # validate_mfa_override — the operator-supplied MFA key, when set, must be
 # exactly what identity's config parser accepts: base64url without padding
 # decoding to 32 bytes (43 characters from A-Z a-z 0-9 - _). A refused value
@@ -687,12 +883,18 @@ validate_mfa_override() {
 #     (a self-contained shared value, generated like the raise text
 #     suggests), the Redis password (redis half above), each Postgres role's
 #     password (step 8).
+#   minted on the box in step 11, never printed, never an input —
+#     COURIER_IDENTITY_TOKEN. It is an API key identity itself mints, so the
+#     old two-terminal loop (install → boot → mint by hand → paste into a
+#     second run) is gone: the same four calls run on this box and the value
+#     is patched into both secrets that have to hold it. `COURIER_TOKEN` in
+#     identity-secrets is the SAME value, which courier requires and which no
+#     hand-off can be trusted to get right.
 #   from the environment, shape-validated, never echoed — courier's SMTP
-#     settings and provider secrets (see the header for the variable names),
-#     plus COURIER_IDENTITY_TOKEN, which is paired, not generatable: it is an
-#     API key identity itself mints (POST /v1/accounts/{id}/api-keys) AFTER
-#     identity boots, so the first run refuses naming the mint and the
-#     re-run resumes through the guards.
+#     settings and the provider's signing secret KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET
+#     (see the header for the variable names). This is now the ONE long-lived
+#     secret an operator hands over, because the provider is the only party
+#     that can hold it.
 # `gateway-tls` is NOT created here: cert-manager fills it from the
 # ClusterIssuer. `DATABASE_URL` agrees with the Cluster by construction — the
 # host is CNPG's read-write service, the database and role are the service's
@@ -711,12 +913,11 @@ install_service_secrets() {
   # before any secret is written.
   if [ -z "$KIT_SUBSTRATE_SMTP_HOST" ] ||
      [ -z "$KIT_SUBSTRATE_SMTP_USERNAME" ] || [ -z "$KIT_SUBSTRATE_SMTP_PASSWORD" ] ||
-     [ -z "$KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN" ] ||
      [ -z "$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" ]; then
     echo "error: courier's externally-sourced settings are incomplete — all of these are required:" >&2
     echo "  KIT_SUBSTRATE_SMTP_HOST, KIT_SUBSTRATE_SMTP_USERNAME, KIT_SUBSTRATE_SMTP_PASSWORD" >&2
-    echo "  KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN (minted by identity AFTER it boots: POST /v1/accounts/{id}/api-keys — then re-run; the guards resume)" >&2
     echo "  KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET (the provider's signing secret)" >&2
+    echo "  # courier's identity credential is NOT here: step 11 mints it on this box" >&2
     exit 1
   fi
   case "$KIT_SUBSTRATE_SMTP_ADAPTER" in
@@ -741,14 +942,11 @@ install_service_secrets() {
 
   # identity-secrets. Always: DATABASE_URL (agrees with the Cluster),
   # SIGNUP_SIGNING_KEY (generated once) and MFA_ENCRYPTION_KEY (generated
-  # once, or the validated operator override). Conditionally: COURIER_TOKEN
-  # (only when the operator set it — identity's credential FOR courier,
-  # absent by default) and the OIDC/OAuth surfaces, only when the operator
-  # set them — an unset surface stays unwired, and an unwired surface
-  # contributes no key (envFrom makes every key an env var; a placeholder
-  # would be a lie the service would then read as configuration). MFA has no
-  # unwired state on a fresh install: without the key identity never mounts
-  # its MFA routes.
+  # once, or the validated operator override). When the operator set an issuer:
+  # OIDC_ISSUER plus a signing key and key id GENERATED ON THIS BOX — the
+  # customer's own key, which is why it is not an input. Step 11 adds
+  # COURIER_TOKEN with the value it minted, so identity holds exactly the key
+  # courier presents rather than one the operator matched up by hand.
   # A pre-existing identity-secrets is NEVER patched — not with a generated
   # key and not with an override. The stored key is a persistent encryption
   # key: an imported database could hold ciphertext sealed under a key no
@@ -759,7 +957,7 @@ install_service_secrets() {
   # base64url, no padding): identity decodes MFA_ENCRYPTION_KEY with
   # base64.RawURLEncoding and refuses any other length at boot.
   validate_mfa_override
-  local signup_key mfa_key identity_args
+  local signup_key mfa_key identity_args oidc_key="" oidc_key_id=""
   signup_key="$(read_secret_key identity identity-secrets SIGNUP_SIGNING_KEY)"
   if [ -z "$signup_key" ]; then
     signup_key="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
@@ -775,12 +973,17 @@ install_service_secrets() {
   identity_args=(--from-literal=DATABASE_URL="$(database_url_for identity)"
     --from-literal=SIGNUP_SIGNING_KEY="$signup_key"
     --from-literal=MFA_ENCRYPTION_KEY="$mfa_key")
-  [ -n "$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN" ] &&
-    identity_args+=(--from-literal=COURIER_TOKEN="$KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN")
-  [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY" ] &&
-    identity_args+=(--from-literal=OIDC_SIGNING_KEY="$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY")
-  [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID" ] &&
-    identity_args+=(--from-literal=OIDC_SIGNING_KEY_ID="$KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID")
+  # The OIDC surface, when wired, carries three keys or none: identity refuses
+  # to boot on a lone key. The signing key is generated here and never printed;
+  # the issuer is configuration and is echoed as configuration.
+  if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    resolve_oidc_signing_key
+    oidc_key="$OIDC_SIGNING_KEY"
+    oidc_key_id="$OIDC_SIGNING_KEY_ID"
+    identity_args+=(--from-literal=OIDC_ISSUER="$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER"
+      --from-literal=OIDC_SIGNING_KEY="$oidc_key"
+      --from-literal=OIDC_SIGNING_KEY_ID="$oidc_key_id")
+  fi
   [ -n "$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY" ] &&
     identity_args+=(--from-literal=OAUTH_ENCRYPTION_KEY="$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY")
   if kubectl --kubeconfig="$KUBECONFIG" get secret identity-secrets -n identity >/dev/null 2>&1; then
@@ -816,7 +1019,10 @@ install_service_secrets() {
   # Generated here: SECRET_KEY_BASE (64 bytes — Phoenix refuses shorter),
   # COURIER_SECRET_BOX_KEY (32 bytes base64, the spelling the comment in
   # runtime.exs suggests), COURIER_ERROR_RELAY_TOKEN (32 bytes hex, likewise).
-  # From the environment: the relay settings and the identity-minted token.
+  # From the environment: the relay settings and the provider's signing secret.
+  # COURIER_IDENTITY_TOKEN is NOT set here and is NOT an input: step 11 mints
+  # it from identity's own API, on this box, and patches this secret with the
+  # value — the loop that used to run across two terminals runs inside one run.
   # A missing key is a `System.get_env(…) || raise` at boot — the cheapest
   # possible failure, and it happens before the first customer request.
   local secret_base secret_box relay_token
@@ -833,7 +1039,6 @@ install_service_secrets() {
     kubectl --kubeconfig="$KUBECONFIG" create secret generic courier-secrets -n courier \
       --from-literal=DATABASE_URL="$(database_url_for courier)" \
       --from-literal=SECRET_KEY_BASE="$secret_base" \
-      --from-literal=COURIER_IDENTITY_TOKEN="$KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN" \
       --from-literal=COURIER_SECRET_BOX_KEY="$secret_box" \
       --from-literal=COURIER_MAIL_ADAPTER="$KIT_SUBSTRATE_SMTP_ADAPTER" \
       --from-literal=COURIER_SMTP_HOST="$KIT_SUBSTRATE_SMTP_HOST" \
@@ -843,7 +1048,7 @@ install_service_secrets() {
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
-    echo "      secret courier-secrets created (generated values once-only; rotate by replacing the secret)"
+    echo "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 11 — minted on this box)"
   fi
   # Optional mail-from passthrough: courier falls back to its compiled
   # default without these, so they ride the same conditional pattern as the
@@ -936,6 +1141,130 @@ install_nats() {
   exit 1
 }
 
+# --- step 11: courier's identity credential, minted on this box -------------
+# install → boot → MINT → patch → restart, in ONE run on ONE box.
+#
+# This loop used to cross a boundary: identity booted, the operator minted an
+# API key by hand (POST /v1/accounts/{id}/api-keys), pasted it into a second
+# run of this script, and a mismatch between identity's COURIER_TOKEN and
+# courier's COURIER_IDENTITY_TOKEN surfaced as a 403 that reads like a network
+# fault. None of that is a property the box cannot hold itself, so the mint
+# runs here — the same four calls the local launch harness makes, against
+# identity's own in-cluster endpoint over a port-forward, on the box.
+#
+# WHAT NEVER LEAVES: the minted value is a shell variable, written into two
+# secrets, and printed nowhere — not in DRY_RUN, not on a refusal, not on
+# success. The pair is written as ONE value in ONE step, which is the only
+# shape that cannot drift.
+mint_courier_identity_token() {
+  log_step "courier's identity credential, minted on this box"
+  # The guard is the resume path, and it is the VALUE rather than a step flag:
+  # a re-run that finds the credential already minted has nothing to mint.
+  if [ -n "$(read_secret_key courier courier-secrets COURIER_IDENTITY_TOKEN)" ]; then
+    echo "      credential already minted on this box, skipping (rotate by replacing the secret and restarting the pods)"
+    return 0
+  fi
+  if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets and courier-secrets with the same value and restart both deployments"; then
+    return 0
+  fi
+
+  kubectl --kubeconfig="$KUBECONFIG" -n identity rollout status deployment/identity --timeout=300s
+
+  # Identity is reachable at its cluster-local Service only from inside the
+  # cluster, so the box forwards a port to it — the same mechanism the launch
+  # harness uses, on the box, with no ingress and no external route.
+  local forward_port="${KIT_SUBSTRATE_IDENTITY_LOCAL_PORT:-18080}"
+  kubectl --kubeconfig="$KUBECONFIG" -n identity port-forward "svc/identity" "${forward_port}:8080" >/dev/null 2>&1 &
+  local forward_pid=$!
+  # The forward is torn down on EVERY path out of this function — a mint that
+  # fails halfway must not leave an unauthenticated local port listening.
+  trap 'kill "$forward_pid" 2>/dev/null || true' RETURN
+
+  local base="http://127.0.0.1:${forward_port}" out token
+  # The four calls, each forced by the one before it. The account is courier's
+  # and belongs to the mail path and nothing else; the scope is the floor of
+  # the vocabulary, because the mint refuses an empty list and the
+  # introspection the key is actually used for is not account-scoped.
+  out="$(curl -fsS -X POST "${base}/v1/signup-timestamp")" || {
+    echo "error: identity would not mint a signup timestamp" >&2
+    return 1
+  }
+  local mint_timestamp mint_signature owner_password
+  mint_timestamp="$(printf '%s' "$out" | jq -r '.timestamp // empty')"
+  mint_signature="$(printf '%s' "$out" | jq -r '.signature // empty')"
+  if [ -z "$mint_timestamp" ] || [ -z "$mint_signature" ]; then
+    echo "error: identity's signup-timestamp response carried no pair" >&2
+    return 1
+  fi
+  # The pair must age before it verifies: identity's signup defence waits
+  # MinAge (2s) between mint and register — a person needs seconds to fill a
+  # form, a bot submits instantly. This mint is a client of the same route, so
+  # the defence applies to it, and the wait is the defence working.
+  sleep 3
+  owner_password="$(openssl rand -hex 24)"
+  out="$(curl -fsS -X POST "${base}/v1/users" \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg email "owner+substrate@cafaye.local" \
+      --arg password "$owner_password" \
+      --argjson timestamp "$mint_timestamp" --arg signature "$mint_signature" \
+      '{email: $email, password: $password, website: "", timestamp: $timestamp, signature: $signature}')")" || {
+    echo "error: identity would not register this box's owner account" >&2
+    return 1
+  }
+  local session
+  session="$(curl -fsS -X POST "${base}/v1/session" \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg email "owner+substrate@cafaye.local" --arg password "$owner_password" \
+      '{email: $email, password: $password}')")" || {
+    echo "error: identity would not open a session for this box's owner account" >&2
+    return 1
+  }
+  local session_token
+  session_token="$(printf '%s' "$session" | jq -r '.token // empty')"
+  if [ -z "$session_token" ]; then
+    echo "error: identity's session response carried no token" >&2
+    return 1
+  fi
+  local account_id
+  account_id="$(curl -fsS -X POST "${base}/v1/accounts" \
+    -H "Authorization: Bearer ${session_token}" -H 'Content-Type: application/json' \
+    -d '{"name":"courier"}' | jq -r '.id // empty')" || {
+    echo "error: identity would not create this box's account" >&2
+    return 1
+  }
+  [ -n "$account_id" ] || {
+    echo "error: identity's account response carried no id" >&2
+    return 1
+  }
+  token="$(curl -fsS -X POST "${base}/v1/accounts/${account_id}/api-keys" \
+    -H "Authorization: Bearer ${session_token}" -H 'Content-Type: application/json' \
+    -d '{"name":"courier","scopes":["accounts:read"]}' | jq -r '.token // empty')" || {
+    echo "error: identity would not mint courier's credential" >&2
+    return 1
+  }
+  [ -n "$token" ] || {
+    echo "error: identity's mint response carried no token" >&2
+    return 1
+  }
+
+  # ONE value, TWO secrets — and a PATCH, not a create. `kubectl apply` with a
+  # whole Secret object is a REPLACE: writing `COURIER_TOKEN` through one would
+  # delete `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the
+  # OIDC keys from identity-secrets in the same breath. A merge patch adds the
+  # key and touches nothing else, and it is built by `jq` so a token with a
+  # quote in it cannot break the JSON or land in an argv (`--patch-file=-`
+  # reads it from a pipe).
+  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_TOKEN":$t}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
+    --type=merge --patch-file=-
+  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_IDENTITY_TOKEN":$t}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n courier patch secret courier-secrets \
+    --type=merge --patch-file=-
+  kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
+  kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
+  echo "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"
+}
+
 # --- main -------------------------------------------------------------------
 main() {
   preflight
@@ -949,6 +1278,7 @@ main() {
   install_postgres_cluster
   install_redis_and_secrets
   install_nats
+  mint_courier_identity_token
   echo
   echo "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   echo "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"

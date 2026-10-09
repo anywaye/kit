@@ -1,5 +1,76 @@
 ## Unreleased
 
+### Security
+
+- **The substrate installer no longer takes a long-lived secret as an input
+  (W2-P4).** Two values used to be handed TO it — a GHCR
+  `dockerconfigjson` (`KIT_SUBSTRATE_PULL_SECRET`) and identity's OIDC signing
+  key and id — and both violated invariant 3 ("secrets are born where they are
+  used") on the input side, because a value in somebody's shell history is not
+  a value born on the box.
+  - **The pull secret is redeemed, not supplied.** The installer takes the
+    box's enrolled identity (`KIT_SUBSTRATE_BOX_ID`) and a single-purpose,
+    minutes-lived, box-bound capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`),
+    presents it once at `KIT_SUBSTRATE_REGISTRY_URL`, and receives ONE
+    short-lived dockerconfigjson which lives in a shell variable, is
+    shape-checked (base64, an `auths` object) and is applied as a rendered
+    Secret through a pipe. It reaches no disk, no argv and no stdout, and the
+    capability is validated by shape BEFORE any network call, so a pasted
+    dockerconfigjson from an older runbook is refused rather than sent
+    somewhere as an opaque bearer.
+  - **Identity's OIDC signing key is generated on the box** — `openssl genrsa
+    2048` (identity's own `MinKeyBits`), with a key id DERIVED FROM THE KEY (a
+    public thumbprint, so a verifier's cached `kid` keeps matching) instead of
+    invented. Both are read back once-only, so a re-run never rotates a live
+    system's key. The surface stays all-or-nothing: the operator may set
+    `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` (configuration, not a secret) and the
+    key is born beside it; with no issuer the surface stays absent rather than
+    half-wired.
+  - **Courier's identity credential is now minted, patched and restarted
+    INSIDE one run** (new step 11). The loop used to cross a boundary twice —
+    mint an API key in one terminal, paste it into a second run — and the two
+    halves identity and courier hold must be the same value, which a hand-off
+    cannot be trusted to get right (a mismatch reads as identity's `403`).
+    Step 11 makes the same four calls `launch/bin/launch` makes, against
+    identity's cluster-local endpoint over a port-forward, writes ONE value
+    into `identity-secrets` (`COURIER_TOKEN`) and `courier-secrets`
+    (`COURIER_IDENTITY_TOKEN`), restarts both deployments, and prints none of
+    it.
+  - The one long-lived secret an operator still supplies is
+    `KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET`, because the provider is
+    the only party that can hold it.
+
+- **`install.sh` step 11 writes the minted credential with a merge PATCH, not
+  a whole-Secret apply** — the difference is load-bearing and was a real bug
+  in this packet's own first draft. `kubectl apply` carrying a full Secret
+  object is a REPLACE: writing `COURIER_TOKEN` through one would delete
+  `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the OIDC keys
+  from `identity-secrets` in the same breath, and the symptom would be an
+  identity that boots no further after its next restart. The patch body is
+  built by `jq` and read from `--patch-file=-`, so a token with a quote in it
+  can neither break the JSON nor reach an argv. `tests/substrate_test.sh`'s
+  mock kubectl now MERGES a patch the way kubectl does, so the assertion
+  "identity-secrets still holds the keys step 9 wrote" is a real assertion
+  rather than an accident of the mock — and the SECRET RECORD check learns the
+  patch spelling with a control of its own that removes the patch and must go
+  red, so the widened check is proven on the path that changed.
+
+- `templates/substrate/install.sh` step 5's pull-secret write no longer hands
+  kubectl a `--from-file=<(...)` path. A `/dev/fd/N` exists only for the
+  lifetime of one command, which is a form that works on the machine it was
+  written on and nowhere else; the rendered Secret is applied through a pipe,
+  which also takes the value out of any argv.
+
+- `tests/substrate_test.sh` gains section 13 — the proofs above, each with a
+  control that must answer differently: the retired names planted back into
+  code, a short/absent/dockerconfigjson-shaped capability, an echoed key, an
+  echo-free log planted with the minted credential, and a manifest with no
+  dockerconfigjson type. The retired-name check reads CODE with comments
+  stripped, which is the same strip the SECRET RECORD check uses: a comment
+  naming a retired variable is the record of the change, and a comment cannot
+  read a variable. The `SECRET RECORD` tripwire is unchanged in shape and
+  still the drift contract for what the installer writes.
+
 ### Fixed
 
 - **`tests/launch_test.sh` went red for anyone who had ever launched the

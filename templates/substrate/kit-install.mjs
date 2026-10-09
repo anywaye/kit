@@ -20,9 +20,11 @@
 // the packet names. A .ts Worker would need a type-stripping loader to be
 // testable that way; plain ESM needs none.
 //
-// NO SECRET IS HELD HERE. install.sh reads KIT_SUBSTRATE_PULL_SECRET and
-// KIT_SUBSTRATE_ACME_EMAIL from the operator's environment at run time;
-// this Worker serves bytes and holds nothing.
+// NO SECRET IS HELD HERE — and none is asked for. install.sh takes the box's
+// enrolled identity and a short-lived capability from the operator's
+// environment at run time, redeems one short-lived registry credential with
+// it, and generates everything else on the box itself; this Worker serves
+// bytes and holds nothing.
 
 import installSh from "./install.sh";
 
