@@ -1247,15 +1247,19 @@ mint_courier_identity_token() {
     return 1
   }
 
-  # ONE value, TWO secrets. `--from-literal` is this file's own spelling for a
-  # written secret (see step 9) and it keeps the SECRET RECORD whole; the value
-  # is never echoed, so this step's output names the action and nothing else.
-  kubectl --kubeconfig="$KUBECONFIG" -n courier create secret generic courier-secrets \
-    --from-literal=COURIER_IDENTITY_TOKEN="$token" --dry-run=client -o yaml |
-    kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
-  kubectl --kubeconfig="$KUBECONFIG" -n identity create secret generic identity-secrets \
-    --from-literal=COURIER_TOKEN="$token" --dry-run=client -o yaml |
-    kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
+  # ONE value, TWO secrets — and a PATCH, not a create. `kubectl apply` with a
+  # whole Secret object is a REPLACE: writing `COURIER_TOKEN` through one would
+  # delete `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the
+  # OIDC keys from identity-secrets in the same breath. A merge patch adds the
+  # key and touches nothing else, and it is built by `jq` so a token with a
+  # quote in it cannot break the JSON or land in an argv (`--patch-file=-`
+  # reads it from a pipe).
+  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_TOKEN":$t}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
+    --type=merge --patch-file=-
+  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_IDENTITY_TOKEN":$t}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n courier patch secret courier-secrets \
+    --type=merge --patch-file=-
   kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
   echo "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"

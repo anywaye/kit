@@ -40,6 +40,21 @@
     `KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET`, because the provider is
     the only party that can hold it.
 
+- **`install.sh` step 11 writes the minted credential with a merge PATCH, not
+  a whole-Secret apply** — the difference is load-bearing and was a real bug
+  in this packet's own first draft. `kubectl apply` carrying a full Secret
+  object is a REPLACE: writing `COURIER_TOKEN` through one would delete
+  `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the OIDC keys
+  from `identity-secrets` in the same breath, and the symptom would be an
+  identity that boots no further after its next restart. The patch body is
+  built by `jq` and read from `--patch-file=-`, so a token with a quote in it
+  can neither break the JSON nor reach an argv. `tests/substrate_test.sh`'s
+  mock kubectl now MERGES a patch the way kubectl does, so the assertion
+  "identity-secrets still holds the keys step 9 wrote" is a real assertion
+  rather than an accident of the mock — and the SECRET RECORD check learns the
+  patch spelling with a control of its own that removes the patch and must go
+  red, so the widened check is proven on the path that changed.
+
 - `templates/substrate/install.sh` step 5's pull-secret write no longer hands
   kubectl a `--from-file=<(...)` path. A `/dev/fd/N` exists only for the
   lifetime of one command, which is a form that works on the machine it was

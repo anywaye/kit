@@ -755,6 +755,12 @@ records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
 if len(records) != 4:
     print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
+# A key is WRITTEN in one of two spellings: `--from-literal=KEY=` (the secrets
+# step 9 creates) or the merge patch step 11 sends, whose body is built as
+# `{"stringData":{"KEY":$t}}`. Both are writes and both are checked, so the
+# record cannot be satisfied by a key that only appears in a comment or a
+# variable name. The control below removes one of each.
+patch_keys = set(re.findall(r'"stringData":\{"([A-Z_]+)":\$t\}', code))
 # Conditional keys: set only when the operator sets the surface (identity's
 # OIDC block and its issuer, its courier credential, courier's mail-from). They
 # are deliberately UNRECORDED — absent is a valid reduced surface, and the
@@ -780,13 +786,13 @@ for secret, keys in records:
     if f"create secret generic {secret}" not in code:
         problems.append(f"{secret} is recorded but never created")
     for key in keys.split():
-        if f"--from-literal={key}=" not in code:
+        if f"--from-literal={key}=" not in code and key not in patch_keys:
             problems.append(f"{secret} records {key} but no --from-literal sets it")
 created = set(re.findall(r"create secret generic (\S+)", code))
 for secret in created:
     if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor")):
         problems.append(f"{secret} is created but not recorded")
-for key in set(re.findall(r"--from-literal=([A-Z_]+)=", code)):
+for key in set(re.findall(r"--from-literal=([A-Z_]+)=", code)) | patch_keys:
     if key in conditional:
         continue
     if not any(key in keys for keys in recorded.values()):
@@ -804,6 +810,14 @@ run 'the recorded secret name-and-key list matches install.sh' green check_secre
 fixture_dropped_key="$WORK/install-dropped-key.sh"
 grep -v -- '--from-literal=COURIER_SMTP_PASSWORD=' "$SUBSTRATE/install.sh" >"$fixture_dropped_key"
 run 'control: a secret with a key removed goes red' red check_secret_record "$fixture_dropped_key"
+
+# The second control, for the other spelling: step 11's mint writes its key
+# through a merge patch, and a fixture with that patch removed must go red
+# too. Without it the widened check would be proven only by the --from-literal
+# path, which is the path that never changed.
+fixture_dropped_patch="$WORK/install-dropped-patch.sh"
+grep -v -- '"stringData":{"COURIER_IDENTITY_TOKEN":$t}' "$SUBSTRATE/install.sh" >"$fixture_dropped_patch"
+run 'control: a secret whose patch is removed goes red' red check_secret_record "$fixture_dropped_patch"
 
 # The reverse control: a fixture setting a key the record does not name (and
 # the conditional set does not excuse). Must go red the other way.
@@ -1108,7 +1122,7 @@ mock_get() {
 # (base64 of the stored value, the shape read_secret_key decodes).
 # Anything else is a loud failure, not a silent success.
 mock_kubectl() {
-  local fallback_ns=""
+  local fallback_ns="" patch_file_arg=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --kubeconfig=*) shift ;;
@@ -1221,6 +1235,42 @@ mock_kubectl() {
       # `rollout status` (a wait), `rollout restart` (a kick). Both are no-ops
       # against the file store: the mint loop's contract is that it ASKS, and
       # the value assertions below are what prove it wrote the right thing.
+      return 0
+      ;;
+    patch)
+      # A merge patch, read from `--patch-file=-`: the mock MERGES the
+      # stringData keys into the stored secret, exactly as kubectl does. This
+      # is what makes the "no other key is wiped" assertion below mean
+      # anything — a mock that treated a patch as a replace would make the
+      # destructive and the correct write indistinguishable.
+      local patch_ns="$fallback_ns" patch_name="" body=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) patch_ns="$2"; shift 2 ;;
+          --namespace=*) patch_ns="${1#--namespace=}"; shift ;;
+          secret) shift; patch_name="${1:-}"; shift ;;
+          --type=*) shift ;;
+          --type) shift 2 ;;
+          --patch-file=*) patch_file_arg="${1#--patch-file=}"; shift ;;
+          *) shift ;;
+        esac
+      done
+      if [ -z "$patch_name" ]; then
+        echo "mock_kubectl: patch without a secret name" >&2
+        return 1
+      fi
+      case "${patch_file_arg:-}" in
+        -) body="$(cat)" ;;
+        "") echo "mock_kubectl: patch without --patch-file" >&2; return 1 ;;
+        *) body="$(cat "$patch_file_arg")" ;;
+      esac
+      local d="$MOCK_ROOT/$patch_ns/$patch_name"
+      mkdir -p "$d"
+      # Every "key": "value" pair under stringData, merged over what is stored.
+      printf '%s' "$body" | jq -r '.stringData // {} | to_entries[] | "\(.key)=\(.value)"' |
+        while IFS= read -r pair; do
+          printf '%s' "${pair#*=}" >"$d/${pair%%=*}"
+        done
       return 0
       ;;
     port-forward)
@@ -1778,6 +1828,11 @@ mkdir -p "$MOCK_ROOT"
 mint_loop_ec=0
 (
   mfa_seed_roles
+  # The box's secrets as step 9 left them — so the assertion below is about
+  # what the mint ADDS, not about a secret it created itself.
+  mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
+  mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
+  mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"
   # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
@@ -1789,11 +1844,21 @@ if [ "$mint_loop_ec" -ne 0 ]; then
   fail 'the mint loop completes inside one run' "$(cat "$WORK/mint-loop.log")"
 elif [ "$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)" != "$COURIER_MINT_TOKEN" ]; then
   fail 'the mint loop completes inside one run' "courier-secrets holds: '$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)'"
-elif [ "$(mock_get identity identity-secrets COURIER_TOKEN)" != "$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)" ]; then
-  fail 'the mint loop completes inside one run' "identity and courier hold different values — the 403 courier README names"
+elif [ "$(mock_get identity identity-secrets COURIER_TOKEN)" != "$COURIER_MINT_TOKEN" ]; then
+  fail 'the mint loop completes inside one run' "identity-secrets holds: '$(mock_get identity identity-secrets COURIER_TOKEN)'"
 else
   pass 'the mint loop completes inside one run'
 fi
+# The patch is a PATCH. A whole-Secret `apply` would carry COURIER_TOKEN and
+# drop every key step 9 wrote — identity would boot without its DATABASE_URL
+# and nothing here would look broken until a pod restarted.
+for kept in DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY; do
+  if [ -n "$(mock_get identity identity-secrets "$kept")" ]; then
+    pass "the mint patches identity-secrets without dropping ${kept}"
+  else
+    fail "the mint patches identity-secrets without dropping ${kept}" "the key is gone after the mint"
+  fi
+done
 run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(cat "$WORK/mint-loop.log")" "$COURIER_MINT_TOKEN"
 run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
 
