@@ -37,11 +37,14 @@
 #   Two values used to be: a GHCR dockerconfigjson and identity's OIDC signing
 #   key. Both violated invariant 3 ("secrets are born where they are used") on
 #   the INPUT side, and both are gone — the first because a box-bound,
-#   single-use, minutes-lived capability buys exactly one short-lived registry
-#   credential and nothing else, the second because an OIDC signing key is the
-#   customer's own key and a private RSA key that has been in someone's shell
-#   history is not their own any more. What the operator now hands over is
-#   configuration and a capability whose value expires in minutes:
+#   single-use, minutes-lived capability, redeemed at conductor's
+#   POST /v1/capabilities/redeem, buys exactly one short-lived registry
+#   credential and nothing else (the registry-side exchange lands with the
+#   registry service — step 5 refuses, naming the gap, until it exists), the
+#   second because an OIDC signing key is the customer's own key and a private
+#   RSA key that has been in someone's shell history is not their own any
+#   more. What the operator now hands over is configuration and a capability
+#   whose value expires in minutes:
 #
 # THE OPERATOR-SUPPLIED VALUES (none of them a long-lived secret):
 #   KIT_SUBSTRATE_BOX_ID           required, no default: the enrolled identity
@@ -55,10 +58,11 @@
 #                                  box's enrolled identity presents to redeem
 #                                  ONE short-lived registry credential. It is
 #                                  never written to disk and never echoed.
-#   KIT_SUBSTRATE_REGISTRY_URL     default https://registry.cafaye.com — where
-#                                  a capability is redeemed. Configuration,
+#   KIT_SUBSTRATE_CONDUCTOR_URL    default https://conductor.cafaye.com — where
+#                                  a capability is redeemed (conductor's
+#                                  POST /v1/capabilities/redeem). Configuration,
 #                                  not a secret; a self-hosted fleet points it
-#                                  at its own registry.
+#                                  at its own conductor.
 #   KIT_SUBSTRATE_ACME_EMAIL       required, no default (see step 7).
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
 #                                  service names; must equal the service set the
@@ -194,11 +198,13 @@ NATS_BOX_VERSION="0.20.0"
 # minted spelling `cap_` plus 64 hex) and never echoed.
 : "${KIT_SUBSTRATE_REGISTRY_CAPABILITY:=}"
 
-# KIT_SUBSTRATE_REGISTRY_URL is where a capability is redeemed. Configuration,
+# KIT_SUBSTRATE_CONDUCTOR_URL is where a capability is REDEEMED. Configuration,
 # not a secret: a cafaye-operated fleet is the default and a self-hosted one
-# points it at the registry it runs. No default of `localhost` — a silently
-# local URL is how a box redeems against itself.
-: "${KIT_SUBSTRATE_REGISTRY_URL:=https://registry.cafaye.com}"
+# points it at the conductor it runs. No default of `localhost` — a silently
+# local URL is how a box redeems against itself. The door is conductor's
+# POST /v1/capabilities/redeem, the one the fleet built; the registry-side
+# exchange (the dockerconfigjson) is a different service, landed separately.
+: "${KIT_SUBSTRATE_CONDUCTOR_URL:=https://conductor.cafaye.com}"
 
 # KIT_SUBSTRATE_ACME_EMAIL is the ACME account contact address. Read from the
 # environment like the pull secret and validated by shape, but it is not a
@@ -662,29 +668,40 @@ install_argocd() {
 
 # --- step 5: the image pull secret ------------------------------------------
 # The credential is REDEEMED, never handed over. The box presents its own
-# single-use, minutes-lived, box-bound capability and receives ONE short-lived
-# dockerconfigjson — the value lives in a shell variable, reaches the cluster
-# through a pipe, and is never written to disk or echoed. The step is
-# re-run and therefore re-redeems: a credential with minutes of life is
-# supposed to be replaced, and `apply` is the mechanism.
+# single-use, minutes-lived, box-bound capability to the one door this fleet
+# actually built for it — conductor's POST /v1/capabilities/redeem — and the
+# request names the purpose and the box, so conductor refuses a capability
+# minted for another purpose or another box without having to trust this
+# script to have checked (the same posture as Capability.redeem!).
+#
+# What comes back is a RECEIPT, not a dockerconfigjson: conductor answers
+# {capability:{purpose,box_id,account_id,expires_at}}, because the second
+# half of the exchange — the registry service that would trade a redeemed
+# capability for a short-lived pull credential — does not exist in the fleet
+# yet (seam audit §5a: no service serves /v1/boxes/*; and conductor holds no
+# registry credential, boundary 6). So this step redeems, verifies the
+# receipt, and then REFUSES the write below, naming the gap: a placeholder
+# pull secret is a worse failure than a refusal — it installs, and then fails
+# at image-pull time in a voice nobody can attribute, which is exactly the
+# half-installed-substrate rule this installer's preflight is written around.
 #
 # The capability is validated by SHAPE before any network call, so a pasted
 # dockerconfigjson (the value this step used to take, and the mistake an
 # operator following an older runbook would make) is refused here with the fix
 # named, rather than sent somewhere as an opaque bearer.
-REGISTRY_DOCKERCONFIGJSON=""
-
 registry_capability_shape_ok() {
   [[ "${1:-}" =~ ^cap_[0-9a-f]{64}$ ]]
 }
 
-# redeem_registry_credential — sets REGISTRY_DOCKERCONFIGJSON.
+# redeem_registry_credential — redeems the capability at conductor's redeem
+# route and verifies the receipt conductor actually renders: the receipt is
+# the redemption's whole product, and its verification is its consumption —
+# no value is carried forward. Refuses (never returns) on any failure.
 #
-# The redemption request names the purpose and the box, so the registry can
-# refuse a capability minted for another purpose or another box without having
-# to trust this script to have checked. The response body IS the base64
-# dockerconfigjson: one line, one shape, no JSON to parse on a box with no jq —
-# and the same shape check the old operator-supplied value had to pass.
+# `curl -f` turns a 401/403/409/410 into a non-zero exit with the body on
+# stderr; a conductor refusal is a refusal about the capability — expired,
+# already redeemed, minted for another purpose or another box — and the
+# operator's next step is to enroll again, never to try another value.
 redeem_registry_credential() {
   if [ -z "$KIT_SUBSTRATE_BOX_ID" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_BOX_ID" "export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>' and re-run — the box's own identity, and what the registry capability is bound to" "KIT_SUBSTRATE_BOX_ID is not set
@@ -696,50 +713,60 @@ redeem_registry_credential() {
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
   # a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted"
   fi
-  local response decoded
-  # `curl -f` turns a 401/403/410 into a non-zero exit with the body on stderr;
-  # a registry refusal is a refusal about the capability, and the operator's
-  # next step is to enroll again — never to try another value.
+  local response receipt_purpose receipt_box receipt_account receipt_expires
   if ! response="$(curl -fsS -X POST \
     -H "Authorization: Bearer ${KIT_SUBSTRATE_REGISTRY_CAPABILITY}" \
     -H 'Content-Type: application/json' \
-    --data "$(printf '{"purpose":"registry.pull","box_id":"%s"}' "$KIT_SUBSTRATE_BOX_ID")" \
-    "${KIT_SUBSTRATE_REGISTRY_URL}/v1/boxes/${KIT_SUBSTRATE_BOX_ID}/registry-credentials" 2>/dev/null)"; then
-    kit_substrate_refuse "" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" "the registry refused this box's capability — expired, already redeemed, or minted for another box
+    --data "$(jq -nc --arg token "$KIT_SUBSTRATE_REGISTRY_CAPABILITY" --arg box_id "$KIT_SUBSTRATE_BOX_ID" \
+      '{token: $token, purpose: "registry.pull", box_id: $box_id}')" \
+    "${KIT_SUBSTRATE_CONDUCTOR_URL}/v1/capabilities/redeem" 2>/dev/null)"; then
+    kit_substrate_refuse "" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" "conductor refused this box's capability — expired, already redeemed, or minted for another purpose or box
   re-run 'caf box enroll' and pass the capability it prints (it lives minutes)"
   fi
-  if ! decoded="$(printf '%s' "$response" | base64 -d 2>/dev/null)"; then
-    kit_substrate_refuse "" "" "the registry's response is not a base64 dockerconfigjson"
+  # The response is parsed as the JSON conductor renders — the receipt, not
+  # the base64 dockerconfigjson a registry would answer (seam audit §5c: the
+  # old consumer decoded the body AS the credential, which is why a re-pointed
+  # URL failed the base64 check even where a route existed).
+  if ! receipt_purpose="$(printf '%s' "$response" | jq -r '.capability.purpose // empty' 2>/dev/null)"; then
+    kit_substrate_refuse "" "" "conductor's response is not the redeem receipt — no .capability.purpose to read"
   fi
-  case "$decoded" in
-    *'"auths"'*) ;;
-    *)
-      kit_substrate_refuse "" "" "the registry's response has no \"auths\" key — it is not a dockerconfigjson"
-      ;;
-  esac
-  REGISTRY_DOCKERCONFIGJSON="$response"
+  receipt_box="$(printf '%s' "$response" | jq -r '.capability.box_id // empty' 2>/dev/null)"
+  receipt_account="$(printf '%s' "$response" | jq -r '.capability.account_id // empty' 2>/dev/null)"
+  receipt_expires="$(printf '%s' "$response" | jq -r '.capability.expires_at // empty' 2>/dev/null)"
+  if [ "$receipt_purpose" != "registry.pull" ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — conductor says it was minted for another purpose" "conductor's receipt is for purpose '${receipt_purpose:-<none>}', not registry.pull — the capability was minted for another purpose"
+  fi
+  if [ "$receipt_box" != "$KIT_SUBSTRATE_BOX_ID" ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability for THIS box — conductor says it was minted for another" "conductor's receipt is for box '${receipt_box:-<none>}', not this box — the capability was minted for another box"
+  fi
+  if [ -z "$receipt_account" ]; then
+    kit_substrate_refuse "" "" "conductor's receipt carries no account_id"
+  fi
+  # expires_at must name a live instant: the same shape conductor renders
+  # (iso8601, UTC), compared as a string because identical-format UTC
+  # timestamps order lexicographically the way they order chronologically.
+  if [ -z "$receipt_expires" ] || [[ ! "$receipt_expires" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || [[ "$receipt_expires" < "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+    kit_substrate_refuse "" "" "conductor's receipt expires_at '${receipt_expires:-<none>}' is not a live instant — the capability it names is gone"
+  fi
 }
 
 install_pull_secret() {
   log_step "the GHCR image pull secret, redeemed for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
-  if dry_run "redeem one short-lived registry credential from KIT_SUBSTRATE_REGISTRY_CAPABILITY and apply ghcr-pull-secret in: argocd identity gateway courier parlor observability"; then
+  if dry_run "redeem the registry capability at conductor's POST /v1/capabilities/redeem and apply ghcr-pull-secret in: argocd identity gateway courier parlor observability"; then
     return 0
   fi
   redeem_registry_credential
-  # The secret is rendered and applied THROUGH A PIPE — no `--docker-config`
-  # file, no `--from-file=<(...)`, and no value in any argv. The
-  # process-substitution form this step used to carry looks equivalent and is
-  # not: it hands kubectl a `/dev/fd/N` path that exists only for the lifetime
-  # of one command, which is a thing that works on the machine it was written
-  # on and nowhere else. `data` is base64 by the Secret contract, and the
-  # credential is already base64, so it is substituted as-is.
-  local ns encoded
-  encoded="$(printf '%s' "$REGISTRY_DOCKERCONFIGJSON" | tr -d '\n')"
-  for ns in argocd identity gateway courier parlor observability; do
-    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: ghcr-pull-secret\n  namespace: %s\ntype: kubernetes.io/dockerconfigjson\ndata:\n  .dockerconfigjson: %s\n' \
-      "$ns" "$encoded" |
-      kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  done
+  # The redemption is proven; the write is the remaining gap. The receipt
+  # above is conductor's answer — the box-bound, purpose-bound capability
+  # was accepted — and it is all a client can honestly consume today: no
+  # registry service exists to trade it for a dockerconfigjson, and
+  # conductor will not hold a long-lived registry credential (boundary 6).
+  # The refusal names the gap rather than writing a placeholder Secret that
+  # would install, schedule pods, and fail at image-pull time.
+  kit_substrate_refuse \
+    "" \
+    "run this installer again once the registry service exists — the capability path is proven: conductor redeemed it for this box and purpose" \
+    "the registry-side exchange does not exist yet — conductor redeemed the capability for box ${KIT_SUBSTRATE_BOX_ID} (purpose registry.pull), but no service in the fleet trades a redeemed capability for a dockerconfigjson (seam audit §5a-5c)"
 }
 
 # --- step 6: the first Applications ----------------------------------------
