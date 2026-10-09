@@ -186,11 +186,21 @@ packet can make.
 
 ## Verification
 
-- `bash tests/substrate_test.sh` — 91 passed, 0 failed, 0 skipped.
+- `bash tests/substrate_test.sh` — 91 passed, 0 failed, 0 skipped (was 73
+  before this packet).
 - `shellcheck -S warning templates/substrate/install.sh tests/substrate_test.sh`
   — clean. The gate's first run with this packet went red on exactly this
   (`FAIL tests/substrate_test.sh (shellcheck -S warning)`) while the substrate
   tier itself passed 87/87; fixed in `28f28f5`.
 - `node --check templates/substrate/kit-install.mjs` — clean.
-- `bash tests/validate.sh` — full gate, alone, background, keyed to this
-  worktree (`/tmp/gate-kit-w2p4.log`). See the commit for the recorded result.
+- **`bash tests/validate.sh` — GREEN, run alone, in the background, on the
+  finished tree** (`2cfc90d`): exit code `0`, `PASS: every check passed.`,
+  579 PASS rows, no FAIL, `substrate_test: 91 passed, 0 failed, 0 skipped`,
+  the install host still serving `install.sh` byte-exact, `9 check(s) skipped —
+  reported above, never hidden`, `5 tier(s) ran under a time bound; none was
+  reached`. Log: `/tmp/gate-kit-w2p4.log`, exit code in
+  `/tmp/gate-kit-w2p4.exit`.
+  Two earlier runs are on record as well: the baseline before this packet
+  (exit 0), and the first run with it (exit 1, on the shellcheck warning above)
+  — so this packet has been seen green *and* seen red, and the red was fixed
+  rather than skipped.
