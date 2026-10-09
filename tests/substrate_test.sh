@@ -2281,6 +2281,71 @@ fixture_receipt_running="$WORK/receipt-running.json"
 sed 's/"status": "refused"/"status": "running"/' "$headless_receipt" >"$fixture_receipt_running"
 run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$fixture_receipt_running"
 
+# The refusal's fix hint is on stderr, in interactive and headless mode alike.
+# This was a real regression while this section was written: a
+# kit_substrate_refuse that printed only `error: <message>` silently dropped the
+# `export KIT_SUBSTRATE_…` line that tells an operator how to unblock, and the
+# existing refusal checks still passed because the VARIABLE NAME appears in the
+# message. The hint is the contract's second half, so it gets its own
+# assertion — in both modes, because they take different branches.
+refusal_hint_ok() {
+  local log mode="$2"
+  case "$1" in
+    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'"*)
+      printf 'the refusal names the variable and the fix that clears it (%s)\n' "$mode"
+      ;;
+    *)
+      printf 'the %s-mode refusal lost its fix hint\n' "$mode"
+      return 1
+      ;;
+  esac
+}
+refuse_unset_hint="$(DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && refuse_unset_hint_ec=0 || refuse_unset_hint_ec=$?
+if [ "$refuse_unset_hint_ec" -eq 0 ]; then
+  fail 'the refusal names the variable and the fix that clears it (interactive)' "exit 0 — the plan was not refused"
+else
+  run 'the refusal names the variable and the fix that clears it (interactive)' green \
+    refusal_hint_ok "$refuse_unset_hint" interactive
+fi
+run 'control: a refusal with no hint goes red' red refusal_hint_ok "error: KIT_SUBSTRATE_DATABASES is not set" interactive
+
+headless_refuse_hint="$WORK/headless-refuse-hint.json"
+headless_refuse_ec=0
+# `|| ec=$?` is load-bearing, and the reason is the same one the `run` helper
+# documents: the installer is EXPECTED to exit non-zero here, and under
+# `set -e` a bare failing command takes the harness down before the status is
+# read. A refused plan is the success case of this assertion.
+KIT_SUBSTRATE_RECEIPT="$headless_refuse_hint" KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 \
+  bash "$SUBSTRATE/install.sh" --headless >"$WORK/headless-refuse.jsonl" \
+  2>"$WORK/headless-refuse.human" || headless_refuse_ec=$?
+if [ "$headless_refuse_ec" -eq 0 ]; then
+  fail 'the refusal names the variable and the fix that clears it (headless)' "exit 0 — the plan was not refused"
+else
+  run 'the refusal names the variable and the fix that clears it (headless)' green \
+    refusal_hint_ok "$(cat "$WORK/headless-refuse.human")" headless
+fi
+# And the headless half: the refusal EVENT carries input_needed and human, so
+# an agent reading stdout alone knows both what to collect and what to say.
+case "$(cat "$WORK/headless-refuse.jsonl")" in
+  *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
+    pass 'headless: the refusal event names the input needed and where the human goes'
+    ;;
+  *)
+    fail 'headless: the refusal event names the input needed and where the human goes' "$(cat "$WORK/headless-refuse.jsonl")"
+    ;;
+esac
+# Its control: an event with a null human must go red. An agent told what to
+# collect but not who to ask is told half a refusal.
+refusal_no_human='{"event":"refusal","step":8,"phase":"postgres","input_needed":"KIT_SUBSTRATE_DATABASES","human":null,"message":"x"}'
+case "$refusal_no_human" in
+  *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
+    fail 'control: a refusal event with no human destination goes red' 'a null human matched the want'
+    ;;
+  *)
+    pass 'control: a refusal event with no human destination goes red'
+    ;;
+esac
+
 # ===========================================================================
 # Summary
 # ===========================================================================

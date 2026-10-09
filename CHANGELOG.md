@@ -71,6 +71,54 @@
   read a variable. The `SECRET RECORD` tripwire is unchanged in shape and
   still the drift contract for what the installer writes.
 
+- **`install.sh` gains `--headless` (or `HEADLESS=1`) — the mode an agent
+  drives (W2-P5).** `caf box apply --phase N` runs the installer with the flag
+  and reads **stdout as a stream of JSONL progress events, one object per
+  line, and nothing else**:
+  `{"event":"step.start","step":1,"phase":"k3s","message":"…"}`. Interactive
+  mode is unchanged and prints the same plain text, byte for byte.
+  - **The split between two writers is the property.** `kit_substrate_emit`
+    owns stdout — JSONL, headless only. `kit_substrate_out` owns human text —
+    stdout interactively, **stderr** in headless mode, so the operator and
+    `caf box logs` still read it while stdout stays machine-parseable.
+    Nothing else in the file writes to the process stdout.
+  - **The tripwire is a parse of every `echo` and `printf`**, in the
+    `SECRET RECORD` family rather than a run of one path: continuation lines
+    are joined first (the pipe carrying a rendered Secret into
+    `kubectl apply -f -` sits on the line AFTER the `printf`, so a line-based
+    read flags the one statement whose output most needs to stay off a
+    terminal), and then two rules — a statement that reaches stdout must live
+    in one of the two writers, and nothing that can reach stdout may expand a
+    variable holding secret material. The second is what makes the first
+    worth having: a channel only two functions write to is still a channel a
+    `$PASSWORD` could be poured into. Both exemptions are closed lists, not
+    patterns: a `*SECRET*` glob would also match `secret_name`, a Kubernetes
+    object's NAME, which is not a value, and a check that fires on correct
+    work teaches its reader to ignore it.
+  - **The install-receipt file** (`KIT_SUBSTRATE_RECEIPT`, default
+    `/var/lib/kit/substrate-receipt.json`) is rewritten at every state change
+    and names the **phase**, the **next step**, the **input needed** and
+    **where the human goes**. A refusal writes a `refusal` event *and* a
+    receipt with `status: "refused"` — so the agent's only touchpoint with a
+    person is the receipt's `human` field, and every operator-input refusal
+    (box id, capability, ACME email, database list, courier's relay settings,
+    the MFA override, a step run out of order) is routed through it. Writing
+    it is best-effort and never stops the install: the receipt is a report,
+    not a gate. W5-P4's resumable install is its consumer.
+  - The live half proves what a static parse cannot: with kubectl mocked to
+    files, stdout parses line by line as JSON, the detail lines are on stderr
+    and not on stdout, and none of the values the run *holds* — the generated
+    `SIGNUP_SIGNING_KEY`, MFA key, `SECRET_KEY_BASE`, box key, relay token,
+    role passwords, the operator's relay password, and the `DATABASE_URL`s
+    those passwords sit inside — reach stdout. Those values only exist at
+    runtime, which is exactly what a source parse cannot see.
+  - Five controls, each proven able to go red: a bare `echo` restored, a
+    secret-shaped variable through `kit_substrate_out`, the same through
+    `kit_substrate_emit`, a piped secret moved onto the process stdout, and a
+    receipt with no `human` destination (plus a second recorded as
+    `"running"` — a refusal recorded as running is an install the agent
+    believes is still in progress).
+
 ### Fixed
 
 - **`tests/launch_test.sh` went red for anyone who had ever launched the

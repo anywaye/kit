@@ -510,14 +510,21 @@ kit_substrate_write_receipt() {
 }
 
 # kit_substrate_refuse <input_needed> <human> <message> — the ONE refusal path.
-# The message goes to stderr for the human, identical to the refusals this
-# replaces (a refusal names a VARIABLE, never its value). In headless mode a
-# refusal event goes to stdout and the receipt is rewritten with the input
-# needed and where the human goes, so the agent driving the install knows what
-# to collect and what to tell the operator.
+# The message and the fix both go to stderr for the human, in the same
+# `error:` + indented-hint shape every refusal in this file has always used
+# (a refusal names a VARIABLE, never its value). In headless mode a refusal
+# event goes to stdout and the receipt is rewritten with the input needed and
+# where the human goes, so the agent driving the install knows what to
+# collect and what to tell the operator.
+#
+# THE HINT IS NOT OPTIONAL, and dropping it was a real regression: the first
+# version of this helper printed only `error: <message>` and the operator lost
+# the `export KIT_SUBSTRATE_…` line that tells them how to unblock. The
+# interactive contract is the message AND the fix, on two lines.
 kit_substrate_refuse() {
   local input="$1" human="$2" message="$3"
   printf 'error: %s\n' "$message" >&2
+  [ -n "$human" ] && printf '  %s\n' "$human" >&2
   if [ "$HEADLESS" -eq 1 ]; then
     printf '{"event":"refusal","step":%s,"phase":%s,"input_needed":%s,"human":%s,"message":%s}\n' \
       "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$input")" "$(json_str "$human")" "$(json_str "$message")"
