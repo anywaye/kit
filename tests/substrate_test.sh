@@ -1863,6 +1863,490 @@ run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(c
 run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
 
 # ===========================================================================
+# 14. --headless — stdout is progress-only, and progress is secret-free
+# ===========================================================================
+#
+# The claim `caf box apply --phase N` rests on: run the installer with
+# --headless and stdout is a stream of JSONL progress events, one object per
+# line, and NOTHING ELSE — because an agent parsing that stream cannot tell a
+# prose line from a progress line, and a prose line is where a credential
+# would go if one ever did.
+#
+# The proof is in two halves, and both are needed.
+#
+#   A STATIC parse of every echo and printf in install.sh. It is the
+#     SECRET RECORD's own idiom — a check over the source, not over one run —
+#     and it is the half that holds for code paths no run reaches. Two rules:
+#     (1) a statement that writes to the process stdout must live inside one
+#     of the two emitters, and (2) no statement that can reach stdout, and no
+#     emitter call, may expand a variable that holds secret material. Rule 2
+#     is what makes the first one worth having: a stdout channel that only
+#     the emitters write to is still a channel a `$PASSWORD` could be poured
+#     into.
+#
+#   A LIVE run of the headless path against the mocked kubectl. It proves the
+#     two writers actually behave: stdout parsed line by line as JSON, the
+#     human text on stderr, and none of the run's real secret material — the
+#     generated keys, the role passwords, the operator's relay password —
+#     anywhere on stdout. A static check cannot see a value that only exists
+#     at runtime, which is exactly the half the generated keys occupy.
+#
+# The `$KIT_SUBSTRATE_RECEIPT` override is load-bearing here: the default path
+# is /var/lib/kit on a root-owned box, and a receipt the test cannot read is a
+# receipt the test has not checked.
+
+check_headless_stdout() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+
+# The two writers, plus the helpers they own. A statement inside one of these
+# may reach the process stdout; anywhere else it may not.
+EMITTERS = {
+    "json_str",
+    "kit_substrate_emit",
+    "kit_substrate_out",
+    "kit_substrate_write_receipt",
+    "kit_substrate_refuse",
+}
+
+# Functions whose stdout is a COMMAND SUBSTITUTION at every call site. Their
+# output is a value handed to another command — database_url_for builds a DSN
+# carrying a generated password, oidc_key_id_for builds a thumbprint — so it
+# must reach its caller and never a terminal. They are excused from rule 1 and
+# NOT checked by rule 2, because a printf that cannot carry `$pw` is a DSN
+# with no password in it. The assertion at the bottom of this check keeps the
+# list honest: a value producer called anywhere else goes red.
+VALUE_PRODUCERS = {"database_url_for", "oidc_key_id_for"}
+
+# Every variable in install.sh that HOLDS secret material, by name. This is a
+# closed list, not a pattern: a `*SECRET*` glob would also match `secret_name`
+# (a Kubernetes object's name, which is not a value) and `secret_base`, and a
+# check that fires on correct work teaches its reader to ignore it. A new
+# secret-bearing variable must be added here in the same commit that adds it —
+# the list is the contract, and an absent name is a hole.
+SECRET_VARS = {
+    "REGISTRY_DOCKERCONFIGJSON",   # step 5's redeemed dockerconfigjson
+    "OIDC_SIGNING_KEY",             # generated on the box, step 9
+    "OIDC_SIGNING_KEY_ID",
+    "KIT_SUBSTRATE_REGISTRY_CAPABILITY",
+    "KIT_SUBSTRATE_SMTP_PASSWORD",
+    "KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET",
+    "KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY",
+    "KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY",
+    "response", "decoded",          # step 5's redemption round trip
+    "stored",                       # read_secret_key's return
+    "signup_key", "mfa_key", "oidc_key", "oidc_key_id",
+    "secret_base", "secret_box", "relay_token", "redis_pw", "pw",
+    "token", "session_token", "owner_password",
+    "mint_timestamp", "mint_signature", "out", "session", "account_id",
+}
+
+fn_re = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{")
+stmt_re = re.compile(r"^\s*(echo|printf)\b(.*)$")
+var_re = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+# Continuation lines are joined first. The pipe that carries a rendered Secret
+# into `kubectl apply -f -` sits on the line AFTER the printf, so a line-based
+# read would flag the one statement in this file whose output most needs to
+# stay off the terminal.
+joined = []
+buf, start = "", None
+for n, line in enumerate(src.split("\n"), 1):
+    if start is None:
+        start = n
+    if line.rstrip().endswith("\\"):
+        buf += line.rstrip()[:-1] + " "
+        continue
+    buf += line
+    joined.append((start, buf))
+    buf, start = "", None
+if start is not None:
+    joined.append((start, buf))
+
+problems = []
+writers = 0
+cur = "<top>"
+for n, line in joined:
+    m = fn_re.match(line)
+    if m:
+        cur = m.group(1)
+        continue
+    m = stmt_re.match(line)
+    if not m:
+        continue
+    verb, rest = m.group(1), m.group(2)
+    # A refusal already names the channel it writes to.
+    if ">&2" in rest:
+        continue
+    # A printf whose output is a pipe or a command substitution never reaches
+    # the process stdout: it is an argument to another command. Those are the
+    # GOOD paths — the credential travels into kubectl, not into a terminal —
+    # and flagging them would fail the exact behaviour this install exists to
+    # have. Quoted text is stripped first so a `|` inside a message is not
+    # mistaken for a pipe.
+    bare = re.sub(r"'[^']*'|\"[^\"]*\"", "", rest)
+    if "|" in bare or "$(" in bare or "`" in bare:
+        continue
+    if cur not in EMITTERS and cur not in VALUE_PRODUCERS:
+        problems.append(
+            f"line {n}: `{verb}` writes to stdout from {cur}() — "
+            "route it through kit_substrate_out"
+        )
+        continue
+    if cur in VALUE_PRODUCERS:
+        continue
+    writers += 1
+    # Rule 2: a secret-bearing variable expanded into anything that can reach
+    # stdout, including through an emitter call. Parsed off the raw line so a
+    # value passed as an argument is seen wherever it sits.
+    for name in var_re.findall(line):
+        if name in SECRET_VARS:
+            problems.append(
+                f"line {n}: ${name} reaches the stdout path — "
+                "a secret-shaped variable must never be expanded there"
+            )
+
+# Rule 2's other half: an emitter CALL SITE is checked the same way. A call is
+# not an echo or printf, so the loop above never sees it.
+for n, line in enumerate(src.split("\n"), 1):
+    for name in ("kit_substrate_out", "kit_substrate_emit"):
+        for call in re.finditer(re.escape(name) + r"\b(.*)", line):
+            for var in var_re.findall(call.group(1)):
+                if var in SECRET_VARS:
+                    problems.append(
+                        f"line {n}: {name}(... ${var}) — a secret-shaped "
+                        "variable reaches the stdout path through a call site"
+                    )
+
+if "kit_substrate_out" not in src or "kit_substrate_emit" not in src:
+    problems.append("the two writers are not both defined")
+# The human channel must really move in headless mode, or the claim is prose.
+out_body = re.search(r"^kit_substrate_out\(\)\s*\{(.*?)^\}", src, re.M | re.S)
+if not out_body or ">&2" not in out_body.group(1):
+    problems.append("kit_substrate_out does not send the human channel to stderr")
+
+# And the VALUE_PRODUCERS exemption is only as good as its call sites: each one
+# must be read inside a `$(...)`. Called bare, `database_url_for` would print a
+# password to stdout and this check would have excused it. The definition line
+# is skipped — `name()` is not a call.
+for name in sorted(VALUE_PRODUCERS):
+    for m in re.finditer(r"(?<![\w$])" + re.escape(name) + r"\s*\(", src):
+        before = src[: m.start()]
+        line_start = before.rfind("\n") + 1
+        if not src[line_start : m.start()].strip():
+            continue  # the definition
+        window = src[max(0, line_start - 2) : m.start()]
+        if "$(" not in window:
+            problems.append(
+                f"{name} is called outside a command substitution — its "
+                "output would reach stdout"
+            )
+            break
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{writers} stdout statement(s), all inside the two writers")
+PY
+}
+
+run 'every stdout echo/printf lives in the two writers' green check_headless_stdout "$SUBSTRATE/install.sh"
+
+# The control for rule 1: a step that goes back to a bare echo. Must go red —
+# without this the check is satisfied by a file with no echoes at all, which
+# is the state where the property has been deleted rather than kept.
+fixture_bare_echo="$WORK/install-bare-echo.sh"
+sed 's|^\( *\)kit_substrate_out "      applied letsencrypt|\1echo "      applied letsencrypt|' \
+  "$SUBSTRATE/install.sh" >"$fixture_bare_echo"
+if ! grep -q 'echo "      applied letsencrypt' "$fixture_bare_echo"; then
+  fail 'control fixture: the bare-echo edit failed to apply' \
+    "the sed did not restore an echo — the control would prove nothing"
+  failures=$((failures + 1))
+else
+  run 'control: a step that echoes straight to stdout goes red' red check_headless_stdout "$fixture_bare_echo"
+fi
+
+# The control for rule 2, through kit_substrate_out. The property the packet
+# is named for, in the one line that could break it.
+fixture_secret_out="$WORK/install-secret-out.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_secret_out"
+printf '\n  kit_substrate_out "relay password ${KIT_SUBSTRATE_SMTP_PASSWORD}"\n' >>"$fixture_secret_out"
+run 'control: a secret-shaped variable on the human channel goes red' red check_headless_stdout "$fixture_secret_out"
+
+# The second control for rule 2, through kit_substrate_emit — the stdout
+# channel itself, so the two writers are proven separately rather than by one
+# fixture that happens to satisfy only the first.
+fixture_secret_emit="$WORK/install-secret-emit.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_secret_emit"
+printf '\n  kit_substrate_emit progress "redeemed ${REGISTRY_DOCKERCONFIGJSON}"\n' >>"$fixture_secret_emit"
+run 'control: a secret-shaped variable on the stdout channel goes red' red check_headless_stdout "$fixture_secret_emit"
+
+# The third control: rule 1's escape hatch. A printf redirected into a pipe is
+# excused because the value travels into kubectl. Removing the pipe — leaving
+# the dockerconfigjson on the process stdout — must go red, or the piped
+# exemption is a hole the check cannot see through.
+fixture_no_pipe="$WORK/install-no-pipe.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_no_pipe"
+printf '\n  printf "%%s" "$REGISTRY_DOCKERCONFIGJSON"\n' >>"$fixture_no_pipe"
+run 'control: a piped secret moved onto stdout goes red' red check_headless_stdout "$fixture_no_pipe"
+
+# --- the live half -----------------------------------------------------------
+# The install needs root, Linux and k3s, so the headless path runs the way
+# section 13's cases do: the installer is sourced with its trailing `main`
+# stripped, kubectl is the file-backed mock, and the two writers are watched
+# on the real channels. This is the half a static parse cannot do: the values
+# asserted absent are GENERATED during the run.
+headless_receipt="$WORK/headless-receipt.json"
+MOCK_ROOT="$WORK/headless"
+mkdir -p "$MOCK_ROOT"
+headless_ec=0
+(
+  # The exports come BEFORE the source: `RECEIPT_PATH` is resolved from
+  # KIT_SUBSTRATE_RECEIPT at source time, so exporting after would leave the
+  # installer writing to the real /var/lib/kit — which on a developer machine
+  # it cannot create, so the receipt would silently never appear.
+  export DRY_RUN=0
+  export HEADLESS=1
+  export KIT_SUBSTRATE_RECEIPT="$headless_receipt"
+  # The operator-sourced courier values. Every one is a FAKE — a label, not a
+  # credential — and each is asserted absent from stdout below, which is the
+  # point: a value the installer never prints is a value the check can look
+  # for by name.
+  export KIT_SUBSTRATE_SMTP_HOST="relay.example.com"
+  export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
+  export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass-fake"
+  export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="provider-signing-fake"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
+  export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  # shellcheck disable=SC2034  # read by the sourced installer's emit path
+  CURRENT_PHASE="redis-and-secrets"
+  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor)"
+  install_service_secrets
+  # A refusal, because that is where a receipt earns its keep: the agent's
+  # only touchpoint with a person is this event's input_needed and human.
+  kit_substrate_refuse \
+    "KIT_SUBSTRATE_ACME_EMAIL" \
+    "export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>' on the box" \
+    "KIT_SUBSTRATE_ACME_EMAIL is not set"
+) >"$WORK/headless.jsonl" 2>"$WORK/headless.human" || headless_ec=$?
+
+if [ "$headless_ec" -eq 0 ]; then
+  fail 'headless: the refusal path exits non-zero' "exit 0 — a refusal must stop the install"
+else
+  pass 'headless: the refusal path exits non-zero'
+fi
+
+headless_jsonl_ok() {
+  "$PY" - "$1" <<'PY'
+import json
+import sys
+
+bad = []
+count = 0
+for i, line in enumerate(open(sys.argv[1], encoding="utf-8").read().split("\n"), 1):
+    if not line.strip():
+        continue
+    count += 1
+    try:
+        obj = json.loads(line)
+    except Exception as e:
+        bad.append(f"line {i} is not JSON ({e}): {line[:70]!r}")
+        continue
+    for field in ("event", "step", "phase", "message"):
+        if field not in obj:
+            bad.append(f"line {i} has no {field!r} field")
+if count == 0:
+    print("stdout was empty — no events at all")
+    sys.exit(1)
+if bad:
+    print("; ".join(bad))
+    sys.exit(1)
+print(f"{count} JSONL event(s), every one with event/step/phase/message")
+PY
+}
+run 'headless: stdout is JSONL, one object per line' green headless_jsonl_ok "$WORK/headless.jsonl"
+
+# Every secret the run actually holds — generated during it, and read back
+# from the mock store so the assertion is about the run's own values rather
+# than about a literal planted in the test.
+headless_absent() {
+  local log needle
+  log="$(cat "$1")"
+  shift
+  for needle in "$@"; do
+    case "$log" in
+      *"$needle"*)
+        printf 'the value appears on headless stdout\n'
+        return 1
+        ;;
+    esac
+  done
+  printf 'none of the %d checked values appear on headless stdout\n' "$#"
+}
+headless_secrets=(
+  "relay-pass-fake"
+  "provider-signing-fake"
+  "$(mock_get identity identity-secrets SIGNUP_SIGNING_KEY)"
+  "$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)"
+  "$(mock_get courier courier-secrets SECRET_KEY_BASE)"
+  "$(mock_get courier courier-secrets COURIER_SECRET_BOX_KEY)"
+  "$(mock_get courier courier-secrets COURIER_ERROR_RELAY_TOKEN)"
+  "$(mock_get data redis-password password)"
+  "$(mock_get data postgres-role-identity-app password)"
+)
+run 'headless: no secret value the run holds reaches stdout' green \
+  headless_absent "$WORK/headless.jsonl" "${headless_secrets[@]}"
+
+# The DATABASE_URL is the interesting one: it carries a real generated
+# password inside a value the installer builds, so it is the shape most likely
+# to leak by accident.
+run 'headless: a generated DATABASE_URL never reaches stdout' green \
+  headless_absent "$WORK/headless.jsonl" \
+  "$(mock_get identity identity-secrets DATABASE_URL)" \
+  "$(mock_get courier courier-secrets DATABASE_URL)"
+
+# The human channel survives. A headless run that swallowed the operator's
+# output would be a run nobody could debug, and the split only helps if both
+# halves still reach somebody. What it carries is the DETAIL lines: the step
+# headers became JSONL events, which is the point of the mode, so the human
+# channel is asserted on a detail line and on the refusal that ended the run.
+case "$(cat "$WORK/headless.human")" in
+  *"secret identity-secrets created"*"error: KIT_SUBSTRATE_ACME_EMAIL is not set"*)
+    pass 'headless: the human channel still carries the detail lines and the refusal'
+    ;;
+  *)
+    fail 'headless: the human channel still carries the detail lines and the refusal' "$(cat "$WORK/headless.human")"
+    ;;
+esac
+# And the converse, which is the real claim: the human prose must NOT be on
+# stdout. A single non-JSON line on stdout would break `caf box apply`'s
+# parser, so this is asserted separately from the JSONL parse above.
+if grep -q 'secret identity-secrets created' "$WORK/headless.jsonl"; then
+  fail 'headless: the human detail lines are not on stdout' "a prose line reached the JSONL channel"
+else
+  pass 'headless: the human detail lines are not on stdout'
+fi
+
+# The receipt: phase, next step, input needed, where the human goes. The
+# refusal above is what makes it a resumable-install contract rather than a
+# log — it names the variable the operator must supply and where.
+headless_receipt_ok() {
+  "$PY" - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    r = json.load(fh)
+missing = [f for f in ("phase", "status", "next", "input_needed", "human") if f not in r]
+if missing:
+    print(f"receipt has no {', '.join(missing)}")
+    sys.exit(1)
+if r["status"] != "refused":
+    print(f"status is {r['status']!r}, want 'refused' — the refusal did not land in the receipt")
+    sys.exit(1)
+if r["input_needed"] != "KIT_SUBSTRATE_ACME_EMAIL":
+    print(f"input_needed is {r['input_needed']!r}, want the variable name")
+    sys.exit(1)
+if "example.com" not in (r["human"] or ""):
+    print(f"human is {r['human']!r} — it must say where the person goes")
+    sys.exit(1)
+if not (r["next"] or "").strip():
+    print("next is empty — a receipt with no next step is not resumable")
+    sys.exit(1)
+print("phase, next, input_needed and human all name their thing")
+PY
+}
+run 'headless: the receipt names phase, next step, input needed and the human' green \
+  headless_receipt_ok "$headless_receipt"
+
+# The receipt's control: a receipt with no `human` field must go red. Without
+# it the shape check is satisfied by a status report, which is the thing the
+# receipt exists NOT to be.
+fixture_receipt_no_human="$WORK/receipt-no-human.json"
+sed 's/  "human": .*$/  "human": "",/' "$headless_receipt" >"$fixture_receipt_no_human"
+run 'control: a receipt with no human destination goes red' red headless_receipt_ok "$fixture_receipt_no_human"
+
+# And a receipt whose status is not the refusal's must go red too — the
+# direction that matters, because a refusal recorded as `running` is an
+# install the agent believes is still in progress.
+fixture_receipt_running="$WORK/receipt-running.json"
+sed 's/"status": "refused"/"status": "running"/' "$headless_receipt" >"$fixture_receipt_running"
+run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$fixture_receipt_running"
+
+# The refusal's fix hint is on stderr, in interactive and headless mode alike.
+# This was a real regression while this section was written: a
+# kit_substrate_refuse that printed only `error: <message>` silently dropped the
+# `export KIT_SUBSTRATE_…` line that tells an operator how to unblock, and the
+# existing refusal checks still passed because the VARIABLE NAME appears in the
+# message. The hint is the contract's second half, so it gets its own
+# assertion — in both modes, because they take different branches.
+refusal_hint_ok() {
+  local log mode="$2"
+  case "$1" in
+    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'"*)
+      printf 'the refusal names the variable and the fix that clears it (%s)\n' "$mode"
+      ;;
+    *)
+      printf 'the %s-mode refusal lost its fix hint\n' "$mode"
+      return 1
+      ;;
+  esac
+}
+refuse_unset_hint="$(DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && refuse_unset_hint_ec=0 || refuse_unset_hint_ec=$?
+if [ "$refuse_unset_hint_ec" -eq 0 ]; then
+  fail 'the refusal names the variable and the fix that clears it (interactive)' "exit 0 — the plan was not refused"
+else
+  run 'the refusal names the variable and the fix that clears it (interactive)' green \
+    refusal_hint_ok "$refuse_unset_hint" interactive
+fi
+run 'control: a refusal with no hint goes red' red refusal_hint_ok "error: KIT_SUBSTRATE_DATABASES is not set" interactive
+
+headless_refuse_hint="$WORK/headless-refuse-hint.json"
+headless_refuse_ec=0
+# `|| ec=$?` is load-bearing, and the reason is the same one the `run` helper
+# documents: the installer is EXPECTED to exit non-zero here, and under
+# `set -e` a bare failing command takes the harness down before the status is
+# read. A refused plan is the success case of this assertion.
+KIT_SUBSTRATE_RECEIPT="$headless_refuse_hint" KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 \
+  bash "$SUBSTRATE/install.sh" --headless >"$WORK/headless-refuse.jsonl" \
+  2>"$WORK/headless-refuse.human" || headless_refuse_ec=$?
+if [ "$headless_refuse_ec" -eq 0 ]; then
+  fail 'the refusal names the variable and the fix that clears it (headless)' "exit 0 — the plan was not refused"
+else
+  run 'the refusal names the variable and the fix that clears it (headless)' green \
+    refusal_hint_ok "$(cat "$WORK/headless-refuse.human")" headless
+fi
+# And the headless half: the refusal EVENT carries input_needed and human, so
+# an agent reading stdout alone knows both what to collect and what to say.
+case "$(cat "$WORK/headless-refuse.jsonl")" in
+  *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
+    pass 'headless: the refusal event names the input needed and where the human goes'
+    ;;
+  *)
+    fail 'headless: the refusal event names the input needed and where the human goes' "$(cat "$WORK/headless-refuse.jsonl")"
+    ;;
+esac
+# Its control: an event with a null human must go red. An agent told what to
+# collect but not who to ask is told half a refusal.
+refusal_no_human='{"event":"refusal","step":8,"phase":"postgres","input_needed":"KIT_SUBSTRATE_DATABASES","human":null,"message":"x"}'
+case "$refusal_no_human" in
+  *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
+    fail 'control: a refusal event with no human destination goes red' 'a null human matched the want'
+    ;;
+  *)
+    pass 'control: a refusal event with no human destination goes red'
+    ;;
+esac
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

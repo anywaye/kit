@@ -248,6 +248,66 @@ rather than planned — the refusal is the contract, and
 validated on the live path only: a plan does not need credentials to print.
 The full plan needs only the database list.
 
+### `--headless` — the mode an agent drives
+
+```sh
+bash templates/substrate/install.sh --headless          # or HEADLESS=1
+```
+
+`caf box apply --phase N` runs the installer with this flag and reads stdout as
+a **stream of JSONL progress events, one object per line, and nothing else**:
+
+```
+{"event":"install.start","step":0,"phase":"install","message":"install begins: 11 steps, receipt at /var/lib/kit/substrate-receipt.json"}
+{"event":"step.start","step":1,"phase":"k3s","message":"k3s v1.37.1+k3s1 — single node, sqlite datastore"}
+{"event":"refusal","step":8,"phase":"cluster-issuers","input_needed":"KIT_SUBSTRATE_ACME_EMAIL","human":"export … on the box and re-run","message":"…"}
+```
+
+Interactive mode is unchanged and prints the same plain text, byte for byte.
+
+**The split between the two writers is the property.** `kit_substrate_emit`
+owns stdout — JSONL, headless only. `kit_substrate_out` owns human text — stdout
+interactively, **stderr** in headless mode, so the operator (and `caf box logs`)
+still reads it while stdout stays machine-parseable. Nothing else in the file
+writes to the process stdout; a `printf … | kubectl apply -f -` is a pipe, not a
+stdout write, and that is the good path — the credential travels into kubectl,
+not into a terminal. `tests/substrate_test.sh` parses every `echo` and `printf`
+in `install.sh` and FAILS on one that reaches stdout from anywhere but those two
+functions, or that expands a variable holding secret material. **A stdout that
+is progress-only is the claim; that check is the proof**, and it holds for code
+paths no run reaches.
+
+**The install-receipt file** (`KIT_SUBSTRATE_RECEIPT`, default
+`/var/lib/kit/substrate-receipt.json`) is rewritten at every state change:
+
+```json
+{
+  "phase": "cluster-issuers",
+  "status": "refused",
+  "step": 7,
+  "total_steps": 11,
+  "next": "the Let's Encrypt ClusterIssuers …",
+  "input_needed": "KIT_SUBSTRATE_ACME_EMAIL",
+  "human": "export KIT_SUBSTRATE_ACME_EMAIL='<you@example.com>' on the box and re-run",
+  "message": "KIT_SUBSTRATE_ACME_EMAIL is not set",
+  "receipt": "/var/lib/kit/substrate-receipt.json",
+  "headless": true,
+  "dry_run": false,
+  "updated_at": "2026-10-09T09:24:03Z"
+}
+```
+
+A refusal writes a `refusal` event *and* a receipt with `status: "refused"`, the
+**input needed** and **where the human goes**. That is the whole point of the
+mode: the agent's only touchpoint with a person is the receipt's `human` field,
+and every operator-input refusal — the box id, the capability, the ACME email,
+the database list, courier's relay settings, the MFA override, a step run out of
+order — is routed through it. W5-P4's resumable install reads it; `caf box
+apply --phase N` (W2-P6) reads it to know where to resume. It is rewritten on
+every state change, so a crashed install leaves one naming where it stopped.
+Writing it is best-effort and never stops the install: the receipt is a report,
+not a gate.
+
 ## The data layer: Postgres, Redis and NATS
 
 `manifests/data/` holds three files, and all three are applied by `install.sh`
