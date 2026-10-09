@@ -127,6 +127,25 @@
 #   the script testable on a machine that is not a customer box — and a
 #   developer machine is not one.
 #
+# --headless (or HEADLESS=1)
+#   The mode an agent drives. `caf box apply --phase N` runs this script with
+#   the flag and reads stdout as a STREAM OF JSONL EVENTS, one object per
+#   line, and nothing else: `{"event":"step.start","step":1,"phase":"k3s",
+#   "message":"k3s v1.37.1+k3s1 — single node, sqlite datastore"}`. Every human
+#   line that interactive mode prints goes to STDERR instead, so stdout is
+#   progress-only and a parser never has to guess.
+#   The install-receipt file (KIT_SUBSTRATE_RECEIPT, default
+#   /var/lib/kit/substrate-receipt.json) is rewritten at every state change and
+#   names the phase, the next step, the input needed and where the human goes.
+#   A refusal writes a `refusal` event AND a receipt with `status: refused` and
+#   the input it needs, which is the whole point: the agent's only touchpoint
+#   with a person is the receipt's `human` field.
+#   Two writers exist and the test enforces the split: kit_substrate_emit
+#   writes stdout (JSONL, headless only) and kit_substrate_out writes the
+#   human text (stderr, headless only). Nothing else writes to the process
+#   stdout — see tests/substrate_test.sh, which parses every echo and printf
+#   in this file and fails on one that reaches stdout from anywhere else.
+#
 # SECRETS
 #   NO LONG-LIVED SECRET ENTERS THIS SCRIPT. The registry credential is
 #   REDEEMED, per run, from a capability that is single-use, minutes-lived and
@@ -261,6 +280,20 @@ NATS_BOX_VERSION="0.20.0"
 
 DRY_RUN="${DRY_RUN:-0}"
 
+# HEADLESS=1 (or the --headless flag) turns stdout into a JSONL event stream —
+# one object per line, machine-parseable — and writes an install receipt naming
+# the phase, the next step, the input needed and where the human goes. This is
+# the mode `caf box apply --phase N` drives: the agent reads the JSONL and the
+# receipt, and the only human touchpoint is the receipt's `human` field. The
+# interactive mode is unchanged — the same calls print the same plain text.
+HEADLESS="${HEADLESS:-0}"
+
+# Where the install receipt is written. Overridable so a test (or a box with a
+# different layout) can point it at a writable path; the default is the box's
+# own state directory. The receipt is rewritten at every state change, so a
+# crashed install leaves one naming where it stopped.
+RECEIPT_PATH="${KIT_SUBSTRATE_RECEIPT:-/var/lib/kit/substrate-receipt.json}"
+
 # Where this script lives, so the manifests are found from a checkout and from
 # a served copy alike.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -331,20 +364,171 @@ KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
 TOTAL=11
+# The phase the install is in — set by main before each step, read by the
+# emit path and the receipt. It names the STEP, not the sub-step, so the
+# receipt's phase is always one of the eleven (or preflight/complete).
+CURRENT_PHASE="install"
+
+# --- the headless emit path ---------------------------------------------------
+# TWO writers, and the split between them is the whole property.
+#
+#   kit_substrate_emit — PROGRESS. In headless mode it is the ONLY thing that
+#     reaches stdout, and every line it writes is one JSONL object. In
+#     interactive mode the same call prints exactly what the installer has
+#     always printed, byte for byte.
+#   kit_substrate_out — HUMAN TEXT. stdout in interactive mode; STDERR in
+#     headless mode, so the operator (and `caf box logs`) still reads it while
+#     stdout stays a machine-parseable stream.
+#
+# Nothing else in this file writes to the process stdout. `printf … | kubectl`
+# is a pipe, not a stdout write; `echo … >&2` is a refusal and already goes to
+# stderr. tests/substrate_test.sh parses every echo and printf in this file and
+# FAILS on one that reaches stdout from anywhere but those two functions, so
+# the claim "headless stdout is progress-only" is enforced rather than
+# promised. The message is pre-formatted by the caller and carries no secret —
+# a refusal names a VARIABLE, never its value, the same rule as every refusal.
+
+# json_str <string> — the string as a JSON string literal. Every JSONL value
+# goes through this, so a quote, a backslash or a newline in a message cannot
+# break the line's shape. jq is already a hard requirement (preflight).
+json_str() {
+  printf '%s' "$1" | jq -Rs '.'
+}
+
+# kit_substrate_out <message> — the human channel. Interactive mode prints it
+# on stdout, exactly as the `echo` it replaced did; headless mode sends it to
+# stderr, because stdout is the agent's channel and it has one shape.
+#
+# The caller formats the message, so `kit_substrate_out "secret $secret_name
+# created …"` names a NAME and never a value — the rule every other line in
+# this file already follows. Nothing routed here is ever a credential, a token
+# or key material, and the test proves it by reading every call site.
+kit_substrate_out() {
+  if [ "$HEADLESS" -eq 1 ]; then
+    printf '%s\n' "$*" >&2
+  else
+    printf '%s\n' "$*"
+  fi
+}
+
+# kit_substrate_emit <event> <message> — emit one progress event.
+kit_substrate_emit() {
+  local event="$1" message="$2"
+  if [ "$HEADLESS" -eq 1 ]; then
+    printf '{"event":"%s","step":%s,"phase":%s,"message":%s}\n' \
+      "$event" "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$message")"
+  else
+    case "$event" in
+      step.start) echo "[${STEP}/${TOTAL}] $message" ;;
+      step.skip)  echo "      already installed, skipping" ;;
+      step.plan)  echo "      DRY_RUN: $message" ;;
+      *)          echo "$message" ;;
+    esac
+  fi
+}
+
+# kit_substrate_skip — the guard said the component is already present.
+# Used by the steps that skip as a whole; the per-secret and per-stream lines
+# go through kit_substrate_out because they carry a name.
+kit_substrate_skip() {
+  kit_substrate_emit step.skip "already installed, skipping"
+}
 
 log_step() {
   STEP=$((STEP + 1))
-  echo "[${STEP}/${TOTAL}] $*"
+  # The receipt follows the install: at each step start it names the phase and
+  # the next step, so a crash mid-step leaves a receipt pointing at that step.
+  R_PHASE="$CURRENT_PHASE"
+  R_NEXT="$*"
+  R_INPUT=""
+  R_HUMAN=""
+  R_STATUS="running"
+  R_MESSAGE=""
+  kit_substrate_write_receipt
+  kit_substrate_emit step.start "$*"
 }
 
 # dry_run <description> — print what would happen and return 0 (skip the real
 # work) when DRY_RUN=1, or return 1 (do the real work) when it is not.
 dry_run() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "      DRY_RUN: $*"
+    kit_substrate_emit step.plan "$*"
     return 0
   fi
   return 1
+}
+
+# --- the install receipt ------------------------------------------------------
+# The receipt is the resumable-install contract and the agent's map of the
+# install: it names the phase, the next step, the input needed and where the
+# human goes. `caf box apply --phase N` (W2-P6) reads it to know what to do
+# next; W5-P4's resumable install is its consumer.
+R_PHASE="install"
+R_NEXT=""
+R_INPUT=""
+R_HUMAN=""
+R_STATUS="running"
+R_MESSAGE=""
+
+kit_substrate_write_receipt() {
+  local dir
+  dir="$(dirname "$RECEIPT_PATH")"
+  # Best-effort on a machine that is not a box: a dev machine running DRY_RUN
+  # has no /var/lib/kit, and there the receipt is a nicety, not a contract. On
+  # a box the installer runs as root and the directory is made. A failure here
+  # never stops the install — the receipt is a report, not a gate.
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    return 0
+  fi
+  jq -n \
+    --arg phase "$R_PHASE" \
+    --arg status "$R_STATUS" \
+    --argjson step "$STEP" \
+    --argjson total_steps "$TOTAL" \
+    --arg next "$R_NEXT" \
+    --arg input_needed "$R_INPUT" \
+    --arg human "$R_HUMAN" \
+    --arg message "$R_MESSAGE" \
+    --arg receipt "$RECEIPT_PATH" \
+    --argjson headless "$HEADLESS" \
+    --argjson dry_run "$DRY_RUN" \
+    --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      phase: $phase,
+      status: $status,
+      step: $step,
+      total_steps: $total_steps,
+      next: (if $next == "" then null else $next end),
+      input_needed: (if $input_needed == "" then null else $input_needed end),
+      human: (if $human == "" then null else $human end),
+      message: (if $message == "" then null else $message end),
+      receipt: $receipt,
+      headless: $headless,
+      dry_run: $dry_run,
+      updated_at: $updated_at
+    }' >"$RECEIPT_PATH" 2>/dev/null || true
+}
+
+# kit_substrate_refuse <input_needed> <human> <message> — the ONE refusal path.
+# The message goes to stderr for the human, identical to the refusals this
+# replaces (a refusal names a VARIABLE, never its value). In headless mode a
+# refusal event goes to stdout and the receipt is rewritten with the input
+# needed and where the human goes, so the agent driving the install knows what
+# to collect and what to tell the operator.
+kit_substrate_refuse() {
+  local input="$1" human="$2" message="$3"
+  printf 'error: %s\n' "$message" >&2
+  if [ "$HEADLESS" -eq 1 ]; then
+    printf '{"event":"refusal","step":%s,"phase":%s,"input_needed":%s,"human":%s,"message":%s}\n' \
+      "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$input")" "$(json_str "$human")" "$(json_str "$message")"
+  fi
+  R_PHASE="$CURRENT_PHASE"
+  R_INPUT="$input"
+  R_HUMAN="$human"
+  R_STATUS="refused"
+  R_MESSAGE="$message"
+  kit_substrate_write_receipt
+  exit 1
 }
 
 # --- preflight --------------------------------------------------------------
@@ -352,18 +536,16 @@ dry_run() {
 # worse than no substrate, because it looks like it works.
 preflight() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
+    kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
     return 0
   fi
 
   if [ "$(id -u)" -ne 0 ]; then
-    echo "error: must run as root — k3s installs to /usr/local and writes the kubeconfig" >&2
-    exit 1
+    kit_substrate_refuse "" "run as root — k3s installs to /usr/local and writes the kubeconfig" "must run as root — k3s installs to /usr/local and writes the kubeconfig"
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
-    echo "error: curl is required — every component is fetched over HTTPS" >&2
-    exit 1
+    kit_substrate_refuse "" "install curl — every component is fetched over HTTPS" "curl is required — every component is fetched over HTTPS"
   fi
 
   # openssl generates identity's OIDC signing key ON THIS BOX (it is the
@@ -420,7 +602,7 @@ preflight() {
 install_k3s() {
   log_step "k3s ${K3S_VERSION} — single node, sqlite datastore"
   if kit_substrate_guard k3s; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -"; then
@@ -434,7 +616,7 @@ install_k3s() {
 install_cert_manager() {
   log_step "cert-manager ${CERT_MANAGER_VERSION}"
   if kit_substrate_guard cert-manager; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"; then
@@ -449,7 +631,7 @@ install_cert_manager() {
 install_cnpg() {
   log_step "CloudNativePG ${CNPG_VERSION}"
   if kit_substrate_guard cloudnative-pg; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_VERSION}/releases/cnpg-${CNPG_VERSION#v}.yaml"; then
@@ -464,7 +646,7 @@ install_cnpg() {
 install_argocd() {
   log_step "Argo CD core ${ARGOCD_VERSION}"
   if kit_substrate_guard argocd; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"; then
@@ -583,7 +765,7 @@ install_applications() {
 install_cluster_issuers() {
   log_step "the Let's Encrypt ClusterIssuers (staging + prod, from KIT_SUBSTRATE_ACME_EMAIL)"
   if kit_substrate_guard clusterissuer; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "substitute the ACME email and apply ${TLS_DIR} (letsencrypt-staging, letsencrypt-prod)"; then
@@ -620,7 +802,7 @@ install_cluster_issuers() {
   # operator's address is left in a file on this box.
   sed "s/ACME_EMAIL_PLACEHOLDER/$KIT_SUBSTRATE_ACME_EMAIL/" "$TLS_DIR"/*.yaml |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  echo "      applied letsencrypt-staging and letsencrypt-prod"
+  kit_substrate_out "      applied letsencrypt-staging and letsencrypt-prod"
 }
 
 # --- step 8: the Postgres Cluster -------------------------------------------
@@ -676,7 +858,7 @@ install_postgres_cluster() {
     fi
   done
   if kit_substrate_guard cluster; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "create namespace data, create 8 postgres-role-* password secrets (generated once), apply ${DATA_DIR}/postgres-cluster.yaml"; then
@@ -696,12 +878,12 @@ install_postgres_cluster() {
     for suffix in "" "-app"; do
       if [ -z "$suffix" ]; then secret_name="postgres-role-$svc"; else secret_name="postgres-role-$svc-app"; fi
       if kubectl --kubeconfig="$KUBECONFIG" get secret "$secret_name" -n data >/dev/null 2>&1; then
-        echo "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
+        kit_substrate_out "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
       else
         pw="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
         kubectl --kubeconfig="$KUBECONFIG" create secret generic "$secret_name" -n data \
           --from-literal=username="$svc$suffix" --from-literal=password="$pw" >/dev/null
-        echo "      secret $secret_name created (generated once — a re-run reads it back)"
+        kit_substrate_out "      secret $secret_name created (generated once — a re-run reads it back)"
       fi
     done
   done
@@ -722,16 +904,16 @@ install_postgres_cluster() {
 install_redis_and_secrets() {
   log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor)"
   if kit_substrate_guard redis; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
   elif dry_run "create secret redis-password (generated once) and apply ${DATA_DIR}/redis.yaml"; then
     :
   else
     if ! kubectl --kubeconfig="$KUBECONFIG" get secret redis-password -n data >/dev/null 2>&1; then
       kubectl --kubeconfig="$KUBECONFIG" create secret generic redis-password -n data \
         --from-literal=password="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')" >/dev/null
-      echo "      secret redis-password created (generated once — a re-run reads it back)"
+      kit_substrate_out "      secret redis-password created (generated once — a re-run reads it back)"
     else
-      echo "      secret redis-password exists, keeping its password (never regenerated, never printed)"
+      kit_substrate_out "      secret redis-password exists, keeping its password (never regenerated, never printed)"
     fi
     kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/redis.yaml"
     kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment redis -n data --timeout=180s
@@ -901,7 +1083,7 @@ validate_mfa_override() {
 # own, and the password is read back from step 8's secret.
 install_service_secrets() {
   if kit_substrate_guard secrets; then
-    echo "      already installed, skipping"
+    kit_substrate_out "      already installed, skipping"
     return 0
   fi
   if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets (generated values once-only, sourced values validated on the live path)"; then
@@ -987,10 +1169,10 @@ install_service_secrets() {
   [ -n "$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY" ] &&
     identity_args+=(--from-literal=OAUTH_ENCRYPTION_KEY="$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY")
   if kubectl --kubeconfig="$KUBECONFIG" get secret identity-secrets -n identity >/dev/null 2>&1; then
-    echo "      secret identity-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+    kit_substrate_out "      secret identity-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic identity-secrets -n identity "${identity_args[@]}" >/dev/null
-    echo "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
+    kit_substrate_out "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
   fi
 
   # gateway-secrets. Exactly one key: REDIS_URL, the required secretKeyRef the
@@ -1005,11 +1187,11 @@ install_service_secrets() {
     exit 1
   fi
   if kubectl --kubeconfig="$KUBECONFIG" get secret gateway-secrets -n gateway >/dev/null 2>&1; then
-    echo "      secret gateway-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+    kit_substrate_out "      secret gateway-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic gateway-secrets -n gateway \
       --from-literal=REDIS_URL="redis://:$redis_pw@redis.data.svc.cluster.local:6379" >/dev/null
-    echo "      secret gateway-secrets created (REDIS_URL only — the chart's one required secretKeyRef)"
+    kit_substrate_out "      secret gateway-secrets created (REDIS_URL only — the chart's one required secretKeyRef)"
   fi
 
   # courier-secrets. The keys chart/values.yaml documents that this install
@@ -1034,7 +1216,7 @@ install_service_secrets() {
   relay_token="$(read_secret_key courier courier-secrets COURIER_ERROR_RELAY_TOKEN)"
   [ -n "$relay_token" ] || relay_token="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   if kubectl --kubeconfig="$KUBECONFIG" get secret courier-secrets -n courier >/dev/null 2>&1; then
-    echo "      secret courier-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+    kit_substrate_out "      secret courier-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic courier-secrets -n courier \
       --from-literal=DATABASE_URL="$(database_url_for courier)" \
@@ -1048,7 +1230,7 @@ install_service_secrets() {
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
-    echo "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 11 — minted on this box)"
+    kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 11 — minted on this box)"
   fi
   # Optional mail-from passthrough: courier falls back to its compiled
   # default without these, so they ride the same conditional pattern as the
@@ -1065,11 +1247,11 @@ install_service_secrets() {
   # EXIST or the pod never starts, so it carries the one value that agrees
   # with the Cluster by construction: parlor's own DATABASE_URL.
   if kubectl --kubeconfig="$KUBECONFIG" get secret parlor-secrets -n parlor >/dev/null 2>&1; then
-    echo "      secret parlor-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+    kit_substrate_out "      secret parlor-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic parlor-secrets -n parlor \
       --from-literal=DATABASE_URL="$(database_url_for parlor)" >/dev/null
-    echo "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
+    kit_substrate_out "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
   fi
 }
 
@@ -1100,7 +1282,7 @@ install_service_secrets() {
 install_nats() {
   log_step "NATS with JetStream ${NATS_VERSION} and stream cafaye (in the data namespace)"
   if kit_substrate_guard nats; then
-    echo "      already installed, skipping the broker (the stream init still runs)"
+    kit_substrate_out "      already installed, skipping the broker (the stream init still runs)"
   elif dry_run "substitute NATS_IMAGE_PLACEHOLDER with nats:${NATS_VERSION} and apply ${DATA_DIR}/nats.yaml, then wait for deployment nats"; then
     :
   else
@@ -1125,7 +1307,7 @@ install_nats() {
     case "$phase" in
       Succeeded)
         kubectl --kubeconfig="$KUBECONFIG" delete pod nats-stream-init -n data >/dev/null
-        echo "      stream cafaye exists (created or already present)"
+        kit_substrate_out "      stream cafaye exists (created or already present)"
         return 0
         ;;
       Failed)
@@ -1161,7 +1343,7 @@ mint_courier_identity_token() {
   # The guard is the resume path, and it is the VALUE rather than a step flag:
   # a re-run that finds the credential already minted has nothing to mint.
   if [ -n "$(read_secret_key courier courier-secrets COURIER_IDENTITY_TOKEN)" ]; then
-    echo "      credential already minted on this box, skipping (rotate by replacing the secret and restarting the pods)"
+    kit_substrate_out "      credential already minted on this box, skipping (rotate by replacing the secret and restarting the pods)"
     return 0
   fi
   if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets and courier-secrets with the same value and restart both deployments"; then
@@ -1262,27 +1444,68 @@ mint_courier_identity_token() {
     --type=merge --patch-file=-
   kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
-  echo "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"
+  kit_substrate_out "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"
 }
 
 # --- main -------------------------------------------------------------------
 main() {
+  # --headless is the agent-driven mode: JSONL on stdout, a receipt on disk.
+  # The flag and the HEADLESS=1 environment variable are the same switch —
+  # the flag for a human typing it, the variable for `caf box apply`.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --headless) HEADLESS=1; shift ;;
+      *)
+        printf 'error: unknown argument "%s"\n' "$1" >&2
+        printf '  usage: install.sh [--headless]\n' >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  # The receipt opens the install: it names the phase, the next step and the
+  # (empty) input needed, so a reader — human or agent — knows what this run
+  # is and where it starts before the first step emits.
+  R_PHASE="install"
+  R_NEXT="k3s ${K3S_VERSION} — single node, sqlite datastore"
+  R_STATUS="running"
+  kit_substrate_write_receipt
+  if [ "$HEADLESS" -eq 1 ]; then
+    kit_substrate_emit install.start "install begins: ${TOTAL} steps, receipt at ${RECEIPT_PATH}"
+  fi
+
+  CURRENT_PHASE="preflight"
   preflight
-  install_k3s
-  install_cert_manager
-  install_cnpg
-  install_argocd
-  install_pull_secret
-  install_applications
-  install_cluster_issuers
-  install_postgres_cluster
-  install_redis_and_secrets
-  install_nats
-  mint_courier_identity_token
-  echo
-  echo "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
-  echo "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"
-  echo "             kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+  CURRENT_PHASE="k3s"; install_k3s
+  CURRENT_PHASE="cert-manager"; install_cert_manager
+  CURRENT_PHASE="cnpg"; install_cnpg
+  CURRENT_PHASE="argocd"; install_argocd
+  CURRENT_PHASE="pull-secret"; install_pull_secret
+  CURRENT_PHASE="applications"; install_applications
+  CURRENT_PHASE="cluster-issuers"; install_cluster_issuers
+  CURRENT_PHASE="postgres"; install_postgres_cluster
+  CURRENT_PHASE="redis-and-secrets"; install_redis_and_secrets
+  CURRENT_PHASE="nats"; install_nats
+  CURRENT_PHASE="courier-mint"; mint_courier_identity_token
+
+  # The receipt closes the install: phase complete, no next step, and the
+  # human sent to the Argo CD UI — the one place a person goes now that the
+  # box has done its work.
+  R_PHASE="complete"
+  R_STATUS="complete"
+  R_NEXT=""
+  R_INPUT=""
+  R_HUMAN="open the Argo CD UI: kubectl -n argocd port-forward svc/argocd-server 8443:443"
+  R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+  kit_substrate_write_receipt
+  if [ "$HEADLESS" -eq 1 ]; then
+    kit_substrate_emit install.done "$R_MESSAGE"
+  else
+    kit_substrate_out ""
+    kit_substrate_out "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+    kit_substrate_out "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"
+    kit_substrate_out "             kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+  fi
 }
 
 main "$@"
