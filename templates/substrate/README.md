@@ -26,8 +26,13 @@ this file only describes what is here and what is proven.
 2. **cert-manager**
 3. **CloudNativePG**
 4. **Argo CD core** — no Dex, no SSO, no Redis HA.
-5. **The GHCR image pull secret** — created from `KIT_SUBSTRATE_PULL_SECRET`,
-   a value the operator supplies. Never a literal in the repo, never echoed.
+5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
+   its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
+   minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived
+   dockerconfigjson, held in a shell variable and applied through a pipe. No
+   long-lived registry credential is handed over, and nothing reaches disk,
+   argv or stdout. Re-running re-redeems, because a credential with minutes of
+   life is supposed to be replaced.
 6. **The first Applications** — applied from `manifests/applications/`, so Argo
    starts syncing.
 7. **The Let's Encrypt ClusterIssuers** — `letsencrypt-staging` and
@@ -56,6 +61,14 @@ this file only describes what is here and what is proven.
     guarded like every other step; the stream init runs on every install and
     is a no-op when the stream exists (`info || add`), failing the install
     loudly when it does not.
+11. **Courier's identity credential** — minted on this box from identity's own
+    API (the same four calls the local launch harness makes, over a
+    port-forward to the cluster-local Service), written as ONE value into both
+    `identity-secrets` (`COURIER_TOKEN`) and `courier-secrets`
+    (`COURIER_IDENTITY_TOKEN`), and both deployments restarted. Nothing
+    crosses a boundary and nothing is printed. This is the loop that used to
+    be manual — mint in one terminal, paste into a second run — and a mismatch
+    between its two halves surfaced as identity's `403`.
 
 Every version is pinned exactly. The pins were verified against the GitHub
 releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
@@ -179,21 +192,24 @@ curl https://kit.cafaye.com | sh
 or, from a kit checkout:
 
 ```sh
-export KIT_SUBSTRATE_PULL_SECRET='<base64 dockerconfigjson>'
+export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
+export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
 export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
 export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
 export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
 export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
-export KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN='<minted-by-identity-after-it-boots>'
 export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET='<provider-signing-secret>'
 bash templates/substrate/install.sh
 ```
 
 `KIT_SUBSTRATE_SMTP_ADAPTER` (default `smtp`) and `KIT_SUBSTRATE_SMTP_PORT`
 (default `587`) are validated, not required. `KIT_SUBSTRATE_MAIL_FROM` /
-`_NAME`, identity's `COURIER_TOKEN`, and the OIDC/OAuth keys are optional
-passthroughs — unset stays unwired (a reduced surface, never a placeholder).
+`_NAME` are optional passthroughs — unset stays unwired (a reduced surface,
+never a placeholder). Setting `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` wires
+identity's OIDC surface **with a key this box generates itself**; leaving it
+unset leaves the surface absent. `KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY`
+is an optional passthrough on the same all-or-nothing rule.
 `KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY` is an optional override with a
 different default: unset means the install **generates** a random 32-byte
 base64url-no-padding key on first creation (the exact shape identity's
@@ -201,6 +217,17 @@ config parser accepts), so a clean install always boots an identity whose
 MFA surface works. A supplied value is validated by shape and refused,
 naming the variable, when it is not 43 base64url characters decoding to
 32 bytes — a key identity would refuse at boot is refused here instead.
+
+**No long-lived secret is an input to this install.** The registry credential
+is redeemed per run from a capability that is single-use, minutes-lived and
+bound to the box (invariant 2), which is what makes handing one over harmless.
+`KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET` is the ONE long-lived secret an
+operator still supplies, because the provider is the only party that can hold
+it. Everything else — the eight Postgres role passwords, the Redis password,
+`SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `SECRET_KEY_BASE`,
+`COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, identity's OIDC signing
+key, and courier's identity credential — is **born on this box**, stored here,
+and never printed.
 
 `KIT_SUBSTRATE_ACME_EMAIL` is the ACME account contact address — the one
 Let's Encrypt sends expiry notices to. It is not a secret, but the script
@@ -283,9 +310,9 @@ environment variable and the key list IS the service's env list:
 
 | Secret | Keys | Provenance |
 |---|---|---|
-| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` (+ `COURIER_TOKEN`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated; the parenthesised four from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
-| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; the rest from the environment |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
 
 The key lists were enumerated from the code, not guesswork: identity's
@@ -308,26 +335,29 @@ secret plus restart-the-pods, never re-run-the-install). The MFA override
 (`KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY`) is honoured only at creation:
 once `identity-secrets` exists its stored key wins over any override, because
 the stored key is a persistent encryption key and re-running with a different
-value must not fork it. Anything externally
-sourced — courier's SMTP settings and provider secrets, the
-identity-minted `COURIER_IDENTITY_TOKEN`, identity's optional
-`COURIER_TOKEN`/OIDC/OAuth surfaces — comes **from the environment,
-shape-validated and never echoed**, in the `KIT_SUBSTRATE_PULL_SECRET`
-pattern. `DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
+value must not fork it. **Minted on this box** — courier's
+`COURIER_IDENTITY_TOKEN`, and the same value written into identity's
+`COURIER_TOKEN` beside it, both by step 11. **Generated on this box** — the
+OIDC signing key and its key id, when an issuer is set (the key is the
+customer's own; it is born here, and the id is a thumbprint of the key so a
+verifier's cached `kid` keeps matching). What is left comes **from the
+environment, shape-validated and never echoed**: courier's SMTP settings,
+the provider's signing secret, and the optional OAuth surface. `DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
 `postgres-rw.data` service, the service's own database, the `<svc>_app`
 login role the local compose files use (`postgres://` for identity and
 parlor, `ecto://` for courier — each service's own spelling), and the
 password read back from step 8's role secret. `gateway-tls` is NOT created
 here — cert-manager fills it from the ClusterIssuer.
 
-Two pairings to read carefully, because both look generatable and neither
-is. `COURIER_IDENTITY_TOKEN` is courier's credential *for* identity: an API
-key identity itself mints, so the box cannot invent it — the first run
-refuses naming the mint (`POST /v1/accounts/{id}/api-keys`), and the
-re-run resumes through the guards. Identity's `COURIER_TOKEN` is the
-opposite direction (identity's credential *for* courier) and stays unset
-unless the operator sets it: absent is the reduced surface the chart
-documents. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
+**`COURIER_IDENTITY_TOKEN` and identity's `COURIER_TOKEN` must be the SAME
+value** — courier's own README says so, and two different keys produce
+identity's `403` and courier's `503`, a symptom that reads like a network
+fault. It used to be the operator's job to get that right by hand, because
+the value was minted outside the box and pasted into a second run. Step 11
+does it inside one run: the key is minted on this box from identity's own API
+(`POST /v1/accounts/{id}/api-keys`), written into both secrets, and both
+deployments are restarted. The guard is the VALUE — a re-run that finds the
+credential already minted has nothing to mint. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
 *shared* secret every service presents to the relay — sibling services do
 not read it yet, so wiring them to this value is a named follow-up, not a
 second copy of it.
@@ -380,9 +410,9 @@ proves the equality offline, with no wrangler, no network and no account:
 it imports the Worker's handler as a plain module and compares the served
 body's SHA-256 against the file's — not a prefix, so a truncated or
 re-encoded body reds — with a control that truncates one byte and must go
-red. The Worker holds no secret: `install.sh` reads
-`KIT_SUBSTRATE_PULL_SECRET` and `KIT_SUBSTRATE_ACME_EMAIL` from the
-operator's environment at run time.
+red. The Worker holds no secret: `install.sh` reads the box id and the
+capability from the operator's environment at run time, and everything else
+it needs it generates itself.
 
 **The operator step (an action, not a file):** publish the Worker
 (`wrangler deploy` from this directory) and bind `kit.cafaye.com` to it —
@@ -402,7 +432,7 @@ operator action, and the URL works only when observed.
 
 - `install.sh` parses (`bash -n`) and is shellcheck-clean.
 - `DRY_RUN=1` runs to completion with the database list set,
-  printing the ten steps in order, each with an action.
+  printing the eleven steps in order, each with an action.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
@@ -425,6 +455,20 @@ operator action, and the URL works only when observed.
 - The recorded secret name-and-key list matches what `install.sh` creates —
   a fixture with a key removed goes **red** either way (and an unrecorded
   key the other way) — and no operator value is ever echoed.
+- **No long-lived secret is an input**, and every value that replaced one is
+  proven: the retired variable names do not appear in the installer's code
+  (comments stripped, the same strip the record check uses — a comment naming
+  a retired value is the record of the change, and a comment cannot read a
+  variable); the capability is validated by shape before any network call, so
+  a pasted dockerconfigjson is refused rather than sent as a bearer; the
+  redeemed dockerconfigjson reaches the cluster as a dockerconfigjson Secret
+  in all six namespaces and the capability and the credential are both absent
+  from the output; identity's OIDC signing key is a 2048-bit RSA PEM with a
+  `box-`-plus-16-hex key id, generated on the box, distinct on a second box,
+  never regenerated on a re-run, and absent from the output; and step 11's
+  mint writes ONE value into both secret halves, restarts both deployments,
+  and leaves that value out of the output. Every one of the no-print claims
+  has a control that plants the value in a log and must go **red**.
 - `identity-secrets` always carries `MFA_ENCRYPTION_KEY`: first creation
   generates a random 32-byte base64url-no-padding key (the exact shape
   identity's config parser accepts, proven by decoding it in the test), a
