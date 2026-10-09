@@ -121,20 +121,20 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The ten steps, in order. The markers are `[1/10]` … `[10/10]`; the check reads
-# them out of the output in the order they appear and compares against the
-# expected sequence, so a script that printed them out of order — or skipped
-# one — would go red here rather than passing on the presence of all ten.
-# The `|| true` is load-bearing: with no `[n/10]` markers printed yet, grep
-# exits 1, and under `set -o pipefail` a failing command substitution would
-# take the harness down before the status is ever read — the same shape the
-# `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/10\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+# The eleven steps, in order. The markers are `[1/11]` … `[11/11]`; the check
+# reads them out of the output in the order they appear and compares against
+# the expected sequence, so a script that printed them out of order — or
+# skipped one — would go red here rather than passing on the presence of all
+# eleven. The `|| true` is load-bearing: with no `[n/11]` markers printed yet,
+# grep exits 1, and under `set -o pipefail` a failing command substitution
+# would take the harness down before the status is ever read — the same shape
+# the `run` helper's comment describes four lines below.
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/11\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9 10" ]; then
-  pass 'DRY_RUN prints the ten steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11" ]; then
+  pass 'DRY_RUN prints the eleven steps in order'
 else
-  fail 'DRY_RUN prints the ten steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the eleven steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
@@ -466,7 +466,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_REGISTRY_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -756,15 +756,19 @@ if len(records) != 4:
     print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
 # Conditional keys: set only when the operator sets the surface (identity's
-# OIDC/OAuth block, its courier credential, courier's mail-from). They
+# OIDC block and its issuer, its courier credential, courier's mail-from). They
 # are deliberately UNRECORDED — absent is a valid reduced surface, and the
 # record lists the keys every install creates. MFA_ENCRYPTION_KEY is NOT
 # conditional: the installer generates it on first creation, so every
-# install creates it and the record must name it.
+# install creates it and the record must name it. OIDC_SIGNING_KEY and its
+# id are now GENERATED ON THE BOX rather than supplied, but still only when
+# the operator sets an issuer — the surface stays all-or-nothing, so they
+# stay unrecorded beside the issuer that gates them.
 conditional = {
     "COURIER_TOKEN",
     "OIDC_SIGNING_KEY",
     "OIDC_SIGNING_KEY_ID",
+    "OIDC_ISSUER",
     "OAUTH_ENCRYPTION_KEY",
     "MAIL_FROM",
     "MAIL_FROM_NAME",
@@ -922,7 +926,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=10", "TOTAL is not 10 — step 10 (NATS) widens the plan and the DRY_RUN order check with it")
+need("TOTAL=11", "TOTAL is not 11 — step 11 (the courier credential minted on this box) widens the plan and the DRY_RUN order check with it")
 need('NATS_VERSION="2.10.24-alpine"', "no exact NATS_VERSION pin beside the other pins")
 need('NATS_BOX_VERSION="0.20.0"', "no exact NATS_BOX_VERSION pin for the stream-init image")
 if not re.search(r"(?m)^install_nats\(\)", code):
@@ -1084,6 +1088,8 @@ fixture_sourced="$WORK/install-sourced.sh"
 sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$fixture_sourced"
 
 # mock_seed <namespace> <secret> <key> <value> — plant one stored value.
+# Every key planted here is a FAKE. Nothing in this file is a credential; the
+# strings are labels, and a label is what a test may print.
 mock_seed() {
   local d="$MOCK_ROOT/$1/$2"
   mkdir -p "$d"
@@ -1102,9 +1108,11 @@ mock_get() {
 # (base64 of the stored value, the shape read_secret_key decodes).
 # Anything else is a loud failure, not a silent success.
 mock_kubectl() {
+  local fallback_ns=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --kubeconfig=*) shift ;;
+      -n) fallback_ns="$2"; shift 2 ;;
       *) break ;;
     esac
   done
@@ -1123,9 +1131,35 @@ mock_kubectl() {
         return 1
       fi
       if [ "${1:-}" = "generic" ]; then shift; fi
+      if [ "${1:-}" = "docker-registry" ]; then
+        # The pull secret's own shape: `--from-file=.dockerconfigjson=<path>`
+        # (a process substitution the caller shell built). The mock stores the
+        # bytes at that path under the secret, so the shape of what the
+        # installer wrote is readable back exactly as kubectl would read it.
+        shift
+        local name="${1:-}"
+        shift || true
+        local ns="$fallback_ns" src=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -n) ns="$2"; shift 2 ;;
+            --namespace=*) ns="${1#--namespace=}"; shift ;;
+            --from-file=.dockerconfigjson=*) src="${1#--from-file=.dockerconfigjson=}"; shift ;;
+            *) shift ;;
+          esac
+        done
+        if [ -z "$src" ]; then
+          echo "mock_kubectl: create secret docker-registry without a --from-file path" >&2
+          return 1
+        fi
+        local d="$MOCK_ROOT/$ns/$name"
+        mkdir -p "$d"
+        cat "$src" >"$d/.dockerconfigjson"
+        return 0
+      fi
       local name="${1:-}"
       shift || true
-      local ns=""
+      local ns="$fallback_ns"
       local -a lits=()
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -1173,7 +1207,26 @@ mock_kubectl() {
       return 0
       ;;
     apply)
-      cat >/dev/null
+      # The mock records what the installer SENT, because for the pull secret
+      # and the minted credential the manifest on stdin IS the claim: the
+      # secret's shape, and that the value in it came from the redemption
+      # rather than a literal in the tree. APPENDED, not numbered: every
+      # pipeline element is a fork, so a counter kept in the parent never
+      # advances and the sixth apply would overwrite the first.
+      mkdir -p "$MOCK_ROOT/applied"
+      cat >>"$MOCK_ROOT/applied.yaml"
+      return 0
+      ;;
+    rollout)
+      # `rollout status` (a wait), `rollout restart` (a kick). Both are no-ops
+      # against the file store: the mint loop's contract is that it ASKS, and
+      # the value assertions below are what prove it wrote the right thing.
+      return 0
+      ;;
+    port-forward)
+      # A real one blocks forever; this one returns instantly, so the installer's
+      # background job is already gone when its RETURN trap kills it. The
+      # exchange it guards is mocked at the curl boundary, not here.
       return 0
       ;;
     *)
@@ -1221,21 +1274,21 @@ mfa_seed_roles() {
 
 # mfa_smtp_env — the externally-sourced courier values the live path
 # requires. Dummy relay values: the shape of the refusal is proven
-# elsewhere; here they only open the gate to the secrets half.
+# elsewhere; here they only open the gate to the secrets half. The box id and
+# capability are the two inputs the W2-P4 cut left, and both are fakes whose
+# shape is what the installer validates.
 mfa_smtp_env() {
   export DRY_RUN=0
   export KIT_SUBSTRATE_SMTP_HOST="relay.example.com"
   export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
   export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass"
-  export KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN="identity-minted-token"
   export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="provider-signing-secret"
   # Empty, not unset: the sourced installer runs under `set -u` and reads
   # these unconditionally, so an unset variable is a fatal rather than an
   # absent surface. Empty is the absent surface the installer documents.
-  export KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY=""
-  export KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID=""
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
-  export KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN=""
 }
 
 # Case A: no override — first creation generates a correctly shaped key.
@@ -1418,6 +1471,332 @@ if [ "$(mock_get identity identity-secrets SIGNUP_SIGNING_KEY)" = "Ou1NSDx0wZAm5
 else
   fail 'legacy: the pre-existing secret keeps its own values' "SIGNUP_SIGNING_KEY changed"
 fi
+
+# ===========================================================================
+# 13. No long-lived secret enters the installer (invariant 3's input side)
+# ===========================================================================
+#
+# W2-P4. Two values used to be handed TO this installer: a GHCR
+# dockerconfigjson and identity's OIDC signing key — both long-lived, both
+# belonging to the box, both arrived in a shell history. A third loop used to
+# cross a boundary twice: the operator minted courier's credential by hand and
+# pasted it into a second run.
+#
+# What this section proves:
+#   1. the retired input names are GONE from install.sh — an input nobody
+#      declared is still an input if somebody read it;
+#   2. what replaced the pull secret is SHORT-LIVED and BOX-BOUND: a capability
+#      of the minted shape, redeemed per run, and never printed;
+#   3. the OIDC signing key is BORN ON THE BOX — generated, shaped the way
+#      identity's own parser demands, stable across a re-run, and never echoed;
+#   4. the courier credential is minted, patched and restarted INSIDE one run,
+#      and the minted value reaches neither secrets nor logs.
+#
+# The no-print assertions are the SECRET RECORD's own idiom: the value must
+# not appear in the installer's output. Each has a control that plants the
+# value in a log and must go red.
+CAP_GOOD="cap_$(printf 'a%.0s' $(seq 64))"
+CAP_B64_PULL_SECRET="$(printf '{"auths":{"ghcr.io":{"auth":"ZmFrZS1ub3QtYS1jcmVkZW50aWFs"}}}' | base64 | tr -d '\n')"
+CAP_BOX_ID_UUID="11111111-2222-3333-4444-555555555555"
+
+# 13a. The retired inputs are gone. The names below are the four spellings an
+# older runbook still carries; a file that reads any of them is a file that
+# still takes a long-lived secret in.
+#
+# The check reads CODE, with comments stripped — the same strip the SECRET
+# RECORD check above uses. A comment cannot read a variable, and this file
+# needs to be able to NAME the values it retired (that naming is the record of
+# the change); a `set -u` installer is what the check is actually about.
+installer_code="$WORK/install-code-only.sh"
+sed -e 's/^[[:space:]]*#.*$//' "$SUBSTRATE/install.sh" >"$installer_code"
+for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN; do
+  if grep -n "$retired" "$installer_code" >/dev/null 2>&1; then
+    fail "the installer no longer reads $retired" "$(grep -n "$retired" "$installer_code" | head -3)"
+  else
+    pass "the installer no longer reads $retired"
+  fi
+done
+
+# The control: a fixture carrying every retired name must be found by the same
+# grep. A check that cannot see the thing it bans is a comment.
+fixture_retired="$WORK/install-retired-inputs.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_retired"
+for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN; do
+  printf ': "${%s:=}"\n' "$retired" >>"$fixture_retired"
+  if grep -n "$retired" "$fixture_retired" >/dev/null 2>&1; then
+    pass "control: a planted $retired is found by the same grep"
+  else
+    fail "control: a planted $retired is found by the same grep" "the grep found nothing in $fixture_retired"
+  fi
+done
+
+# 13b. The capability is validated by shape BEFORE any network call, so a
+# pasted dockerconfigjson — the value an older runbook asks for — is refused
+# on the box instead of sent somewhere as an opaque bearer.
+# shellcheck source=/dev/null
+. "$fixture_sourced"
+
+run 'the capability is validated: the minted shape is accepted' green registry_capability_shape_ok "$CAP_GOOD"
+run 'control: a dockerconfigjson is refused as a capability' red registry_capability_shape_ok "$CAP_B64_PULL_SECRET"
+run 'control: a short capability is refused' red registry_capability_shape_ok "cap_deadbeef"
+run 'control: an empty capability is refused' red registry_capability_shape_ok ""
+
+# 13c. The exchange itself: the redemption returns a short-lived
+# dockerconfigjson, it lands in the pull secret as a dockerconfigjson SHAPE,
+# and neither the capability nor the redeemed credential appears in the output.
+MOCK_ROOT="$WORK/pull-secret"
+mkdir -p "$MOCK_ROOT/applied"
+rm -f "$MOCK_ROOT/applied.yaml"
+pull_secret_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  # The exchange, mocked: the registry answers with one short-lived
+  # dockerconfigjson. The fake is a LABEL, not a credential.
+  curl() { printf '%s' "$CAP_B64_PULL_SECRET"; }
+  DRY_RUN=0
+  KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+  KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+  KIT_SUBSTRATE_REGISTRY_URL="https://registry.cafaye.test"
+  REGISTRY_DOCKERCONFIGJSON=""
+  install_pull_secret >"$WORK/pull-secret.log" 2>&1
+) || pull_secret_ec=$?
+if [ "$pull_secret_ec" -ne 0 ]; then
+  fail 'the pull secret is created from the redeemed credential' "$(cat "$WORK/pull-secret.log")"
+else
+  pass 'the pull secret is created from the redeemed credential'
+fi
+case "$(cat "$WORK/pull-secret.log")" in
+  *"$CAP_GOOD"*)
+    fail 'the redeemed step never echoes the capability' "the capability appears in the log"
+    ;;
+  *) pass 'the redeemed step never echoes the capability' ;;
+esac
+case "$(cat "$WORK/pull-secret.log")" in
+  *"$CAP_B64_PULL_SECRET"*)
+    fail 'the redeemed step never echoes the redeemed credential' "the dockerconfigjson appears in the log"
+    ;;
+  *) pass 'the redeemed step never echoes the redeemed credential' ;;
+esac
+# The manifest the installer sent, not a file it might have written: a
+# dockerconfigjson type, in all six namespaces, with the redeemed value in
+# base64 under the one key the chart reads.
+applied_pull_secret() {
+  local want f found
+  want="$(printf '%s' "$CAP_B64_PULL_SECRET" | tr -d '\n')"
+  found=""
+  for f in "$MOCK_ROOT"/applied.yaml; do
+    [ -r "$f" ] || continue
+    if grep -q 'kubernetes.io/dockerconfigjson' "$f" && grep -Fq "$want" "$f"; then
+      found="$f"
+      break
+    fi
+  done
+  if [ -z "$found" ]; then
+    printf 'no applied manifest carries the redeemed dockerconfigjson\n'
+    return 1
+  fi
+  local ns
+  for ns in argocd identity gateway courier parlor observability; do
+    if ! grep -q "namespace: $ns" "$found"; then
+      printf "the pull secret was not applied in namespace %s\n" "$ns"
+      return 1
+    fi
+  done
+  printf 'a dockerconfigjson secret, applied in all six namespaces'
+}
+run 'the stored pull secret is the docker-registry shape, in every namespace' green applied_pull_secret
+
+# The control: the same assertion against a manifest that carries no
+# dockerconfigjson type. Must go red — a check that cannot see the missing
+# thing is documentation.
+fixture_no_pull_secret="$WORK/applied-no-pull-secret.yaml"
+printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: other\n  namespace: argocd\ntype: Opaque\ndata:\n  x: %s\n' "$CAP_B64_PULL_SECRET" >"$fixture_no_pull_secret"
+run 'control: a manifest with no dockerconfigjson type goes red' red bash -c 'grep -q kubernetes.io/dockerconfigjson "$1" && grep -Fq "$2" "$1"' _ "$fixture_no_pull_secret" "$(printf '%s' "$CAP_B64_PULL_SECRET" | tr -d '\n')"
+
+# 13d. The OIDC signing key is born on THIS box.
+#
+# A private RSA key that has been in somebody's shell history is not the
+# customer's key any more, so the installer generates it: openssl at identity's
+# own floor (2048 bits, MinKeyBits), an id DERIVED FROM THE KEY (a public
+# thumbprint, so a cached verifier's `kid` keeps matching), read back
+# once-only, and never printed. A re-run does not regenerate: gateway caches
+# JWKS entries by `kid`, so a service that signs with a new key every boot is a
+# service nobody can verify.
+oidc_shape_ok() {
+  local pem bits
+  pem="$1"
+  case "$pem" in
+    *"BEGIN RSA PRIVATE KEY"* | *"BEGIN PRIVATE KEY"*) ;;
+    *) printf 'not a PEM private key (%s)\n' "$(printf '%s' "$pem" | head -1)"; return 1 ;;
+  esac
+  bits="$(printf '%s' "$pem" | openssl rsa -noout -text 2>/dev/null | sed -n 's/.*Private-Key: (\([0-9][0-9]*\) bit.*/\1/p' | head -1)"
+  if [ -z "$bits" ]; then
+    printf 'openssl could not parse the stored key\n'
+    return 1
+  fi
+  if [ "$bits" -lt 2048 ]; then
+    printf 'the key is %s bits — identity refuses a key below MinKeyBits (2048)\n' "$bits"
+    return 1
+  fi
+  printf 'a %s-bit RSA PEM private key\n' "$bits"
+}
+
+oidc_log_clean() {
+  # $1 = the log, $2 = the value that must not be in it.
+  case "$1" in
+    *"$2"*)
+      printf 'the value appears in the installer output\n'
+      return 1
+      ;;
+  esac
+  printf 'absent from the output\n'
+}
+
+MOCK_ROOT="$WORK/oidc-a"
+mkdir -p "$MOCK_ROOT"
+oidc_a_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  install_service_secrets >"$WORK/oidc-a.log" 2>&1
+) || oidc_a_ec=$?
+if [ "$oidc_a_ec" -ne 0 ]; then
+  fail 'oidc: the surface wires on a box with no stored key' "$(cat "$WORK/oidc-a.log")"
+else
+  pass 'oidc: the surface wires on a box with no stored key'
+fi
+oidc_key_a="$(mock_get identity identity-secrets OIDC_SIGNING_KEY)"
+oidc_id_a="$(mock_get identity identity-secrets OIDC_SIGNING_KEY_ID)"
+oidc_shape_a="$(oidc_shape_ok "$oidc_key_a")" && oidc_shape_a_ec=0 || oidc_shape_a_ec=$?
+if [ -z "$oidc_key_a" ]; then
+  fail 'oidc: a signing key is generated on the box' "no OIDC_SIGNING_KEY in $MOCK_ROOT/identity/identity-secrets"
+elif [ "$oidc_shape_a_ec" -ne 0 ]; then
+  fail 'oidc: the generated key is an RSA PEM of at least 2048 bits' "$oidc_shape_a"
+else
+  pass "oidc: the generated key is an RSA PEM of at least 2048 bits ($oidc_shape_a)"
+fi
+case "$oidc_id_a" in
+  box-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+    pass 'oidc: the key id is a thumbprint identity accepts (box- plus 16 hex)'
+    ;;
+  *) fail 'oidc: the key id is a thumbprint identity accepts (box- plus 16 hex)' "id: $oidc_id_a" ;;
+esac
+run 'oidc: the generated key never reaches the output' green oidc_log_clean "$(cat "$WORK/oidc-a.log")" "$oidc_key_a"
+run 'control: a key echoed into the log is caught' red oidc_log_clean "created with OIDC_SIGNING_KEY=${oidc_key_a}" "$oidc_key_a"
+if [ "$(mock_get identity identity-secrets OIDC_ISSUER)" = "https://identity.example.com" ]; then
+  pass 'oidc: the issuer rides along — the surface is issuer, key and id, or nothing'
+else
+  fail 'oidc: the issuer rides along — the surface is issuer, key and id, or nothing' "OIDC_ISSUER: $(mock_get identity identity-secrets OIDC_ISSUER)"
+fi
+
+# The re-run: nothing regenerates. The stored key is read back, the id is read
+# back with it, and a second box generates a different key (never a constant).
+MOCK_ROOT="$WORK/oidc-b"
+mkdir -p "$MOCK_ROOT"
+oidc_b_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  install_service_secrets >"$WORK/oidc-b.log" 2>&1
+) || oidc_b_ec=$?
+oidc_key_b="$(mock_get identity identity-secrets OIDC_SIGNING_KEY)"
+if [ "$oidc_b_ec" -ne 0 ]; then
+  fail 'oidc: a second box generates its own key' "$(cat "$WORK/oidc-b.log")"
+elif [ "$oidc_key_a" = "$oidc_key_b" ]; then
+  fail 'oidc: a second box generates its own key' "both boxes hold the same key"
+elif [ "$(mock_get identity identity-secrets OIDC_SIGNING_KEY_ID)" = "$oidc_id_a" ]; then
+  fail 'oidc: a second box generates its own key' "both boxes hold the same key id"
+else
+  pass 'oidc: a second box generates its own key'
+fi
+MOCK_ROOT="$WORK/oidc-rerun"
+mkdir -p "$MOCK_ROOT"
+oidc_rerun_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  install_service_secrets >"$WORK/oidc-rerun1.log" 2>&1
+  install_service_secrets >"$WORK/oidc-rerun2.log" 2>&1
+) || oidc_rerun_ec=$?
+oidc_key_rerun="$(mock_get identity identity-secrets OIDC_SIGNING_KEY)"
+oidc_id_rerun="$(mock_get identity identity-secrets OIDC_SIGNING_KEY_ID)"
+if [ "$oidc_rerun_ec" -ne 0 ]; then
+  fail 'oidc: a re-run never regenerates the key' "$(cat "$WORK/oidc-rerun1.log" "$WORK/oidc-rerun2.log")"
+elif [ -z "$oidc_key_rerun" ]; then
+  fail 'oidc: a re-run never regenerates the key' "no key after the second run"
+elif [ "$oidc_key_rerun" = "$oidc_key_a" ] || [ "$oidc_key_rerun" = "$oidc_key_b" ]; then
+  fail 'oidc: a re-run never regenerates the key' "the stored key matches another install's — a constant, not a key"
+else
+  pass 'oidc: a re-run never regenerates the key'
+fi
+case "$oidc_id_rerun" in
+  box-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f])
+    pass 'oidc: the key id is read back with the key'
+    ;;
+  *) fail 'oidc: the key id is read back with the key' "id: $oidc_id_rerun" ;;
+esac
+
+# 13e. The courier loop is box-internal: one run mints the credential through
+# identity's own API, writes the SAME value into both secrets that have to hold
+# it, and restarts both deployments. Nothing is printed.
+COURIER_MINT_TOKEN="cap_box_minted_fake_token_value"
+courier_mint_curl() {
+  # The URL is whichever argument is one — the calls put `-d` last, so taking
+  # the final argument would read the request body instead.
+  local url="" arg
+  for arg in "$@"; do
+    case "$arg" in
+      http://* | https://*) url="$arg" ;;
+    esac
+  done
+  case "$url" in
+    */v1/signup-timestamp) printf '{"timestamp":1700000000,"signature":"fake-signature"}' ;;
+    */v1/users) printf '{"id":"fake-user"}' ;;
+    */v1/session) printf '{"token":"fake-session"}' ;;
+    */v1/accounts) printf '{"id":"fake-account"}' ;;
+    */v1/accounts/fake-account/api-keys) printf '{"token":"%s"}' "$COURIER_MINT_TOKEN" ;;
+    *)
+      printf 'courier_mint_curl: unmocked %s\n' "$url" >&2
+      return 1
+      ;;
+  esac
+}
+
+MOCK_ROOT="$WORK/mint-loop"
+mkdir -p "$MOCK_ROOT"
+mint_loop_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  curl() { courier_mint_curl "$@"; }
+  mfa_smtp_env
+  mint_courier_identity_token >"$WORK/mint-loop.log" 2>&1
+) || mint_loop_ec=$?
+if [ "$mint_loop_ec" -ne 0 ]; then
+  fail 'the mint loop completes inside one run' "$(cat "$WORK/mint-loop.log")"
+elif [ "$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)" != "$COURIER_MINT_TOKEN" ]; then
+  fail 'the mint loop completes inside one run' "courier-secrets holds: '$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)'"
+elif [ "$(mock_get identity identity-secrets COURIER_TOKEN)" != "$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)" ]; then
+  fail 'the mint loop completes inside one run' "identity and courier hold different values — the 403 courier README names"
+else
+  pass 'the mint loop completes inside one run'
+fi
+run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(cat "$WORK/mint-loop.log")" "$COURIER_MINT_TOKEN"
+run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
 
 # ===========================================================================
 # Summary
