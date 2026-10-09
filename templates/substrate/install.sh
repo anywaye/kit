@@ -554,18 +554,15 @@ preflight() {
   # discovered by an operator with a copy-paste runbook to fall back on, which
   # is exactly the invariant-3 violation this install exists to remove.
   if ! command -v openssl >/dev/null 2>&1; then
-    echo "error: openssl is required — identity's OIDC signing key is generated on this box rather than supplied" >&2
-    exit 1
+    kit_substrate_refuse "" "install openssl — identity's OIDC signing key is generated on this box rather than supplied" "openssl is required — identity's OIDC signing key is generated on this box rather than supplied"
   fi
 
   if ! command -v jq >/dev/null 2>&1; then
-    echo "error: jq is required — step 11 reads the minted credential out of identity's response" >&2
-    exit 1
+    kit_substrate_refuse "" "install jq — step 11 reads the minted credential out of identity's response" "jq is required — step 11 reads the minted credential out of identity's response"
   fi
 
   if [ "$(uname -s)" != "Linux" ]; then
-    echo "error: this script installs k3s, which needs Linux (found $(uname -s))" >&2
-    exit 1
+    kit_substrate_refuse "" "this script installs k3s, which needs Linux" "this script installs k3s, which needs Linux (found $(uname -s))"
   fi
 
   local arch
@@ -573,8 +570,7 @@ preflight() {
   case "$arch" in
     x86_64 | aarch64) ;;
     *)
-      echo "error: unsupported architecture '$arch' — k3s supports x86_64 and aarch64" >&2
-      exit 1
+      kit_substrate_refuse "" "k3s supports x86_64 and aarch64" "unsupported architecture '$arch' — k3s supports x86_64 and aarch64"
       ;;
   esac
 
@@ -583,8 +579,7 @@ preflight() {
   local mem_kb
   mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
   if [ "$mem_kb" -lt 4194304 ]; then
-    echo "error: ${mem_kb} kB RAM — 4GB no longer qualifies once the Grafana stack lands (DEPLOYMENT.md)" >&2
-    exit 1
+    kit_substrate_refuse "" "DEPLOYMENT.md sizes the box: 8GB comfortable, 4GB no longer qualifies once the Grafana stack lands" "${mem_kb} kB RAM — 4GB no longer qualifies once the Grafana stack lands (DEPLOYMENT.md)"
   fi
   if [ "$mem_kb" -lt 8388608 ]; then
     echo "warning: ${mem_kb} kB RAM — 8GB is comfortable for the full stack" >&2
@@ -593,8 +588,7 @@ preflight() {
   # The registry is where the pull secret and every chart come from. An
   # unreachable ghcr.io is a refusal, not a retry: the install cannot complete.
   if ! curl -s --max-time 10 -o /dev/null https://ghcr.io/v2/; then
-    echo "error: ghcr.io is unreachable — the pull secret and charts come from there" >&2
-    exit 1
+    kit_substrate_refuse "" "check network access to ghcr.io — the pull secret and charts come from there" "ghcr.io is unreachable — the pull secret and charts come from there"
   fi
 }
 
@@ -686,16 +680,14 @@ registry_capability_shape_ok() {
 # and the same shape check the old operator-supplied value had to pass.
 redeem_registry_credential() {
   if [ -z "$KIT_SUBSTRATE_BOX_ID" ]; then
-    echo "error: KIT_SUBSTRATE_BOX_ID is not set" >&2
-    echo "  export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'" >&2
-    echo "  # the box's own identity, and what the registry capability is bound to" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_BOX_ID" "export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>' and re-run — the box's own identity, and what the registry capability is bound to" "KIT_SUBSTRATE_BOX_ID is not set
+  export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
+  # the box's own identity, and what the registry capability is bound to"
   fi
   if ! registry_capability_shape_ok "$KIT_SUBSTRATE_REGISTRY_CAPABILITY"; then
-    echo "error: KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability" >&2
-    echo "  export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'" >&2
-    echo "  # a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
+  # a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted"
   fi
   local response decoded
   # `curl -f` turns a 401/403/410 into a non-zero exit with the body on stderr;
@@ -706,19 +698,16 @@ redeem_registry_credential() {
     -H 'Content-Type: application/json' \
     --data "$(printf '{"purpose":"registry.pull","box_id":"%s"}' "$KIT_SUBSTRATE_BOX_ID")" \
     "${KIT_SUBSTRATE_REGISTRY_URL}/v1/boxes/${KIT_SUBSTRATE_BOX_ID}/registry-credentials" 2>/dev/null)"; then
-    echo "error: the registry refused this box's capability — expired, already redeemed, or minted for another box" >&2
-    echo "  re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" >&2
-    exit 1
+    kit_substrate_refuse "" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" "the registry refused this box's capability — expired, already redeemed, or minted for another box
+  re-run 'caf box enroll' and pass the capability it prints (it lives minutes)"
   fi
   if ! decoded="$(printf '%s' "$response" | base64 -d 2>/dev/null)"; then
-    echo "error: the registry's response is not a base64 dockerconfigjson" >&2
-    exit 1
+    kit_substrate_refuse "" "" "the registry's response is not a base64 dockerconfigjson"
   fi
   case "$decoded" in
     *'"auths"'*) ;;
     *)
-      echo "error: the registry's response has no \"auths\" key — it is not a dockerconfigjson" >&2
-      exit 1
+      kit_substrate_refuse "" "" "the registry's response has no \"auths\" key — it is not a dockerconfigjson"
       ;;
   esac
   REGISTRY_DOCKERCONFIGJSON="$response"
@@ -772,10 +761,9 @@ install_cluster_issuers() {
     return 0
   fi
   if [ -z "$KIT_SUBSTRATE_ACME_EMAIL" ]; then
-    echo "error: KIT_SUBSTRATE_ACME_EMAIL is not set" >&2
-    echo "  export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>'" >&2
-    echo "  # the ACME account contact address — Let's Encrypt sends expiry notices to it" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_ACME_EMAIL" \
+      "export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>' on the box and re-run" \
+      "KIT_SUBSTRATE_ACME_EMAIL is not set"
   fi
   # Shape check without echoing the value: exactly one `@`, with something on
   # either side, and not one of the domains Let's Encrypt documents as
@@ -788,13 +776,15 @@ install_cluster_issuers() {
   local_part="${KIT_SUBSTRATE_ACME_EMAIL%%@*}"
   domain_part="${KIT_SUBSTRATE_ACME_EMAIL##*@}"
   if [ "${#ats}" -ne 1 ] || [ -z "$local_part" ] || [ -z "$domain_part" ]; then
-    echo "error: KIT_SUBSTRATE_ACME_EMAIL must be an email address — exactly one '@', with something on either side" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_ACME_EMAIL" \
+      "export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>' on the box and re-run" \
+      "KIT_SUBSTRATE_ACME_EMAIL must be an email address — exactly one '@', with something on either side"
   fi
   case "$domain_part" in
     example.com | example.org | example.net)
-      echo "error: KIT_SUBSTRATE_ACME_EMAIL is a $domain_part address — it must be real; Let's Encrypt sends expiry notices to it" >&2
-      exit 1
+      kit_substrate_refuse "KIT_SUBSTRATE_ACME_EMAIL" \
+        "export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>' on the box and re-run" \
+        "KIT_SUBSTRATE_ACME_EMAIL is a $domain_part address — it must be real; Let's Encrypt sends expiry notices to it"
       ;;
   esac
   # The placeholder is substituted in a pipe, never with `sed -i`: the value
@@ -820,11 +810,9 @@ install_cluster_issuers() {
 install_postgres_cluster() {
   log_step "the Postgres Cluster (from KIT_SUBSTRATE_DATABASES, in the data namespace)"
   if [ -z "$KIT_SUBSTRATE_DATABASES" ]; then
-    echo "error: KIT_SUBSTRATE_DATABASES is not set" >&2
-    echo "  export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'" >&2
-    echo "  # comma-separated, no spaces: one role-and-database per service." >&2
-    echo "  # It must equal the service set manifests/data/postgres-cluster.yaml provisions." >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "KIT_SUBSTRATE_DATABASES is not set"
   fi
   # The manifest is the contract and the variable is the operator confirming
   # it: every name must be a service the manifest provisions, and every
@@ -834,14 +822,14 @@ install_postgres_cluster() {
   want="$(grep -oE 'CREATE DATABASE "[a-z_]+"' "$DATA_DIR/postgres-cluster.yaml" | sed -E 's/.*"(.*)"/\1/' | sort -u | tr '\n' ',' )"
   have="$(printf '%s' "$KIT_SUBSTRATE_DATABASES" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u | tr '\n' ',')"
   if [ -z "$have" ]; then
-    echo "error: KIT_SUBSTRATE_DATABASES names no services (empty after trimming)" >&2
-    echo "  export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "KIT_SUBSTRATE_DATABASES names no services (empty after trimming)"
   fi
   if [ "$want" != "$have" ]; then
-    echo "error: KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})" >&2
-    echo "  # adding a service means extending manifests/data/postgres-cluster.yaml AND this variable in the same change" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
+      "KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})"
   fi
   # The extension list is declared (default: vector, mirroring compose) and
   # validated here, even though no CNPG hook can create it per database (see
@@ -853,8 +841,9 @@ install_postgres_cluster() {
   IFS=',' read -r -a ext_list <<<"$KIT_SUBSTRATE_POSTGRES_EXTENSIONS"
   for ext in "${ext_list[@]}"; do
     if ! printf '%s' "$ext" | LC_ALL=C grep -q '^[a-z_][a-z0-9_]*$'; then
-      echo "error: '$ext' in KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier ([a-z_][a-z0-9_]*)" >&2
-      exit 1
+      kit_substrate_refuse "KIT_SUBSTRATE_POSTGRES_EXTENSIONS" \
+        "export KIT_SUBSTRATE_POSTGRES_EXTENSIONS='vector' on the box and re-run" \
+        "'$ext' in KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier ([a-z_][a-z0-9_]*)"
     fi
   done
   if kit_substrate_guard cluster; then
@@ -945,8 +934,12 @@ database_url_for() {
   local pw
   pw="$(read_secret_key data "postgres-role-$1-app" password)"
   if [ -z "$pw" ]; then
-    echo "error: secret postgres-role-$1-app is missing in namespace data — run step 8 first" >&2
-    exit 1
+    # Not a refusal about an operator input — the step that makes the role
+    # secret has not run — so `input_needed` names the step rather than a
+    # variable, and `human` says which one to run.
+    kit_substrate_refuse "run step 8 (the Postgres Cluster) first" \
+      "re-run 'caf box apply --phase 8' on the box, then this step" \
+      "secret postgres-role-$1-app is missing in namespace data"
   fi
   if [ "$1" = "courier" ]; then
     printf 'ecto://%s_app:%s@postgres-rw.data.svc.cluster.local:5432/%s' "$1" "$pw" "$1"
@@ -1034,10 +1027,9 @@ validate_mfa_override() {
     fi
   fi
   if [ -n "$why" ]; then
-    echo "error: KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY is not a 32-byte base64url-no-padding key — $why" >&2
-    echo "  export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY='<43 base64url characters>'" >&2
-    echo "  # or leave it unset: the install generates one on first creation and keeps it" >&2
-    exit 1
+    kit_substrate_refuse "KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY" \
+      "export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY='<43 base64url characters>' on the box and re-run, or leave it unset so the install generates one on first creation and keeps it" \
+      "KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY is not a 32-byte base64url-no-padding key — $why"
   fi
 }
 
@@ -1096,23 +1088,24 @@ install_service_secrets() {
   if [ -z "$KIT_SUBSTRATE_SMTP_HOST" ] ||
      [ -z "$KIT_SUBSTRATE_SMTP_USERNAME" ] || [ -z "$KIT_SUBSTRATE_SMTP_PASSWORD" ] ||
      [ -z "$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" ]; then
-    echo "error: courier's externally-sourced settings are incomplete — all of these are required:" >&2
-    echo "  KIT_SUBSTRATE_SMTP_HOST, KIT_SUBSTRATE_SMTP_USERNAME, KIT_SUBSTRATE_SMTP_PASSWORD" >&2
-    echo "  KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET (the provider's signing secret)" >&2
-    echo "  # courier's identity credential is NOT here: step 11 mints it on this box" >&2
-    exit 1
+    kit_substrate_refuse \
+      "KIT_SUBSTRATE_SMTP_HOST, KIT_SUBSTRATE_SMTP_USERNAME, KIT_SUBSTRATE_SMTP_PASSWORD, KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
+      "export the four above on the box and re-run — the signing secret comes from the PROVIDER's dashboard (Resend: the webhook endpoint's Signing Secret)" \
+      "courier's externally-sourced settings are incomplete — all of these are required"
   fi
   case "$KIT_SUBSTRATE_SMTP_ADAPTER" in
     smtp | postmark) ;;
     *)
-      echo "error: KIT_SUBSTRATE_SMTP_ADAPTER must be smtp or postmark" >&2
-      exit 1
+      kit_substrate_refuse "KIT_SUBSTRATE_SMTP_ADAPTER" \
+        "export KIT_SUBSTRATE_SMTP_ADAPTER='smtp' (or 'postmark') on the box and re-run" \
+        "KIT_SUBSTRATE_SMTP_ADAPTER must be smtp or postmark"
       ;;
   esac
   case "$KIT_SUBSTRATE_SMTP_PORT" in
     '' | *[!0-9]*)
-      echo "error: KIT_SUBSTRATE_SMTP_PORT must be numeric" >&2
-      exit 1
+      kit_substrate_refuse "KIT_SUBSTRATE_SMTP_PORT" \
+        "export KIT_SUBSTRATE_SMTP_PORT='587' on the box and re-run" \
+        "KIT_SUBSTRATE_SMTP_PORT must be numeric"
       ;;
   esac
 
@@ -1476,17 +1469,33 @@ main() {
 
   CURRENT_PHASE="preflight"
   preflight
-  CURRENT_PHASE="k3s"; install_k3s
-  CURRENT_PHASE="cert-manager"; install_cert_manager
-  CURRENT_PHASE="cnpg"; install_cnpg
-  CURRENT_PHASE="argocd"; install_argocd
-  CURRENT_PHASE="pull-secret"; install_pull_secret
-  CURRENT_PHASE="applications"; install_applications
-  CURRENT_PHASE="cluster-issuers"; install_cluster_issuers
-  CURRENT_PHASE="postgres"; install_postgres_cluster
-  CURRENT_PHASE="redis-and-secrets"; install_redis_and_secrets
-  CURRENT_PHASE="nats"; install_nats
-  CURRENT_PHASE="courier-mint"; mint_courier_identity_token
+  # One line per step, and the phase on its own line above it. The phase is
+  # what the receipt and the JSONL name, and it is deliberately a separate
+  # statement rather than a `PHASE=x; step` compound: tests/substrate_test.sh
+  # asserts `^  install_nats$` in main, and a compound would satisfy nobody
+  # while looking tidier.
+  CURRENT_PHASE="k3s"
+  install_k3s
+  CURRENT_PHASE="cert-manager"
+  install_cert_manager
+  CURRENT_PHASE="cnpg"
+  install_cnpg
+  CURRENT_PHASE="argocd"
+  install_argocd
+  CURRENT_PHASE="pull-secret"
+  install_pull_secret
+  CURRENT_PHASE="applications"
+  install_applications
+  CURRENT_PHASE="cluster-issuers"
+  install_cluster_issuers
+  CURRENT_PHASE="postgres"
+  install_postgres_cluster
+  CURRENT_PHASE="redis-and-secrets"
+  install_redis_and_secrets
+  CURRENT_PHASE="nats"
+  install_nats
+  CURRENT_PHASE="courier-mint"
+  mint_courier_identity_token
 
   # The receipt closes the install: phase complete, no next step, and the
   # human sent to the Argo CD UI — the one place a person goes now that the
