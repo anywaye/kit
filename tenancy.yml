@@ -1,0 +1,145 @@
+---
+# tenancy.yml — what kit declares about its own account boundary.
+#
+# Checked by cafaye/core's contract harness:
+#
+#     bash /Users/kaka/Code/any/moon/cafaye/core/harness/bin/tenancy-check .
+#
+# KIT IS THE SUBSTRATE INSTALLER, AND IT HOLDS NO CUSTOMER ROWS. It provisions
+# the k3s cluster, Traefik, cert-manager, CNPG, ArgoCD, Redis, NATS and the
+# services' secrets. The six `kubectl create secret generic` calls in the tree
+# are Kubernetes Secrets, not Postgres tables. There is no driver import, no
+# SQL statement and no customer row anywhere in this repository — so
+# `accountScoped: false` with an empty enumeration is the truth rather than an
+# omission, and it is CHECKED the same way gateway's and muse's zeros are: an
+# account-scoped statement appearing in the declared sources is
+# `tenancy.honest-zero`, a FAILURE.
+#
+# THE ONE KEY THIS INSTALLER TOUCHES, AND WHAT IT IS. `account_id` appears in
+# code on exactly seven lines, all of them in the installer, and they are two
+# shapes — each is a fact about the CALLER or about ANOTHER service's row, and
+# never a predicate on a row kit owns:
+#
+#   1. Conductor's capability receipt (templates/substrate/install.sh:747).
+#      The box redeems its single-use, box-bound capability at conductor's
+#      POST /v1/capabilities/redeem and reads `.capability.account_id` out of
+#      the JSON receipt — the account the CAPABILITY ITSELF is bound to, which
+#      is the thing the box redeems. The value lands in a shell variable, is
+#      checked for presence (the refusal at :756 names a missing one), and is
+#      never written anywhere: kit stores nothing and queries nothing. The
+#      comment at :691 is the prose that spells the receipt's shape out.
+#   2. Kit as identity's HTTP client (install.sh:1472-1483, inside
+#      `mint_courier_identity_token`). The installer registers THIS box's
+#      owner account by POSTing /v1/accounts on identity's own API, keeps the
+#      response `.id` in a local, and mints courier's API key by POSTing
+#      /v1/accounts/${account_id}/api-keys. Every row involved is identity's,
+#      written by identity's role inside identity's database; kit's only
+#      handle on the account is a shell variable and a URL path. A client of
+#      another service's API is not a reader of its rows.
+#
+# Each of the seven lines is VOUCHED FOR in `scope.nonRowSites` below with the
+# reason it is not a row scope. The vouchers are the whole mechanism that makes
+# this zero expressible: `templates/substrate/install.sh` is a .sh file, which
+# the scanner cannot parse, so every key-carrying line in it arrives as
+# `tenancy.enumeration-partial` residue and would fail the zero if unnamed.
+#
+# WHY THE SOURCES ARE WHAT THEY ARE. `templates/substrate` is kit's entire
+# runtime code — the installer, its README, the manifests and the wrangler
+# config it ships — and the sweep finds the key in exactly one file there. The
+# directory is named rather than the file so that a NEW key-carrying file under
+# it is caught by this check rather than waved past. The trees deliberately NOT
+# declared, with the measurement that excludes each:
+#
+#   * `tests/` — the gate. `tests/tenancy_test.sh` and
+#     `tests/tenant_isolation/` hold real `select … where account_id = …`
+#     statements, but they are fixtures executing THE SERVICES' standard
+#     against a throwaway cluster: the tenant-adapter harness proves the
+#     standards kit hands out work, and proves nothing about kit's own rows
+#     because kit has none. Declaring them would force kit to declare entry
+#     points for statements its runtime never executes — inventing scoping for
+#     a repository that has none, which is the failure this format exists to
+#     prevent. The gate still RUNS them on every change.
+#   * `templates/database/` — the fleet's standard SQL (`tenancy/substrate.sql`,
+#     `tenancy/isolation.sql` and their `create policy` statements). It is
+#     adopted and executed INSIDE each service's own database by the service's
+#     own role; kit executes none of it. It is not in `rls.sources` for the
+#     same reason: the DDL scanner would find policies on tables kit does not
+#     own and fire `tenancy.rls-undeclared` about a boundary that belongs to
+#     the service that ran the migration.
+#   * docs, reports and the CHANGELOG — prose. None of the fleet's three
+#     model declarations (gateway, muse, parlor) declares its documentation
+#     either, and `templates/substrate/README.md` measures zero mentions of
+#     the key anyway.
+#
+# THE DATABASE HALF. `rls.sources` names `templates/compose/postgres/initdb` —
+# the ONLY DDL kit executes. It is the cluster bootstrap: one database and two
+# roles per service (`<service>` the migration owner, `<service>_app` the login
+# that owns nothing), the extensions, and the `REVOKE ALL ON DATABASE … FROM
+# PUBLIC` sweep that is the isolation boundary. The statements it RUNS are
+# create database, create role, grant and revoke; it creates no table of its
+# own, enables no policy and forces no RLS, because kit owns no table, so
+# `databaseEnforced: false` is the truth. Measured, and named rather than
+# hidden: the file mentions `ROW LEVEL SECURITY` twice and `FORCE ROW LEVEL
+# SECURITY` once — all three in PROSE, in the design note explaining why FORCE
+# is a per-table property (done in templates/database/tenancy/substrate.sql by
+# the service that owns the table) and deliberately not a cluster-wide act
+# that would make mid-migration tables unreadable by everybody. Because the
+# checker cannot parse a .sh, it names the file `tenancy.rls-unreadable` — a
+# WARNING, and the honest one: this machine cannot settle a database half
+# written in shell, and the sentence above is what settles it. THE PINS ARE
+# LINE NUMBERS, and that is the fragile part: an insertion anywhere above a
+# vouched line moves it and silently un-declares it, which is exactly the
+# drift that bit muse's first attempt (BRK-3R). Nothing in this repository
+# reads core's checker, so the guard against that drift belongs in kit's own
+# suite and not in a comment here.
+version: 1
+service: kit
+
+accountScoped: false
+
+scope:
+  key: account_id
+  sources:
+    - templates/substrate
+  nonRowSites:
+    # --- conductor's capability receipt, and its own account binding --------
+    - file: templates/substrate/install.sh
+      line: 691
+      reason: prose — the comment spells the receipt's shape; a comment naming a JSON field reads no row
+    - file: templates/substrate/install.sh
+      line: 747
+      reason: the read — jq -r '.capability.account_id' is the account the CAPABILITY ITSELF binds; kit stores it
+    - file: templates/substrate/install.sh
+      line: 756
+      reason: the refusal — names the receipt's missing account_id field; an error message about a capability, not a row
+    # --- kit acting as identity's own HTTP client ---------------------------
+    - file: templates/substrate/install.sh
+      line: 1472
+      reason: a shell local — `local account_id` in mint_courier_identity_token; no table exists for it to name
+    - file: templates/substrate/install.sh
+      line: 1473
+      reason: a client call — POST /v1/accounts on identity's API registers this box's account; the row is identity's
+    - file: templates/substrate/install.sh
+      line: 1479
+      reason: the refusal — checks the local is non-empty; an error string about another service's response
+    - file: templates/substrate/install.sh
+      line: 1483
+      reason: a client call — POST /v1/accounts/${account_id}/api-keys on identity's API; a URL from identity's id
+
+entryPoints: []
+
+# The database half, and the same argument. kit's only DDL is the cluster
+# bootstrap in templates/compose/postgres/initdb, which creates one database
+# and two roles per service and revokes PUBLIC's CONNECT on every one of them;
+# it creates no table, enables no policy and forces no RLS, because kit owns
+# no table. So `databaseEnforced: false` with an empty list is the truth
+# rather than an omission — and it is checked the same way: a policy appearing
+# in the declared sources is `tenancy.rls-undeclared`, a FAILURE. The fleet's
+# standard SQL under templates/database/ is NOT declared here: it is adopted
+# and run inside each service's own database, and a policy found there would
+# be a boundary belonging to the service that ran the migration.
+rls:
+  databaseEnforced: false
+  sources:
+    - templates/compose/postgres/initdb
+  tables: []
