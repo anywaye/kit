@@ -1,0 +1,76 @@
+# cafaye.yml — kit: the shared CI, lint and toolchain conventions every cafaye
+# service repo adopts.
+#
+# Validated with:
+#
+#   cd ../caf && go run ./cmd/caf contract lint ../kit/cafaye.yml
+#
+# The schema is owned by cafaye/core (core/schemas/cafaye.manifest.schema.json)
+# and is NOT vendored here. kit holds no other manifest, and a vendored copy is
+# only safe if something checks it against core's — the thing that used to do
+# that for pantry was deleted with `src/` and nothing replaced it
+# (pantry/cafaye.yml, DECISIONS.md D33). One reader, one validator, no copy.
+#
+# This repository had no manifest until OPS-D2. That was not a statement that kit
+# is nothing; it was the state OPS-D2's own effect column names — "no grant means
+# all rights reserved ... so `kit` and any manifestless repo need both a grant
+# and a `cafaye.yml`" — so the grant and this file land in the same packet.
+#
+# `kit` is on the reserved-name list — `cafaye`, `caf`, `kit`, `core`, `docs`,
+# `pantry` are "reserved, never usable as a service name"
+# (core/docs/manifest-conventions.md, "Namespace rules"). It is named anyway, and
+# that is the same exception core makes for itself: the schema does NOT enforce
+# the list, the name is simultaneously this repository's own name, and the rule
+# exists to stop one service *calling* another `kit`. Flagged for the manager
+# rather than silently written — this is the one line here that is a review
+# decision rather than a derivation.
+name: kit
+description: Shared CI, lint and toolchain conventions every cafaye service repo adopts — reusable workflows, lint configs, Docker bases and the substrate installer.
+
+# `spec`, and not a language kit is written in. The schema's `language` enum is
+# `go ruby elixir python typescript rust spec`, and kit is configuration and
+# documentation only — no runtime code, no library, no build step, no
+# dependencies (AGENTS.md "What this repo is"). There is no `shell` and no
+# `config` value, and adding one is core's decision rather than kit's; `spec` is
+# the honest member of the set, the same one core takes for itself
+# (cafaye.manifest.schema.json `language`).
+language: spec
+
+# The fleet range. kit does not compile against core's schemas — `core/` is a
+# fan-out standard for copying bytes OUT of cafaye/core, and nothing in kit
+# parses an event payload (core/README.md). The constraint is declared anyway,
+# like every other repo, because the manifest is the one place a repository says
+# which contract generation it was written against, and omitting it would read as
+# "unconstrained" rather than as "not a consumer".
+core: ^0.2.0
+
+# kit publishes no HTTP surface and no events, and consumes none. It is not a
+# running process: a service CALLS `.github/workflows/ci.reusable.yml`, COPIES
+# `lint/` and `templates/bin`, and FETCHES `templates/compose/` through the pin
+# in its own `kit.ref` — none of which is a contract, and none of which can break
+# at runtime. `exposes` is omitted rather than left empty, per core's manifest
+# conventions (the same shape `core` takes, and the same reason `caf` gives).
+
+# kit builds on no other cafaye service. It is a dependency OF the fleet, not a
+# consumer: declaring one would tell `caf dev` to start something, and `caf` has
+# nothing to run here.
+dependencies: []
+
+repository:
+  # Measured from this checkout: `git remote -v` reads
+  # git@github.com:cafaye/kit.git, SSH only — an HTTPS remote is a policy
+  # violation (core/docs/manifest-conventions.md, PLAN.md §1).
+  url: git@github.com:cafaye/kit.git
+  defaultBranch: master
+  # public, per OPS-D2: the framework is open under MIT because its job is
+  # adoption, and `LICENSE` is that grant.
+  visibility: public
+
+owner:
+  team: kit
+  # The fleet spelling — every cafaye repo declares `<repo>@cafaye.com`
+  # (core@, caf@, pantry@, identity@, courier@, billing@, parlor@, muse@,
+  # gateway@, darkroom@, docs@ ...). kit declared no mailbox before, so this
+  # follows the convention rather than a record; the manager may correct the
+  # mailbox without touching anything else in this file.
+  contact: kit@cafaye.com
