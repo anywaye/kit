@@ -1,5 +1,52 @@
 ## Unreleased
 
+### Licensing
+
+- **kit's grant is MIT, and it now has a manifest (OPS-D2).** The framework
+  split — core, caf, kit and pantry open under MIT, because their job is
+  adoption — left `kit` in the one state OPS-D2's own effect column names: no
+  grant means "all rights reserved", and a manifestless repo can be both
+  unlicensed and undescribed. Both halves land together.
+  - **`LICENSE` is byte-identical to `cafaye/core/LICENSE`.** The wording is not
+    new and not kit's own draft: seven cafaye repositories already carry this
+    exact text — billing, caf, cafaye-py, cafaye-ts, core, darkroom and docs —
+    each 1063 bytes, each md5 `cb5ecefdf779acdeacb8709d2ddd56cf`. A reader
+    diffing two framework repos sees no grant and only the repository differing.
+  - **`cafaye.yml` is added.** `name: kit`, `language: spec` (the schema's enum
+    has no config member and AGENTS.md says kit is configuration and
+    documentation only), `core: ^0.2.0`, `dependencies: []` (kit is a dependency
+    *of* the fleet, never a consumer), `visibility: public`. No `exposes` or
+    `consumes`: kit is not a running process, so it has no runtime contract to
+    break — the reason core gives for its own omission. Validated against
+    `core/schemas/cafaye.manifest.schema.json` (required keys,
+    `additionalProperties: false`, and the `serviceName`, `semver`, `repository`
+    and `owner` patterns).
+  - **`name: kit` is on the reserved-name list** —
+    `cafaye`, `caf`, `kit`, `core`, `docs`, `pantry` are "reserved, never usable
+    as a service name" (`core/docs/manifest-conventions.md`, Namespace rules) —
+    and it is named anyway, which is the exception core already makes for
+    itself: the schema does not enforce the list and the rule exists to stop one
+    service *calling* another `kit`. This is the one line of the file that is a
+    review decision rather than a derivation, and it is flagged in the manifest
+    itself.
+  - README's `## License` section, the "kit's own licence" section and the
+    layout table, and AGENTS.md's layout comment and licence rule, all re-point
+    at MIT. Historical records (m168, m172, kit-19 and their reports) are left
+    as written: they describe what was decided then, and a changelog that edits
+    its own history is a changelog that cannot be read.
+
+  **The gate is red on exactly one check, and that is named rather than hidden.**
+  `license_check` in `tests/validate.sh` was written in m172 for the proprietary
+  grant: it requires `All rights reserved`, `proprietary property of Cafaye` and
+  `separate written Cafaye agreement`, refuses MIT's permission grant, and
+  requires README's `## License` section to state `Proprietary` and name
+  `Cafaye`. Measured on this packet: 6 of its 8 sub-assertions are red, and the 2
+  that stay green are the ones that were never about the grant's *wording*
+  (README links the LICENSE file, README names AGPL). The grant is the file and
+  the check is what has to move; a licensing packet does not get to edit a
+  security-shaped gate to make itself green, so it does not, and the successor's
+  move is written into AGENTS.md beside the rule.
+
 ### Security
 
 - **The substrate installer no longer takes a long-lived secret as an input

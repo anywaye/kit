@@ -17,7 +17,8 @@
 ```
 kit/
 ├── README.md                             # what kit is, how a repo adopts it
-├── LICENSE                               # Proprietary (Cafaye). The whole grant, and nothing can disagree
+├── LICENSE                               # MIT. The whole grant, and nothing can disagree
+├── cafaye.yml                           # the manifest: name, language, core range, owner
 ├── DECISIONS.md                          # the trades this repo has NOT made
 ├── VERSION                               # the version, and the ONLY place it is written
 ├── RESERVED                              # tombstones: a retired name stays dead
@@ -1139,7 +1140,7 @@ See `DECISIONS.md` (MD26, MD27).
 - **Pins are placeholders.** `templates/mise.toml` and the Dockerfiles carry
   placeholder versions on purpose. A service raises them in its own repo; kit
   does not become an org-wide lockfile.
-- **The licence is Cafaye proprietary, and it lives in exactly one place.** `LICENSE` is the
+- **The licence is MIT, and it lives in exactly one place.** `LICENSE` is the
   grant, and `license_check` asserts it *and* walks every root manifest that can
   carry a licence field. It does not ban those manifests — it requires them to
   agree, because a check satisfied by "kit has no `package.json`" would be
@@ -1148,6 +1149,18 @@ See `DECISIONS.md` (MD26, MD27).
   declare it; a manifest copied out of a service is how that stops being true,
   and it looks like a build decision rather than a legal one. `templates/` is
   out of scope by design — a licence in a template is that template's business.
+
+  **The check is stale against the grant, and that is named rather than hidden.**
+  kit's grant was the Cafaye proprietary text until OPS-D2 made the framework
+  MIT (2026-10-10); `license_check` still asserts the proprietary sentences and
+  still refuses MIT's permission grant, so the gate is red on exactly that one
+  check. **Do not weaken it to get green** — the grant is the file and the check
+  is what has to move, in its own commit, with a reason. The successor's move is
+  to re-point the three required phrases and the README assertions at MIT, to
+  keep the two-direction shape (the file grants MIT; the `## License` section
+  states MIT and links it), and to keep point 4 exactly as it is: `cafaye.yml`
+  declares no licence field and core's schema has no key for one, so "manifests
+  inspected, none disagreeing" is still the measurement the check prints.
 - **No `latest`.** Every base image and action ref is pinned or floating-major
   deliberately, never `latest`.
 

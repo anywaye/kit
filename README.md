@@ -168,7 +168,8 @@ than something a green run prints.
 | `tests/launch_test.sh` | The shape proof: layout validation, pin behavior, command construction, teardown safety, and the compose/schema invariants — each with a control that must go red — plus the installer split, all with stubbed tools and no daemon. The one real-docker contact is `compose config` (client-side rendering, starts nothing). The teardown claims whose subject is `launch/.env` run against a shadow copy of `launch/` that the suite builds, because the real one is git-ignored and belongs to a stack that may be running. | kit's gate (static phase) |
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
 | `RESERVED` | **Tombstones: a retired name stays dead.** In the `skip-allowlist` dialect, and the fourth hygiene rule is **inverted** — a reserved path that exists in the tree is the failure. buf's `reserved` and k8s's `+k8s:deprecated` are *not* the same mechanism (a wire tombstone vs a lifecycle marker on a still-present field); kit has no encoding, so only the shared weaker half transfers. See `DECISIONS.md` (MD27). | kit's gate; read before reintroducing any path |
-| `LICENSE` | **kit's own grant: Cafaye proprietary.** The whole grant — kit has no package manifest, so there is no metadata field that could disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
+| `LICENSE` | **kit's own grant: MIT, and byte-identical to `cafaye/core/LICENSE`.** The whole grant — the manifest below carries no licence field, so no metadata field can disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
+| `cafaye.yml` | **The manifest.** Added when the grant moved to MIT, because OPS-D2 says no grant means "all rights reserved" and `kit` had no manifest — so a repo can be both unlicensed and undescribed. Same keys as `core`/`pantry`/`caf`, `language: spec` (the enum has no config member), `dependencies: []` (kit is a dependency *of* the fleet), and `name: kit` — which is on the reserved-name list, the same exception core makes for itself. Validated against `core/schemas/cafaye.manifest.schema.json`. | `caf contract lint`; anyone resolving what kit is |
 | `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, sends general app fixes upstream to the canonical app as fork + PR (branding stays downstream), and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate) — the two upstream directions kept apart. Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside cafaye |
 
 ## Secrets — what kit checks, and what it does not
@@ -683,16 +684,25 @@ filled.
 
 ### kit's own licence
 
-**kit itself is Cafaye proprietary.** See [LICENSE](LICENSE), which is the whole grant: kit is
-configuration and documentation, has no package manifest in any ecosystem, and
-therefore has no metadata field that could disagree with the file.
+**kit is MIT.** See [LICENSE](LICENSE), which is the whole grant and is
+byte-identical to `cafaye/core/LICENSE` — the text seven cafaye repositories
+already carry (billing, caf, cafaye-py, cafaye-ts, core, darkroom, docs), all at
+1063 bytes and the same md5, so a reader diffing two framework repos sees no
+grant and only the repository differing. OPS-D2 puts the framework open under
+MIT: their job is adoption.
 
 That is a different question from the AGPL paragraph above, and keeping them
 apart is the point. The four backing services are third-party software we
 *consume*, unmodified, under their own terms. kit is cafaye's own work and is
-granted under the proprietary terms in `LICENSE`. A service adopting kit adopts
-the conventions under those terms and pulls
-the four backends under AGPL-3.0, and neither obligation runs toward the other.
+granted under MIT. A service adopting kit adopts the conventions under those
+terms and pulls the four backends under AGPL-3.0, and neither obligation runs
+toward the other — MIT is one-way permissive, so it can never acquire AGPL's
+terms and AGPL can never reach kit's.
+
+The grant is not a change to the library question: kit holds no package manifest
+in any ecosystem and nothing depends on it (AGENTS.md), so a consumer takes the
+conventions by copy or by fetch and the file governs. What changed is what a
+reader is allowed to do with it, not how it is delivered.
 
 ### Telemetry is never in a readiness path
 
@@ -1793,17 +1803,19 @@ than the one being read.
 
 ## License
 
-Proprietary — Cafaye. See [LICENSE](LICENSE).
+**MIT.** See [LICENSE](LICENSE).
 
 kit is configuration and documentation — no runtime code, no library, nothing
-imported by anything — so the `LICENSE` file is the entire grant. There is no
-`Cargo.toml`, `package.json`, `pyproject.toml` or gemspec here, and therefore no
-metadata field that could disagree with the file. That is the same shape as Go
-modules and the reason the file is the grant there too.
+imported by anything — so the `LICENSE` file is the entire grant. The one
+manifest kit carries, `cafaye.yml`, has no licence field: core's manifest schema
+declares no such key (`core/schemas/cafaye.manifest.schema.json` sets
+`additionalProperties: false` and enumerates its twelve `properties` in full, and
+none of them is `license`), and a manifest copied out of a Go, Rust or Node
+project would be the one place that could disagree. That is the same shape as Go
+modules, where the file is the grant too.
 
 That last sentence is a **claim about the tree**, so a check holds it: the gate
-reads the grant by the proprietary sentences in `LICENSE` rather than by an
-identifier string, and then
+reads the grant, then
 inspects every manifest at the repository root that can carry a licence field,
 failing on any that declares something else. A licence is only unambiguous when
 exactly one place in a repository can declare one — a `package.json` appears, it
@@ -1811,6 +1823,13 @@ carries `"license": "AGPL-3.0-only"` copied out of a service, and now a
 compliance tool and a reader are reading different files. The check does **not**
 ban the manifest; it requires it to agree, which is the difference between a rule
 and a ratchet.
+
+**What that check does not say today is what kit's grant now is.** `license_check`
+in `tests/validate.sh` was written for the Cafaye proprietary grant (m172, recorded
+in `REPORT-kit-license-check-m172.md`) and still asserts the proprietary sentences
+and refuses MIT's permission grant. OPS-D2 re-grants kit, so the check and the
+grant disagree; the grant is the file and the check is what has to move. The gate
+is red on exactly that one check, which is the honest state of it.
 
 See [kit's own licence](#kits-own-licence) for why this is a separate question
 from the AGPL-3.0 backends kit ships unmodified.
