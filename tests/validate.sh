@@ -2001,12 +2001,12 @@ json.loads("".join(out))
   # because kit's job is adoption. The grant moved and this check did not, so
   # README.md's `## License` section and AGENTS.md's licence rule both carried
   # a paragraph saying the gate was red on exactly this one check — written by
-  # the packet that moved the grant, which could not move the check without
-  # running the gate it forbade itself. This is the re-point: the same four
-  # assertions, against MIT's own sentences, and the record of which grant this
-  # file used to assert is kept in the comments rather than deleted, because
-  # the third grant in this file's history is the reason the dual-grant refusal
-  # below is not hypothetical.
+  # the packet that moved the grant, whose own brief forbade it to edit this
+  # file, so the red was left standing and named rather than fixed quietly.
+  # This is the re-point: the same four assertions, against MIT's own sentences,
+  # and the record of which grant this file used to assert is kept in the
+  # comments rather than deleted, because the third grant in this file's history
+  # is the reason the dual-grant refusal below is not hypothetical.
   #
   # The interesting half is not the file. It is that a licence is only
   # unambiguous when there is exactly ONE place in a repository that can declare
@@ -2036,7 +2036,10 @@ json.loads("".join(out))
   #      that are *not* kit's (the backends kit ships unmodified), so a
   #      whole-file search is satisfied by the exact conflation the section split
   #      exists to prevent — the same reason kit-19 scoped it, and the scoping
-  #      survived both re-grants.
+  #      survived both re-grants. The section also has to keep separating the
+  #      backends' AGPL from kit's own grant, and that is asserted as the claim
+  #      rather than as the token `AGPL`, which the section's own manifest
+  #      example carries.
   #   4. every root manifest that CAN carry a licence field agrees with the
   #      grant.
   #
