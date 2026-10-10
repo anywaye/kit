@@ -178,6 +178,19 @@ ARGOCD_VERSION="v3.5.4"
 # pin lives here and nowhere else.
 NATS_VERSION="2.10.24-alpine"
 NATS_BOX_VERSION="0.20.0"
+# THE BROKER'S ADDRESS, AND IT IS ONE FACT. Both writers read this line: step
+# 10's one-shot stream-init pod (it dials the broker to create the stream) and
+# identity-secrets (it is what tells identity's outbox loop where to publish).
+# A second spelling is exactly how the init pod and the services drift apart,
+# so neither of them writes the address out.
+#
+# FULLY QUALIFIED, AND DELIBERATELY SO. `nats` alone is the compose stack's
+# spelling and it resolves only inside the `data` namespace — identity runs in
+# `identity`, so a `nats://nats:4222` here produces a pod that starts and a
+# loop that silently connects to nothing, which is the failure this key ends.
+# Kubernetes' own rule, measured from its docs: a query naming no namespace is
+# limited to the caller's, and `svc.<namespace>.svc.cluster.local` crosses it.
+NATS_URL="nats://nats.data.svc.cluster.local:4222"
 
 # --- operator-supplied values ----------------------------------------------
 # --- the box's own identity and capability ------------------------------------
@@ -1075,7 +1088,7 @@ validate_mfa_override() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL
 #   RECORD gateway-secrets: REDIS_URL
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
@@ -1103,6 +1116,12 @@ validate_mfa_override() {
 #     (see the header for the variable names). This is now the ONE long-lived
 #     secret an operator hands over, because the provider is the only party
 #     that can hold it.
+#   NEITHER — configuration that rides a secret-shaped slot. NATS_URL is
+#     the broker's address: not sensitive, and not operator-supplied either,
+#     so it belongs to no provenance above. It is in the RECORD as a
+#     non-secret key because the record's job is the two-way tripwire over
+#     what the charts' `envFrom` actually reads, and a key the check cannot
+#     see drift on is a key it will not catch being deleted.
 # `gateway-tls` is NOT created here: cert-manager fills it from the
 # ClusterIssuer. `DATABASE_URL` agrees with the Cluster by construction — the
 # host is CNPG's read-write service, the database and role are the service's
@@ -1165,6 +1184,20 @@ install_service_secrets() {
   # The generation is SIGNUP_SIGNING_KEY's own spelling (32 random bytes as
   # base64url, no padding): identity decodes MFA_ENCRYPTION_KEY with
   # base64.RawURLEncoding and refuses any other length at boot.
+  #
+  # NATS_URL is CONFIGURATION, not a secret. The broker's address is not
+  # sensitive — the broker carries no credentials on this substrate
+  # (manifests/data/nats.yaml's header) and the stream it reaches holds no
+  # customer data — and it is here because the generated charts inject env
+  # with `envFrom: secretRef`, so this secret IS identity's environment.
+  # It is the key that turns identity's outbox loop on at all: identity
+  # builds its NATS publisher only when NATS_URL is set, so without it the
+  # local compose stack publishes and a real box does not. The address is
+  # the one constant above — fully qualified, because identity's namespace
+  # is not the broker's. Written on first creation and never patched, like
+  # every other key here: the address is fixed by the broker's own Service
+  # name, and a broker that moves is a rotate-by-replacement (README), not
+  # a silent patch of a running secret.
   validate_mfa_override
   local signup_key mfa_key identity_args oidc_key="" oidc_key_id=""
   signup_key="$(read_secret_key identity identity-secrets SIGNUP_SIGNING_KEY)"
@@ -1181,7 +1214,8 @@ install_service_secrets() {
   fi
   identity_args=(--from-literal=DATABASE_URL="$(database_url_for identity)"
     --from-literal=SIGNUP_SIGNING_KEY="$signup_key"
-    --from-literal=MFA_ENCRYPTION_KEY="$mfa_key")
+    --from-literal=MFA_ENCRYPTION_KEY="$mfa_key"
+    --from-literal=NATS_URL="$NATS_URL")
   # The OIDC surface, when wired, carries three keys or none: identity refuses
   # to boot on a lone key. The signing key is generated here and never printed;
   # the issuer is configuration and is echoed as configuration.
@@ -1297,7 +1331,8 @@ install_service_secrets() {
 # absent, so the `add` runs only then — a plain `add` is NOT idempotent), with
 # the same subjects, storage, retention, max-age, discard and replicas. Here
 # the same command runs in an ephemeral pod (`kubectl run` with the nats-box
-# image and NATS_URL pointed at the in-cluster Service): the guard above
+# image, NATS_URL read from the one constant above — the same address
+# identity's secret carries): the guard above
 # skips the BROKER on a re-run, but the stream init runs every time, and
 # `info || add` makes that a no-op when the stream exists.
 #
@@ -1326,7 +1361,7 @@ install_nats() {
   kubectl --kubeconfig="$KUBECONFIG" run nats-stream-init -n data \
     --restart=Never \
     --image="natsio/nats-box:${NATS_BOX_VERSION}" \
-    --env="NATS_URL=nats://nats.data.svc.cluster.local:4222" \
+    --env="NATS_URL=$NATS_URL" \
     --command -- sh -c 'nats stream info cafaye >/dev/null 2>&1 || nats stream add cafaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
   local phase="" tries=24
   while [ "$tries" -gt 0 ]; do

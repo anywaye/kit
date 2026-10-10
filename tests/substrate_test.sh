@@ -1073,6 +1073,93 @@ fixture_drift="$WORK/install-nats-drift.sh"
 sed 's/--max-age 7d/--max-age 30d/' "$SUBSTRATE/install.sh" >"$fixture_drift"
 run 'control: a substrate with a drifted max-age goes red' red check_nats_drift "$COMPOSE_STACK" "$fixture_drift"
 
+# --- the broker's address reaches the services ---------------------------------
+#
+# THE BROKER ALONE IS NOT ENOUGH. install.sh installs NATS in `data` and
+# defines the stream, and the only NATS_URL it ever set was on the one-shot
+# stream-init pod — so every service that has a publisher has it dark on a
+# real box, and identity's outbox loop (built only when NATS_URL is set) has
+# never run in production. The local compose stack sets the variable; the
+# substrate now does too, into identity-secrets.
+#
+# The check is a COUPLING, not a presence test: the address in the secret must
+# be the fully qualified name of the broker's own Service (name, namespace and
+# port read out of manifests/data/nats.yaml), because identity runs in
+# `identity` and an unqualified `nats` resolves only inside `data` — the
+# compose spelling, which here would produce a pod that starts and a loop
+# that connects to nothing. The record half is section 11's (a key set but
+# unrecorded is already red there); what this adds is that the KEY EXISTS at
+# all, which is the direction nothing else asks — the two checks together are
+# what cover the literal and its record entry being removed in one commit.
+check_nats_service_url() {
+  "$PY" - "$1" "$2" <<'PY'
+import re
+import sys
+
+import yaml
+
+install = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", install)
+problems = []
+
+try:
+    docs = [d for d in yaml.safe_load_all(open(sys.argv[2], encoding="utf-8")) if d]
+except (yaml.YAMLError, OSError) as e:
+    print(f"unreadable ({e})")
+    sys.exit(1)
+svcs = [d for d in docs if d.get("kind") == "Service"]
+if len(svcs) != 1:
+    print(f"expected 1 Service, found {len(svcs)}")
+    sys.exit(1)
+svc = svcs[0].get("metadata", {})
+ports = [p.get("port") for p in svcs[0].get("spec", {}).get("ports", [])]
+if 4222 not in ports:
+    problems.append(f"the broker Service exposes {ports}, not the 4222 client port")
+want = f"nats://{svc.get('name')}.{svc.get('namespace')}.svc.cluster.local:4222"
+
+assigns = re.findall(r'(?m)^NATS_URL="([^"]*)"', code)
+if len(assigns) != 1:
+    problems.append(f"expected exactly one NATS_URL assignment, found {len(assigns)} — one fact, one line")
+elif assigns[0] != want:
+    problems.append(
+        f"NATS_URL is {assigns[0]!r}, want {want!r} — the fully qualified name of the broker's own Service"
+    )
+if '--from-literal=NATS_URL="$NATS_URL"' not in code:
+    problems.append("no service secret carries --from-literal=NATS_URL — the publisher stays dark on a box")
+if '--env="NATS_URL=$NATS_URL"' not in code:
+    problems.append("the stream-init pod does not read the same constant — the two writers have drifted apart")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"identity-secrets carries {want}, one constant read by both writers")
+PY
+}
+
+run 'identity-secrets carries the in-cluster broker address (fully qualified)' green \
+  check_nats_service_url "$SUBSTRATE/install.sh" "$DATA_DIR/nats.yaml"
+
+# The controls, one property each: the unqualified compose spelling, the
+# missing literal, and the two writers spelling the address separately. Each
+# must go red for the reason its own name gives — a control that fires for
+# some other reason proves nothing about the assertion it sits under.
+fixture_short_url="$WORK/install-nats-short.sh"
+sed 's|nats://nats.data.svc.cluster.local:4222|nats://nats:4222|' \
+  "$SUBSTRATE/install.sh" >"$fixture_short_url"
+run 'control: the unqualified compose spelling goes red' red \
+  check_nats_service_url "$fixture_short_url" "$DATA_DIR/nats.yaml"
+
+fixture_dropped_url="$WORK/install-nats-url-dropped.sh"
+grep -v -- '--from-literal=NATS_URL="$NATS_URL"' "$SUBSTRATE/install.sh" >"$fixture_dropped_url"
+run 'control: a secret without the broker address goes red' red \
+  check_nats_service_url "$fixture_dropped_url" "$DATA_DIR/nats.yaml"
+
+fixture_two_writers="$WORK/install-nats-two-writers.sh"
+sed 's|--env="NATS_URL=$NATS_URL"|--env="NATS_URL=nats://nats.data.svc.cluster.local:4222"|' \
+  "$SUBSTRATE/install.sh" >"$fixture_two_writers"
+run 'control: a second spelling of the address in the stream-init pod goes red' red \
+  check_nats_service_url "$fixture_two_writers" "$DATA_DIR/nats.yaml"
+
 # ===========================================================================
 # 13. identity-secrets carries a generated MFA key by default
 # ===========================================================================
@@ -1520,6 +1607,105 @@ if [ "$(mock_get identity identity-secrets SIGNUP_SIGNING_KEY)" = "Ou1NSDx0wZAm5
   pass 'legacy: the pre-existing secret keeps its own values'
 else
   fail 'legacy: the pre-existing secret keeps its own values' "SIGNUP_SIGNING_KEY changed"
+fi
+
+# ===========================================================================
+# 12 (executed half). identity-secrets carries the broker's address
+# ===========================================================================
+#
+# Section 12 above PARSES the source; this RUNS it. The installer is sourced
+# with its trailing `main` removed and install_service_secrets is executed
+# against the file-backed kubectl the MFA cases above define, so the claim is
+# about the secret kubectl would actually create rather than about the text
+# of the script. It lives beside those cases rather than in section 12 because
+# the harness it needs is defined there.
+#
+# WHY IT IS WORTH RUNNING: identity builds its NATS publisher only when
+# NATS_URL is set, so the local compose stack publishes and a real box does
+# not — the one difference this packet closes. A parse can be satisfied by a
+# literal on a line that never executes; a mock store cannot.
+BROKER_URL="nats://nats.data.svc.cluster.local:4222"
+MOCK_ROOT="$WORK/nats-url"
+mkdir -p "$MOCK_ROOT"
+mfa_seed_roles
+nats_url_1_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  install_service_secrets >"$WORK/nats-url-1.log" 2>&1
+) || nats_url_1_ec=$?
+first_broker_url="$(mock_get identity identity-secrets NATS_URL)"
+
+# Twice: the second run is the idempotency claim. A re-run must not rewrite
+# the address — and it cannot, by construction. When all four secrets exist
+# the step's own guard skips it ("already installed, skipping"); when only
+# some do (a half-finished first run) the step runs and the per-secret path
+# refuses to overwrite identity-secrets. Either way nothing is patched: the
+# address is fixed by the broker's own Service name, and a broker that moves
+# is a rotate-by-replacement (README), never a silent patch of a live secret.
+nats_url_2_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  install_service_secrets >"$WORK/nats-url-2.log" 2>&1
+) || nats_url_2_ec=$?
+second_broker_url="$(mock_get identity identity-secrets NATS_URL)"
+
+if [ "$nats_url_1_ec" -ne 0 ]; then
+  fail 'identity-secrets: the first run completes carrying the broker address' "$(cat "$WORK/nats-url-1.log")"
+elif [ "$first_broker_url" != "$BROKER_URL" ]; then
+  fail 'identity-secrets: the first run completes carrying the broker address' "stored: '${first_broker_url}'"
+else
+  pass 'identity-secrets: the first run completes carrying the broker address'
+fi
+if [ "$nats_url_2_ec" -ne 0 ]; then
+  fail 're-run: a second run succeeds and changes nothing' "$(cat "$WORK/nats-url-2.log")"
+elif [ "$second_broker_url" != "$first_broker_url" ]; then
+  fail 're-run: a second run succeeds and changes nothing' "'${first_broker_url}' became '${second_broker_url}'"
+else
+  pass 're-run: a second run succeeds and changes nothing'
+fi
+case "$(cat "$WORK/nats-url-2.log")" in
+  *"already installed, skipping"*)
+    pass 're-run: the guard skips the step rather than rewriting the secret'
+    ;;
+  *"secret identity-secrets exists"*)
+    pass 're-run: the per-secret refusal fires rather than rewriting the secret'
+    ;;
+  *)
+    fail 're-run: the guard skips the step rather than rewriting the secret' "$(cat "$WORK/nats-url-2.log")"
+    ;;
+esac
+
+# The control: the identical run against an installer carrying the COMPOSE
+# spelling (`nats://nats:4222`, which resolves only inside `data`) stores that
+# spelling verbatim. It proves the assertion above is about the INSTALLER and
+# not about the mock — a store that recorded whatever it was sent, wrongly,
+# would make the green assertion a tautology, and this is the fixture that
+# shows it can tell the two apart.
+fixture_short_live="$WORK/install-nats-short-live.sh"
+sed 's|--from-literal=NATS_URL="$NATS_URL"|--from-literal=NATS_URL="nats://nats:4222"|' \
+  "$SUBSTRATE/install.sh" | sed '/^main "$@"/d' >"$fixture_short_live"
+MOCK_ROOT="$WORK/nats-url-control"
+mkdir -p "$MOCK_ROOT"
+mfa_seed_roles
+control_short_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_short_live"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  install_service_secrets >"$WORK/nats-url-control.log" 2>&1
+) || control_short_ec=$?
+control_short_url="$(mock_get identity identity-secrets NATS_URL)"
+if [ "$control_short_ec" -eq 0 ] && [ "$control_short_url" = "nats://nats:4222" ] && [ "$control_short_url" != "$BROKER_URL" ]; then
+  pass 'control: the compose spelling is stored verbatim, and is not the broker address'
+else
+  fail 'control: the compose spelling is stored verbatim, and is not the broker address' "exit ${control_short_ec}; stored: '${control_short_url}'"
 fi
 
 # ===========================================================================

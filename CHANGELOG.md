@@ -1,5 +1,40 @@
 ## Unreleased
 
+### Substrate
+
+- **`identity-secrets` carries `NATS_URL`, so identity's outbox loop runs on a
+  real box.** The substrate installs the broker (step 10: one Deployment +
+  Service + PVC in `data`, plus the fleet's stream defined idempotently) and
+  the **only** `NATS_URL` it ever set was on the one-shot `nats-stream-init`
+  pod — a `kubectl run` pod that exits. Every service that has a publisher had
+  it dark in production, and identity's loop — the one fully wired and tested
+  — had never run there: identity builds its NATS publisher only when
+  `NATS_URL` is set, so the local compose stack published and the substrate
+  did not. The address is now written into `identity-secrets`, which is where
+  a service's environment comes from (the generated charts inject env with
+  `envFrom: secretRef`, so the secret IS the env list).
+  - **The address is the broker's fully qualified name,
+    `nats://nats.data.svc.cluster.local:4222`, not the compose spelling.**
+    identity runs in the `identity` namespace; a DNS query naming no namespace
+    is limited to the caller's own, so `nats://nats:4222` would produce a pod
+    that starts and a loop that connects to nothing — the failure this packet
+    exists to end. Step 10's stream-init pod reads the same constant, so the
+    two writers cannot drift, and the gate derives the expected value from
+    the broker's own Service (name, namespace, port) rather than restating it.
+  - **It is recorded as a non-secret key.** The SECRET RECORD's job is the
+    two-way tripwire over what the charts' `envFrom` reads; a key the record
+    cannot see drift on is a key it will not catch being deleted. `NATS_URL` is
+    configuration — the address is not sensitive, the broker carries no
+    credentials and the stream holds no customer data — and it is written on
+    first creation like every other key, never patched (a broker that moves is
+    a rotate-by-replacement, not a silent patch of a live secret).
+  - `tests/substrate_test.sh` grows a check that runs the installer against
+    the file-backed mock kubectl and reads the stored secret back, plus a
+    parse check with three controls (the compose spelling, the missing
+    literal, a second spelling of the address in the stream-init pod). A
+    pre-existing `identity-secrets` without the key is still left alone by a
+    re-run; the README's rotate-by-replacement path adds it.
+
 ### Licensing
 
 - **kit's grant is MIT, and it now has a manifest (OPS-D2).** The framework

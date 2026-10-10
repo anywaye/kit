@@ -50,7 +50,9 @@ this file only describes what is here and what is proven.
    `courier-secrets`, `parlor-secrets`, one per service namespace, each
    exactly the keys its chart reads (see [The services' secrets](#the-services-secrets)
    below). Generated values are once-only with read-back; externally-sourced
-   values are shape-validated and never echoed. Two guarded halves in one
+   values are shape-validated and never echoed; `NATS_URL` is a constant, so
+   this step reads back nothing that step 10's broker would have had to
+   create. Two guarded halves in one
    step, so a half-finished step 9 resumes the secrets without touching
    Redis.
 10. **NATS with JetStream and the fleet's stream** — one Deployment + Service
@@ -362,6 +364,21 @@ fleet's stream (`cafaye`: `identity.>`, `billing.>`, `courier.>`, `muse.>`,
 `nats-stream-init` flag for flag; `tests/substrate_test.sh` parses both
 renders and refuses drift.
 
+**The broker's address reaches the services through their secrets.** The
+local compose stack sets `NATS_URL: nats://nats:4222` on every service that
+publishes; on the box the address is written into `identity-secrets` instead,
+because the generated chart's only env injection is `envFrom: secretRef` — so
+this secret IS identity's environment. It is the key that turns identity's
+outbox loop on at all: identity builds its NATS publisher only when
+`NATS_URL` is set, so without it the local stack publishes and a real box
+does not. The address is the broker's **fully qualified** name,
+`nats.data.svc.cluster.local`, and not the compose spelling: identity runs in
+the `identity` namespace, a query naming no namespace is limited to the
+caller's own, and `nats://nats:4222` on a box is a pod that starts and a loop
+that connects to nothing. Step 10's own stream-init pod reads the same
+constant, so the two writers cannot drift. courier, muse, billing and darkroom
+take the same key in their own secrets when their publishers land.
+
 ## The services' secrets
 
 One secret per service namespace, each exactly the keys its chart reads —
@@ -370,7 +387,7 @@ environment variable and the key list IS the service's env list:
 
 | Secret | Keys | Provenance |
 |---|---|---|
-| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
@@ -402,7 +419,14 @@ OIDC signing key and its key id, when an issuer is set (the key is the
 customer's own; it is born here, and the id is a thumbprint of the key so a
 verifier's cached `kid` keeps matching). What is left comes **from the
 environment, shape-validated and never echoed**: courier's SMTP settings,
-the provider's signing secret, and the optional OAuth surface. `DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
+the provider's signing secret, and the optional OAuth surface. **`NATS_URL`
+is in neither bucket** — it is configuration, not a secret: the broker's
+address is not sensitive (the broker carries no credentials on this
+substrate, and the stream it reaches holds no customer data), and it is not
+operator-supplied either. It rides the secret-shaped slot because the
+chart's `envFrom` has no other door, and it is recorded in the SECRET RECORD
+as a non-secret key so the tripwire still sees it.
+`DATABASE_URL` agrees with the `Cluster` by construction: CNPG's
 `postgres-rw.data` service, the service's own database, the `<svc>_app`
 login role the local compose files use (`postgres://` for identity and
 parlor, `ecto://` for courier — each service's own spelling), and the
@@ -445,6 +469,20 @@ existing secret before touching it, and restart identity's pods afterwards
 changes nothing). If the database was imported from anywhere that may have
 sealed factors under a *different* key, do not invent one — recover that
 key instead; a second key does not decrypt the first key's rows.
+
+**The same refusal leaves `NATS_URL` off a pre-existing `identity-secrets`** —
+a re-run will not patch a secret that already exists, so an install made
+before this key keeps identity's outbox loop dark until an operator adds it.
+There is no ciphertext to fork here (the address is configuration, and the
+broker it names is fixed by its own Service), so the rotate-by-replacement
+path is the cheap one:
+
+```sh
+kubectl -n identity get secret identity-secrets -o yaml >identity-secrets.backup.yaml
+kubectl -n identity patch secret identity-secrets -p \
+  '{"stringData":{"NATS_URL":"nats://nats.data.svc.cluster.local:4222"}}'
+kubectl -n identity rollout restart deployment/identity  # the chart's deployment name
+```
 
 The SECRET RECORD comment block on `install_secrets` is the drift tripwire:
 `tests/substrate_test.sh` parses it and fails if any recorded name is not
