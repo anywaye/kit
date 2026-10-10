@@ -2154,14 +2154,21 @@ else:
             "README.md's License section does not link to the LICENSE file, so a "
             "reader has to go looking for it"
         )
-# The separation itself, which is a claim rather than a file.
-if "AGPL" not in own:
-    problems.append(
-        "README.md's License section does not name AGPL anywhere. kit shipping "
-        "AGPL-3.0 backends unmodified and kit itself being MIT-licensed are two "
-        "different questions, and the section that answers the second has to say "
-        "why the first does not change the answer"
-    )
+    # The backends' AGPL is a separate question from kit's own grant, and the
+    # section that answers the second has to say why the first does not change
+    # the answer. Asserted as the CLAIM and not as the token: this section also
+    # carries `AGPL-3.0-only` inside a manifest example, so a bare token search
+    # is satisfied by that example — measured, not argued, by deleting the
+    # distinction sentence and watching a bare `AGPL` search stay green. Naming
+    # the backends is what the section owes a reader, and `AGPL-3.0` alone is how
+    # every other licence in the paragraph is spelled.
+    if not re.search(r"AGPL-3\.0 backends", own):
+        problems.append(
+            "README.md's License section does not separate the AGPL-3.0 backends "
+            "kit ships unmodified from kit's own grant, so the section that "
+            "answers the second question no longer says why the first does not "
+            "change the answer"
+        )
 
 # (4): anything in the tree root that can carry a licence field.
 # Deliberately ROOT-ONLY and deliberately not a ban. `templates/` holds
