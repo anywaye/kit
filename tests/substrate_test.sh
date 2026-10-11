@@ -16,7 +16,9 @@
 #   image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates,
-#   no image floats on `latest`, and no secret is a literal in the tree.
+#   no image floats on `latest`, no secret is a literal in the tree, and the
+#   env-var surface the leak check covers is still the surface the installer
+#   reads — so a rename that reaches one file and not the other goes red.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
 #   A check that passes against an empty directory is not a check. So each
