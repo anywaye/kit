@@ -2,7 +2,7 @@
 #
 # kit's customer substrate — one command, one box.
 #
-#   curl https://kit.cafaye.com | sh
+#   curl https://cafaye.com/box/install | sh
 #
 # or, from a kit checkout:
 #

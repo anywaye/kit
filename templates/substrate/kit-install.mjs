@@ -1,10 +1,21 @@
-// kit-install.mjs — the install host at kit.cafaye.com.
+// kit-install.mjs — the install host: the Worker that serves install.sh at
+// https://cafaye.com/box/install.
 //
 // Serves templates/substrate/install.sh — the customer one-command install —
-// at GET / and GET /install.sh: the exact bytes, content-type
-// text/x-shellscript, no transformation. `curl | sh` executes whatever bytes
-// arrive, so a Worker that reformats, wraps or minifies the script is a
-// Worker that breaks the install.
+// at GET /box/install: the exact bytes, content-type text/x-shellscript, no
+// transformation. `curl | sh` executes whatever bytes arrive, so a Worker that
+// reformats, wraps or minifies the script is a Worker that breaks the install.
+//
+// THE PATH IS THE PRODUCT'S FRONT DOOR and it lives under cafaye.com now, not
+// on a host of its own: `curl https://cafaye.com/box/install | sh`. kit.cafaye.com
+// is retired, so the Worker is bound to a route on cafaye.com rather than to a
+// hostname — the same deployment, a different binding, and the binding stays an
+// operator action (see wrangler.jsonc).
+//
+// TWO OTHER PATHS are served and they are the cutover, not a second contract:
+// GET / and GET /install.sh answer the same bytes, so a Worker bound to a
+// hostname of its own still behaves exactly as it did before the move. They are
+// NOT the front door and nothing in this repository documents them as one.
 //
 // The script is IMPORTED, not copied. wrangler's Text-module rule
 // (wrangler.jsonc, `rules`) bundles install.sh's bytes into this Worker at
@@ -32,11 +43,11 @@ export default {
   async fetch(request) {
     const { pathname } = new URL(request.url);
 
-    // Exactly two paths serve the script. The URL parser has already
-    // resolved `..` and `%2e%2e` by the time pathname is read, so
-    // `/install.sh/../secrets` arrives as `/secrets` and 404s like every
-    // other path that is not exactly `/` or `/install.sh`.
-    if (pathname === "/" || pathname === "/install.sh") {
+    // The front door is /box/install, on cafaye.com. The URL parser has
+    // already resolved `..` and `%2e%2e` by the time pathname is read, so
+    // `/box/install/../secrets` arrives as `/secrets` and 404s like every
+    // other path that is not one of the three named here.
+    if (pathname === "/box/install" || pathname === "/" || pathname === "/install.sh") {
       return new Response(installSh, {
         status: 200,
         headers: { "content-type": "text/x-shellscript" },

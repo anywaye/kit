@@ -43,7 +43,11 @@ if (!handler || typeof handler.fetch !== "function") {
   process.exit(1);
 }
 
-const base = "https://kit.cafaye.com";
+// The front door the plan pins: cafaye.com/box/install. The base is the site's
+// host, not a host of the Worker's own — kit.cafaye.com is retired, so the
+// Worker is bound to a route under cafaye.com and this probe answers the
+// question that binding will answer.
+const base = "https://cafaye.com";
 let failures = 0;
 
 function check(label, ok, detail) {
@@ -65,8 +69,28 @@ async function probe(pathname) {
   };
 }
 
-// GET / — the exact bytes of install.sh.
-let r = await probe("/");
+// GET /box/install — THE FRONT DOOR. The plan's path, under cafaye.com, and
+// the only path this repository documents as the product's front door. It is
+// asserted first and by the same whole-body hash as the rest: the byte-equality
+// guarantee is about whatever path a customer types into `curl | sh`, and that
+// path moved.
+let r = await probe("/box/install");
+check("GET /box/install is 200", r.status === 200, `status ${r.status}`);
+check(
+  "GET /box/install content-type is text/x-shellscript",
+  r.contentType === "text/x-shellscript",
+  `content-type is ${r.contentType}`,
+);
+check(
+  "GET /box/install body is the exact bytes of install.sh (sha256)",
+  r.bodyHash === realHash,
+  `served ${r.bodyHash}, file ${realHash}`,
+);
+
+// GET / and GET /install.sh — the same bytes, under whatever host the Worker
+// is bound to. Not the front door; the cutover, so a hostname-bound Worker
+// still answers the spelling it answered before the move.
+r = await probe("/");
 check("GET / is 200", r.status === 200, `status ${r.status}`);
 check(
   "GET / content-type is text/x-shellscript",
@@ -101,11 +125,15 @@ check("GET /healthz is 200", r.status === 200, `status ${r.status}`);
 // already resolved to an ordinary path by the time the handler reads it.
 for (const pathname of [
   "/anything-else",
+  "/box/install/../secrets",
   "/install.sh/../secrets",
   "/%2e%2e/secrets",
   "/secrets",
   "/install.sh.bak",
   "//install.sh",
+  "/box",
+  "/box/",
+  "/box/install.sh",
 ]) {
   r = await probe(pathname);
   check(`GET ${pathname} is 404`, r.status === 404, `status ${r.status}`);
@@ -116,5 +144,5 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  "install host: the handler serves install.sh byte-exact; every other path 404s; /healthz is 200",
+  "install host: cafaye.com/box/install serves install.sh byte-exact; every other path 404s; /healthz is 200",
 );
