@@ -6,7 +6,7 @@ that would otherwise be retyped, and slightly differently, in each of the six
 services.
 
 ```
-github.com/cafaye/caf     Go       github.com/cafaye/billing  Ruby
+github.com/cafaye/cafe     Go       github.com/cafaye/billing  Ruby
 github.com/cafaye/identity Go      github.com/cafaye/courier  Elixir
 github.com/cafaye/gateway TypeScript  github.com/cafaye/muse   Python
 github.com/cafaye/darkroom Rust    github.com/cafaye/parlor   TypeScript
@@ -169,7 +169,7 @@ than something a green run prints.
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
 | `RESERVED` | **Tombstones: a retired name stays dead.** In the `skip-allowlist` dialect, and the fourth hygiene rule is **inverted** — a reserved path that exists in the tree is the failure. buf's `reserved` and k8s's `+k8s:deprecated` are *not* the same mechanism (a wire tombstone vs a lifecycle marker on a still-present field); kit has no encoding, so only the shared weaker half transfers. See `DECISIONS.md` (MD27). | kit's gate; read before reintroducing any path |
 | `LICENSE` | **kit's own grant: MIT, and byte-identical to `cafaye/core/LICENSE`.** The whole grant — the manifest below carries no licence field, so no metadata field can disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
-| `cafaye.yml` | **The manifest.** Added when the grant moved to MIT, because OPS-D2 says no grant means "all rights reserved" and `kit` had no manifest — so a repo can be both unlicensed and undescribed. Same keys as `core`/`pantry`/`caf`, `language: spec` (the enum has no config member), `dependencies: []` (kit is a dependency *of* the fleet), and `name: kit` — which is on the reserved-name list, the same exception core makes for itself. Validated against `core/schemas/cafaye.manifest.schema.json`. | `caf contract lint`; anyone resolving what kit is |
+| `cafaye.yml` | **The manifest.** Added when the grant moved to MIT, because OPS-D2 says no grant means "all rights reserved" and `kit` had no manifest — so a repo can be both unlicensed and undescribed. Same keys as `core`/`pantry`/`cafe`, `language: spec` (the enum has no config member), `dependencies: []` (kit is a dependency *of* the fleet), and `name: kit` — which is on the reserved-name list, the same exception core makes for itself. Validated against `core/schemas/cafaye.manifest.schema.json`. | `cafe contract lint`; anyone resolving what kit is |
 | `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, sends general app fixes upstream to the canonical app as fork + PR (branding stays downstream), and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate) — the two upstream directions kept apart. Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside cafaye |
 
 ## Secrets — what kit checks, and what it does not
@@ -1335,7 +1335,7 @@ equivalent, and the adoption numbers say so:
 
 Counted, not estimated: a non-worktree directory beside this one that contains a
 workflow with a `uses: cafaye/kit/.github/workflows/ci.reusable.yml` line. The
-eleven are `billing caf core courier darkroom docs gateway identity kit muse
+eleven are `billing cafe core courier darkroom docs gateway identity kit muse
 parlor`, and `kit` is in the list because it calls its own workflow — the
 repository that defines the standard should be the first repository held to it,
 and excluding it would make the denominator flattering rather than true.
