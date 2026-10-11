@@ -1,6 +1,6 @@
 # templates/substrate — the customer install
 
-**One command, one box.** `curl https://kit.cafaye.com | sh` installs the
+**One command, one box.** `curl https://cafaye.com/box/install | sh` installs
 customer substrate: k3s → cert-manager → CloudNativePG → Argo CD core →
 image pull secret → the first Applications sync → the Let's Encrypt
 ClusterIssuers.
@@ -188,7 +188,7 @@ pinned upstream, and anything else fails closed.
 ## How to run it
 
 ```sh
-curl https://kit.cafaye.com | sh
+curl https://cafaye.com/box/install | sh
 ```
 
 or, from a kit checkout:
@@ -489,9 +489,9 @@ The SECRET RECORD comment block on `install_secrets` is the drift tripwire:
 created or any recorded key is not set, with a key-removed fixture that must
 go red.
 
-## The install host: `kit.cafaye.com`
+## The install host: `cafaye.com/box/install`
 
-`install.sh` is served at `https://kit.cafaye.com/` (and `/install.sh`) by
+`install.sh` is served at `https://cafaye.com/box/install` by
 `kit-install.mjs`, a Cloudflare Worker in this directory — the fleet's
 established mechanism (`site` and `parlor` are Workers). The Worker serves
 the **exact bytes** of `install.sh` with `content-type: text/x-shellscript`
@@ -513,16 +513,19 @@ capability from the operator's environment at run time, and everything else
 it needs it generates itself.
 
 **The operator step (an action, not a file):** publish the Worker
-(`wrangler deploy` from this directory) and bind `kit.cafaye.com` to it —
-a Cloudflare route / custom domain on `kit-install`, the same way
-`cafaye.com` is bound to `site` today. Measured: `site/wrangler.jsonc`
-carries no `routes` block, so the binding is done outside the repositories
-and **cannot be asserted from this repository** — which is why
-`wrangler.jsonc` does not invent one.
+(`wrangler deploy` from this directory) and bind the route
+`cafaye.com/box/install` to `kit-install` — a Cloudflare route / custom
+domain, the same way `cafaye.com` is bound to `site` today. The Worker
+itself is hostname-agnostic: it serves `/box/install` under whatever host it
+is reached on, so the plan's path and the host binding are two separate
+moves and only the second one is the operator's. Measured:
+`site/wrangler.jsonc` carries no `routes` block, so the binding is done
+outside the repositories and **cannot be asserted from this repository** —
+which is why `wrangler.jsonc` does not invent one.
 
-**What is not proven here:** that `https://kit.cafaye.com` answers. The
-Worker, its config and the byte-equality are proven; the binding is an
-operator action, and the URL works only when observed.
+**What is not proven here:** that `https://cafaye.com/box/install` answers.
+The Worker, its config and the byte-equality are proven; binding the route
+is an operator action, and the URL works only when observed.
 
 ## What is proven, and what is not
 
@@ -618,10 +621,10 @@ operator action, and the URL works only when observed.
   machine (or any development machine) is. The `DATABASE_URL`↔Cluster
   agreement, the once-only generation and the refusal paths are all asserted
   without a box; the live boot is a customer-box claim.
-- That `https://kit.cafaye.com` answers. The Worker, its config and the
-  byte-equality are proven; binding the host to the Worker is a Cloudflare
-  route/custom-domain action outside every repository, so the URL works
-  only when observed.
+- That `https://cafaye.com/box/install` answers. The Worker, its config and
+  the byte-equality are proven; binding the route to the Worker is a
+  Cloudflare route/custom-domain action outside every repository, so the URL
+  works only when observed.
 
 This machine is macOS. It cannot run k3s, so `install.sh` has never been
 executed here. The proof is `DRY_RUN=1` plus the checks above. **A claim you
@@ -632,7 +635,7 @@ this paragraph is unexercised.
 
 The first real run, on a Linux box with 8GB or more:
 
-1. `curl https://kit.cafaye.com | sh` completes all ten steps.
+1. `curl https://cafaye.com/box/install | sh` completes all ten steps.
 2. `kubectl get nodes` shows the node Ready.
 3. `kubectl get applications -n argocd` shows all eight Applications synced.
 4. The observability stack is reachable and retaining.

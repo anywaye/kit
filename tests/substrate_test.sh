@@ -16,7 +16,9 @@
 #   image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates,
-#   no image floats on `latest`, and no secret is a literal in the tree.
+#   no image floats on `latest`, no secret is a literal in the tree, and the
+#   env-var surface the leak check covers is still the surface the installer
+#   reads — so a rename that reaches one file and not the other goes red.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
 #   A check that passes against an empty directory is not a check. So each
@@ -466,7 +468,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_CONDUCTOR_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -478,6 +480,49 @@ if [ -n "$echo_leak" ]; then
 else
   pass 'no operator value is ever echoed'
 fi
+
+# THE `sourced_vars` LIST AND install.sh MUST AGREE, and the direction that
+# matters is the one a rename breaks. The echo-leak check above only scans the
+# names this list names, so a rename that reached install.sh and NOT the list
+# would leave the list looking full while the scan quietly stopped covering
+# the variable that moved — the exact drift this packet's own env-var rename
+# could have introduced, and it would have been green. The assertion is about
+# the LIST: every name it names must still be read by the installer.
+stale_sourced=""
+for v in $sourced_vars; do
+  if ! grep -qE "\\\$\{?$v" "$SUBSTRATE/install.sh"; then
+    stale_sourced="${stale_sourced} $v"
+  fi
+done
+if [ -n "$stale_sourced" ]; then
+  fail 'sourced_vars names only variables install.sh reads' "the installer does not read:${stale_sourced}"
+else
+  pass 'sourced_vars names only variables install.sh reads'
+fi
+
+# THE CONTROL is the drift itself, replayed: a copy of install.sh in which one
+# listed variable has been renamed — here the ACME contact, because a rename is
+# the only way this check can go red — must be CAUGHT by the same loop, since
+# the list still names the old spelling and the fixture no longer reads it. A
+# control that plants an absent name would only prove the grep works; this one
+# proves the check catches a rename that reached one file and not the other,
+# which is the defect this packet's own env rename could have introduced.
+control_script="$WORK/install.sh.renamed"
+sed 's/KIT_SUBSTRATE_ACME_EMAIL/KIT_SUBSTRATE_ACME_CONTACT/g' "$SUBSTRATE/install.sh" >"$control_script"
+control_stale=""
+for v in $sourced_vars; do
+  if ! grep -qE "\\\$\{?$v" "$control_script"; then
+    control_stale="${control_stale} $v"
+  fi
+done
+case "$control_stale" in
+  *KIT_SUBSTRATE_ACME_EMAIL*)
+    pass 'control: a rename that misses sourced_vars goes red'
+    ;;
+  *)
+    fail 'control: a rename that misses sourced_vars goes red' "the fixture was not caught (stale:${control_stale:-none})"
+    ;;
+esac
 
 # ===========================================================================
 # 8. KIT_SUBSTRATE_DATABASES refuses in DRY_RUN: unset, empty, mismatched
@@ -1817,7 +1862,7 @@ pull_secret_ec=0
   # shell appears not to use (SC2034) while the installer reads it.
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  export KIT_SUBSTRATE_CONDUCTOR_URL="https://conductor.cafaye.test"
+  export KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test"
   install_pull_secret >"$WORK/pull-secret.log" 2>&1
 ) || pull_secret_ec=$?
 # The step refuses the write (exit 1) — and the refusal is the GAP, not a
@@ -1895,7 +1940,7 @@ redeem_case() {  # <mode> <response-body> <expected-log-substring> <case-name>
     }
     export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
     export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-    export KIT_SUBSTRATE_CONDUCTOR_URL="https://conductor.cafaye.test"
+    export KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test"
     install_pull_secret >"$log" 2>&1
   ) || ec=$?
   MOCK_CURL_MODE=""

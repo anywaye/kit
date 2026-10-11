@@ -35,6 +35,32 @@
     pre-existing `identity-secrets` without the key is still left alone by a
     re-run; the README's rotate-by-replacement path adds it.
 
+- **The box control plane's env surface is named for the box, and the install
+  has one front door: `https://cafaye.com/box/install`.** Two renames that are
+  one packet — the plan's §3 L2 and L5 — and neither has a legacy alias,
+  because an alias is a second spelling of a fact that moved.
+  - **`KIT_SUBSTRATE_CONDUCTOR_URL` is `KIT_SUBSTRATE_BOX_URL`, default
+    `https://box.svc.cafaye.com`.** The variable named the service it talks
+    to; the fleet renamed that surface to the box, and the hostname followed.
+    Nothing consumes the old spelling, so nothing shims it: a box that sets
+    the old name gets the new default and redeems nowhere, which is the loud
+    answer rather than the silent one.
+  - **The test double moved with it: `box.svc.cafaye.test`.** The suite's
+    check on `sourced_vars` names the variable, so a rename that reached the
+    installer and not the test would have left the suite exporting a value
+    under a name nothing reads — green, and measuring nothing.
+  - **`kit.cafaye.com` is retired; `cafaye.com/box/install` is the front
+    door.** The Worker serves `/box/install` under whatever host it is
+    reached on, so the plan's path and the host binding are two moves and
+    only the second is an operator action: bind the route to `kit-install`
+    the way `cafaye.com` is bound to `site` today. `GET /` and
+    `GET /install.sh` keep answering the same bytes — the cutover for a
+    hostname-bound Worker, not a second front door.
+  - **The byte-equality guarantee follows the path.** `check_install_host`
+    asserts `GET /box/install` FIRST and by the same whole-body SHA-256, so
+    the proof is about the path a customer actually types into `curl | sh`
+    and not about the path that used to be true.
+
 ### Licensing
 
 - **kit's grant is MIT, and it now has a manifest (OPS-D2).** The framework

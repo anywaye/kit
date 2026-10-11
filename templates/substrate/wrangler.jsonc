@@ -1,10 +1,14 @@
 {
-  // kit-install — the install host at kit.cafaye.com.
+  // kit-install — the install host: the Worker behind
+  // cafaye.com/box/install.
   //
-  // Serves templates/substrate/install.sh at GET / and GET /install.sh: the
-  // exact bytes, content-type text/x-shellscript, no transformation. The
-  // decisions are in DEPLOYMENT.md; the operator action (binding the host)
-  // is named in templates/substrate/README.md and is NOT a file here.
+  // Serves templates/substrate/install.sh at GET /box/install: the exact
+  // bytes, content-type text/x-shellscript, no transformation. GET / and GET
+  // /install.sh answer the same bytes, so a Worker bound to a hostname of its
+  // own behaves exactly as it did before the move — they are the cutover,
+  // not a second front door. The decisions are in DEPLOYMENT.md; the
+  // operator action (binding the route) is named in
+  // templates/substrate/README.md and is NOT a file here.
   //
   // `main` is this directory's kit-install.mjs — plain ESM, so the gate
   // imports the handler as a plain module with no wrangler, no network and
@@ -24,10 +28,10 @@
   // hash comparison is what proves the two never drift.
   //
   // NO `routes` BLOCK, matching the fleet: measured, site/wrangler.jsonc
-  // carries none, so the cafaye.com binding is done outside the repositories
-  // and kit.cafaye.com follows the same shape. Binding the host is a
-  // Cloudflare route/custom-domain action — an operator step, not a value
-  // this repository can verify.
+  // carries none, so the cafaye.com/box/install route is bound outside the
+  // repositories and this Worker follows the same shape. Binding the route
+  // is a Cloudflare route/custom-domain action — an operator step, not a
+  // value this repository can verify.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "kit-install",
   "compatibility_date": "2025-09-02",

@@ -4610,10 +4610,12 @@ PY
   }
 
   # -------------------------------------------------------------------------
-  # The install host — the Worker that serves install.sh at kit.cafaye.com.
+  # The install host — the Worker that serves install.sh at cafaye.com/box/install.
   #
-  # WHY THIS CHECK EXISTS. `DEPLOYMENT.md` decides the product's front door:
-  # `curl https://kit.cafaye.com | sh`. The script it serves has existed since
+  # WHY THIS CHECK EXISTS. The product's front door is
+  # `curl https://cafaye.com/box/install | sh`; kit.cafaye.com is retired, so
+  # the Worker is bound to a route under cafaye.com rather than to a host. The
+  # script it serves has existed since
   # W74 and nothing in the fleet served it at that URL — measured: no Worker,
   # no wrangler config, no static host, and W74's own report named the gap.
   # `templates/substrate/kit-install.mjs` closes it, and the failure this
@@ -4637,10 +4639,13 @@ PY
   #      inventing one here would be a value this repository cannot verify.
   #   2. The handler, imported as a plain module and called with no wrangler,
   #      no network and no account, serves the EXACT bytes of install.sh at
-  #      GET / and GET /install.sh — compared by SHA-256, not by a prefix, so
+  #      GET /box/install — the front door the plan pins, asserted FIRST and
+  #      by the same whole-body hash — compared by SHA-256, not by a prefix, so
   #      a truncated or re-encoded body reds — with content-type
   #      text/x-shellscript; serves 200 at /healthz; and 404s every other
-  #      path, including traversal.
+  #      path, including traversal. GET / and GET /install.sh carry the same
+  #      bytes: they are the cutover for a hostname-bound Worker, not a
+  #      second front door.
   #
   # THE TWO CONTROLS, which must go RED under the same assertions: a fixture
   # Worker whose install.sh is ONE BYTE SHORTER (the packet's named control —
@@ -4649,9 +4654,9 @@ PY
   # the test itself rather than a pass.
   #
   # WHAT IS NOT PROVEN HERE, and is stated rather than hidden: that
-  # kit.cafaye.com ANSWERS. Binding the host to the Worker is a Cloudflare
-  # route/custom-domain action outside every repository (DEPLOYMENT.md
-  # decides it), so the URL works only when observed.
+  # cafaye.com/box/install ANSWERS. Binding the route to the Worker is a
+  # Cloudflare route/custom-domain action outside every repository (the plan
+  # §1 stability rule 3 decides it), so the URL works only when observed.
   # `templates/substrate/README.md` carries the same sentence.
   check_install_host() {
     local worker="$ROOT/templates/substrate/kit-install.mjs"
@@ -4660,11 +4665,11 @@ PY
     local driver="$ROOT/tests/install-host-driver.mjs"
 
     # The red-first message, before anything else: with no Worker there is
-    # nothing at kit.cafaye.com, and the check says so by name rather than
-    # failing later on an import error.
+    # nothing at cafaye.com/box/install, and the check says so by name rather
+    # than failing later on an import error.
     if [ ! -f "$worker" ]; then
       printf '       the Worker does not exist: %s\n' "$worker"
-      printf '       nothing serves install.sh at kit.cafaye.com — the front door is open\n'
+      printf '       nothing serves install.sh at cafaye.com/box/install — the front door is open\n'
       return 1
     fi
 
@@ -4732,8 +4737,8 @@ if not isinstance(obs, dict) or obs.get("enabled") is not True:
 if "routes" in doc:
     problems.append(
         "a `routes` block is present — the fleet does not carry one (measured:"
-        " site's has none); the kit.cafaye.com binding is an operator action,"
-        " not a file"
+        " site's has none); the cafaye.com/box/install route binding is an"
+        " operator action, not a file"
     )
 rules = doc.get("rules")
 if not isinstance(rules, list):
@@ -4996,10 +5001,10 @@ PY
       "$ROOT/templates/substrate/manifests/applications"
 
   # -------------------------------------------------------------------------
-  # The install host — the Worker that serves install.sh at kit.cafaye.com.
+  # The install host — the Worker that serves install.sh at cafaye.com/box/install.
   #
-  # `DEPLOYMENT.md` decides the front door: `curl https://kit.cafaye.com | sh`.
-  # The script has existed since W74; nothing in the fleet served it at that
+  # The front door is `curl https://cafaye.com/box/install | sh`. The script has
+  # existed since W74; nothing in the fleet served it at the URL that
   # URL (measured: no Worker, no wrangler config, no static host — W74's own
   # report named the gap). `templates/substrate/kit-install.mjs` closes it,
   # and the failure this check exists to catch is the silent one: `curl | sh`
@@ -5014,11 +5019,11 @@ PY
   # Two controls must go red: a fixture whose install.sh is one byte shorter,
   # and a fixture with the wrong content-type.
   #
-  # WHAT IS NOT PROVEN: that kit.cafaye.com ANSWERS. The binding is a
+  # WHAT IS NOT PROVEN: that cafaye.com/box/install ANSWERS. The binding is a
   # Cloudflare route/custom-domain action outside every repository, so the
   # URL works only when observed. `templates/substrate/README.md` says so.
   section 'static: the install host — the Worker serves the exact bytes of install.sh'
-  check 'install host  (GET / and /install.sh serve install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
+  check 'install host  (cafaye.com/box/install serves install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
     check_install_host
 
   # The build half — optional, SKIPs loudly where wrangler is absent. See
