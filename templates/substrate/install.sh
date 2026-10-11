@@ -58,11 +58,11 @@
 #                                  box's enrolled identity presents to redeem
 #                                  ONE short-lived registry credential. It is
 #                                  never written to disk and never echoed.
-#   KIT_SUBSTRATE_CONDUCTOR_URL    default https://conductor.cafaye.com — where
-#                                  a capability is redeemed (conductor's
-#                                  POST /v1/capabilities/redeem). Configuration,
-#                                  not a secret; a self-hosted fleet points it
-#                                  at its own conductor.
+#   KIT_SUBSTRATE_BOX_URL    default https://box.svc.cafaye.com — where
+#                                  a capability is redeemed (the box control
+#                                  plane's POST /v1/capabilities/redeem).
+#                                  Configuration, not a secret; a self-hosted
+#                                  fleet points it at its own control plane.
 #   KIT_SUBSTRATE_ACME_EMAIL       required, no default (see step 7).
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
 #                                  service names; must equal the service set the
@@ -211,13 +211,14 @@ NATS_URL="nats://nats.data.svc.cluster.local:4222"
 # minted spelling `cap_` plus 64 hex) and never echoed.
 : "${KIT_SUBSTRATE_REGISTRY_CAPABILITY:=}"
 
-# KIT_SUBSTRATE_CONDUCTOR_URL is where a capability is REDEEMED. Configuration,
+# KIT_SUBSTRATE_BOX_URL is where a capability is REDEEMED. Configuration,
 # not a secret: a cafaye-operated fleet is the default and a self-hosted one
-# points it at the conductor it runs. No default of `localhost` — a silently
-# local URL is how a box redeems against itself. The door is conductor's
-# POST /v1/capabilities/redeem, the one the fleet built; the registry-side
-# exchange (the dockerconfigjson) is a different service, landed separately.
-: "${KIT_SUBSTRATE_CONDUCTOR_URL:=https://conductor.cafaye.com}"
+# points it at the control plane it runs. No default of `localhost` — a
+# silently local URL is how a box redeems against itself. The door is the box
+# control plane's POST /v1/capabilities/redeem, the one the fleet built; the
+# registry-side exchange (the dockerconfigjson) is a different service,
+# landed separately.
+: "${KIT_SUBSTRATE_BOX_URL:=https://box.svc.cafaye.com}"
 
 # KIT_SUBSTRATE_ACME_EMAIL is the ACME account contact address. Read from the
 # environment like the pull secret and validated by shape, but it is not a
@@ -732,7 +733,7 @@ redeem_registry_credential() {
     -H 'Content-Type: application/json' \
     --data "$(jq -nc --arg token "$KIT_SUBSTRATE_REGISTRY_CAPABILITY" --arg box_id "$KIT_SUBSTRATE_BOX_ID" \
       '{token: $token, purpose: "registry.pull", box_id: $box_id}')" \
-    "${KIT_SUBSTRATE_CONDUCTOR_URL}/v1/capabilities/redeem" 2>/dev/null)"; then
+    "${KIT_SUBSTRATE_BOX_URL}/v1/capabilities/redeem" 2>/dev/null)"; then
     kit_substrate_refuse "" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" "conductor refused this box's capability — expired, already redeemed, or minted for another purpose or box
   re-run 'caf box enroll' and pass the capability it prints (it lives minutes)"
   fi
