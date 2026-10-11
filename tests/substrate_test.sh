@@ -479,6 +479,49 @@ else
   pass 'no operator value is ever echoed'
 fi
 
+# THE `sourced_vars` LIST AND install.sh MUST AGREE, and the direction that
+# matters is the one a rename breaks. The echo-leak check above only scans the
+# names this list names, so a rename that reached install.sh and NOT the list
+# would leave the list looking full while the scan quietly stopped covering
+# the variable that moved — the exact drift this packet's own env-var rename
+# could have introduced, and it would have been green. The assertion is about
+# the LIST: every name it names must still be read by the installer.
+stale_sourced=""
+for v in $sourced_vars; do
+  if ! grep -qE "\\\$\{?$v" "$SUBSTRATE/install.sh"; then
+    stale_sourced="${stale_sourced} $v"
+  fi
+done
+if [ -n "$stale_sourced" ]; then
+  fail 'sourced_vars names only variables install.sh reads' "the installer does not read:${stale_sourced}"
+else
+  pass 'sourced_vars names only variables install.sh reads'
+fi
+
+# THE CONTROL is the drift itself, replayed: a copy of install.sh in which one
+# listed variable has been renamed — here the ACME contact, because a rename is
+# the only way this check can go red — must be CAUGHT by the same loop, since
+# the list still names the old spelling and the fixture no longer reads it. A
+# control that plants an absent name would only prove the grep works; this one
+# proves the check catches a rename that reached one file and not the other,
+# which is the defect this packet's own env rename could have introduced.
+control_script="$WORK/install.sh.renamed"
+sed 's/KIT_SUBSTRATE_ACME_EMAIL/KIT_SUBSTRATE_ACME_CONTACT/g' "$SUBSTRATE/install.sh" >"$control_script"
+control_stale=""
+for v in $sourced_vars; do
+  if ! grep -qE "\\\$\{?$v" "$control_script"; then
+    control_stale="${control_stale} $v"
+  fi
+done
+case "$control_stale" in
+  *KIT_SUBSTRATE_ACME_EMAIL*)
+    pass 'control: a rename that misses sourced_vars goes red'
+    ;;
+  *)
+    fail 'control: a rename that misses sourced_vars goes red' "the fixture was not caught (stale:${control_stale:-none})"
+    ;;
+esac
+
 # ===========================================================================
 # 8. KIT_SUBSTRATE_DATABASES refuses in DRY_RUN: unset, empty, mismatched
 # ===========================================================================
