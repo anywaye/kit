@@ -6266,6 +6266,13 @@ check_mint_mail_path() {
     printf 'a base URL and a token with no (valid) link template — identity would refuse (ErrInvalidCourier):%s\n' "$bad"
     return 1
   fi
+  # The installer's OWN report must say which mail path the box has, or the
+  # state is only in the secret and nobody reading the install output knows it.
+  if ! grep -q 'TRUE mail path' "$ROLLOUT_DIR/run.log"; then
+    printf 'the mint did not report the configured mail path on its own channel\n%s\n' \
+      "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
   printf 'identity mail path: CONFIGURED — the pair and five templates written together, each on parlor'"'"'s served route'
 }
 
@@ -6322,6 +6329,13 @@ check_mint_mail_path_unset() {
   if [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ] \
     || [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_URL" 2>/dev/null || true)" != "$IDENTITY_BASE_URL_EXPECTED" ]; then
     printf 'courier-secrets lost the required pair when identity had no mail path\n'
+    return 1
+  fi
+  # The installer must SAY the mail path is off, so the operator learns the box
+  # boots without one from the install output rather than from a 503 later.
+  if ! grep -q 'mail path is NOT configured' "$ROLLOUT_DIR/run.log"; then
+    printf 'the mint did not report the no-mail path on its own channel\n%s\n' \
+      "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
   printf 'no public origin: no identity courier key written, identity boots into its no-mail state, courier still holds its pair'

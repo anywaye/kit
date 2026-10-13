@@ -2600,7 +2600,7 @@ mint_courier_identity_token() {
   # source would truncate that block after the first template. Keeping the
   # placeholders in shell values keeps every key visible to the check.
   if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
-    local base reset verify change recovery invite
+    local base reset verify change recovery invite identity_patch
     base="${KIT_SUBSTRATE_APP_BASE_URL%/}"
     reset="${base}/reset-password?token={token}"
     verify="${base}/verify-email/confirm?token={token}"
@@ -2610,7 +2610,7 @@ mint_courier_identity_token() {
     change="$verify"
     recovery="$verify"
     invite="${base}/invitations/{token}"
-    printf '%s' "$(jq -nc \
+    identity_patch="$(jq -nc \
       --arg url "$COURIER_URL" --arg t "$token" \
       --arg reset "$reset" --arg verify "$verify" --arg change "$change" \
       --arg recovery "$recovery" --arg invite "$invite" \
@@ -2622,7 +2622,8 @@ mint_courier_identity_token() {
         "EMAIL_CHANGE_LINK_TEMPLATE":$change,
         "RECOVERY_LINK_TEMPLATE":$recovery,
         "INVITATION_LINK_TEMPLATE":$invite
-      }}')" |
+      }}')"
+    printf '%s' "$identity_patch" |
       kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
       --type=merge --patch-file=/dev/stdin
     kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
