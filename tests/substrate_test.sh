@@ -3830,6 +3830,25 @@ courier_mint_curl() {
 
 MOCK_ROOT="$WORK/mint-loop"
 mkdir -p "$MOCK_ROOT"
+# A REAL local listener for the mint's port wait. The step now proves the
+# forwarded port is UP before it curls it (the (7) connect race), and a mock
+# port-forward that returns instantly does not open one — so the test opens a
+# socket on a random high port and points the mint at it. The real
+# kit_substrate_await_port then succeeds, which is what a working box looks
+# like; a fake override would have proven nothing about the wait.
+mint_port=$(( 20000 + (RANDOM % 20000) ))
+"$PY" -c 'import socket, sys, time
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(8)
+time.sleep(30)' "$mint_port" &
+mint_listener=$!
+# Wait for the listener to be bound before the mint races it.
+for _ in $(seq 1 50); do
+  (exec 3<>"/dev/tcp/127.0.0.1/${mint_port}") 2>/dev/null && break
+  sleep 0.1
+done
 mint_loop_ec=0
 (
   mfa_seed_roles
@@ -3838,11 +3857,12 @@ mint_loop_ec=0
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
   mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"
-  # The Deployment Argo synced from step 6's Applications — step 11's await
+  # The Deployment Argo synced from step 6's Applications — step 12's await
   # polls for it before watching its rollout, so the fixture carries it the
   # way a box past step 6 does. Without this the await polls to its bound and
   # refuses, which is the next section's control rather than this test.
   mock_seed identity deploy-identity ready yes
+  export KIT_SUBSTRATE_IDENTITY_LOCAL_PORT="$mint_port"
   # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
@@ -3850,6 +3870,8 @@ mint_loop_ec=0
   mfa_smtp_env
   mint_courier_identity_token >"$WORK/mint-loop.log" 2>&1
 ) || mint_loop_ec=$?
+kill "$mint_listener" 2>/dev/null || true
+wait "$mint_listener" 2>/dev/null || true
 if [ "$mint_loop_ec" -ne 0 ]; then
   fail 'the mint loop completes inside one run' "$(cat "$WORK/mint-loop.log")"
 elif [ "$(mock_get courier courier-secrets COURIER_IDENTITY_TOKEN)" != "$COURIER_MINT_TOKEN" ]; then
@@ -3871,6 +3893,57 @@ for kept in DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY; do
 done
 run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(cat "$WORK/mint-loop.log")" "$COURIER_MINT_TOKEN"
 run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
+
+# --- the port wait the mint now takes before it curls -------------------------
+# The probe's (7) connect failure was a race: `kubectl port-forward` opens its
+# local listener asynchronously, and the curl ran the line after the `&`. The
+# fix is existence-then-use, so the wait must be able to BOTH succeed against a
+# live port and FAIL against a dead one — the green case alone would be
+# satisfied by a function that returns 0 unconditionally.
+#
+# A fresh listener: the mint's own was killed above, and a green case against a
+# dead port would prove the opposite of what it claims.
+wait_port=$(( 20000 + (RANDOM % 20000) ))
+"$PY" -c 'import socket, sys, time
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1])))
+s.listen(4)
+time.sleep(20)' "$wait_port" &
+wait_listener=$!
+for _ in $(seq 1 50); do
+  (exec 3<>"/dev/tcp/127.0.0.1/${wait_port}") 2>/dev/null && break
+  sleep 0.1
+done
+mint_await_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kit_substrate_await_port "$wait_port" 5
+) || mint_await_ec=$?
+kill "$wait_listener" 2>/dev/null || true
+wait "$wait_listener" 2>/dev/null || true
+if [ "$mint_await_ec" -eq 0 ]; then
+  pass 'the port wait succeeds against a live listener'
+else
+  fail 'the port wait succeeds against a live listener' "kit_substrate_await_port exited ${mint_await_ec}"
+fi
+# A port nothing listens on. `$mint_port + 1` is not guaranteed free, but a
+# random high port beside a bound one almost always is, and the red assertion
+# is what proves the wait is bounded and honest.
+dead_port=$(( 40000 + (RANDOM % 15000) ))
+dead_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kit_substrate_await_port "$dead_port" 2
+) || dead_ec=$?
+if [ "$dead_ec" -ne 0 ]; then
+  pass 'control: the port wait fails against a dead port (it is bounded and honest)'
+else
+  fail 'control: the port wait fails against a dead port (it is bounded and honest)' \
+    "kit_substrate_await_port returned 0 for a port nothing listens on"
+fi
 
 # ===========================================================================
 # 13g. Step 10 — the services' schemas are applied, idempotently, and a failed
@@ -5475,6 +5548,10 @@ mint_step() {
       '. "$FIXTURE"' \
       'kubectl() { rollout_kubectl "$@"; }' \
       'curl() { courier_mint_curl "$@"; }' \
+      '# The port-forward is stubbed here, so the port wait must be too — this' \
+      '# harness is about the DEPLOYMENT wait and the rollout watch. The wait' \
+      '# itself is proven green and red against a real socket in 13f-2.' \
+      'kit_substrate_await_port() { return 0; }' \
       'mfa_smtp_env' \
       'mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"' \
       'mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"' \

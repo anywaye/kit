@@ -549,6 +549,33 @@ kit_substrate_await_list() {
   done
 }
 
+# kit_substrate_await_port <port> <budget> — wait until a LOCAL TCP port accepts
+# a connection. The companion of kit_substrate_await_list, for the one thing a
+# `kubectl port-forward` needs and a `kubectl get` does not: the listener is
+# established ASYNCHRONOUSLY by the port-forward process (it must reach the API
+# server, find the pod and dial it), so a curl issued the line after the
+# background `&` races it and dies with `curl: (7) Failed to connect … port
+# <n>`. That is a CONNECT failure, not an HTTP status — the schema-missing 500
+# is a different error (curl exit 22 under `-f`) — and conflating the two is how
+# a racy forward reads as "identity would not mint a signup timestamp".
+#
+# The shape is existence-then-use, the same shape the list and rollout waits
+# take: prove the endpoint is UP (bounded), then use it with what is left. Uses
+# bash's /dev/tcp so it needs no `nc`, which a customer box is not promised.
+kit_substrate_await_port() {
+  local port="$1" budget="$2" deadline
+  deadline=$(( $(date +%s) + budget ))
+  while :; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 # --- the install receipt ------------------------------------------------------
 # The receipt is the resumable-install contract and the agent's map of the
 # install: it names the phase, the next step, the input needed and where the
@@ -1949,7 +1976,7 @@ migration_command_for() {
     # `migrations/*.sql` (its Down section is cut out by bin/migration-up-section).
     # It is in the repository, NOT in the image today — see the step header and
     # the report; the exact service-repo edit that puts it there is named there.
-    identity) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_identity:-bin/migrate}" ;;
+    identity) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_identity:-/app/bin/migrate}" ;;
     # courier's release overlays a `bin/migrate` -> `courier eval
     # Courier.Release.migrate`, which runs as Courier.OwnerRepo.
     courier) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_courier:-/app/bin/migrate}" ;;
@@ -2228,6 +2255,19 @@ mint_courier_identity_token() {
   # The forward is torn down on EVERY path out of this function — a mint that
   # fails halfway must not leave an unauthenticated local port listening.
   trap 'kill "$forward_pid" 2>/dev/null || true' RETURN
+
+  # EXISTENCE, THEN USE. `kubectl port-forward` establishes its local listener
+  # ASYNCHRONOUSLY — it must reach the API server, resolve svc/identity and dial
+  # the pod — so a curl on the next line races it and dies with
+  # `curl: (7) Failed to connect to 127.0.0.1 port 18080`. That is a CONNECT
+  # failure and it reads identically to "identity refused", which is the wrong
+  # diagnosis. Measured live on the box: the step reported "identity would not
+  # mint a signup timestamp" while the actual curl was a (7) connect failure.
+  # Wait for the local port to accept a connection (bounded), then use it.
+  if ! kit_substrate_await_port "$forward_port" 30; then
+    echo "error: the port-forward to svc/identity never accepted a connection on 127.0.0.1:${forward_port} — the forward itself failed, not identity" >&2
+    return 1
+  fi
 
   local base="http://127.0.0.1:${forward_port}" out token
   # The four calls, each forced by the one before it. The account is courier's
