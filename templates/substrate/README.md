@@ -126,8 +126,9 @@ The deploy loop this substrate serves is **pull-based**: a commit changes a
 chart, Argo makes the box agree. The consume end is the eight `Application`
 manifests in `manifests/applications/`, in two halves with different owners:
 the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
-`oci://ghcr.io/cafaye/charts` at `targetRevision: 0.1.0`, and the four
-observability charts (`alloy`, `grafana`, `loki`, `prometheus`) pull their
+their own chart's path in `oci://ghcr.io/cafaye/charts` — e.g.
+`oci://ghcr.io/cafaye/charts/identity` — at `targetRevision: 0.1.0`, and the
+four observability charts (`alloy`, `grafana`, `loki`, `prometheus`) pull their
 official upstream chart repositories at pinned chart versions (see [The
 observability half of the loop](#the-observability-half-of-the-loop)). **The publish end
 is kit's `.github/workflows/chart.reusable.yml`**, and a service adopts it by
@@ -146,11 +147,19 @@ Three facts about that loop, each load-bearing:
   string a service copies into its own repo and a copied string drifts from
   the chart it names.
 - **The registry string is one fact in two files.** The workflow's default
-  `registry` input is `oci://ghcr.io/cafaye/charts`, the exact string every
-  `Application` carries as `source.repoURL`. Both files are in kit, which is
-  what makes the seam provable: `check_chart_publish` in kit's gate compares
-  them and fails on a disagreement, with a control that drifts one
-  `repoURL` and must go red.
+  `registry` input is `oci://ghcr.io/cafaye/charts` — the **prefix**, the root
+  `helm push` appends the chart's name to. Every `Application` therefore
+  carries `source.repoURL: oci://ghcr.io/cafaye/charts/<its chart name>`, and
+  the registry root is **not** a valid `repoURL`: Argo resolves an OCI source's
+  revision against `repoURL` itself, so the root asks for an artifact named
+  after nothing and the sync never finds the chart (measured on the fleet's
+  first end-to-end install: `HEAD https://ghcr.io/v2/cafaye/charts/manifests/
+  0.1.0` → 403, every service Application un-synced). Both files are in kit,
+  which is what makes the seam provable: `check_chart_publish` in kit's gate
+  asserts `repoURL == registry + "/" + chart` for every service `Application`
+  and fails on a disagreement, with controls that set a `repoURL` back to the
+  registry root, make a `repoURL` path disagree with `chart:`, and drift the
+  registry — each of which must go red.
 - **Publishing is opt-in and refuses forks.** `push` defaults to `false`, so
   a caller that only meant to check the chart still packages it but publishes
   nothing; the job refuses to publish from a `pull_request` regardless of what

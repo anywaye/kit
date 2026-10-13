@@ -49,12 +49,15 @@
 # permission on the caller.
 #
 # THE THREE SEAMS, AND WHY EVERY END LIVES IN KIT.
-#   1. The registry string. `chart.reusable.yml` pushes to a registry; every
-#      Argo CD Application in `templates/substrate/manifests/applications/`
-#      pulls from `oci://ghcr.io/cafaye/charts`. Both files are in kit, which is
-#      what makes this provable in this repository's own gate — the check
-#      compares the workflow's default registry against every Application's
-#      `source.repoURL` and fails on a disagreement.
+#   1. The registry path. `chart.reusable.yml` pushes to the registry root and
+#      `helm push` appends the chart's name; every Argo CD Application in
+#      `templates/substrate/manifests/applications/` carries that path
+#      (`oci://ghcr.io/cafaye/charts/<chart>`) as its `source.repoURL`. Argo
+#      resolves an OCI source's revision against `repoURL` itself, so the bare
+#      root is not an artifact. Both files are in kit, which is what makes this
+#      provable in this repository's own gate — the check asserts
+#      `repoURL == registry + "/" + chart` for every service Application and
+#      fails on a disagreement.
 #   2. The chart version. Each Application pins `targetRevision: 0.1.0`, and a
 #      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
 #      Helm chart is its `version`, so the push tag and the pull
@@ -90,8 +93,10 @@ on:
       registry:
         description: >-
           The OCI registry charts are pushed to, including the oci:// scheme.
-          The default is the exact string every Argo CD Application carries as
-          source.repoURL. Images are always pushed to ghcr.io — the image
+          The default is the PREFIX every service Argo CD Application builds
+          its source.repoURL from — `helm push` appends the chart's name, so an
+          Application's repoURL is this string plus "/<chart>". Images are
+          always pushed to ghcr.io — the image
           workflow derives the name from github.repository and takes no
           registry input.
         required: false

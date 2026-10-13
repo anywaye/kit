@@ -22,21 +22,27 @@
 #
 # WHY THIS EXISTS, IN ONE SENTENCE. `DEPLOYMENT.md`'s deploy loop is
 # pull-based — a commit changes a chart, Argo makes the box agree — and only
-# one end of that loop existed: eight Argo CD `Application`s pull from
-# `oci://ghcr.io/cafaye/charts`, and nothing in the fleet ever ran `helm push`
-# or `helm package`, so every `Application` pointed at a registry nothing wrote
-# to. Argo synced nothing; the box never converged. This is the other half.
+# one end of that loop existed: eight Argo CD `Application`s pull each chart's
+# own path under `oci://ghcr.io/cafaye/charts`, and nothing in the fleet ever
+# ran `helm push` or `helm package`, so every `Application` pointed at a
+# registry nothing wrote to. Argo synced nothing; the box never converged. This
+# is the other half.
 #
 # THE TWO SEAMS THAT MUST NOT DRIFT, AND WHY BOTH ENDS LIVE IN KIT.
 #
-#   1. THE REGISTRY STRING. This workflow pushes to a registry; every
-#      `Application` in `templates/substrate/manifests/applications/` pulls
-#      from `oci://ghcr.io/cafaye/charts`. Both files are in kit, which is what
-#      makes this provable in this repository's own gate:
-#      `check_chart_publish` in `tests/validate.sh` compares this workflow's
-#      default `registry`
-#      input against every `Application`'s `source.repoURL` and fails on a
-#      disagreement. A registry string that drifts fails SILENTLY — Argo
+#   1. THE REGISTRY PATH. This workflow pushes to the registry root; `helm
+#      push` APPENDS the chart's name, so the artifact is
+#      `oci://ghcr.io/cafaye/charts/<chart>`, and every `Application` in
+#      `templates/substrate/manifests/applications/` must carry that path as
+#      its `source.repoURL`. Argo resolves an OCI source's revision against
+#      `repoURL` ITSELF, so an `Application` naming the bare root asks for an
+#      artifact named after nothing — measured on the fleet's first end-to-end
+#      install, `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403
+#      and every service Application un-synced. Both files are in kit, which
+#      is what makes this provable in this repository's own gate:
+#      `check_chart_publish` in `tests/validate.sh` asserts
+#      `repoURL == registry + "/" + chart` for every service `Application` and
+#      fails on a disagreement. A path that drifts fails SILENTLY — Argo
 #      reports no error, it just never finds the artifact.
 #
 #   2. THE VERSION. Each `Application` pins `targetRevision: 0.1.0`, and a
@@ -99,10 +105,12 @@ on:
       registry:
         description: >-
           The OCI registry to push to, including the oci:// scheme. The default
-          is the exact string every Argo CD Application in
-          templates/substrate/manifests/applications/ carries as source.repoURL.
-          An input, because a self-hoster may point at their own registry — but
-          the default is the fleet's, and kit's gate proves the two agree.
+          is the PREFIX every service Argo CD Application in
+          templates/substrate/manifests/applications/ builds its source.repoURL
+          from — `helm push` appends the chart's name, so each Application's
+          repoURL is this string plus "/<chart>". An input, because a
+          self-hoster may point at their own registry — but the default is the
+          fleet's, and kit's gate proves the two agree.
         required: false
         type: string
         default: 'oci://ghcr.io/cafaye/charts'
@@ -297,7 +305,7 @@ jobs:
             echo "chart: \`$REGISTRY/$NAME:$VERSION\`"
             echo
             echo "The OCI tag is the chart's version. An Argo CD Application pulls"
-            echo "this chart with repoURL: $REGISTRY, chart: $NAME, targetRevision:"
+            echo "this chart with repoURL: $REGISTRY/$NAME, chart: $NAME, targetRevision:"
             echo "$VERSION — the targetRevision and this tag are the same fact"
             echo "written twice, and a chart pushed as one version while the"
             echo "Application names another is a service that never deploys."

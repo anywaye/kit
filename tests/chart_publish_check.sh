@@ -5,12 +5,16 @@
 #   bash tests/chart_publish_check.sh <workflow> <applications-dir>
 #
 # WHAT IT PROVES. The publish/consume seam, both ends in kit: the workflow's
-# default registry is the string every SERVICE Application's source.repoURL
-# reads from, `push` defaults to false, the chart name/version are not
-# inputs, and the pull_request refusal is present. Plus its TWO RED CONTROLS
-# under the same assertions: a fixture with one Application's repoURL
-# drifted, and a fixture with `push`'s default flipped to true — each must
-# go red, or the proof fails itself.
+# default registry is the PREFIX every SERVICE Application's source.repoURL is
+# built from — `repoURL == registry + "/" + chart` — `push` defaults to false,
+# the chart name/version are not inputs, and the pull_request refusal is
+# present. Plus its RED CONTROLS under the same assertions: a fixture whose
+# repoURL is the registry root (the shape that never synced — measured:
+# `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403, because Argo
+# resolves an OCI revision against repoURL itself and the registry root is not
+# an artifact), a fixture whose repoURL path disagrees with `chart:`, a
+# fixture whose registry prefix drifted, and a fixture with `push`'s default
+# flipped to true — each must go red, or the proof fails itself.
 #
 # SINGLE SOURCE OF TRUTH. The assertions below are the gate's chart-publish
 # assertions, not a second implementation: tests/validate.sh's
@@ -96,7 +100,15 @@ if not isinstance(push, dict):
 elif push.get("default") is not False:
     problems.append(f"`push` default is {push.get('default')!r}, not false")
 
-# 3. The default registry equals every SERVICE Application's source.repoURL.
+# 3. The default registry is the PREFIX of every SERVICE Application's
+# source.repoURL: repoURL == registry + "/" + chart. Argo resolves an OCI
+# source's revision against repoURL ITSELF — the artifact it HEADs is
+# <repoURL>:<targetRevision> — so a repoURL that is the registry root asks for
+# an artifact named after nothing. Measured on the fleet's first end-to-end
+# install: `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403 and
+# every Application stuck un-synced, because the published packages are
+# `cafaye/charts/<name>` and the root is not an artifact. The push appends the
+# chart name (`helm push "$PACKAGE" "$REGISTRY"`), so the pull must name it too.
 # Observability Applications (alloy, grafana, loki, prometheus) point at
 # upstream chart repositories by design and are skipped here — asserting them
 # here as well would pin them to a registry nothing publishes them to, which
@@ -105,6 +117,11 @@ elif push.get("default") is not False:
 SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
 registry = inputs.get("registry")
 default_registry = registry.get("default") if isinstance(registry, dict) else None
+if not isinstance(default_registry, str) or not default_registry:
+    problems.append(
+        "chart.reusable.yml declares no default `registry` — the pull end "
+        "has no prefix to be built from"
+    )
 apps = sorted(glob.glob(apps_dir + "/*.yaml")) + sorted(glob.glob(apps_dir + "/*.yml"))
 if not apps:
     problems.append(f"no Application manifests found in {apps_dir}")
@@ -116,15 +133,22 @@ for app in apps:
     except Exception as exc:
         problems.append(f"{app} does not parse: {exc}")
         continue
-    repo = ((adoc.get("spec") or {}).get("source") or {}).get("repoURL")
+    source = (adoc.get("spec") or {}).get("source") or {}
+    repo = source.get("repoURL")
+    chart = source.get("chart")
     name = ((adoc.get("metadata") or {}).get("name"))
     if name not in SERVICE_APPS:
         continue
     checked += 1
-    if repo != default_registry:
+    want = f"{default_registry}/{chart}" if isinstance(chart, str) and chart else None
+    if repo != want:
         problems.append(
             f"{app}: source.repoURL is {repo!r} but the workflow's default "
-            f"registry is {default_registry!r} — the publish/consume seam"
+            f"registry {default_registry!r} plus this Application's chart name "
+            f"{chart!r} is {want!r} — Argo resolves an OCI source's revision "
+            f"against repoURL itself, so a repoURL that is not the chart's own "
+            f"path in the registry finds no artifact and the Application never "
+            f"syncs (the publish/consume seam)"
         )
 
 # 4. The name and version are not inputs.
@@ -149,7 +173,7 @@ if problems:
     for problem in problems:
         print(f"chart publish: {problem}")
     sys.exit(1)
-print(f"seam: default registry == source.repoURL in {checked} service Application(s)")
+print(f"seam: default registry + chart == source.repoURL in {checked} service Application(s)")
 PY
 
 # The `|| ec=$?` shape is load-bearing rather than defensive: a bare
@@ -170,38 +194,68 @@ fi
 # green means the check is not measuring what it claims, and that is
 # reported as a failure of the proof itself rather than passed over.
 
-# (a) THE SEAM CONTROL: one service Application's repoURL drifted from
-# the workflow's default registry. The publish end and the consume end
-# disagreeing is the defect this check exists to catch, so the fixture
-# is that disagreement, in one file, with everything else identical.
-seam_fixture="$TMP/chart-publish-seam"
-rm -rf "$seam_fixture"
-mkdir -p "$seam_fixture"
-cp "$apps_dir"/*.yaml "$seam_fixture"/
 # A temp file and `mv`, not `sed -i`: BSD sed (macOS) requires a backup
 # argument after `-i` and GNU sed does not, so the in-place spelling is
 # one platform's bug and the other's no-op.
-sed 's|oci://ghcr.io/cafaye/charts|oci://ghcr.io/cafaye/charts-drifted|' \
-  "$seam_fixture/gateway.yaml" >"$seam_fixture/gateway.yaml.drifted"
-mv "$seam_fixture/gateway.yaml.drifted" "$seam_fixture/gateway.yaml"
-if "$PY" "$checker" "$workflow" "$seam_fixture" >/dev/null 2>&1; then
-  printf 'chart publish: control (a) the seam control did not go red — the registry comparison is not measuring what it claims\n'
+mutate_gateway() {
+  # Rewrite one line of the gateway Application in a fresh fixture dir,
+  # everything else byte-identical: one fixture, one mutation.
+  local dir="$1" expr="$2"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  cp "$apps_dir"/*.yaml "$dir"/
+  sed "$expr" "$dir/gateway.yaml" >"$dir/gateway.yaml.mutated"
+  mv "$dir/gateway.yaml.mutated" "$dir/gateway.yaml"
+}
+
+# (a) THE ROOT CONTROL: one service Application's repoURL set back to the
+# registry ROOT — today's shape, and the one that never synced. Argo resolves
+# the revision against repoURL itself, the root is not an artifact, and every
+# sync 403s: this is precisely the defect the check exists to catch.
+root_fixture="$TMP/chart-publish-root"
+mutate_gateway "$root_fixture" \
+  's|^\( *\)repoURL: oci://ghcr.io/cafaye/charts/gateway$|\1repoURL: oci://ghcr.io/cafaye/charts|'
+if "$PY" "$checker" "$workflow" "$root_fixture" >/dev/null 2>&1; then
+  printf 'chart publish: control (a) the registry-root control did not go red — a repoURL that is the registry root is not being caught\n'
   exit 1
 fi
 
-# (b) THE DEFAULT CONTROL: `push` flipped to default-true. A reusable
+# (b) THE PATH/NAME CONTROL: the chart name in the repoURL path disagrees
+# with the manifest's own `chart:`. The two are one fact; the fixture changes
+# one and leaves the other, so exactly one property is violated.
+disagree_fixture="$TMP/chart-publish-disagree"
+mutate_gateway "$disagree_fixture" \
+  's|^\( *\)repoURL: oci://ghcr.io/cafaye/charts/gateway$|\1repoURL: oci://ghcr.io/cafaye/charts/gateway-drifted|'
+if "$PY" "$checker" "$workflow" "$disagree_fixture" >/dev/null 2>&1; then
+  printf 'chart publish: control (b) the path/name control did not go red — a repoURL path that disagrees with `chart:` is not being caught\n'
+  exit 1
+fi
+
+# (c) THE DRIFTED-REGISTRY CONTROL: the old seam fixture, the workflow's
+# prefix moved out from under every repoURL. It is kept BESIDE (a) rather than
+# folded into it: (a) removes the chart segment and (c) moves the registry, and
+# a check that can catch one but not the other is a check with a blind side.
+drift_fixture="$TMP/chart-publish-drift"
+mutate_gateway "$drift_fixture" \
+  's|oci://ghcr.io/cafaye/charts/gateway|oci://ghcr.io/cafaye/charts-drifted/gateway|'
+if "$PY" "$checker" "$workflow" "$drift_fixture" >/dev/null 2>&1; then
+  printf 'chart publish: control (c) the drifted-registry control did not go red — the registry comparison is not measuring what it claims\n'
+  exit 1
+fi
+
+# (d) THE DEFAULT CONTROL: `push` flipped to default-true. A reusable
 # workflow that publishes by default is one every caller publishes from
 # by accident, so the fixture is the one-line flip.
 push_fixture="$TMP/chart-publish-push-default.yml"
 sed 's/default: false/default: true/' "$workflow" >"$push_fixture"
 if "$PY" "$checker" "$push_fixture" "$apps_dir" >/dev/null 2>&1; then
-  printf 'chart publish: control (b) the push-default control did not go red — the default comparison is not measuring what it claims\n'
+  printf 'chart publish: control (d) the push-default control did not go red — the default comparison is not measuring what it claims\n'
   exit 1
 fi
 
 # The proof, on the way out: the seam the check measured, so a green run
-# prints the number of Applications the registry string was compared
+# prints the number of Applications the registry+chart string was compared
 # against rather than asserting it in a comment.
 printf '%s\n' "$out"
-printf 'chart publish: both red controls went red (drifted repoURL; push default true)\n'
+printf 'chart publish: four red controls went red (repoURL at the registry root; repoURL path disagreeing with `chart:`; drifted registry prefix; push default true)\n'
 exit 0

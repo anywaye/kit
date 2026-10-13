@@ -13,8 +13,9 @@
 #   2. tests/chart_publish_check.sh: the gate's EXACT chart-publish proof —
 #      the same file tests/validate.sh calls — workflow_call shape, push
 #      default, registry agreement with every service Application,
-#      name/version not inputs, pull_request refused, plus both red controls
-#      (drifted repoURL, flipped push default). Same file, same assertions,
+#      name/version not inputs, pull_request refused, plus its red controls
+#      (repoURL at the registry root, repoURL path disagreeing with `chart:`,
+#      drifted registry prefix, flipped push default). Same file, same assertions,
 #      same verdict; no second implementation to drift.
 #   3. tests/publish_seam_check.sh: the gate's EXACT publish-path proof —
 #      the same file tests/validate.sh calls — the local reusable-workflow

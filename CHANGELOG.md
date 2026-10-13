@@ -2,6 +2,30 @@
 
 ### Substrate
 
+- **An OCI Helm `Application` named the registry root, not the chart's own
+  path, and every sync in the fleet's first end-to-end install failed.** The
+  four service `Application`s in `templates/substrate/manifests/applications/`
+  carried `repoURL: oci://ghcr.io/cafaye/charts` with `chart: <name>`. Argo
+  resolves an OCI source's revision against `repoURL` **itself** — the artifact
+  it resolves is `<repoURL>:<targetRevision>` — and the published packages are
+  `cafaye/charts/<name>`, so the root is not an artifact:
+
+      Failed to load target state: failed to generate manifest for source 1 of 1:
+      rpc error: … failed to resolve revision "0.1.0": cannot get digest for
+      revision 0.1.0: HEAD "https://ghcr.io/v2/cafaye/charts/manifests/0.1.0"
+      → 403 denied
+
+  No `Application` synced, no `Deployment` was created, and step 11 waited on
+  an object that never existed. The `repoURL` now names the chart's own path
+  (`oci://ghcr.io/cafaye/charts/<name>`; `chart:` stays, and the two may not
+  disagree). `check_chart_publish` in `tests/chart_publish_check.sh` is re-aimed
+  from `repoURL == registry` to `repoURL == registry + "/" + chart`, with four
+  red controls — the registry root (today's shape), a `repoURL` path disagreeing
+  with `chart:`, a drifted registry prefix, and the existing flipped `push`
+  default — and `check_obs_chart_sources` in the gate grades the same path.
+  Measured live: patching one `Application` to
+  `oci://ghcr.io/cafaye/charts/identity` moved it to `Synced` and created the
+  fleet's first `identity` Deployment.
 - **The NATS manifest gave Kubernetes a flag where it expected a binary.**
   `templates/substrate/manifests/data/nats.yaml` carried the local stack's flag
   list under `command:` — `[-js, -sd, /data, -m, 8222]` — because

@@ -4401,12 +4401,15 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      does. A reusable workflow that publishes by default is one every
   #      caller publishes from by accident, including the caller that only
   #      meant to check the chart still packages.
-  #   3. Its default `registry` equals the `source.repoURL` of every
-  #      SERVICE Application manifest (`identity`, `gateway`, `courier`,
-  #      `parlor`). The seam itself: the string the push writes
-  #      to and the string the pull reads from are one fact, and a chart
-  #      pushed to a registry no Application names is a service that never
-  #      deploys. Observability Applications are SKIPPED here — they resolve
+  #   3. Its default `registry` is the PREFIX of every SERVICE Application
+  #      manifest's `source.repoURL` (`identity`, `gateway`, `courier`,
+  #      `parlor`): `repoURL == registry + "/" + chart`. The seam itself: the
+  #      path the push writes to and the path the pull reads from are one
+  #      fact, and an Application whose repoURL is not the chart's own path in
+  #      that registry is a service that never deploys — Argo resolves an OCI
+  #      source's revision against repoURL itself, so the registry ROOT is not
+  #      an artifact (measured: `HEAD .../v2/cafaye/charts/manifests/0.1.0`
+  #      → 403). Observability Applications are SKIPPED here — they resolve
   #      to upstream repositories by design (see `check_obs_chart_sources`).
   #   4. The chart name and version are NOT inputs. An input is a string a
   #      service copies into its own repo, and a copied string drifts from
@@ -4417,9 +4420,11 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      registry write by untrusted code, and a fork's token is read-only
   #      anyway — refusing before the attempt beats failing after it.
   #
-  # THE TWO CONTROLS, which must go RED under the same check the real tree
-  # passes: a fixture with one Application's `repoURL` altered (the seam
-  # control) and a fixture with `push`'s default flipped to true. A control
+  # THE RED CONTROLS, which must go RED under the same check the real tree
+  # passes (all four live in `chart_publish_check.sh`): one Application's
+  # `repoURL` set back to the registry ROOT (the shape that never synced), a
+  # `repoURL` path disagreeing with the same Application's `chart:`, the
+  # registry prefix drifted, and `push`'s default flipped to true. A control
   # that does not go red is a failure of the test itself — the discipline
   # `substrate_test.sh`'s `run` helper enforces, applied here.
   #
@@ -4490,8 +4495,10 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      classifies by. A file whose name and manifest disagree is classified
   #      by neither and fails.
   #   2. A service name (`identity`, `gateway`, `courier`, `parlor`) carries
-  #      `repoURL: oci://ghcr.io/cafaye/charts`, its own name as `chart`,
-  #      and `targetRevision: 0.1.0` — the private-OCI ruling, untouched.
+  #      its own name as `chart`, `repoURL: oci://ghcr.io/cafaye/charts/<name>`
+  #      (the registry's PREFIX plus the chart name — Argo resolves the
+  #      revision against repoURL itself, so the root is not an artifact), and
+  #      `targetRevision: 0.1.0` — the private-OCI ruling, untouched.
   #   3. An observability name carries EXACTLY the (repoURL, chart,
   #      targetRevision) triple in the EXPECTED table — the official upstream
   #      repository, the unmodified chart, the pinned version. Each pin was
@@ -4570,7 +4577,7 @@ for app in apps:
     source = ((adoc.get("spec") or {}).get("source") or {})
     triple = (source.get("repoURL"), source.get("chart"), str(source.get("targetRevision")))
     if name in SERVICE_APPS:
-        want = (PRIVATE_OCI, name, "0.1.0")
+        want = (f"{PRIVATE_OCI}/{name}", name, "0.1.0")
         if triple != want:
             problems.append(
                 f"{app}: service chart resolves to {triple!r}, not {want!r} — "
@@ -5026,11 +5033,13 @@ PY
   # end is chart.reusable.yml, and the two ends disagreeing is a SILENT
   # failure: Argo reports no error, it just never finds the artifact. Both
   # ends live in this repository, so the seam is provable here — the check
-  # compares the workflow's default registry against every Application's
-  # source.repoURL, and its two controls (a drifted repoURL, a flipped push
-  # default) must go red under the same assertions the real tree passes.
+  # compares the workflow's default registry PLUS each Application's chart name
+  # against its source.repoURL, and its four controls (a repoURL at the
+  # registry root, a repoURL path disagreeing with `chart:`, a drifted registry
+  # prefix, a flipped push default) must go red under the same assertions the
+  # real tree passes.
   section 'static: the chart publish path — the publish/consume seam, both ends in kit'
-  check 'chart publish  (workflow_call, push defaults false, registry == every service Application repoURL, name/version not inputs, pull_request refused)' \
+  check 'chart publish  (workflow_call, push defaults false, registry + chart == every service Application repoURL, name/version not inputs, pull_request refused)' \
     check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
       "$ROOT/templates/substrate/manifests/applications"
 
@@ -5094,7 +5103,7 @@ PY
   # two controls (a reverted repoURL, a drifted chart name) must go red under
   # the same assertions the real tree passes.
   section 'static: the observability chart sources — every Application resolves to a chart somebody publishes'
-  check 'obs chart sources  (service charts stay on the private OCI registry at 0.1.0; alloy/grafana/loki/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
+  check 'obs chart sources  (service charts stay on the private OCI registry at their own path and 0.1.0; alloy/grafana/loki/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
     check_obs_chart_sources \
       "$ROOT/templates/substrate/manifests/applications"
 

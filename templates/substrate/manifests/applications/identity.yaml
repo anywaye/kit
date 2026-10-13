@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts
+    repoURL: oci://ghcr.io/cafaye/charts/identity
     chart: identity
     targetRevision: 0.1.0
   destination:
