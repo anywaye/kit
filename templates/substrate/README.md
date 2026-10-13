@@ -550,6 +550,15 @@ is an operator action, and the URL works only when observed.
   the connection limit, the timeouts, no `imageName`, and pointedly no
   `postInitApplicationSQL` — a fixture with the `REVOKE` removed goes
   **red** under the same check, as does a manifest re-adding the hook).
+- **Every field the manifests write under `spec` is declared by the CRD the
+  operator ships.** `tests/substrate-crd/schemas.json` is the property graph of
+  the pinned CNPG v1.30.1, Argo CD v3.5.4 and cert-manager v1.21.2 CRDs,
+  derived from the same release URLs `install.sh` applies, and
+  `tests/substrate_test.sh` §9b refuses a field name the pinned version does not
+  declare at that path. The `storageConfiguration` name the box refused goes
+  **red**, as does a nested retired spelling (`storageClassName`) and a pin bump
+  with no re-derivation. This is the class the Cluster defect belonged to; it
+  proves field NAMES, not types or semantics. A CRD with no model fails closed.
 - The extension list defaults to `vector` and is validated as identifiers in
   `install.sh` — a fixture with no default goes **red**.
 - The Redis manifest parses with the exact tag `redis:7.4.1-alpine` and the
