@@ -1323,9 +1323,13 @@ create_postgres_role_secrets() {
         # Keep the password (never regenerated, never printed); correct the
         # username if an older run wrote the secret's spelling instead of the
         # role's. A merge patch of the same value is a no-op, so this is safe
-        # to run on every pass.
+        # to run on every pass. The patch is read from `/dev/stdin`, the file
+        # the heredoc arrives on: kubectl has no `-` convention for
+        # `--patch-file`, and `--patch-file=-` opens a file literally named `-`
+        # ("error: unable to read patch file: open -: no such file or
+        # directory"), which is the live defect this uses /dev/stdin to avoid.
         kubectl --kubeconfig="$KUBECONFIG" -n data patch secret "$secret_name" \
-          --type=merge --patch-file=- >/dev/null <<JSON
+          --type=merge --patch-file=/dev/stdin >/dev/null <<JSON
 {"stringData":{"username":"$role"}}
 JSON
         kit_substrate_out "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
@@ -2055,14 +2059,15 @@ mint_courier_identity_token() {
   # delete `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the
   # OIDC keys from identity-secrets in the same breath. A merge patch adds the
   # key and touches nothing else, and it is built by `jq` so a token with a
-  # quote in it cannot break the JSON or land in an argv (`--patch-file=-`
-  # reads it from a pipe).
+  # quote in it cannot break the JSON or land in an argv (`--patch-file=/dev/stdin`
+  # reads it from a pipe; kubectl has no `-` convention for `--patch-file`, so
+  # `--patch-file=-` would open a file literally named `-`).
   printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
-    --type=merge --patch-file=-
+    --type=merge --patch-file=/dev/stdin
   printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_IDENTITY_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n courier patch secret courier-secrets \
-    --type=merge --patch-file=-
+    --type=merge --patch-file=/dev/stdin
   kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
   kit_substrate_out "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"

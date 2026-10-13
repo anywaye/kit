@@ -2073,11 +2073,13 @@ mock_kubectl() {
       return 0
       ;;
     patch)
-      # A merge patch, read from `--patch-file=-`: the mock MERGES the
+      # A merge patch, read from `--patch-file=/dev/stdin`: the mock MERGES the
       # stringData keys into the stored secret, exactly as kubectl does. This
       # is what makes the "no other key is wiped" assertion below mean
       # anything — a mock that treated a patch as a replace would make the
-      # destructive and the correct write indistinguishable.
+      # destructive and the correct write indistinguishable. `--patch-file=-`
+      # is refused with kubectl's own error below, because the real binary has
+      # no `-` stdin convention and this suite must not be green on one.
       local patch_ns="$fallback_ns" patch_name="" body=""
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -2095,8 +2097,18 @@ mock_kubectl() {
         return 1
       fi
       case "${patch_file_arg:-}" in
-        -) body="$(cat)" ;;
         "") echo "mock_kubectl: patch without --patch-file" >&2; return 1 ;;
+        -)
+          # THE LIVE DEFECT, MODELLED. Real kubectl has no `-` stdin
+          # convention for --patch-file: it opens a file literally named `-`,
+          # and this is the byte-for-byte error it prints when there is none.
+          # Measured on the Contabo box against the pinned kubectl. The mock
+          # used to treat `-` as stdin, which is why a step that could never
+          # run was green for the life of this suite.
+          echo "error: unable to read patch file: open -: no such file or directory" >&2
+          return 1
+          ;;
+        /dev/stdin) body="$(cat)" ;;
         *) body="$(cat "$patch_file_arg")" ;;
       esac
       local d="$MOCK_ROOT/$patch_ns/$patch_name"
@@ -2673,6 +2685,15 @@ check_rerun_repairs_username() {
     [ "$(mock_get data "postgres-role-$svc-app" password)" = "pw-$svc-app" ] ||
       problems="$problems; $svc-app password was regenerated"
   done
+  # The repair must have TRAVELLED on a `/dev/stdin` patch, not merely landed.
+  # The mock records every invocation in full and refuses `-`, so an argv
+  # naming the convention is the fact the live fix depends on — a store that
+  # changed through some other route would pass the username check above and
+  # still not be the path the box ran.
+  if ! grep -q -- "patch secret postgres-role-identity-app .*--patch-file=/dev/stdin" \
+    "$root/kubectl-argv" 2>/dev/null; then
+    problems="$problems; the repair never issued a --patch-file=/dev/stdin patch"
+  fi
   if [ -n "$problems" ]; then
     echo "${problems#; }"
     return 1
@@ -2713,6 +2734,91 @@ open(sys.argv[2], "w", encoding="utf-8").write(src.replace(before, after, 1))
 PY
 run 'control: a reconcile behind the cluster guard never repairs a re-run' red \
   check_rerun_repairs_username "$fixture_guard_first"
+
+# ===========================================================================
+# 12d. `kubectl patch` reads its patch from `/dev/stdin`, not `-`
+# ===========================================================================
+#
+# THE HALF OF THE LIVE DEFECT THAT MADE 12c UNREACHABLE. 12c proves the
+# username is repaired; this proves the repair can REACH the API server at
+# all. `kubectl` has no `-` stdin convention for `--patch-file`: it opens a
+# file literally named `-` and dies before the request is built, so the repair
+# never happens on the box. Measured back to back on Contabo, against the
+# pinned kubectl:
+#
+#   $ echo '{"metadata":{"annotations":{"probe":"1"}}}' |
+#       kubectl patch secret postgres-role-identity -n data --type=merge \
+#         --patch-file=-
+#   error: unable to read patch file: open -: no such file or directory
+#   $ echo '{"metadata":{"annotations":{"probe":"1"}}}' |
+#       kubectl patch secret postgres-role-identity -n data --type=merge \
+#         --patch-file=/dev/stdin
+#   secret/postgres-role-identity patched
+#
+# `kubectl apply -f -` IS a real convention (step 6 and the pull secret use
+# it, and it is left alone); only the `--patch-file` spelling was wrong. The
+# mock modelled `-` as stdin and so was green over a step that cannot run — a
+# witness from a different program than the one on the box. Both mocks now
+# implement `/dev/stdin` and refuse `-` with the real binary's own error, so
+# the class cannot pass again.
+
+# check_patch_convention <mock-fn> <root> — one store, the two spellings,
+# against the mock named. `/dev/stdin` must read the pipe and merge; `-` must
+# fail with kubectl's EXACT message and leave the store untouched. Shared by
+# mock_kubectl (step 8) and rollout_kubectl (step 11) because they hold the
+# same contract and a divergence between them would be the defect again.
+check_patch_convention() {
+  local mock="$1" root="$2" ec=0
+  local want="error: unable to read patch file: open -: no such file or directory"
+  rm -rf "$root"
+  mkdir -p "$root"
+  (
+    export MOCK_ROOT="$root"
+    mock_seed data probe username old
+    # (1) the convention the installer uses: /dev/stdin reads the pipe.
+    printf '%s' '{"stringData":{"username":"new"}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
+      { echo "$mock refused the /dev/stdin patch"; exit 3; }
+    # (2) the spelling the real kubectl rejects: `-`.
+    printf '%s' '{"stringData":{"username":"never"}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=- 2>"$root/dash.err" &&
+      { echo "$mock accepted --patch-file=-, which real kubectl refuses"; exit 4; }
+    exit 0
+  ) || ec=$?
+  MOCK_ROOT="$root"
+  if [ "$ec" -ne 0 ]; then
+    echo "the mock-convention check failed (exit $ec)"
+    return 1
+  fi
+  if [ "$(cat "$root/dash.err")" != "$want" ]; then
+    echo "$mock's --patch-file=- error is not kubectl's: '$(cat "$root/dash.err")'"
+    return 1
+  fi
+  if [ "$(mock_get data probe username)" != "new" ]; then
+    echo "the /dev/stdin patch did not merge (stored '$(mock_get data probe username)')"
+    return 1
+  fi
+  echo "$mock reads /dev/stdin and refuses - with kubectl's own error"
+}
+run 'the step-8 mock reads --patch-file=/dev/stdin and refuses - as kubectl does' green \
+  check_patch_convention mock_kubectl "$WORK/mock-dash"
+
+# The RED CONTROL on the real step: step 8's patch spelling reverted to `-`.
+# The mock now refuses it exactly as the box does, so the re-run repair aborts
+# and the check that is GREEN above goes red. The fixture asserts its own
+# premise before it is used: a transform that matched nothing would be a
+# control that proves nothing.
+fixture_patch_dash="$WORK/install-patchfile-dash.sh"
+sed -e '/^main "$@"/d' -e 's|--patch-file=/dev/stdin|--patch-file=-|g' \
+  "$SUBSTRATE/install.sh" >"$fixture_patch_dash"
+if grep -q -- '--patch-file=-' "$fixture_patch_dash" \
+  && ! grep -q -- '--patch-file=/dev/stdin' "$fixture_patch_dash"; then
+  run 'control: the - patch spelling the real kubectl refuses goes red' red \
+    check_rerun_repairs_username "$fixture_patch_dash"
+else
+  fail 'control: the - patch spelling the real kubectl refuses goes red' \
+    "the fixture still holds /dev/stdin or lost the dashed spelling — the control cannot be built"
+fi
 
 # ===========================================================================
 # 13. No long-lived secret enters the installer (invariant 3's input side)
@@ -4948,9 +5054,12 @@ rollout_kubectl() {
       return 0
       ;;
     *"patch secret "*)
-      # A merge patch, read from --patch-file=- and merged over the store —
-      # the same contract mock_kubectl's patch branch holds, so "no other key
-      # is wiped" means something here too.
+      # A merge patch, read from --patch-file=/dev/stdin and merged over the
+      # store — the same contract mock_kubectl's patch branch holds, so "no
+      # other key is wiped" means something here too. `--patch-file=-` is
+      # refused with kubectl's own error: the real binary reads a FILE named
+      # `-` and fails, so the mock must not be the only place the spelling
+      # works.
       local p prev="" patch_ns="" patch_name="" patch_file_arg="" body=""
       for p in "$@"; do
         case "$p" in
@@ -4973,8 +5082,9 @@ rollout_kubectl() {
         return 1
       fi
       case "$patch_file_arg" in
-        -) body="$(cat)" ;;
-        *) echo "rollout_kubectl: patch without --patch-file=-" >&2; return 1 ;;
+        /dev/stdin) body="$(cat)" ;;
+        -) echo "error: unable to read patch file: open -: no such file or directory" >&2; return 1 ;;
+        *) echo "rollout_kubectl: patch without --patch-file=/dev/stdin" >&2; return 1 ;;
       esac
       local pdir="$MOCK_ROOT/$patch_ns/$patch_name"
       mkdir -p "$pdir"
@@ -5167,6 +5277,40 @@ mint_never_ok() {
   printf 'refused in %ss, naming the missing Deployment, with no watch and no write' "$elapsed"
 }
 run 'step 11 refuses within its bound when Argo never creates the Deployment' green mint_never_ok
+
+# ---------------------------------------------------------------------------
+# 18a. Step 11's mock holds the same `--patch-file` convention as step 8's
+# ---------------------------------------------------------------------------
+# The sibling of §12d: `rollout_kubectl` is the second mock with a patch
+# branch, and a divergence between the two would let the class back in through
+# the mint. One store, the two spellings, against this mock.
+run 'the step-11 mock reads --patch-file=/dev/stdin and refuses - as kubectl does' green \
+  check_patch_convention rollout_kubectl "$WORK/rollout-dash"
+
+# check_mint_writes_both_secrets <fixture> — step 11 for real, and the one
+# minted value must land in both secrets. The red control below is the same
+# run with the patch spelling reverted to `-`: rollout_kubectl refuses it as
+# the box does, and under `set -e` the mint aborts.
+check_mint_writes_both_secrets() {
+  mint_step "$1" 2 5
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  if [ "$(cat "$ROLLOUT_DIR/store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ]; then
+    echo "identity-secrets does not hold the minted value"
+    return 1
+  fi
+  if [ "$(cat "$ROLLOUT_DIR/store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ]; then
+    echo "courier-secrets does not hold the minted value"
+    return 1
+  fi
+  echo "step 11 wrote one minted value into both secrets through /dev/stdin"
+}
+run 'step 11 writes one minted value into both secrets through /dev/stdin' green \
+  check_mint_writes_both_secrets "$mint_fixed"
+run 'control: the - patch spelling aborts the mint, as it does on the box' red \
+  check_mint_writes_both_secrets "$fixture_patch_dash"
 
 # ===========================================================================
 # 19. Step 6 waits on nothing — the core-install reality, executed
