@@ -22,7 +22,10 @@ this file only describes what is here and what is proven.
 
 ## What `install.sh` does
 
-1. **k3s** — single node, sqlite datastore. No etcd on one box.
+1. **k3s** — single node, sqlite datastore. No etcd on one box. The step proves
+   the `Node` object exists before it waits for it to be Ready, because the
+   kubelet registers it a few seconds after k3s starts and a wait on an empty
+   list is an error rather than a wait.
 2. **cert-manager**
 3. **CloudNativePG**
 4. **Argo CD core** — no Dex, no SSO, no Redis HA.
@@ -327,8 +330,13 @@ its declarative `inRoles` form. `spec.imageName` is unset on purpose: CNPG's
 standard image already carries pgvector, so the substrate needs no custom
 image and no build step. Storage is explicit (`20Gi` on `local-path`, k3s's
 default) and resources are stated as a share of the 8GB box — both numbers
-are the box's, not Postgres's. Step 8 waits on the labelled pods' Ready
-condition, not on a Cluster phase string this script does not own.
+are the box's, not Postgres's. Step 8 proves the labelled pods EXIST before it
+waits on their Ready condition, and then waits on that condition rather than on
+a Cluster phase string this script does not own. Both halves are needed: the
+Cluster CR is applied synchronously, but the pods are created asynchronously by
+CNPG's operator, so the selector can match nothing at the instant the apply
+returns — and a `kubectl wait` on an empty list is `error: no matching
+resources found`, not a wait.
 
 **What the Cluster does NOT reproduce: per-database `CREATE EXTENSION`.**
 The local script creates the extension list (compose default: `vector`)
