@@ -7067,7 +7067,7 @@ else:
 # 4. "Every service" is the four the substrate ships, and each must have a
 #    secret to carry the switch or an Application that does. A service dropped
 #    from the secret step is a service nothing configures.
-services = set(re.findall(r"create secret generic (\S+)-secrets", code))
+services = set(re.findall(r"create secret generic (\S+-secrets)", code))
 for svc in ("identity", "gateway", "courier", "parlor"):
     if f"{svc}-secrets" not in services:
         problems.append(f"{svc} has no secret in install.sh")

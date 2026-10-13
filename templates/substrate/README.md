@@ -531,11 +531,29 @@ environment variable and the key list IS the service's env list:
 | `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL`, `COURIER_BASE_URL`, `COURIER_TOKEN` (`OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted and `COURIER_BASE_URL` is courier's Service, written in the same patch; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 12; the rest from the environment |
-| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL`, `OTEL_SDK_DISABLED` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; `OTEL_SDK_DISABLED` is the telemetry kill switch (see below); the rest from the environment |
 | `gateway-secrets` | `REDIS_URL`, `ASSERTION_SIGNING_KEY` | `REDIS_URL` built from step 9's password; `ASSERTION_SIGNING_KEY` generated on the box (a PKCS#8 RSA-2048 PEM the chart mounts as `signing.pem`) |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
-| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_IDENTITY_URL`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11 and `COURIER_IDENTITY_URL` is identity's Service, written in the same patch; the rest from the environment |
-| `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_IDENTITY_URL`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET`, `OTEL_SDK_DISABLED` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11 and `COURIER_IDENTITY_URL` is identity's Service, written in the same patch; `OTEL_SDK_DISABLED` is the telemetry kill switch; the rest from the environment |
+| `parlor-secrets` | `DATABASE_URL`, `OTEL_SDK_DISABLED` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys); `OTEL_SDK_DISABLED` is the telemetry kill switch |
+
+**The services' telemetry is DELIBERATELY OFF on a box, and the switch is
+`OTEL_SDK_DISABLED=true`.** The services' compiled default OTLP endpoint is the
+*compose* stack's name (`http://otel-collector:4318`, `:4317` for gateway), and
+the box deploys no such Service and no OTLP endpoint at all: alloy is pinned at
+chart `1.13.0` with no values, so its default config
+(`config/example.alloy`) declares no `otelcol.receiver.otlp` and its Service
+exposes only `http-metrics` on `12345`, and the substrate ships no Tempo
+(`DEPLOYMENT.md`: "Traces | deferred"). Without the switch every service
+retries forever and logs a DNS failure every ten seconds. The switch is core's
+`otel-endpoint.schema.json` no-op mechanism — free: no queue, no retry, no
+warning per export, no dial at boot — written once as `SERVICE_OTEL_DISABLED`
+and referenced by identity/courier/parlor's secrets, whose generated charts
+`envFrom` them. **gateway is the one exception:** its hand-written chart reads
+clear env from a ConfigMap rather than its secret, so its Application carries
+the same key/value in `spec.source.helm.values`. When Tempo becomes an
+Application this comes out and `<SERVICE>_OTEL_ENDPOINT` goes in, one fact in
+one place.
 
 The key lists were enumerated from the code, not guesswork: identity's
 `internal/config` + README variable table (`SIGNUP_SIGNING_KEY` is base64url

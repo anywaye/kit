@@ -25,6 +25,32 @@
   the mint wrote (the matrix in executable form): green on pair + five templates,
   a red control for the shipped shape (pair, no template) that names
   `INVITATION_LINK_TEMPLATE`, and the unset branch proven green.
+- **Every service pointed at a collector nobody deploys, and logged the DNS
+  failure every ten seconds.** The services' compiled default OTLP endpoint is
+  the *compose* stack's name — `http://otel-collector:4318` (identity, courier,
+  parlor) and `:4317` (gateway) — and a box deploys no such Service and no OTLP
+  endpoint at all, so a live identity pod logged forever:
+
+      level=INFO msg="traces export: Post \"http://otel-collector:4318/v1/traces\":
+        dial tcp: lookup otel-collector on 10.43.0.10:53: no such host"
+
+  Measured rather than assumed: the observability set is alloy + loki + grafana
+  + prometheus, alloy is pinned at chart `1.13.0` with **no values**, so its
+  default config (`config/example.alloy`) declares no `otelcol.receiver.otlp`
+  and its default Service exposes only `http-metrics` on `12345`; the substrate
+  ships no Tempo (`DEPLOYMENT.md`: "Traces | deferred"); and `kubectl get svc -n
+  observability` on the live box returns nothing. So the decision is the
+  packet's other branch — **deliberately off** — and the mechanism is core's
+  pinned no-op: `OTEL_SDK_DISABLED=true` (free: no queue, no retry, no warning
+  per export, no dial at boot). It is written once as `SERVICE_OTEL_DISABLED`
+  and referenced by identity/courier/parlor's secrets, whose generated charts
+  `envFrom` them; **gateway is the one exception**, because its hand-written
+  chart reads clear env from a ConfigMap rather than its secret, so its
+  Application carries the same key/value in `spec.source.helm.values`.
+  `tests/substrate_test.sh` §23 asserts every service is configured, that the
+  switch is spelled once and agrees across both sites, with red controls for the
+  dropped switch, a drifted name, a dropped secret reference, and gateway
+  losing the key or its value.
 - **Step 11 wrote half a credential pair, and identity refused to boot on it.**
   The mint patched `COURIER_TOKEN` into `identity-secrets` and
   `COURIER_IDENTITY_TOKEN` into `courier-secrets`, restarted both, and the
