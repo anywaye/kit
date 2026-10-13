@@ -2,6 +2,40 @@
 
 ### Substrate
 
+- **Every chart dialled a bare service name, and every service is in its own
+  namespace — so no cross-service address resolved on a box.** The substrate
+  puts `identity`, `gateway`, `courier` and `parlor` each in a namespace of its
+  own and the data plane in `data`. Kubernetes limits a DNS query that names no
+  namespace to the CALLER's, so the compose spelling — a bare `identity`,
+  `redis`, `postgres-rw`, `pantry` — resolves only inside a namespace of that
+  exact name. Measured on a completed install, gateway's ConfigMap carried
+  `IDENTITY_URL: http://identity:8080` and a `ROUTE_TABLE` full of
+  `http://pantry:8080`, and gateway's `/readyz` answered
+  `{"deps":{"identity":"unavailable","redis":"unavailable"}}`; the same defect
+  appears at every peer, and each one is a service that boots and never becomes
+  Ready. **The substrate owns the namespace layout, so the substrate now spells
+  the box's addresses** — in each Application's `spec.source.helm.values`, the
+  file kit already owns, so no chart learns a namespace it cannot know:
+  gateway's Application sets `IDENTITY_URL` and `IDENTITY_JWKS_URL`, and
+  parlor's sets the `IDENTITY_URL` **nothing was setting at all** (parlor's
+  chart ships `env: {}` and `parlor-secrets` carried no identity address, so
+  parlor fell back to the compose spelling and could not serve a sign-in). The
+  installer's own addresses (`COURIER_BASE_URL`, `COURIER_IDENTITY_URL`,
+  `REDIS_URL`, the DSNs, `NATS_URL`) were already fully qualified and are
+  unchanged. **The public issuer pair is reported, not guessed:**
+  `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` has no default (unset ⇒ identity serves
+  no OIDC surface), gateway's chart default is `https://auth.cafaye.com`, and a
+  box must set the same origin on both sides or identity mints `iss` gateway
+  will not accept; `IDENTITY_ISSUER` stays an operator value. gateway's
+  `ROUTE_TABLE` (`pantry`) and parlor's `BILLING_URL` are deliberately left to
+  the values commit that deploys those services, because the substrate may only
+  name Services its own manifests create. `tests/substrate_test.sh` §24 asserts
+  every cross-service address the Applications set — and every
+  `.svc.cluster.local` name the installer writes — names a Service the
+  manifests ship in the namespace they ship it in, with red controls for a bare
+  name, a name in the wrong namespace, a name no manifest ships, a service that
+  loses its address, and a drifted installer name.
+
 - **identity refused to boot on the *next* check after the credential pair: a
   courier base URL and token with no link template.** Wiring the courier block
   makes `loadCourier` continue into `resolveLinkTemplates` and

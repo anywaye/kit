@@ -7124,6 +7124,278 @@ run 'control: gateway losing the switch value goes red' red \
   check_service_telemetry "$SUBSTRATE/install.sh" "$fixture_gw_value"
 
 # ===========================================================================
+# 24. EVERY CROSS-SERVICE ADDRESS RESOLVES TO A SERVICE THE MANIFESTS SHIP
+# ===========================================================================
+#
+# THE DEFECT. The box puts every service in its own namespace — `identity`,
+# `gateway`, `courier`, `parlor` — and the data plane in `data`. A bare name
+# resolves only inside a namespace of that name (Kubernetes limits a query
+# naming no namespace to the CALLER's own), so `http://identity:8080` from a pod
+# in `gateway` resolves to nothing: gateway boots, `/readyz` answers
+# `identity: unavailable` forever, and nothing becomes Ready. The COMPOSE
+# spelling is correct for one flat network and wrong the moment the substrate
+# gives each service a namespace.
+#
+# THE CLAIM. Every cross-service address the substrate sets is
+# `<svc>.<ns>.svc.cluster.local` and names a Service the substrate's manifests
+# actually ship, in the namespace they ship it in. Two writers are covered: the
+# APPLICATIONS (`spec.source.helm.values`, which is where the substrate owns
+# gateway's and parlor's clear env) and the INSTALLER's own addresses (the
+# constants and DSNs it writes into the services' secrets — NATS_URL,
+# COURIER_BASE_URL, COURIER_IDENTITY_URL, REDIS_URL, the database DSNs).
+#
+# WHY A STATIC CHECK OVER YAML. The defect is a name that disagrees across two
+# trees (a chart default written for compose vs. the substrate's namespace
+# layout); the box showed the runtime symptom. The equality is a name, so a
+# static comparison of names is the check that would have caught it, and it runs
+# on a developer machine.
+#
+# THE SHIPPED SET IS DERIVED, NOT TYPED. The launch Services come from each
+# Application's `metadata.name` + `spec.destination.namespace`; the data Services
+# from the `Service` documents in `manifests/data/`; and CNPG's read-write
+# Service (`<cluster>-rw`) from the `Cluster` document. So an address to a name
+# no manifest creates — `pantry`, `billing` — goes RED, which is the property
+# that keeps the check honest: the substrate may only name what it ships.
+#
+# THE CONTROLS answer differently: a bare name, a name in the wrong namespace, a
+# name no manifest ships (pantry), a service that loses its address entirely,
+# and a drifted name in the installer — each must go red.
+check_cross_namespace_addresses() {
+  "$PY" - "$1" "$2" "$3" <<'PY'
+import os
+import re
+import sys
+
+import yaml
+
+apps_dir, data_dir, install_path = sys.argv[1:4]
+
+problems = []
+
+# --- 1. the Services the manifests SHIP ------------------------------------
+# launch services: one Application per service, its name the Service's name and
+# its destination the service's own namespace.
+shipped = {}
+for entry in sorted(os.listdir(apps_dir)):
+    if not entry.endswith(".yaml"):
+        continue
+    with open(os.path.join(apps_dir, entry), encoding="utf-8") as fh:
+        app = yaml.safe_load(fh) or {}
+    if not isinstance(app, dict):
+        continue
+    meta = app.get("metadata") or {}
+    dest = ((app.get("spec") or {}).get("destination") or {})
+    name, ns = meta.get("name"), dest.get("namespace")
+    if name and ns:
+        shipped.setdefault(name, set()).add(ns)
+
+# the data plane: every Service document, plus CNPG's derived read-write Service
+# (`<cluster>-rw`), which CNPG creates rather than a manifest.
+for entry in sorted(os.listdir(data_dir)):
+    if not entry.endswith(".yaml"):
+        continue
+    with open(os.path.join(data_dir, entry), encoding="utf-8") as fh:
+        docs = list(yaml.safe_load_all(fh))
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        meta = doc.get("metadata") or {}
+        name, ns = meta.get("name"), meta.get("namespace")
+        if doc.get("kind") == "Service" and name and ns:
+            shipped.setdefault(name, set()).add(ns)
+        if doc.get("kind") == "Cluster" and name and ns:
+            shipped.setdefault(f"{name}-rw", set()).add(ns)
+
+SUFFIX = ".svc.cluster.local"
+URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://([^\s\"'/]+)")
+
+addresses = []  # (host, where)
+
+
+def host_of(hostport):
+    return hostport.split("@")[-1].split(":")[0]
+
+
+# --- 2. every address the APPLICATIONS set --------------------------------
+app_addresses = 0
+per_app = {}
+for entry in sorted(os.listdir(apps_dir)):
+    if not entry.endswith(".yaml"):
+        continue
+    with open(os.path.join(apps_dir, entry), encoding="utf-8") as fh:
+        app = yaml.safe_load(fh) or {}
+    if not isinstance(app, dict):
+        continue
+    src = ((app.get("spec") or {}).get("source") or {})
+    values = (src.get("helm") or {}).get("values")
+    if not values:
+        continue
+    where = f"{entry} (spec.source.helm.values)"
+    # The values block is a YAML STRING; parse it and read every scalar, so a
+    # URL nested in the route table is found the same way a top-level one is.
+    try:
+        parsed = yaml.safe_load(values)
+    except yaml.YAMLError as exc:
+        problems.append(f"{where} is not YAML: {exc}")
+        continue
+    found = 0
+    stack = [parsed]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, str):
+            for hostport in URL_RE.findall(node):
+                addresses.append((host_of(hostport), where))
+                found += 1
+    per_app[entry] = found
+    app_addresses += found
+
+# The Applications whose clear env the substrate MUST override are named, not
+# inferred: gateway's and parlor's charts ship a COMPOSE default for a peer
+# (`http://identity:8080`), and the substrate is the only thing that can spell
+# the box's namespace. A vacuity guard on the total would be satisfied by
+# gateway's two addresses ALONE, so a service that silently lost its override —
+# the exact state this packet fixes for parlor — must be its own failure.
+for required in ("gateway.yaml", "parlor.yaml"):
+    if per_app.get(required, 0) < 1:
+        problems.append(
+            f"{required} sets no cross-service address, so its chart's compose "
+            "default (" + "'http://identity:8080'" + ") is what the box gets"
+        )
+if app_addresses == 0:
+    problems.append(
+        "no Application sets a cross-service address — the check is vacuous, so it "
+        "proves nothing (gateway and parlor must each carry one)"
+    )
+
+# --- 3. every `.svc.cluster.local` name the INSTALLER writes ---------------
+with open(install_path, encoding="utf-8") as fh:
+    src_text = fh.read()
+code = re.sub(r"(?m)^\s*#.*$", "", src_text)
+install_addresses = re.findall(r"[A-Za-z0-9.\-]+\.svc\.cluster\.local", code)
+for host in install_addresses:
+    addresses.append((host, "install.sh"))
+if len(install_addresses) < 5:
+    problems.append(
+        f"install.sh writes only {len(install_addresses)} in-cluster addresses "
+        "(expected at least NATS_URL, COURIER_URL, IDENTITY_URL, REDIS_URL and the "
+        "Postgres DSN host) — a check on a vanished writer proves nothing"
+    )
+
+# --- 4. every address resolves to a shipped Service, in the right namespace -
+for host, where in addresses:
+    if not host.endswith(SUFFIX):
+        problems.append(
+            f"{where}: {host!r} is not fully qualified — a bare name resolves only "
+            "in the caller's own namespace"
+        )
+        continue
+    parts = host[: -len(SUFFIX)].split(".")
+    if len(parts) != 2:
+        problems.append(f"{where}: {host!r} is not `<svc>.<ns>.svc.cluster.local`")
+        continue
+    svc, ns = parts
+    if svc not in shipped:
+        problems.append(
+            f"{where}: {host!r} names Service {svc!r}, which the manifests do not "
+            f"ship (shipped: {', '.join(sorted(shipped))})"
+        )
+    elif ns not in shipped[svc]:
+        problems.append(
+            f"{where}: {host!r} puts {svc!r} in namespace {ns!r}, but the manifests "
+            f"ship it in {', '.join(sorted(shipped[svc]))}"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(
+    f"every cross-service address is fully qualified and names a shipped Service "
+    f"({app_addresses} from the Applications, {len(install_addresses)} from install.sh)"
+)
+PY
+}
+
+run 'every cross-service address names a Service the manifests ship' green \
+  check_cross_namespace_addresses "$MANIFESTS" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
+
+# A fixture apps directory: the real Applications, so the shipped set is the real
+# one, with exactly one file mutated. `cp -R` then `sed` in place.
+fixture_apps() {
+  local dir="$1"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  cp -R "$MANIFESTS/." "$dir/"
+}
+
+# The control that a BARE name is the defect: gateway keeps its override but
+# drops the qualification, so `identity` resolves only inside `identity`.
+fixture_bare="$WORK/apps-bare"
+fixture_apps "$fixture_bare"
+sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://identity:8080|g' \
+  "$fixture_bare/gateway.yaml"
+rm -f "$fixture_bare/gateway.yaml.bak"
+run 'control: a bare cross-service name goes red' red \
+  check_cross_namespace_addresses "$fixture_bare" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
+
+# The control that the NAMESPACE segment is load-bearing: identity's Service
+# named in the wrong namespace is still a fully qualified name and still wrong.
+fixture_wrongns="$WORK/apps-wrongns"
+fixture_apps "$fixture_wrongns"
+sed -i.bak 's|identity.identity.svc.cluster.local|identity.gateway.svc.cluster.local|g' \
+  "$fixture_wrongns/gateway.yaml"
+rm -f "$fixture_wrongns/gateway.yaml.bak"
+run 'control: a name in the wrong namespace goes red' red \
+  check_cross_namespace_addresses "$fixture_wrongns" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
+
+# The control that a name the manifests DO NOT SHIP is refused. This is the
+# property that keeps the check from being satisfied by any well-spelled name:
+# pantry is addressed by the fleet but shipped by no substrate manifest, so a
+# substrate Application may not name it.
+fixture_unshipped="$WORK/apps-unshipped"
+fixture_apps "$fixture_unshipped"
+sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://pantry.pantry.svc.cluster.local:8080|' \
+  "$fixture_unshipped/gateway.yaml"
+rm -f "$fixture_unshipped/gateway.yaml.bak"
+run 'control: an address to a Service no manifest ships goes red' red \
+  check_cross_namespace_addresses "$fixture_unshipped" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
+
+# The control that a SERVICE LOSING ITS ADDRESS is caught: parlor's override is
+# emptied, so parlor falls back to the compose spelling — the exact state this
+# packet fixes — and the address set shrinks.
+fixture_parlor_loss="$WORK/apps-parlor-loss"
+fixture_apps "$fixture_parlor_loss"
+"$PY" - "$fixture_parlor_loss/parlor.yaml" <<'PY'
+import sys
+
+import yaml
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    docs = list(yaml.safe_load_all(fh))
+app = docs[0]
+src = app["spec"]["source"]
+helm = src.get("helm")
+if helm:
+    del src["helm"]
+with open(path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump_all(docs, fh)
+PY
+run 'control: a service that loses its address goes red' red \
+  check_cross_namespace_addresses "$fixture_parlor_loss" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
+
+# The control that the INSTALLER's half is load-bearing: the Redis address is
+# moved to a namespace redis does not live in.
+fixture_install_ns="$WORK/install-wrong-ns.sh"
+sed 's|redis\.data\.svc\.cluster\.local|redis.gateway.svc.cluster.local|g' \
+  "$SUBSTRATE/install.sh" >"$fixture_install_ns"
+run 'control: a drifted in-cluster name in the installer goes red' red \
+  check_cross_namespace_addresses "$MANIFESTS" "$SUBSTRATE/manifests/data" "$fixture_install_ns"
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

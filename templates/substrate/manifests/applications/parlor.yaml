@@ -11,6 +11,34 @@ spec:
     repoURL: oci://ghcr.io/cafaye/charts/parlor
     chart: parlor
     targetRevision: 0.1.0
+    # PARLOR'S ONE CROSS-NAMESPACE ADDRESS, AND WITHOUT IT PARLOR DOES NOT RUN.
+    #
+    # parlor is the browser front end, and its runtime reads `IDENTITY_URL` from
+    # the environment (`process.env.IDENTITY_URL`) to reach identity's `/auth`
+    # session endpoints. Its chart ships `env: {}` — "the manifest carries no
+    # env; a service's configuration is its own" — and install.sh's
+    # parlor-secrets carries only `DATABASE_URL` and the telemetry switch, so on
+    # a box NOTHING set it: parlor was left with its compiled fallback, which is
+    # the COMPOSE stack's `http://identity:8080`. That resolves only inside a
+    # namespace called `identity`, and parlor runs in `parlor`, so parlor could
+    # not serve a sign-in.
+    #
+    # THE SUBSTRATE OWNS THE TOPOLOGY, so the address is set HERE, in parlor's
+    # own Application, rather than by teaching parlor's chart a namespace it
+    # cannot know. Same rule, same spelling and same check as gateway's
+    # (`tests/substrate_test.sh` §24): one fact — identity's `identity` Service
+    # in the `identity` namespace — spelled once per consumer, and asserted to
+    # name a Service the substrate's manifests ship.
+    #
+    # `BILLING_URL` IS DELIBERATELY NOT SET. parlor treats an empty/absent one
+    # as the supported "no billing deployed" state (`src/lib/…`: an unset
+    # billing URL answers 503 on the billing routes rather than a boot
+    # failure), and the substrate ships no billing — so naming one would be an
+    # address to a Service that does not exist.
+    helm:
+      values: |
+        env:
+          IDENTITY_URL: "http://identity.identity.svc.cluster.local:8080"
   destination:
     server: https://kubernetes.default.svc
     namespace: parlor

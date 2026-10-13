@@ -22,16 +22,58 @@ spec:
     # gateway-secrets never reaches the pod, and this Application — kit's own
     # file — carries the switch as a Helm value override instead.
     #
-    # The box deploys no OTLP endpoint (alloy is pinned with no values and its
-    # default config has no `otelcol.receiver.otlp`; there is no Tempo), so
-    # without this gateway retries `http://otel-collector:4317` forever and logs
-    # `traces export: ... produced zero addresses` every ten seconds. Helm
-    # merges maps, so this ADDS one key to the chart's `env:` rather than
-    # replacing it.
+    # TWO KINDS OF OVERRIDE LIVE HERE, and they are different in nature.
+    #
+    # 1. THE TELEMETRY KILL SWITCH. The box deploys no OTLP endpoint (alloy is
+    #    pinned with no values and its default config has no
+    #    `otelcol.receiver.otlp`; there is no Tempo), so without
+    #    `OTEL_SDK_DISABLED=true` gateway retries `http://otel-collector:4317`
+    #    forever and logs `traces export: ... produced zero addresses` every ten
+    #    seconds. See REPORT-roll-c5-otel.md.
+    #
+    # 2. THE CROSS-NAMESPACE ADDRESSES. THE BOX PUTS EVERY SERVICE IN ITS OWN
+    #    NAMESPACE (`identity`, `gateway`, `courier`, `parlor`) AND THE DATA
+    #    PLANE IN `data`. A bare `identity` in gateway's ConfigMap resolves only
+    #    inside a namespace called `identity` — Kubernetes limits a query naming
+    #    no namespace to the CALLER's own — so `http://identity:8080` from a pod
+    #    in `gateway` resolves to nothing and gateway's `/readyz` reports
+    #    `identity: unavailable` forever. The chart's own default is the COMPOSE
+    #    spelling (one network, no namespaces) and is correct for the stack it
+    #    was written for, so the box whose topology differs overrides it HERE —
+    #    the substrate owns the Applications and the namespace layout, so the
+    #    substrate is the one place that spells the box's addresses.
+    #
+    #    `IDENTITY_URL` is identity's Service for the `/auth` session calls.
+    #    `IDENTITY_JWKS_URL` is the same Service for the key set gateway VERIFIES
+    #    with: the issuer (`IDENTITY_ISSUER`, a public https origin) names the
+    #    `iss` claim, and the key set is fetched over the cluster network so
+    #    verification does not depend on the box's public DNS or a hairpin
+    #    through its own edge. gateway's runtime documents exactly this split
+    #    (`internal/httpapi/runtime.go`: "IDENTITY_JWKS_URL … an explicit key
+    #    set, when identity publishes it elsewhere"), and resolving it here keeps
+    #    one `/readyz` asking the same URL the verifier fetches.
+    #
+    # ONE SPELLING, ONE FILE, AND AGREEMENT IS A CHECK. The installer writes its
+    # own addresses (COURIER_BASE_URL, COURIER_IDENTITY_URL, REDIS_URL, the
+    # database DSNs, NATS_URL) into the services' secrets, and
+    # tests/substrate_test.sh §24 asserts every cross-service address the
+    # Applications set — and every `.svc.cluster.local` name the installer
+    # writes — parses as `<svc>.<ns>.svc.cluster.local` naming a Service the
+    # substrate's manifests actually ship, with a red control on a drifted name.
+    #
+    # `IDENTITY_ISSUER` IS DELIBERATELY NOT SET HERE. It is the PUBLIC origin
+    # identity mints `iss` with (`KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER`, which has
+    # NO default: unset means identity serves no OIDC surface at all), while the
+    # chart's default is the fleet's production origin `https://auth.cafaye.com`.
+    # A box that sets the installer's issuer must set the SAME origin here — the
+    # pair is reported in REPORT-roll-c5-crossns.md, and it is an operator fact
+    # (the customer's own domain) that a static manifest cannot hold.
     helm:
       values: |
         env:
           OTEL_SDK_DISABLED: "true"
+          IDENTITY_URL: "http://identity.identity.svc.cluster.local:8080"
+          IDENTITY_JWKS_URL: "http://identity.identity.svc.cluster.local:8080/.well-known/jwks.json"
   destination:
     server: https://kubernetes.default.svc
     namespace: gateway

@@ -696,6 +696,76 @@ The SECRET RECORD comment block on `install_secrets` is the drift tripwire:
 created or any recorded key is not set, with a key-removed fixture that must
 go red.
 
+## Cross-namespace addresses
+
+**One service, one namespace, and the data plane in `data` — so every
+cross-service name a service dials must be qualified.** The substrate puts
+`identity`, `gateway`, `courier` and `parlor` each in a namespace of its own and
+postgres/redis/nats in `data`. Kubernetes limits a DNS query that names no
+namespace to the CALLER's, so the compose spelling — `identity`, `pantry`,
+`redis`, `postgres-rw` as bare single labels — resolves only inside a namespace
+of that exact name. From gateway's pod, `http://identity:8080` reaches nothing,
+gateway boots, and `/readyz` answers `identity: unavailable` forever; the same
+defect appears at every peer, and each one is a service that starts and never
+becomes Ready.
+
+**Two writers set these addresses, and both were fixed to the same rule.**
+
+| address | who writes it | where |
+|---|---|---|
+| gateway → identity (`IDENTITY_URL`, `IDENTITY_JWKS_URL`) | the **substrate**, in gateway's Application | `manifests/applications/gateway.yaml` `spec.source.helm.values` |
+| parlor → identity (`IDENTITY_URL`) | the **substrate**, in parlor's Application | `manifests/applications/parlor.yaml` `spec.source.helm.values` |
+| gateway → redis (`REDIS_URL`) | the installer | `gateway-secrets`, built from step 9's password |
+| identity → courier (`COURIER_BASE_URL`), identity → nats (`NATS_URL`) | the installer | `identity-secrets` |
+| courier → identity (`COURIER_IDENTITY_URL`) | the installer | `courier-secrets` (step 12, with the token) |
+| identity/courier/parlor → postgres (`DATABASE_URL`) | the installer | each service's secret |
+
+**The substrate owns the topology, so the Applications carry the box's
+topology.** gateway's and parlor's charts read their clear env from
+`.Values.env` (gateway through a ConfigMap, parlor through the Deployment's
+`env:`), and their defaults are the COMPOSE spelling — correct for the flat
+stack they were generated for, wrong for the box. The override lives in the
+Application (`spec.source.helm.values`), the file the substrate already owns, so
+no chart learns a namespace it cannot know: gateway gets
+`http://identity.identity.svc.cluster.local:8080` and parlor the same, and the
+installer's own addresses (already fully qualified) agree with them. `helm`
+merges maps, so each Application **adds** keys to the chart's `env:` rather than
+replacing the ones it does not mention.
+
+**`IDENTITY_JWKS_URL` is set because the issuer's origin is public and the key
+set is not.** gateway verifies tokens against the public issuer
+(`IDENTITY_ISSUER`, the `iss` identity mints) but fetches the key set from
+identity's in-cluster Service, so verification does not depend on the box's
+public DNS or a hairpin through its own edge; gateway's runtime documents this
+exact split ("an explicit key set, when identity publishes it elsewhere"), and
+resolving it once keeps `/readyz` and the verifier asking the same URL.
+
+**The issue/verify pair is an operator fact, and it is reported rather than
+guessed.** `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` has **no default**: unset means
+identity serves no OIDC surface at all. gateway's chart default is the fleet's
+production origin, `https://auth.cafaye.com`. A box that sets the installer's
+issuer must set the **same** origin as gateway's `IDENTITY_ISSUER` — otherwise
+identity mints `iss` the gateway will not accept — so the two are the same fact
+spelled in two places and are set together. `IDENTITY_ISSUER` is deliberately
+**not** fixed in gateway's Application: it is the customer's own public domain,
+which a static manifest cannot hold. See `REPORT-roll-c5-crossns.md` for the
+measured pair and the exact commands.
+
+**`BILLING_URL` and gateway's `ROUTE_TABLE` are deliberately out of scope.**
+parlor treats an unset `BILLING_URL` as the supported "no billing deployed"
+state, and gateway's `ROUTE_TABLE` points at `pantry` — a service the substrate
+does not ship. The substrate may only name Services its own manifests create
+(that is what `tests/substrate_test.sh` §24 asserts), so a box that deploys
+pantry or billing writes those addresses in its **values commit**, the
+pull-based loop's documented write path, not here.
+
+`tests/substrate_test.sh` §24 is the check: every cross-service address the
+Applications set, and every `.svc.cluster.local` name `install.sh` writes, must
+parse as `<svc>.<ns>.svc.cluster.local` and name a Service the manifests ship
+in the namespace they ship it in — with red controls for a bare name, a name in
+the wrong namespace, a name no manifest ships, a service that loses its
+address, and a drifted name in the installer.
+
 ## The install host: `cafaye.com/box/install`
 
 `install.sh` is served at `https://cafaye.com/box/install` by
