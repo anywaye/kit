@@ -235,6 +235,10 @@ export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
 export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
 export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
 export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET='<provider-signing-secret>'
+# Optional: the public origin a browser reaches. Set it and identity's five
+# recovery/invitation mail links are derived from it; leave it unset and the
+# box boots with its mail path deliberately off (see below).
+export KIT_SUBSTRATE_APP_BASE_URL='https://app.example.com'
 bash templates/substrate/install.sh
 ```
 
@@ -278,6 +282,27 @@ config parser accepts), so a clean install always boots an identity whose
 MFA surface works. A supplied value is validated by shape and refused,
 naming the variable, when it is not 43 base64url characters decoding to
 32 bytes — a key identity would refuse at boot is refused here instead.
+
+`KIT_SUBSTRATE_APP_BASE_URL` is the public origin a browser reaches — where
+identity's recovery and invitation mail links point. It is the one input that
+makes identity's mail path **true**, because identity refuses to boot with a
+courier base URL and token but no link template
+(`internal/config/config.go`, `loadCourier` → `resolveLinkTemplates`: the case is
+named *"a base URL and a token with no link template"* → `ErrInvalidCourier`).
+When it is set, step 12 derives the five templates from it — `reset-password`,
+`verify-email/confirm` (also the honest target for an address change), the
+recovery default, and `invitations/{token}` — and writes them **in the same
+patch** as `COURIER_BASE_URL` + `COURIER_TOKEN`, so no path can write a token
+without its base URL or a base URL without its templates. When it is **unset**,
+step 12 writes no identity courier key at all: that is identity's own supported
+"no mail path" state (`loadCourier`'s `present == 0` branch), identity boots, and
+every recovery route answers `503` rather than a rollout that never goes Ready.
+There is **no default** — a localhost or guessed origin would mail a reader to a
+screen that is not theirs. A malformed value (not `http(s)://`, or carrying a
+query or fragment) is refused by shape, naming the variable, before the mint
+does anything. Courier still gets its own required pair
+(`COURIER_IDENTITY_URL` + `COURIER_IDENTITY_TOKEN`) either way, because
+courier's runtime demands a credential regardless of whether identity sends.
 
 **No long-lived secret is an input to this install.** The registry credential
 is redeemed per run from a capability that is single-use, minutes-lived and

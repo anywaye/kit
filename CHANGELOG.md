@@ -2,6 +2,29 @@
 
 ### Substrate
 
+- **identity refused to boot on the *next* check after the credential pair: a
+  courier base URL and token with no link template.** Wiring the courier block
+  makes `loadCourier` continue into `resolveLinkTemplates` and
+  `resolveInvitationLinkTemplate`, which require at least one link template plus
+  `INVITATION_LINK_TEMPLATE`; identity's own config test names the shape — *"a
+  base URL and a token with no link template"* → `ErrInvalidCourier`
+  (`internal/config/courier_test.go:62`) — and the mirror, *"a link template and
+  a token with no base URL"*, is refused too. The mint wrote the pair and no
+  template, so a box's identity refused on the check after the pair landed. The
+  five templates are now derived from **one operator input**,
+  `KIT_SUBSTRATE_APP_BASE_URL` (the public origin a browser reaches), and written
+  in the **same merge patch** as `COURIER_BASE_URL` + `COURIER_TOKEN` — so no
+  path can write a token without its base URL or a base URL without its
+  templates. With the value **unset** the mint writes no identity courier key at
+  all: identity's own supported `present == 0` "no mail path" state, which boots
+  and answers `503` on every recovery route, while courier still gets its
+  required pair. A malformed origin is refused by shape, naming the variable,
+  before the mint does anything. There is **no default** — a localhost or guessed
+  origin would mail a reader to a screen that is not theirs.
+  `tests/substrate_test.sh` applies identity's all-or-nothing rule to the secret
+  the mint wrote (the matrix in executable form): green on pair + five templates,
+  a red control for the shipped shape (pair, no template) that names
+  `INVITATION_LINK_TEMPLATE`, and the unset branch proven green.
 - **Step 11 wrote half a credential pair, and identity refused to boot on it.**
   The mint patched `COURIER_TOKEN` into `identity-secrets` and
   `COURIER_IDENTITY_TOKEN` into `courier-secrets`, restarted both, and the
