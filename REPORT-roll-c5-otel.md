@@ -130,9 +130,25 @@ branch was ruled out by measurement, so §23 asserts the off branch's equivalent
 and its red control drifts the switch **name**, which is the same property (a
 name nothing honours).
 
+## The rebase onto master (the linktpl merge)
+
+After the fix was committed, the manager's integration step rebased
+`roll/c5-otel` onto `master` (`db42bd7`, the `roll/c5-linktpl` merge). Two
+conflicts, both because master and this packet edited the same lines:
+
+- `install.sh` — the `RECORD identity-secrets:` line: master added the five
+  `*_LINK_TEMPLATE` keys, this packet added `OTEL_SDK_DISABLED`. Resolved as the
+  **union** (both sets of keys; they are independent).
+- `CHANGELOG.md` — two new `### Substrate` bullets at the top. Resolved by
+  keeping both.
+
+The rebased tip is `c00e68c` (this packet's two commits, `afbe7a2` + `c00e68c`).
+`git diff master roll/c5-otel` is exactly this packet's six files.
+
 ## Suite counts
 
-- `bash tests/substrate_test.sh` → **244 passed, 0 failed, 0 skipped** (green).
+- `bash tests/substrate_test.sh` → **247 passed, 0 failed, 0 skipped** (green;
+  244 before the rebase, +3 from the linktpl checks master brought in).
 - `bash -n` on `install.sh` and `substrate_test.sh` → clean.
 - `shellcheck -S warning` on both → clean.
 - `.venv/bin/yamllint -c lint/yamllint.yml` on `gateway.yaml` → one pre-existing
