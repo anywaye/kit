@@ -103,6 +103,23 @@
 #   KIT_SUBSTRATE_MAIL_FROM / KIT_SUBSTRATE_MAIL_FROM_NAME — optional courier
 #                                  passthroughs (courier falls back to its
 #                                  compiled default without them).
+#   KIT_SUBSTRATE_APP_BASE_URL     optional: the public origin a browser reaches
+#                                  (e.g. https://app.example.com). Step 12
+#                                  derives identity's five link templates from
+#                                  it and writes them in the SAME patch as the
+#                                  courier pair, because identity's courier block
+#                                  is all-or-nothing: a base URL and a token with
+#                                  no link template is `ErrInvalidCourier`
+#                                  (`identity/internal/config/config.go`
+#                                  `loadCourier` → `resolveLinkTemplates`), and
+#                                  a link template with no base URL is refused
+#                                  the same way. UNSET is a DELIBERATE, supported
+#                                  no-mail path: step 12 writes no identity
+#                                  courier keys at all, identity boots into its
+#                                  own "no mail path" state, and every recovery
+#                                  route answers 503. There is no default and the
+#                                  value is never guessed — a localhost link
+#                                  mails a reader to a screen that is not theirs.
 #   KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY / _OAUTH_ENCRYPTION_KEY /
 #                                  _COURIER_TOKEN — optional identity surfaces;
 #                                  each lands in identity-secrets only when
@@ -339,6 +356,23 @@ IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER:=}"
 : "${KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY:=}"
+
+# KIT_SUBSTRATE_APP_BASE_URL is the public origin a browser reaches — where
+# identity's mail links point. It is the ONE input that makes identity's mail
+# path true: identity refuses to boot with a courier pair and no link template
+# (`internal/config/config.go`, loadCourier → resolveLinkTemplates; identity's
+# own test names the case "a base URL and a token with no link template" →
+# ErrInvalidCourier), and it refuses the reverse too ("a link template and a
+# token with no base URL"). NO DEFAULT: a localhost or guessed default is a link
+# that reaches a screen the reader cannot open, which is worse than no mail path
+# at all. UNSET is a DELIBERATE, supported state — step 12 then writes no
+# identity courier keys, so identity boots into its own supported "no mail path"
+# state (its loader's `present == 0` branch: "all three absent is a deployment
+# with no mail path, and is supported") and every recovery route answers 503
+# rather than a rollout that never goes Ready. Set it to the box's public origin
+# (scheme + host, optionally a path — no query and no fragment) to give the box a
+# true mail path; identity appends each link's own path to it.
+: "${KIT_SUBSTRATE_APP_BASE_URL:=}"
 
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -1761,7 +1795,7 @@ validate_mfa_override() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
@@ -1798,6 +1832,16 @@ validate_mfa_override() {
 #     without its base URL is a half-block, and identity's own loader refuses
 #     to boot on one (`loadCourier`), which is the live defect this pair
 #     closes.
+#     THE PAIR ON IDENTITY'S SIDE IS WRITTEN ONLY WITH ITS LINK TEMPLATES, and
+#     all seven keys are gated on KIT_SUBSTRATE_APP_BASE_URL. identity refuses
+#     to boot with a base URL and a token but no link template
+#     (`internal/config/config.go` loadCourier → resolveLinkTemplates; the case
+#     is named "a base URL and a token with no link template" → ErrInvalidCourier).
+#     So when the operator sets the box's public origin, step 12 writes the pair
+#     AND the five templates in one patch; when it is unset, step 12 writes NO
+#     identity courier key at all — the no-mail state identity supports
+#     (`present == 0`) — and courier's own pair is still written, because
+#     COURIER_IDENTITY_TOKEN is required by courier's runtime regardless.
 #   from the environment, shape-validated, never echoed — courier's SMTP
 #     settings and the provider's signing secret KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET
 #     (see the header for the variable names). This is now the ONE long-lived
@@ -2346,6 +2390,32 @@ install_nats() {
 # success. The token is written as ONE value in ONE step, and each secret's
 # base URL is written in the same patch as its token — the only shape that
 # cannot drift.
+# validate_app_base_url — refuse a malformed KIT_SUBSTRATE_APP_BASE_URL, naming
+# the variable, BEFORE identity's link templates are derived from it. identity
+# validates the same shape at boot (`validateMailBaseURL` and the link-template
+# checks: absolute http/https, a host, no query or fragment; placeholders and a
+# per-template path are the template's own), but a boot-time refusal costs a
+# rollout that never goes Ready while this one costs a sentence. An UNSET value
+# is NOT a refusal: it is the documented no-mail path, and this returns 0.
+validate_app_base_url() {
+  [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ] || return 0
+  case "$KIT_SUBSTRATE_APP_BASE_URL" in
+    http://* | https://*) ;;
+    *)
+      kit_substrate_refuse "KIT_SUBSTRATE_APP_BASE_URL" \
+        "export KIT_SUBSTRATE_APP_BASE_URL='https://app.example.com' — the public origin a browser reaches (scheme and host, no query and no fragment) — and re-run" \
+        "KIT_SUBSTRATE_APP_BASE_URL must be an absolute http(s) URL"
+      ;;
+  esac
+  case "${KIT_SUBSTRATE_APP_BASE_URL#*://}" in
+    "" | *\?* | *#*)
+      kit_substrate_refuse "KIT_SUBSTRATE_APP_BASE_URL" \
+        "export KIT_SUBSTRATE_APP_BASE_URL='https://app.example.com' — scheme, host and nothing with a query or a fragment (identity appends each link's own path) — and re-run" \
+        "KIT_SUBSTRATE_APP_BASE_URL must be an origin: a host, and no query or fragment"
+      ;;
+  esac
+}
+
 mint_courier_identity_token() {
   log_step "courier's identity credential, minted on this box"
   # The guard is the resume path, and it is the VALUE rather than a step flag:
@@ -2354,7 +2424,11 @@ mint_courier_identity_token() {
     kit_substrate_out "      credential already minted on this box, skipping (rotate by replacing the secret and restarting the pods)"
     return 0
   fi
-  if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets (COURIER_BASE_URL + COURIER_TOKEN) and courier-secrets (COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN) and restart both deployments"; then
+  # The one operator value this step derives anything from is refused by SHAPE
+  # here, before the port-forward and the four API calls, so a typo costs a
+  # sentence rather than a minted account and a rollout that never goes Ready.
+  validate_app_base_url
+  if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets (COURIER_BASE_URL + COURIER_TOKEN + link templates when KIT_SUBSTRATE_APP_BASE_URL is set) and courier-secrets (COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN) and restart both deployments"; then
     return 0
   fi
 
@@ -2492,29 +2566,79 @@ mint_courier_identity_token() {
   # namespace boundary. Both halves go in ONE patch so no path can write one
   # without the other.
   #
-  # IDENTITY'S MAIL PATH IS NOT COMPLETE WITH THIS PAIR ALONE, and that is
-  # recorded here rather than silently left for the next live run. Wiring the
-  # courier block makes `loadCourier` call `resolveLinkTemplates` and
-  # `resolveInvitationLinkTemplate`, and identity requires at least one link
-  # template plus `INVITATION_LINK_TEMPLATE` whenever the block is wired
-  # (identity's own `internal/config/courier_test.go` has the case named "a
-  # base URL and a token with no link template" → `ErrInvalidCourier`). The
-  # substrate sets none of them, so a restarted identity refuses on the NEXT
-  # check after this pair unless the deployment supplies them. Their values are
-  # the PUBLIC app URL (the launch stack's `APP_BASE_URL`), which this
-  # installer has no input for, so they are deliberately NOT guessed here —
-  # see REPORT-roll-c5-mint-pair.md.
-  printf '%s' "$(jq -nc --arg url "$COURIER_URL" --arg t "$token" \
-    '{"stringData":{"COURIER_BASE_URL":$url,"COURIER_TOKEN":$t}}')" |
-    kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
-    --type=merge --patch-file=/dev/stdin
+  # IDENTITY'S MAIL PATH IS ALL-OR-NOTHING, AND THE PAIR ALONE IS ONLY HALF OF
+  # IT. Wiring the courier block makes `loadCourier` continue into
+  # `resolveLinkTemplates` and `resolveInvitationLinkTemplate`, which REQUIRE at
+  # least one link template plus `INVITATION_LINK_TEMPLATE`; identity's own
+  # config test names the defect — "a base URL and a token with no link template"
+  # → `ErrInvalidCourier` (`identity/internal/config/courier_test.go:62`) — and
+  # the mirror case, "a link template and a token with no base URL", is refused
+  # too. The templates point at the PUBLIC app URL (the launch stack's
+  # `APP_BASE_URL`, `launch/docker-compose.launch.yml`), which this installer
+  # cannot know and MUST NOT guess: a localhost default would mail every reader
+  # to a screen that is not theirs. So the identity patch is gated on the one
+  # operator input that makes it true:
+  #
+  #   * KIT_SUBSTRATE_APP_BASE_URL SET — the pair AND the five templates land in
+  #     ONE merge patch. One patch because a base URL and a token with no
+  #     template is a refusal at boot, and deriving all five from the one origin
+  #     is what keeps two of them from drifting.
+  #   * KIT_SUBSTRATE_APP_BASE_URL UNSET — identity's courier block is written
+  #     NOT AT ALL: no COURIER_BASE_URL, no COURIER_TOKEN. identity's own loader
+  #     treats "everything absent" as a supported deployment with no mail path
+  #     (`loadCourier`'s `present == 0` branch: "all three absent is a deployment
+  #     with no mail path, and is supported"), so it BOOTS and every recovery
+  #     route answers 503 — the honest state — instead of a rollout that never
+  #     goes Ready. Courier's own pair is STILL written below, because
+  #     COURIER_IDENTITY_TOKEN is required by courier's runtime regardless
+  #     (`courier/config/runtime.exs:227-229`).
+  #
+  # The templates are passed as `--arg` VALUES rather than written as literals
+  # inside the jq program for a load-bearing reason: `tests/substrate_test.sh`'s
+  # record tripwire reads the keys out of every `stringData` block with a regex
+  # that stops at the first `}`, and a literal `{token}` placeholder in the jq
+  # source would truncate that block after the first template. Keeping the
+  # placeholders in shell values keeps every key visible to the check.
+  if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
+    local base reset verify change recovery invite
+    base="${KIT_SUBSTRATE_APP_BASE_URL%/}"
+    reset="${base}/reset-password?token={token}"
+    verify="${base}/verify-email/confirm?token={token}"
+    # EMAIL_CHANGE has no screen of its own on parlor; `verify-email/confirm` is
+    # the served address-confirmation screen and the closest honest target,
+    # exactly as the launch stack spells it (`EMAIL_CHANGE_LINK_TEMPLATE`).
+    change="$verify"
+    recovery="$verify"
+    invite="${base}/invitations/{token}"
+    printf '%s' "$(jq -nc \
+      --arg url "$COURIER_URL" --arg t "$token" \
+      --arg reset "$reset" --arg verify "$verify" --arg change "$change" \
+      --arg recovery "$recovery" --arg invite "$invite" \
+      '{"stringData":{
+        "COURIER_BASE_URL":$url,
+        "COURIER_TOKEN":$t,
+        "PASSWORD_RESET_LINK_TEMPLATE":$reset,
+        "EMAIL_VERIFICATION_LINK_TEMPLATE":$verify,
+        "EMAIL_CHANGE_LINK_TEMPLATE":$change,
+        "RECOVERY_LINK_TEMPLATE":$recovery,
+        "INVITATION_LINK_TEMPLATE":$invite
+      }}')" |
+      kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
+      --type=merge --patch-file=/dev/stdin
+    kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
+  else
+    kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): no identity courier keys written, so identity boots into its supported no-mail state and every recovery route answers 503"
+  fi
   printf '%s' "$(jq -nc --arg url "$IDENTITY_URL" --arg t "$token" \
     '{"stringData":{"COURIER_IDENTITY_URL":$url,"COURIER_IDENTITY_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n courier patch secret courier-secrets \
     --type=merge --patch-file=/dev/stdin
-  kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
-  kit_substrate_out "      credential minted on this box, written to identity-secrets and courier-secrets with each side's base URL, both deployments restarted"
+  if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
+    kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (five link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}) and courier holds the same credential, both deployments restarted"
+  else
+    kit_substrate_out "      credential minted on this box; courier holds it, identity's mail path is OFF BY DESIGN (set KIT_SUBSTRATE_APP_BASE_URL to turn it on), courier restarted"
+  fi
 }
 
 # --- main -------------------------------------------------------------------

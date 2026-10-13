@@ -482,7 +482,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -4154,6 +4154,11 @@ fi
 # identity's own API, writes the SAME value into both secrets that have to hold
 # it, and restarts both deployments. Nothing is printed.
 COURIER_MINT_TOKEN="cap_box_minted_fake_token_value"
+# The public origin identity's mail links point at, for the tests that exercise
+# the CONFIGURED mail path. It is a test fixture, never a shipped default: the
+# installer has no default for KIT_SUBSTRATE_APP_BASE_URL on purpose (a guessed
+# or localhost value mails a reader to a screen that is not theirs).
+APP_BASE_URL="https://app.example.com"
 courier_mint_curl() {
   # The URL is whichever argument is one — the calls put `-d` last, so taking
   # the final argument would read the request body instead.
@@ -4211,6 +4216,10 @@ mint_loop_ec=0
   # refuses, which is the next section's control rather than this test.
   mock_seed identity deploy-identity ready yes
   export KIT_SUBSTRATE_IDENTITY_LOCAL_PORT="$mint_port"
+  # The CONFIGURED mail path: with the public origin set, identity's pair and its
+  # five link templates land together, so the assertions below are about a
+  # complete block. The UNCONFIGURED path is proven separately in §18c.
+  export KIT_SUBSTRATE_APP_BASE_URL="$APP_BASE_URL"
   # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
@@ -5891,6 +5900,14 @@ mint_step() {
     # source time and a value exported after it is a value it never saw.
     printf 'KIT_SUBSTRATE_RECEIPT=%q\n' "$ROLLOUT_DIR/receipt.json"
     printf 'COURIER_MINT_TOKEN=%q\n' "$COURIER_MINT_TOKEN"
+    # identity's link templates are gated on this value. It is SET by default so
+    # the pair/template tests below exercise the CONFIGURED mail path; a caller
+    # runs `MINT_APP_BASE_URL=__UNSET__ mint_step …` for the deliberate no-mail
+    # path (see §18c). The literal `__UNSET__` means "emit nothing", so install.sh
+    # falls back to its own empty default rather than to a value the test chose.
+    if [ "${MINT_APP_BASE_URL:-$APP_BASE_URL}" != "__UNSET__" ]; then
+      printf 'KIT_SUBSTRATE_APP_BASE_URL=%q\n' "${MINT_APP_BASE_URL:-$APP_BASE_URL}"
+    fi
     declare -f mock_seed mfa_smtp_env courier_mint_curl rollout_kubectl
     printf '%s\n' \
       'export DRY_RUN=0 HEADLESS=0' \
@@ -6172,6 +6189,145 @@ else
   run 'control: a RETURN trap that does not remove itself exits 1 after the mint' red \
     check_mint_exit_zero "$fixture_trap_nonself"
 fi
+
+# ===========================================================================
+# 18c. identity's mail path is ALL-OR-NOTHING: the link templates ride the
+#      courier pair, and an unset base URL is a supported no-mail path
+# ===========================================================================
+#
+# THE DEFECT THIS PACKET CLOSES. The mint wrote identity's courier pair
+# (COURIER_BASE_URL + COURIER_TOKEN) and NO link template, and identity's own
+# loader refuses exactly that shape: `internal/config/config.go` `loadCourier`
+# → `resolveLinkTemplates`/`resolveInvitationLinkTemplate`, the case named "a
+# base URL and a token with no link template" → `ErrInvalidCourier`
+# (`internal/config/courier_test.go:62`). identity needs at least one template
+# plus `INVITATION_LINK_TEMPLATE` whenever the block is wired; the mirror case,
+# "a link template and a token with no base URL", is refused too. And the mirror
+# of that mirror — "all three absent" — is a SUPPORTED deployment with no mail
+# path (`loadCourier`'s `present == 0` branch).
+#
+# THE FIX. The five templates are derived from the ONE public origin
+# (KIT_SUBSTRATE_APP_BASE_URL) and written in the SAME patch as the pair, or no
+# identity courier key is written at all. `check_mint_mail_path` applies
+# identity's own all-or-nothing rule to what landed in identity-secrets, so this
+# is the matrix in executable form rather than a shape check.
+#
+# THE PATHS ARE PARLOR'S SERVED ROUTES, the launch stack's own spellings
+# (`launch/docker-compose.launch.yml`): reset-password, verify-email/confirm
+# (which is also the honest target for an address change, as the launch file
+# argues at length), and invitations/{token}. A template without `{token}` is
+# refused by identity (`resolveLinkTemplates`), so every recovery template
+# carries it.
+identity_expected_template() {
+  case "$1" in
+    PASSWORD_RESET_LINK_TEMPLATE)      printf '%s/reset-password?token={token}' "$APP_BASE_URL" ;;
+    EMAIL_VERIFICATION_LINK_TEMPLATE)  printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
+    EMAIL_CHANGE_LINK_TEMPLATE)        printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
+    RECOVERY_LINK_TEMPLATE)            printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
+    INVITATION_LINK_TEMPLATE)          printf '%s/invitations/{token}' "$APP_BASE_URL" ;;
+    *) return 1 ;;
+  esac
+}
+
+# check_mint_mail_path <fixture> — run step 12 for real, then apply identity's
+# all-or-nothing rule to identity-secrets. Green means the box's identity boots
+# with whatever mail path the secret describes.
+check_mint_mail_path() {
+  mint_step "$1" 2 5
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  local store="$ROLLOUT_DIR/store" base token k want got bad=""
+  base="$(cat "$store/identity/identity-secrets/COURIER_BASE_URL" 2>/dev/null || true)"
+  token="$(cat "$store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)"
+  if [ -z "$base" ] && [ -z "$token" ]; then
+    # `present == 0`: no mail path. A template here would be the mirror refusal.
+    for k in PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+      if [ -n "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
+        printf 'a link template (%s) was written with no base URL and no token — identity would refuse (ErrInvalidCourier)\n' "$k"
+        return 1
+      fi
+    done
+    printf 'identity mail path: NOT configured (no courier keys) — the supported no-mail state: boots, recovery routes answer 503'
+    return 0
+  fi
+  if [ -z "$base" ] || [ -z "$token" ]; then
+    printf 'a HALF pair reached identity-secrets (base=%s token=%s) — identity would refuse (ErrInvalidCourier)\n' \
+      "${base:-<none>}" "${token:-<none>}"
+    return 1
+  fi
+  for k in PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+    want="$(identity_expected_template "$k")"
+    got="$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)"
+    [ "$got" = "$want" ] || bad="${bad} ${k}=${got:-<missing>};"
+  done
+  if [ -n "$bad" ]; then
+    printf 'a base URL and a token with no (valid) link template — identity would refuse (ErrInvalidCourier):%s\n' "$bad"
+    return 1
+  fi
+  printf 'identity mail path: CONFIGURED — the pair and five templates written together, each on parlor'"'"'s served route'
+}
+
+run 'step 11 writes identity'"'"'s courier pair AND its five link templates when KIT_SUBSTRATE_APP_BASE_URL is set' green \
+  check_mint_mail_path "$mint_fixed"
+
+# THE RED CONTROL is the pre-fix shape this packet exists for: the pair is
+# written and the templates are not, which is a restarted identity that refuses
+# on the next check. The fixture is asserted to really be that shape before the
+# control is allowed to count — a mutation that broke nothing would prove nothing.
+fixture_no_template="$WORK/install-mint-no-template.sh"
+sed -e '/^main "$@"$/d' -e '/LINK_TEMPLATE/d' "$SUBSTRATE/install.sh" >"$fixture_no_template"
+if grep -q 'LINK_TEMPLATE' "$fixture_no_template" \
+  || ! grep -q '"COURIER_BASE_URL":\$url,' "$fixture_no_template"; then
+  fail 'control fixture: a pair written with no link template' \
+    "the strip did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  ntp_out=""; ntp_ec=0
+  ntp_out="$(check_mint_mail_path "$fixture_no_template" 2>&1)" || ntp_ec=$?
+  if [ "$ntp_ec" -eq 0 ]; then
+    fail 'control: a pair written with no link template goes red, naming the variable' \
+      "exit 0 — the shipped shape passed the check"
+  elif case "$ntp_out" in *INVITATION_LINK_TEMPLATE*) true ;; *) false ;; esac; then
+    pass 'control: a pair written with no link template goes red, naming the variable'
+  else
+    fail 'control: a pair written with no link template goes red, naming the variable' "$ntp_out"
+  fi
+fi
+
+# THE OTHER BRANCH, green: no public origin means no identity courier keys at
+# all — identity's own "no mail path" state — while courier still gets its
+# required pair. A box that cannot know its public URL boots with all recovery
+# routes answering 503, never a rollout that never goes Ready.
+check_mint_mail_path_unset() {
+  local saved="${MINT_APP_BASE_URL:-}"
+  MINT_APP_BASE_URL=__UNSET__
+  mint_step "$1" 2 5
+  MINT_APP_BASE_URL="$saved"
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s with no base URL\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  local store="$ROLLOUT_DIR/store" k present=""
+  for k in COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+    if [ -n "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
+      present="${present} ${k}"
+    fi
+  done
+  if [ -n "$present" ]; then
+    printf 'identity-secrets carries courier keys with no public origin:%s\n' "$present"
+    return 1
+  fi
+  if [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ] \
+    || [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_URL" 2>/dev/null || true)" != "$IDENTITY_BASE_URL_EXPECTED" ]; then
+    printf 'courier-secrets lost the required pair when identity had no mail path\n'
+    return 1
+  fi
+  printf 'no public origin: no identity courier key written, identity boots into its no-mail state, courier still holds its pair'
+}
+run 'step 11 writes NO identity courier key when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
+  check_mint_mail_path_unset "$mint_fixed"
 
 # ===========================================================================
 # 19. Step 6 waits on nothing — the core-install reality, executed
