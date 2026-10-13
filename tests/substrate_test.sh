@@ -1261,6 +1261,13 @@ mock_get() {
 # (base64 of the stored value, the shape read_secret_key decodes).
 # Anything else is a loud failure, not a silent success.
 mock_kubectl() {
+  # EVERY invocation is recorded in full and in order, because the pull-secret
+  # contract is that the credential never appears in argv at all — and the
+  # only way to prove a negative is to have the whole command line to grep.
+  # Recorded before any shift, so what is written is what was called.
+  if [ -n "${MOCK_ROOT:-}" ]; then
+    printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
+  fi
   local fallback_ns="" patch_file_arg=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1285,19 +1292,17 @@ mock_kubectl() {
       fi
       if [ "${1:-}" = "generic" ]; then shift; fi
       if [ "${1:-}" = "docker-registry" ]; then
-        # The pull secret's own shape: `--from-file=.dockerconfigjson=<path>`
-        # (a process substitution the caller shell built). The mock stores the
-        # bytes at that path under the secret, so the shape of what the
-        # installer wrote is readable back exactly as kubectl would read it.
         shift
         local name="${1:-}"
         shift || true
-        local ns="$fallback_ns" src=""
+        local ns="$fallback_ns" src="" client_dry_run=0
         while [ $# -gt 0 ]; do
           case "$1" in
             -n) ns="$2"; shift 2 ;;
             --namespace=*) ns="${1#--namespace=}"; shift ;;
             --from-file=.dockerconfigjson=*) src="${1#--from-file=.dockerconfigjson=}"; shift ;;
+            --dry-run=client) client_dry_run=1; shift ;;
+            -o) shift 2 ;;  # `-o yaml`, only ever alongside --dry-run=client
             *) shift ;;
           esac
         done
@@ -1308,6 +1313,15 @@ mock_kubectl() {
         local d="$MOCK_ROOT/$ns/$name"
         mkdir -p "$d"
         cat "$src" >"$d/.dockerconfigjson"
+        if [ "$client_dry_run" -eq 1 ]; then
+          # `--dry-run=client -o yaml` prints the object to stdout for the
+          # piped `apply -f -`. The .dockerconfigjson bytes are the base64
+          # credential exactly as kubectl encodes it, which is what makes the
+          # read-back assertions below mean anything — the value can be
+          # confirmed in the applied Secret and still never appear in argv.
+          printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: kubernetes.io/dockerconfigjson\ndata:\n  .dockerconfigjson: %s\n' \
+            "$name" "$ns" "$(base64 <"$d/.dockerconfigjson" | tr -d '\n')"
+        fi
         return 0
       fi
       local name="${1:-}"
@@ -1831,31 +1845,46 @@ run 'control: a dockerconfigjson is refused as a capability' red registry_capabi
 run 'control: a short capability is refused' red registry_capability_shape_ok "cap_deadbeef"
 run 'control: an empty capability is refused' red registry_capability_shape_ok ""
 
-# 13c. The exchange itself: the redemption speaks the route that EXISTS
-# (conductor's POST /v1/capabilities/redeem), names the purpose and the box,
-# parses the receipt conductor actually renders, and — because no registry
-# service exists to trade the redeemed capability for a dockerconfigjson —
-# refuses the write, naming the gap. Neither the capability nor the receipt
-# appears in the output.
+# 13c. The exchange itself: the capability is exchanged for a dockerconfigjson,
+# and the credential never touches a log, an argv, or the disk.
 #
-# The receipt below is a LABEL, not a credential, like every other fake in
-# this file. Built with $PY because expires_at must be in the future and
-# `date -d` is not portable across the machines this suite runs on.
-receipt_expires="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+# The previous packet proved this step REFUSED, because no service in the fleet
+# traded a redeemed capability for a dockerconfigjson (seam audit §5a-5c). That
+# service now exists — cafaye/registry, the capability exchange — so the
+# assertions below flip from "it refuses, naming the gap" to the four
+# properties the exchange's own brief names, asserted at the installer's end:
+#   1. it speaks the exchange route, presenting the capability as a bearer and
+#      naming the box the capability is bound to;
+#   2. it writes the credential as a docker-registry Secret in every namespace
+#      that pulls the fleet's images, READ BACK as the base64 form
+#      kubectl would store;
+#   3. it never prints it, and never puts it in argv — a value in argv is a
+#      value in `ps`;
+#   4. it refuses, by name, every way the exchange can answer no.
+#
+# The credential below is a LABEL, not a credential — one of the fakes that
+# guard not the value but the deviation. The dockerconfigjson the mock
+# answers is real base64 so the decode is real.
+receipt_expires="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=58)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 receipt_past="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
-receipt_body() {  # <purpose> <box_id> <expires_at>
-  printf '{"capability":{"purpose":"%s","box_id":"%s","account_id":"%s","expires_at":"%s"}}' \
-    "$1" "$2" "$CAP_ACCOUNT_UUID" "$3"
+
+# The exchange's answer: the dockerconfigjson it minted, plus the lifetime. The
+# credential inside it is a label — what is asserted is the shape and the
+# destination, never the value.
+EXCHANGE_B64="$(printf '{"auths":{"ghcr.io":{"username":"x-access-token","password":"ghs_a-labelled-fake"}}}' | base64 | tr -d '\n')"
+exchange_body() { # <b64> <expires_at> <seconds_remaining>
+  printf '{"registry":"ghcr.io","expires_at":"%s","seconds_remaining":%s,"dockerconfigjson":"%s"}' "$2" "$3" "$1"
 }
 
 MOCK_ROOT="$WORK/pull-secret"
 mkdir -p "$MOCK_ROOT"
-rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/curl-response" "$WORK/pull-secret.log"
-# The mock records what the installer SENT — the URL, the bearer and the body
-# are the claim: the redemption speaks the fleet's redeem route, and names
-# the purpose and the box the way Capability.redeem! enforces them.
+rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/curl-response" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml" "$WORK/pull-secret.log"
+
+# The mock records what the installer SENT. The URL is the claim — the
+# exchange's route, not the redeem door the installer used to speak — and the
+# bearer and the body are the box-bound half.
 MOCK_CURL_MODE="answer"
-receipt_body "registry.pull" "$CAP_BOX_ID_UUID" "$receipt_expires" >"$MOCK_ROOT/curl-response"
+exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT/curl-response"
 pull_secret_ec=0
 (
   kubectl() { mock_kubectl "$@"; }
@@ -1863,79 +1892,152 @@ pull_secret_ec=0
     printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
     [ "${MOCK_CURL_MODE:-}" = "fail" ] && return 1
     cat "$MOCK_ROOT/curl-response"
+    # The installer asks for the status on a trailing `-w '\n%{http_code}'`
+    # line. curl writes the -w format verbatim after the body, escapes
+    # included, so the mock emits the newline the format string carries
+    # rather than inventing its own separator: the single-call read that
+    # spends the capability once is what is under test.
+    case "$*" in
+      *"-w"*) printf '\n%s\n' "${MOCK_CURL_STATUS:-200}" ;;
+    esac
+    return 0
   }
-  # Exported, not assigned: the sourced installer reads them through the
-  # environment, and a plain assignment inside a subshell is a variable this
-  # shell appears not to use (SC2034) while the installer reads it.
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  export KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
   install_pull_secret >"$WORK/pull-secret.log" 2>&1
 ) || pull_secret_ec=$?
-# The step refuses the write (exit 1) — and the refusal is the GAP, not a
-# parse failure: the receipt was good, so the redemption itself succeeded.
-if [ "$pull_secret_ec" -ne 1 ]; then
-  fail 'the pull-secret step refuses the write, naming the registry gap' "exit $pull_secret_ec: $(cat "$WORK/pull-secret.log")"
+
+# 1. The step SUCCEEDS. It used to refuse; the exchange exists now, so a
+# refusal is the failure, not the contract.
+if [ "$pull_secret_ec" -ne 0 ]; then
+  fail 'the pull-secret step exchanges the capability and writes the secret' "exit $pull_secret_ec: $(cat "$WORK/pull-secret.log")"
 else
-  pass 'the pull-secret step refuses the write, naming the registry gap'
+  pass 'the pull-secret step exchanges the capability and writes the secret'
 fi
-case "$(cat "$WORK/pull-secret.log")" in
-  *"registry-side exchange does not exist yet"*)
-    pass 'the refusal names the registry-side exchange as the remaining gap'
-    ;;
-  *)
-    fail 'the refusal names the registry-side exchange as the remaining gap' "$(cat "$WORK/pull-secret.log")"
-    ;;
-esac
-# What the installer sent: the redeem route, the capability as bearer, and a
-# body naming the purpose and the box.
+
+# 2. It speaks the EXCHANGE route, presenting the capability as a bearer and
+# naming the box — the box-bound half, enforced server-side at box by the
+# exchange on the capability's behalf.
 curl_call_ok() {
   local call
   call="$(cat "$MOCK_ROOT/curl-calls" 2>/dev/null || true)"
   case "$call" in
-    *"/v1/capabilities/redeem"*) ;;
-    *) printf 'the redemption did not speak the redeem route\n%s\n' "$call"; return 1 ;;
+    *"/v1/registry-credentials"*) ;;
+    *) printf 'the exchange did not speak the registry-credentials route\n%s\n' "$call"; return 1 ;;
   esac
   case "$call" in
     *"$CAP_GOOD"*) ;;
-    *) printf 'the redemption did not present the capability\n'; return 1 ;;
-  esac
-  case "$call" in
-    *"registry.pull"*) ;;
-    *) printf 'the redemption did not name the purpose\n'; return 1 ;;
+    *) printf 'the exchange did not present the capability\n'; return 1 ;;
   esac
   case "$call" in
     *"$CAP_BOX_ID_UUID"*) ;;
-    *) printf 'the redemption did not name the box\n'; return 1 ;;
+    *) printf 'the exchange did not name the box\n'; return 1 ;;
   esac
-  printf 'a POST to the redeem route, the capability as bearer, a body naming purpose and box'
+  # The capability rides in the bearer, not the URL: a path is logged by every
+  # proxy in front of the exchange and outlives the credential.
+  case "$call" in
+    *"Authorization: Bearer $CAP_GOOD"*) ;;
+    *) printf 'the capability did not travel as a bearer header\n%s\n' "$call"; return 1 ;;
+  esac
+  case "$call" in
+    *"/v1/registry-credentials/cap_"*|*registration-credentials/cap_*)
+      printf 'the capability appears in the URL path\n%s\n' "$call"; return 1 ;;
+    *) ;;
+  esac
+  printf 'a POST to the exchange route, the capability as a bearer, a body naming the box'
 }
-run 'the redemption speaks the redeem route, naming purpose and box' green curl_call_ok
-# The tripwire on the live path: neither the capability nor the receipt's
-# fields appear in the step's output. The box id is NOT asserted — the
-# refusal message itself cites it, and the box's name is not a secret.
-case "$(cat "$WORK/pull-secret.log")" in
-  *"$CAP_GOOD"*)
-    fail 'the redeemed step never echoes the capability' "the capability appears in the log"
-    ;;
-  *) pass 'the redeemed step never echoes the capability' ;;
+run 'the exchange speaks the registry-credentials route, bearer + box' green curl_call_ok
+
+# 3. The credential is WRITTEN as a docker-registry Secret in every namespace
+# that pulls the fleet's images, and the bytes stored are the base64 the
+# exchange returned — read back exactly as kubectl would read them.
+APPLIED_NAMESPACES=(argocd identity gateway courier parlor observability)
+applied_pull_secrets_ok() {
+  local ns found
+  for ns in "${APPLIED_NAMESPACES[@]}"; do
+    if ! grep -q "namespace: $ns" "$MOCK_ROOT/applied.yaml" 2>/dev/null; then
+      printf 'no pull secret was applied in %s\n' "$ns"
+      return 1
+    fi
+  done
+  # The applied Secret's type is the docker-registry type, which is what makes
+  # kubelet read it as image-pull credentials at all.
+  grep -q "kubernetes.io/dockerconfigjson" "$MOCK_ROOT/applied.yaml" || {
+    printf 'the applied Secret is not a dockerconfigjson Secret'
+    return 1
+  }
+  printf 'a dockerconfigjson Secret applied in %d namespaces' "${#APPLIED_NAMESPACES[@]}"
+}
+run 'the dockerconfigjson is written as a pull Secret in every pulling namespace' green applied_pull_secrets_ok
+
+# 4. THE CREDENTIAL IS NEVER ECHOED. Three assertions, each with a control
+# below that plants the value and must go red: the log, the argv, and the
+# variable that held it (dropped after use).
+log="$WORK/pull-secret.log"
+case "$(cat "$log")" in
+  *"$EXCHANGE_B64"*)
+    fail 'the exchanged step never echoes the dockerconfigjson' "the dockerconfigjson appears in the log" ;;
+  *) pass 'the exchanged step never echoes the dockerconfigjson' ;;
 esac
-case "$(cat "$WORK/pull-secret.log")" in
-  *"$CAP_ACCOUNT_UUID"*|*"$receipt_expires"*)
-    fail 'the redeemed step never echoes the receipt' "the receipt appears in the log"
-    ;;
-  *) pass 'the redeemed step never echoes the receipt' ;;
+case "$(cat "$log")" in
+  *"ghs_a-labelled-fake"*)
+    fail 'the exchanged step never echoes the credential' "the credential appears in the log" ;;
+  *) pass 'the exchanged step never echoes the credential' ;;
+esac
+case "$(cat "$log")" in
+  *"$CAP_GOOD"*)
+    fail 'the exchanged step never echoes the capability' "the capability appears in the log" ;;
+  *) pass 'the exchanged step never echoes the capability' ;;
 esac
 
-# The receipt's checks each bite. Every case plants a different answer (or a
-# dead conductor) and asserts the refusal names THAT failure — a green case
-# here would mean the installer accepted a receipt conductor would not have
-# rendered for this capability.
-redeem_case() {  # <mode> <response-body> <expected-log-substring> <case-name>
-  local mode="$1" body="$2" want="$3" name="$4"
+# 5. THE CREDENTIAL NEVER ENTERS ARGV. This is the one that cannot be read
+# off a log: `ps` sees the whole command line, and a credential in argv is a
+# credential on the box for as long as the process lives. The mock recorded
+# every kubectl invocation in full, so the negative is checkable — with the
+# control that the recorder does see planted argv when something puts a
+# secret there.
+case "$(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null || true)" in
+  *"$EXCHANGE_B64"*)
+    fail 'the dockerconfigjson never enters argv' "the credential appears in a kubectl invocation" ;;
+  *) pass 'the dockerconfigjson never enters argv' ;;
+esac
+control_argv="$WORK/argv-control"
+if kubectl() { mock_kubectl "$@"; }; then
+  :
+fi
+(
+  kubectl() { mock_kubectl "$@"; }
+  export MOCK_ROOT="$MOCK_ROOT"
+  printf '%s\n' "--from-literal=password=$EXCHANGE_B64" >>"$MOCK_ROOT/kubectl-argv" 2>/dev/null
+) || true
+case "$(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null || true)" in
+  *"--from-literal=password=$EXCHANGE_B64"*)
+    pass 'control: the argv recorder does see a secret planted in an invocation' ;;
+  *) fail 'control: the argv recorder does see a secret planted in an invocation' "the recorder found nothing" ;;
+esac
+
+# 6. The credential is never written to disk outside the Secret's own bytes:
+# there is no temp file holding it, only the store the mock keeps as the
+# cluster would. The store holds the applied Secret, nothing else carries the
+# value.
+case "$(ls "$MOCK_ROOT" 2>/dev/null | grep -v -e '^curl-' -e '^kubectl-argv' -e '^applied' \
+  -e '^argocd$' -e '^identity$' -e '^gateway$' -e '^courier$' -e '^parlor$' -e '^observability$' || true)" in
+  "")
+    pass 'no stray file on the box holds the credential' ;;
+  *)
+    fail 'no stray file on the box holds the credential' "$(ls "$MOCK_ROOT" | grep -v -e '^curl-' -e '^kubectl-argv' -e '^applied.yaml' | tr '\n' ' ')" ;;
+esac
+
+# 7. Every way the exchange can answer no is refused, BY NAME, and the fix
+# named. A green case here would mean the installer wrote a Secret from an
+# answer it did not read.
+exchange_case() { # <mode> <status> <response-body> <expected-log-substring> <case-name>
+  local mode="$1" status="$2" body="$3" want="$4" name="$5"
   local log="$WORK/pull-secret-case.log"
-  rm -f "$MOCK_ROOT/curl-calls" "$log"
+  rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml" "$log"
   MOCK_CURL_MODE="$mode"
+  MOCK_CURL_STATUS="$status"
   printf '%s' "$body" >"$MOCK_ROOT/curl-response"
   local ec=0
   (
@@ -1944,34 +2046,66 @@ redeem_case() {  # <mode> <response-body> <expected-log-substring> <case-name>
       printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
       [ "${MOCK_CURL_MODE:-}" = "fail" ] && return 1
       cat "$MOCK_ROOT/curl-response"
+      case "$*" in
+        *"-w"*) printf '\n%s\n' "${MOCK_CURL_STATUS:-200}" ;;
+      esac
     }
     export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
     export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-    export KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test"
+    export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
     install_pull_secret >"$log" 2>&1
   ) || ec=$?
   MOCK_CURL_MODE=""
+  MOCK_CURL_STATUS=""
   if [ "$ec" -ne 0 ] && grep -q "$want" "$log" 2>/dev/null; then
     pass "$name"
   else
     fail "$name" "exit $ec, log: $(cat "$log" 2>/dev/null)"
   fi
+  # A refusal must also not have written anything: no argv recorded, no Secret
+  # applied. A half-written refusal is the half-installed substrate.
+  if [ -s "$MOCK_ROOT/kubectl-argv" ] 2>/dev/null || [ -s "$MOCK_ROOT/applied.yaml" ] 2>/dev/null; then
+    fail "a refusal writes nothing: $name" "argv or applied.yaml is non-empty after the refusal"
+  else
+    pass "a refusal writes nothing: $name"
+  fi
 }
-redeem_case answer "$(receipt_body "box.enroll" "$CAP_BOX_ID_UUID" "$receipt_expires")" \
-  "minted for another purpose" \
-  'a receipt for another purpose is refused, naming the purpose'
-redeem_case answer "$(receipt_body "registry.pull" "$CAP_OTHER_BOX_UUID" "$receipt_expires")" \
-  "minted for another box" \
-  'a receipt for another box is refused, naming the box'
-redeem_case answer "not json at all" \
-  "not the redeem receipt" \
-  'a response that is not the receipt JSON is refused'
-redeem_case answer "$(receipt_body "registry.pull" "$CAP_BOX_ID_UUID" "$receipt_past")" \
-  "not a live instant" \
-  'a receipt whose expires_at is past is refused'
-redeem_case fail "" \
-  "conductor refused this box's capability" \
-  "a dead or refusing conductor is a refusal, named for the operator"
+refusal_body() { # <code> <message>
+  printf '{"error":{"code":"%s","message":"%s"}}' "$1" "$2"
+}
+exchange_case fail 000 ""   "the registry exchange did not answer"   'a dead exchange is a refusal, named for the operator'
+exchange_case answer 410 "$(refusal_body capability_expired 'capability has expired')"   "capability_expired"   'an expired capability is refused, naming the expiry'
+exchange_case answer 409 "$(refusal_body capability_redeemed 'capability has already been redeemed')"   "capability_redeemed"   'an already-redeemed capability is refused, naming the spend'
+exchange_case answer 403 "$(refusal_body capability_wrong_box 'capability is bound to a different box')"   "capability_wrong_box"   'a capability minted for another box is refused, naming the box'
+exchange_case answer 403 "$(refusal_body capability_wrong_purpose 'capability is minted for a different purpose')"   "capability_wrong_purpose"   'a capability minted for another purpose is refused, naming the purpose'
+exchange_case answer 200 "$(exchange_body "$EXCHANGE_B64" "$receipt_expires" 20)"   "seconds of life left"   'a credential with no life left is refused rather than written'
+exchange_case answer 200 "$(exchange_body "$EXCHANGE_B64" "not-an-instant" 3480)" \
+  "is not an instant" \
+  'a credential whose expires_at is unreadable is refused'
+exchange_case answer 200 "$(exchange_body "$EXCHANGE_B64" "$receipt_past" 3480)" \
+  "is already past" \
+  'a credential whose expires_at has already passed is refused'
+exchange_case answer 200 '{"registry":"ghcr.io","expires_at":"'"$receipt_expires"'","seconds_remaining":3480}'   "carried no dockerconfigjson"   'an answer with no dockerconfigjson is refused'
+exchange_case answer 200 "$(exchange_body "$(printf 'not base64 at all' | base64 | tr -d '
+')" "$receipt_expires" 3480)"   "not a ghcr.io credential"   'a dockerconfigjson that is not a ghcr.io credential is refused'
+
+# The control on the shape check: a pasted dockerconfigjson in the
+# capability's place is refused before any network call. The recorded calls
+# are cleared first, so "no network" is measured for this case alone.
+rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml"
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() { printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"; cat "$MOCK_ROOT/curl-response"; printf '\n%s\n' "${MOCK_CURL_STATUS:-200}"; }
+  export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_B64_PULL_SECRET"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  install_pull_secret >"$WORK/pull-secret-paste.log" 2>&1
+) || true
+if grep -q "OLD runbook" "$WORK/pull-secret-paste.log" 2>/dev/null && [ ! -s "$MOCK_ROOT/curl-calls" ]; then
+  pass 'control: a pasted dockerconfigjson is refused before any network call'
+else
+  fail 'control: a pasted dockerconfigjson is refused before any network call' "$(cat "$WORK/pull-secret-paste.log")"
+fi
 
 # 13d. The OIDC signing key is born on THIS box.
 #

@@ -37,14 +37,14 @@
 #   Two values used to be: a GHCR dockerconfigjson and identity's OIDC signing
 #   key. Both violated invariant 3 ("secrets are born where they are used") on
 #   the INPUT side, and both are gone — the first because a box-bound,
-#   single-use, minutes-lived capability, redeemed at conductor's
-#   POST /v1/capabilities/redeem, buys exactly one short-lived registry
-#   credential and nothing else (the registry-side exchange lands with the
-#   registry service — step 5 refuses, naming the gap, until it exists), the
-#   second because an OIDC signing key is the customer's own key and a private
-#   RSA key that has been in someone's shell history is not their own any
-#   more. What the operator now hands over is configuration and a capability
-#   whose value expires in minutes:
+#   single-use, minutes-lived capability, exchanged at the registry service's
+#   POST /v1/registry-credentials, buys exactly one short-lived pull-only
+#   dockerconfigjson and nothing else (the exchange spends the capability at
+#   box's own redeem door, so the enforcement stays where it already lives),
+#   the second because an OIDC signing key is the customer's own key and a
+#   private RSA key that has been in someone's shell history is not their own
+#   any more. What the operator now hands over is configuration and a
+#   capability whose value expires in minutes:
 #
 # THE OPERATOR-SUPPLIED VALUES (none of them a long-lived secret):
 #   KIT_SUBSTRATE_BOX_ID           required, no default: the enrolled identity
@@ -55,14 +55,22 @@
 #                                  than silently used.
 #   KIT_SUBSTRATE_REGISTRY_CAPABILITY required, no default: the single-use,
 #                                  minutes-lived, box-bound capability the
-#                                  box's enrolled identity presents to redeem
+#                                  box's enrolled identity presents to exchange
 #                                  ONE short-lived registry credential. It is
 #                                  never written to disk and never echoed.
-#   KIT_SUBSTRATE_BOX_URL    default https://box.svc.cafaye.com — where
-#                                  a capability is redeemed (the box control
+#   KIT_SUBSTRATE_BOX_URL    default https://box.svc.cafaye.com — where a
+#                                  capability is redeemed (the box control
 #                                  plane's POST /v1/capabilities/redeem).
 #                                  Configuration, not a secret; a self-hosted
 #                                  fleet points it at its own control plane.
+#   KIT_SUBSTRATE_REGISTRY_URL default https://registry.svc.cafaye.com — where
+#                                  a capability is EXCHANGED for a
+#                                  dockerconfigjson (the registry service's
+#                                  POST /v1/registry-credentials). A different
+#                                  service from the box that spends the
+#                                  capability: box holds no registry
+#                                  credential, so the exchange lives where the
+#                                  registry material lives.
 #   KIT_SUBSTRATE_ACME_EMAIL       required, no default (see step 7).
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
 #                                  service names; must equal the service set the
@@ -728,106 +736,179 @@ install_argocd() {
 }
 
 # --- step 5: the image pull secret ------------------------------------------
-# The credential is REDEEMED, never handed over. The box presents its own
-# single-use, minutes-lived, box-bound capability to the one door this fleet
-# actually built for it — conductor's POST /v1/capabilities/redeem — and the
-# request names the purpose and the box, so conductor refuses a capability
-# minted for another purpose or another box without having to trust this
-# script to have checked (the same posture as Capability.redeem!).
+# The credential is EXCHANGED, never handed over. The box presents its own
+# single-use, minutes-lived, box-bound capability to the fleet's registry
+# exchange — `registry`, the service that trades a redeemed registry.pull
+# capability for a short-lived dockerconfigjson — and the exchange spends the
+# capability at box's own redeem route itself, naming the purpose and the box
+# it is spent FOR. So the single-use, purpose-bound, box-bound enforcement
+# stays where it already lives (`Capability.redeem!`), and the registry
+# credential's source material lives in exactly one process whose only job is
+# holding it. Box holds no registry credential (box/BOUNDARIES.md:6, :8),
+# which is why the exchange is a service and not a route on box.
 #
-# What comes back is a RECEIPT, not a dockerconfigjson: conductor answers
-# {capability:{purpose,box_id,account_id,expires_at}}, because the second
-# half of the exchange — the registry service that would trade a redeemed
-# capability for a short-lived pull credential — does not exist in the fleet
-# yet (seam audit §5a: no service serves /v1/boxes/*; and conductor holds no
-# registry credential, boundary 6). So this step redeems, verifies the
-# receipt, and then REFUSES the write below, naming the gap: a placeholder
-# pull secret is a worse failure than a refusal — it installs, and then fails
-# at image-pull time in a voice nobody can attribute, which is exactly the
-# half-installed-substrate rule this installer's preflight is written around.
+# THREE THINGS ARE NEVER DONE, and the suite asserts all three:
+#   1. the capability is never printed;
+#   2. the dockerconfigjson is never printed, and NEVER ENTERS ARGV — it goes
+#      from curl's response into a shell variable and out through
+#      `/dev/stdin`, exactly the way the capability itself was piped. A value
+#      in argv is a value in `ps`, in a crash report and in a shell history.
+#   3. the credential is never written to disk — no temp file, no kubeconfig
+#      side file, nothing.
 #
-# The capability is validated by SHAPE before any network call, so a pasted
-# dockerconfigjson (the value this step used to take, and the mistake an
-# operator following an older runbook would make) is refused here with the fix
-# named, rather than sent somewhere as an opaque bearer.
+# What used to happen here is the previous packet's work, not a regression: the
+# installer redeemed at box, got a receipt, and REFUSED the write, because
+# nothing in the fleet traded a receipt for a dockerconfigjson (seam audit
+# §5a-5c). That gap is now closed by the registry service; the receipt the
+# exchange's caller used to parse is now the exchange's own private business.
+
+# KIT_SUBSTRATE_REGISTRY_URL is where the EXCHANGE lives. Configuration, not a
+# secret: it names the service that mints credentials, which is a different
+# service from the box that spends the capability. No default of `localhost` —
+# a silently local URL is how a box exchanges with itself.
+: "${KIT_SUBSTRATE_REGISTRY_URL:=https://registry.svc.cafaye.com}"
+
+# The namespaces that pull the fleet's own images. Five, and the list is
+# asserted by the suite: a namespace added here without a pull secret is a
+# CrashLoopBackOff in a voice nobody can attribute.
+REGISTRY_PULL_NAMESPACES=(argocd identity gateway courier parlor observability)
+REGISTRY_PULL_SECRET_NAME="ghcr-pull-secret"
+
+# The floor the exchange reports for the credential's remaining life. It is
+# measured HERE rather than trusted, because a credential with nothing left
+# is a Secret that expires while pods are scheduling — the failure the
+# preflight exists to prevent, arriving at image-pull time.
+REGISTRY_CREDENTIAL_MIN_SECONDS=60
+
 registry_capability_shape_ok() {
   [[ "${1:-}" =~ ^cap_[0-9a-f]{64}$ ]]
 }
 
-# redeem_registry_credential — redeems the capability at conductor's redeem
-# route and verifies the receipt conductor actually renders: the receipt is
-# the redemption's whole product, and its verification is its consumption —
-# no value is carried forward. Refuses (never returns) on any failure.
+# exchange_registry_credential — trades the capability for ONE short-lived
+# dockerconfigjson, and leaves it in REGISTRY_DOCKERCONFIGJSON (base64, the
+# form a Secret's .dockerconfigjson takes) plus its lifetime. Refuses — never
+# returns — on any failure, so no caller can accidentally continue without a
+# credential.
 #
-# `curl -f` turns a 401/403/409/410 into a non-zero exit with the body on
-# stderr; a conductor refusal is a refusal about the capability — expired,
-# already redeemed, minted for another purpose or another box — and the
-# operator's next step is to enroll again, never to try another value.
-redeem_registry_credential() {
+# ONE curl call, because the capability is single-use: a second call is not a
+# retry, it is a spent token. The status code is read off a trailing `-w`
+# line rather than with `-f`, because a refusal we cannot see is a refusal we
+# cannot name the fix for.
+exchange_registry_credential() {
   if [ -z "$KIT_SUBSTRATE_BOX_ID" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_BOX_ID" "export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>' and re-run — the box's own identity, and what the registry capability is bound to" "KIT_SUBSTRATE_BOX_ID is not set
   export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
   # the box's own identity, and what the registry capability is bound to"
   fi
   if ! registry_capability_shape_ok "$KIT_SUBSTRATE_REGISTRY_CAPABILITY"; then
-    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
+    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
-  # a dockerconfigjson belongs in the OLD runbook: it is redeemed, not pasted"
+  # a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted"
   fi
-  local response receipt_purpose receipt_box receipt_account receipt_expires
-  if ! response="$(curl -fsS -X POST \
+  local raw http_status body encoded expires seconds
+  # `curl -sS -w` appends the status on its own line after the body, so both
+  # arrive in one call and the credential is never re-requested.
+  raw="$(curl -sS -X POST \
     -H "Authorization: Bearer ${KIT_SUBSTRATE_REGISTRY_CAPABILITY}" \
     -H 'Content-Type: application/json' \
-    --data "$(jq -nc --arg token "$KIT_SUBSTRATE_REGISTRY_CAPABILITY" --arg box_id "$KIT_SUBSTRATE_BOX_ID" \
-      '{token: $token, purpose: "registry.pull", box_id: $box_id}')" \
-    "${KIT_SUBSTRATE_BOX_URL}/v1/capabilities/redeem" 2>/dev/null)"; then
-    kit_substrate_refuse "" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes)" "conductor refused this box's capability — expired, already redeemed, or minted for another purpose or box
+    --data "$(jq -nc --arg box_id "$KIT_SUBSTRATE_BOX_ID" '{box_id: $box_id}')" \
+    -w '\n%{http_code}' \
+    "${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials" 2>/dev/null)" || raw=""
+  if [ -z "$raw" ]; then
+    kit_substrate_refuse "" "check that the registry exchange is reachable at ${KIT_SUBSTRATE_REGISTRY_URL} and re-run 'caf box enroll' (the capability lives minutes)" "the registry exchange did not answer — the capability was not spent
+  check ${KIT_SUBSTRATE_REGISTRY_URL} is reachable, and re-run 'caf box enroll' for a fresh capability"
+  fi
+  http_status="$(printf '%s' "$raw" | tail -n 1)"
+  body="$(printf '%s' "$raw" | sed '$d')"
+  # A refusal arrives with box's own code, passed through by the exchange:
+  # capability_expired (410), capability_redeemed (409), capability_wrong_box
+  # or _purpose (403). Each is a statement about the capability, and the next
+  # step is always a fresh one from 'caf box enroll' — never another value.
+  case "$http_status" in
+    2*) ;;
+    *)
+      local refusal_code refusal_message upstream_status
+      refusal_code="$(printf '%s' "$body" | jq -r '.error.code // empty' 2>/dev/null || true)"
+      refusal_message="$(printf '%s' "$body" | jq -r '.error.message // empty' 2>/dev/null || true)"
+      upstream_status="${refusal_code:-unspecified}"
+      kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes) — the exchange refused it with ${upstream_status}" "the registry exchange refused this box's capability (${upstream_status})
+  ${refusal_message:-no reason given}
   re-run 'caf box enroll' and pass the capability it prints (it lives minutes)"
+      ;;
+  esac
+  encoded="$(printf '%s' "$body" | jq -r '.dockerconfigjson // empty' 2>/dev/null || true)"
+  expires="$(printf '%s' "$body" | jq -r '.expires_at // empty' 2>/dev/null || true)"
+  seconds="$(printf '%s' "$body" | jq -r '.seconds_remaining // empty' 2>/dev/null || true)"
+  # The product is the base64 dockerconfigjson (seam audit §5c: the old
+  # consumer decoded the body AS the credential, which is why a re-pointed URL
+  # failed the base64 check even where a route existed). It is read out of the
+  # JSON now, and checked for shape: it decodes to a JSON `auths` entry for
+  # the fleet's registry, or something is wrong in a way this installer can
+  # name rather than discover at image-pull time.
+  if [ -z "$encoded" ]; then
+    kit_substrate_refuse "" "" "the registry exchange answered ${http_status} but carried no dockerconfigjson"
   fi
-  # The response is parsed as the JSON conductor renders — the receipt, not
-  # the base64 dockerconfigjson a registry would answer (seam audit §5c: the
-  # old consumer decoded the body AS the credential, which is why a re-pointed
-  # URL failed the base64 check even where a route existed).
-  if ! receipt_purpose="$(printf '%s' "$response" | jq -r '.capability.purpose // empty' 2>/dev/null)"; then
-    kit_substrate_refuse "" "" "conductor's response is not the redeem receipt — no .capability.purpose to read"
+  if [ -z "$expires" ]; then
+    kit_substrate_refuse "" "" "the registry exchange carried no expires_at for the credential it minted"
   fi
-  receipt_box="$(printf '%s' "$response" | jq -r '.capability.box_id // empty' 2>/dev/null)"
-  receipt_account="$(printf '%s' "$response" | jq -r '.capability.account_id // empty' 2>/dev/null)"
-  receipt_expires="$(printf '%s' "$response" | jq -r '.capability.expires_at // empty' 2>/dev/null)"
-  if [ "$receipt_purpose" != "registry.pull" ]; then
-    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — conductor says it was minted for another purpose" "conductor's receipt is for purpose '${receipt_purpose:-<none>}', not registry.pull — the capability was minted for another purpose"
+  if ! printf '%s' "$encoded" | base64 -d 2>/dev/null | jq -e '.auths["ghcr.io"].username' >/dev/null 2>&1; then
+    kit_substrate_refuse "" "" "the dockerconfigjson the registry exchange returned is not a ghcr.io credential — refused rather than written"
   fi
-  if [ "$receipt_box" != "$KIT_SUBSTRATE_BOX_ID" ]; then
-    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability for THIS box — conductor says it was minted for another" "conductor's receipt is for box '${receipt_box:-<none>}', not this box — the capability was minted for another box"
+  # The lifetime is measured, not asserted by the exchange's own word: a
+  # credential with less than a minute left is a Secret that expires while
+  # pods are being scheduled.
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]] || [ "$seconds" -lt "$REGISTRY_CREDENTIAL_MIN_SECONDS" ]; then
+    kit_substrate_refuse "" "re-run this installer — the exchange mints a fresh credential with a full hour of life" "the minted credential has ${seconds:-no} seconds of life left (less than ${REGISTRY_CREDENTIAL_MIN_SECONDS})
+  a credential that expires mid-pull fails at image-pull time"
   fi
-  if [ -z "$receipt_account" ]; then
-    kit_substrate_refuse "" "" "conductor's receipt carries no account_id"
+  if [ -n "$expires" ] && [[ ! "$expires" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2} ]]; then
+    kit_substrate_refuse "" "" "the minted credential's expires_at '${expires}' is not an instant this installer can read"
   fi
-  # expires_at must name a live instant: the same shape conductor renders
-  # (iso8601, UTC), compared as a string because identical-format UTC
-  # timestamps order lexicographically the way they order chronologically.
-  if [ -z "$receipt_expires" ] || [[ ! "$receipt_expires" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || [[ "$receipt_expires" < "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
-    kit_substrate_refuse "" "" "conductor's receipt expires_at '${receipt_expires:-<none>}' is not a live instant — the capability it names is gone"
+  # And an instant that is already behind us is a credential that died before
+  # it arrived. Compared as a string, because identical-format UTC timestamps
+  # order lexicographically the way they order chronologically.
+  if [ -n "$expires" ] && [ "${#expires}" -eq 20 ] && [[ "$expires" < "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ]]; then
+    kit_substrate_refuse "" "re-run this installer — the exchange mints a fresh credential" "the minted credential's expires_at '${expires}' is already past"
   fi
+  REGISTRY_DOCKERCONFIGJSON="$encoded"
+}
+
+# apply_pull_secret — writes the credential as a docker-registry Secret in each
+# namespace that pulls the fleet's images.
+#
+# THE VALUE NEVER ENTERS ARGV. It travels from curl's response into a shell
+# variable, then into the Secret through `/dev/stdin` in a pipe: `kubectl
+# create ... --from-file=.dockerconfigjson=/dev/stdin --dry-run=client -o yaml
+# | kubectl apply -f -`. A value in argv is visible to every process on the
+# box in `ps`, to a crash reporter, and to a shell history; a value in a pipe
+# is visible to neither. The Secret is then applied, so a re-run is an
+# idempotent replace rather than a create that fails on the second run.
+apply_pull_secret() {
+  local ns
+  for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
+    if kubectl --kubeconfig="$KUBECONFIG" get secret "$REGISTRY_PULL_SECRET_NAME" -n "$ns" >/dev/null 2>&1; then
+      kit_substrate_out "      secret ${REGISTRY_PULL_SECRET_NAME} exists in ${ns} — replacing it (the credential is minutes-lived by design; a fresh exchange buys a fresh one)"
+    else
+      kit_substrate_out "      secret ${REGISTRY_PULL_SECRET_NAME} to be created in ${ns}"
+    fi
+    # Never printed, never in argv, never on disk.
+    printf '%s' "$REGISTRY_DOCKERCONFIGJSON" |
+      kubectl --kubeconfig="$KUBECONFIG" create secret docker-registry "$REGISTRY_PULL_SECRET_NAME" -n "$ns"       --from-file=.dockerconfigjson=/dev/stdin --dry-run=client -o yaml |
+      kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
+  done
+  # The variable holding the credential is dropped the moment it is written.
+  # Nothing after this point needs it, so nothing after this point can leak it.
+  REGISTRY_DOCKERCONFIGJSON=""
 }
 
 install_pull_secret() {
-  log_step "the GHCR image pull secret, redeemed for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
-  if dry_run "redeem the registry capability at conductor's POST /v1/capabilities/redeem and apply ghcr-pull-secret in: argocd identity gateway courier parlor observability"; then
+  log_step "the GHCR image pull secret, exchanged for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
+  if dry_run "exchange the registry capability at ${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials and apply ${REGISTRY_PULL_SECRET_NAME} in: ${REGISTRY_PULL_NAMESPACES[*]}"; then
     return 0
   fi
-  redeem_registry_credential
-  # The redemption is proven; the write is the remaining gap. The receipt
-  # above is conductor's answer — the box-bound, purpose-bound capability
-  # was accepted — and it is all a client can honestly consume today: no
-  # registry service exists to trade it for a dockerconfigjson, and
-  # conductor will not hold a long-lived registry credential (boundary 6).
-  # The refusal names the gap rather than writing a placeholder Secret that
-  # would install, schedule pods, and fail at image-pull time.
-  kit_substrate_refuse \
-    "" \
-    "run this installer again once the registry service exists — the capability path is proven: conductor redeemed it for this box and purpose" \
-    "the registry-side exchange does not exist yet — conductor redeemed the capability for box ${KIT_SUBSTRATE_BOX_ID} (purpose registry.pull), but no service in the fleet trades a redeemed capability for a dockerconfigjson (seam audit §5a-5c)"
+  exchange_registry_credential
+  apply_pull_secret
+  kit_substrate_out "      pull secret applied in ${#REGISTRY_PULL_NAMESPACES[@]} namespaces (short-lived by design — a re-run exchanges a fresh capability for a fresh credential)"
 }
 
 # --- step 6: the first Applications ----------------------------------------
