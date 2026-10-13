@@ -14,6 +14,19 @@
 # place and this file never carries a second opinion. A literal tag here fails
 # the gate, the way a second pin anywhere else would.
 #
+# THE TWO FIELDS, AND WHICH FILE MEANS WHAT. This file reproduces the local
+# service, but it does not reproduce its field spelling. Compose's `command:`
+# APPENDS to the image's ENTRYPOINT; Kubernetes' `command:` REPLACES it, and
+# Kubernetes' `args:` is the field that carries arguments. So the local stack's
+# `command: [-js, -sd, /data, -m, 8222]` runs `nats-server -js …` there, while
+# the same list under this file's `command:` asked the kernel to exec a binary
+# literally named `-js` — measured, on the box, as a CrashLoopBackOff whose
+# termination message was `exec: "-js": executable file not found in $PATH`.
+# The flags are `args:` below, beside a `command:` naming the binary, and the
+# comment at the Deployment spells out both semantics against the image's own
+# entrypoint. `tests/substrate_test.sh` fails the build if a `command:` in this
+# tree ever starts with a flag again.
+#
 # THE SHAPE, and each choice, mirroring the local service:
 #   `-js`            JetStream on. Without it a service that publishes and then
 #                    crashes loses the message, and the at-least-once guarantee
@@ -75,8 +88,48 @@ spec:
           # Substituted at apply time by install.sh step 10 — never a literal
           # tag here (see the header). Renders to nats:<NATS_VERSION>.
           image: NATS_IMAGE_PLACEHOLDER
-          # The local service's command, flag for flag.
+          # THE BINARY, then THE FLAGS — and the two fields are not the two
+          # fields the compose file spells the same way.
+          #
+          # Kubernetes `command:` REPLACES the image's ENTRYPOINT. It is NOT
+          # compose's `command:`, which APPENDS to it. Measured on the pinned
+          # tag (`docker image inspect nats:2.10.24-alpine`) the image is
+          # ENTRYPOINT ["docker-entrypoint.sh"], CMD
+          # ["nats-server","--config","/etc/nats/nats-server.conf"], and that
+          # entrypoint script prepends the binary when the first argument is a
+          # flag:
+          #
+          #     if [ "$#" -eq 0 ] || [ "${1#-}" != "$1" ]; then
+          #         set -- nats-server "$@"
+          #     fi
+          #
+          # So the compose service's flag list under `command:` runs, via the
+          # image's own entrypoint, as
+          #
+          #     nats-server -js -sd /data -m 8222
+          #
+          # and the SAME list under a Kubernetes `command:` appends to nothing:
+          # it asks the kernel to exec a binary literally named `-js`. That is
+          # what shipped, and it is what the box said — `exec: "-js":
+          # executable file not found in $PATH`, StartError, CrashLoopBackOff,
+          # and step 10's `kubectl wait` timing out on deployments/nats. So the
+          # flags live in `args:` here, which is where a container override puts
+          # ARGUMENTS — a field compose spells `command` and Kubernetes also
+          # spells `command`, which is exactly how the two got confused.
+          #
+          # `command:` is written out, naming the binary, rather than being left
+          # off to inherit the entrypoint: the manifest then says what it runs
+          # without a reader knowing the image, and it does not depend on the
+          # entrypoint script's first-argument heuristic still being there.
+          # Leaving `command:` off would also work today — the entrypoint script
+          # prepends `nats-server` for exactly this argument shape — and that is
+          # the more literal port of the compose contract. Naming the binary is
+          # the Redis manifest's precedent, which names `sh` for the same
+          # reason, and `nats-server` is on the image's PATH at
+          # /usr/local/bin (measured).
           command:
+            - "nats-server"
+          args:
             - "-js"
             - "-sd"
             - "/data"

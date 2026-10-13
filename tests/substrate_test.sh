@@ -1178,6 +1178,14 @@ run 'control: a secret with an unrecorded key goes red' red check_secret_record 
 # it and defines the stream, and the two renders agree — the drift check
 # parses BOTH contracts and fails on divergence, so local and substrate
 # cannot drift apart silently. Each has a fixture control that must go red.
+#
+# AND THE FIELD THE FLAGS LIVE IN IS PART OF THE CLAIM. The manifest used to
+# carry the compose flag list under `command:`, which Kubernetes reads as the
+# ENTRYPOINT rather than as arguments — the box refused to start the container
+# at all (`exec: "-js": executable file not found in $PATH`, CrashLoopBackOff,
+# step 10's wait timing out). The check now reads the union of `command` and
+# `args`, because that union is the argv the runtime execs, so no fixture can
+# pass by putting the flags in a field that is not the field.
 COMPOSE_STACK="$ROOT/templates/compose/docker-compose.yml"
 
 check_nats_manifest() {
@@ -1227,11 +1235,16 @@ if container.get("image") != "NATS_IMAGE_PLACEHOLDER":
         " the pin lives in install.sh ($NATS_VERSION) and is substituted at"
         " apply time; a literal tag here is a second opinion"
     )
-tokens = container.get("command", [])
+# The flags are read out of `command` AND `args` together, because that union
+# is the argv the runtime execs: Kubernetes replaces the image's entrypoint
+# with `command` and appends `args` to it. Reading only one of them would pass
+# a manifest whose flags sit in the wrong field — which is the defect this
+# packet is about, and which the check in §12c refuses by shape.
+tokens = list(container.get("command") or []) + list(container.get("args") or [])
 for flag in ("-js", "-sd", "/data", "-m", "8222"):
     if flag not in tokens:
         problems.append(
-            f"broker command is missing {flag!r} — without -js the bus is"
+            f"broker argv is missing {flag!r} — without -js the bus is"
             " at-most-once and every publish is unacked file storage"
         )
 for probe in ("livenessProbe", "readinessProbe"):
