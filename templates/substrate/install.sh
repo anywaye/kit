@@ -698,7 +698,7 @@ install_k3s() {
   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -
   # TWO WAITS, because the Node object is created ASYNCHRONOUSLY: the line
   # above starts k3s, and the kubelet registers the Node a few seconds after
-  # that. The wait below used to be a single `wait --for=condition=Ready node
+  # that. This step used to be a single `wait --for=condition=Ready node
   # --all`, which on an EMPTY list is not a wait at all — it is `error: no
   # matching resources found`, exit 1, and the install is dead at step 1. On a
   # box that had already registered a node the race was invisible; on a wiped
