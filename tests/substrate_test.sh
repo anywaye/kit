@@ -1781,6 +1781,32 @@ mock_namespace_exists() {
   grep -qx -- "$1" "$MOCK_ROOT/namespaces" 2>/dev/null
 }
 
+# mock_has_control_bytes <file> — exit 0 iff the file carries a NUL byte, the
+# signature of the AppleDouble sidecar (`._name`) BSD tar writes for a file's
+# resource fork. Real kubectl fails to parse such a file; the mock's apply
+# branch calls this so a control that hands it one really does break.
+mock_has_control_bytes() {
+  "$PY" -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1], "rb").read() else 1)' "$1"
+}
+
+# mock_apply_plant <manifest> — the ONE write path for `apply`, shared by the
+# three ways a manifest reaches it: a resolved `-f` FILE, a `-f` DIRECTORY (read
+# the way kubectl reads it), and the pipeline on stdin. Two boundaries meet
+# here, one from each packet, and they are independent: the namespace the
+# manifest NAMES must exist (the same NotFound `create secret` models, asked of
+# the write), and the bytes are then appended to the store verbatim. A manifest
+# with no top-level `namespace:` — the namespace stub `create namespace …
+# --dry-run=client -o yaml` prints, or a cluster-scoped object — is not bound by
+# the first, exactly as real kubectl does not bind it.
+mock_apply_plant() {
+  local manifest="$1" apply_ns
+  apply_ns="$(printf '%s\n' "$manifest" | sed -n 's/^  namespace: //p' | head -1)"
+  if [ -n "$apply_ns" ] && ! mock_namespace_exists "$apply_ns"; then
+    printf 'Error from server (NotFound): namespaces "%s" not found\n' "$apply_ns" >&2
+    return 1
+  fi
+  printf '%s\n' "$manifest" >>"$MOCK_ROOT/applied.yaml"
+}
 # mock_kubectl — the file-backed kubectl. Emulates only what
 # install_service_secrets and the pull-secret step use: `create namespace`
 # (REGISTERS the namespace and prints a stub down the pipe to `apply`),
@@ -1965,18 +1991,61 @@ mock_kubectl() {
       # pipeline element is a fork, so a counter kept in the parent never
       # advances and the sixth apply would overwrite the first.
       #
-      # Buffered into a variable rather than streamed, so the manifest's own
-      # namespace can be read before it is stored — the same NotFound boundary
-      # `create secret` models, asked of the second half of the pipeline.
-      local apply_stdin apply_ns
-      apply_stdin="$(cat)"
-      apply_ns="$(printf '%s\n' "$apply_stdin" | sed -n 's/^  namespace: //p' | head -1)"
-      if [ -n "$apply_ns" ] && ! mock_namespace_exists "$apply_ns"; then
-        printf 'Error from server (NotFound): namespaces "%s" not found\n' "$apply_ns" >&2
-        return 1
-      fi
+      # `-f` may name a real FILE or DIRECTORY, and then the mock READS it the
+      # way kubectl does — dotfiles in a directory included — and refuses a
+      # file carrying NUL bytes with the exact error the box reported for an
+      # AppleDouble sidecar. That is what makes the "filter removed" control
+      # below able to break the apply again rather than pass on a mock that
+      # never looked.
+      #
+      # EVERY manifest written — from a resolved `-f` file, a `-f` directory,
+      # or the pipeline on stdin — goes through mock_apply_plant, which reads
+      # the manifest's own namespace before storing it: the same NotFound
+      # boundary `create secret` models, asked of the write. The two packets'
+      # additions meet here and neither replaces the other: the file/directory
+      # reading is the transport fix's, the namespace registry is step 5's.
       mkdir -p "$MOCK_ROOT/applied"
-      printf '%s\n' "$apply_stdin" >>"$MOCK_ROOT/applied.yaml"
+      local -a apply_targets=()
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -f) apply_targets+=("$2"); shift 2 ;;
+          -f=*) apply_targets+=("${1#-f=}"); shift ;;
+          *) shift ;;
+        esac
+      done
+      if [ "${#apply_targets[@]}" -eq 0 ]; then
+        mock_apply_plant "$(cat)"
+        return $?
+      fi
+      local apply_target
+      for apply_target in "${apply_targets[@]}"; do
+        if [ "$apply_target" = "-" ]; then
+          mock_apply_plant "$(cat)" || return 1
+          continue
+        fi
+        local -a apply_files=()
+        if [ -d "$apply_target" ]; then
+          local fpath
+          for fpath in "$apply_target"/* "$apply_target"/.[!.]* "$apply_target"/..?*; do
+            [ -f "$fpath" ] || continue
+            apply_files+=("$fpath")
+          done
+        else
+          if [ ! -f "$apply_target" ]; then
+            printf 'error: the path "%s" does not exist\n' "$apply_target" >&2
+            return 1
+          fi
+          apply_files=("$apply_target")
+        fi
+        local afile
+        for afile in "${apply_files[@]}"; do
+          if mock_has_control_bytes "$afile"; then
+            printf 'error parsing %s: error converting YAML to JSON: yaml: control characters are not allowed\n' "$afile" >&2
+            return 1
+          fi
+          mock_apply_plant "$(cat "$afile")" || return 1
+        done
+      done
       return 0
       ;;
     rollout)
@@ -2703,7 +2772,7 @@ curl() {
 }
 install_pull_secret
 RUNNER
-export -f mock_kubectl mock_namespace_exists
+export -f mock_kubectl mock_namespace_exists mock_apply_plant mock_has_control_bytes
 pull_ns_ec=0
 bash "$WORK/ns-runner.sh" >"$WORK/pull-secret-ns.log" 2>&1 || pull_ns_ec=$?
 if [ "$pull_ns_ec" -ne 0 ]; then
@@ -2923,7 +2992,7 @@ curl() {
 }
 install_pull_secret
 RUNNER
-  export -f mock_kubectl mock_namespace_exists
+  export -f mock_kubectl mock_namespace_exists mock_apply_plant mock_has_control_bytes
   no_ns_ec=0
   bash "$WORK/no-ns-runner.sh" >"$WORK/pull-secret-no-ns.log" 2>&1 || no_ns_ec=$?
   no_ns_ok() {
@@ -3950,9 +4019,12 @@ run 'control: a fourth remote apply with no flags goes red' red check_apply_mode
 # The OTHER DIRECTION: a local apply that grew the remote flags. Without this
 # control a check satisfied by "every apply has both flags" would be just as
 # happy with an installer that moved kit's own manifests into server-side mode
-# and lost the re-run's reclaim.
+# and lost the re-run's reclaim. Step 6's applications apply no longer carries a
+# literal `-f` (it applies the resolved list — see section 20), so the control
+# grows the flags on the Cluster apply, another LOCAL `-f "$…"` apply; the rule
+# is about the target's origin, not about which local line it is.
 fixture_local_ss="$WORK/install-local-server-side.sh"
-sed 's|apply -f "$MANIFEST_DIR"|apply --server-side=true --force-conflicts -f "$MANIFEST_DIR"|' \
+sed 's|apply -f "$DATA_DIR/postgres-cluster.yaml"|apply --server-side=true --force-conflicts -f "$DATA_DIR/postgres-cluster.yaml"|' \
   "$SUBSTRATE/install.sh" >"$fixture_local_ss"
 run 'control: a local apply carrying the remote flags goes red' red check_apply_modes "$fixture_local_ss"
 
@@ -4899,11 +4971,20 @@ apps_step() {
     printf 'set -euo pipefail\n'
     printf 'ARGOCD_DIR=%q\n' "$ARGOCD_DIR"
     printf 'FIXTURE=%q\n' "$1"
+    # Step 6 now RESOLVES its manifest directory before applying (the transport
+    # fix), so the fixture points MANIFEST_DIR at the real applications dir.
+    # Without it the sourced installer's SCRIPT_DIR is this temp fixture, the
+    # dir holds no `*.yaml`, and the step refuses — a green that failed on the
+    # fixture's own shape rather than on the wait this case is about. Set AFTER
+    # the source: install.sh assigns MANIFEST_DIR from SCRIPT_DIR at source
+    # time, so a value written before it would be overwritten.
     declare -f argocd_kubectl
     printf '%s\n' \
       'export DRY_RUN=0 HEADLESS=0' \
       '# shellcheck source=/dev/null' \
-      '. "$FIXTURE"' \
+      '. "$FIXTURE"'
+    printf 'MANIFEST_DIR=%q\n' "$MANIFESTS"
+    printf '%s\n' \
       'kubectl() { argocd_kubectl "$@"; }' \
       'install_applications'
   } >"$script"
@@ -4954,7 +5035,12 @@ awk -v wait_line="$apps_wait_line" '
   # once; on the broken tree the live wait is stripped and re-inserted, still
   # exactly once.
   /wait --for=condition=Available deployment -n argocd / && !/--all/ { next }
-  /^  kubectl --kubeconfig="\$KUBECONFIG" apply -f "\$MANIFEST_DIR"$/ {
+  # The apply the wait used to follow is now the RESOLVED list the transport
+  # fix applies (install_applications no longer carries a literal
+  # `-f "$MANIFEST_DIR"`), so the insert anchors on that line. Anchoring on the
+  # old one left the wait uninserted and the premise below caught it — the
+  # control would otherwise have proved nothing.
+  /^  kubectl --kubeconfig="\$KUBECONFIG" apply "\$\{apply_args\[@\]\}"$/ {
     print
     print wait_line
     next
@@ -5040,6 +5126,191 @@ if bad:
     sys.exit(1)
 print("the runnable code names no component core-install does not ship")
 PY
+
+# ===========================================================================
+# 20. A manifest directory is read DELIBERATELY — AppleDouble ignored, a stray
+#     file refused by name, and the filter proved load-bearing
+# ===========================================================================
+#
+# MEASURED LIVE ON THE BOX. The substrate tree was shipped from a macOS
+# workstation with the idiom an operator will reach for — `tar czf - . | ssh
+# box 'tar xzf -'` — and BSD tar left AppleDouble sidecars beside every real
+# file. Step 6's `kubectl apply -f <dir>` hands the directory's files, DOTFILES
+# INCLUDED, to the API server, so it read `._identity.yaml` and the install
+# DIED on the first sidecar:
+#
+#   error parsing /var/lib/cafaye/substrate/manifests/applications/._identity.yaml:
+#   error converting YAML to JSON: yaml: control characters are not allowed
+#
+# `COPYFILE_DISABLE=1 tar --no-xattrs` reduces the sidecars but does not remove
+# the class: a Windows copy, an editor's `foo~` backup or a `.DS_Store` is the
+# same defect from another transport. install.sh now resolves its file list (the
+# note above install_applications): AppleDouble ignored and named, a stray file
+# REFUSED by name, the intended `*.yaml` manifests applied and nothing else.
+#
+# THREE PROOFS, each executed against a mocked kubectl that READS what `-f`
+# names — dotfiles in a directory included — and refuses a file carrying NUL
+# bytes with the exact error above. A mock that swallowed everything would let
+# the "filter removed" control pass for the wrong reason, which is the whole
+# failure a red control exists to rule out.
+apple_double_tree="$WORK/apply-tree-sidecar"
+stray_tree="$WORK/apply-tree-stray"
+
+# plant_apple_double <path> — an AppleDouble sidecar: the BSD tar magic, an
+# "Mac OS X" attr header, and the NUL bytes that make kubectl refuse it.
+plant_apple_double() {
+  printf '\000\005\026\007\000\002\000\000Mac OS X\000\000\000\002\000\000' >"$1"
+  printf '\000\000\000\000\000\000\000\000' >>"$1"
+}
+
+# apply_step <installer> <manifest-tree> <mock-root> <log> — source <installer>
+# with `main` already stripped, point MANIFEST_DIR at <manifest-tree>, stub
+# kubectl with the file-backed mock, and run install_applications. Returns the
+# step's exit status; the mock's records land under <mock-root>.
+apply_step() {
+  local installer="$1" tree="$2" mock="$3" log="$4" ec=0
+  rm -rf "$mock"
+  mkdir -p "$mock"
+  # The box state step 6 runs in: step 4 has already made `argocd`, and the
+  # Applications apply INTO it (metadata.namespace: argocd). The mock enforces
+  # the namespace registry on every write, so the fixture seeds the namespace
+  # the manifests name — otherwise the green would fail on the namespace the
+  # box already has, not on the transport this check is about.
+  printf 'argocd\n' >"$mock/namespaces"
+  (
+    # shellcheck source=/dev/null
+    . "$installer"
+    # A failing kubectl KILLS the step here, the way it does on the box: the
+    # subshell is the left side of an `||`, which suppresses `set -e`, so the
+    # wrapper makes the failure fatal explicitly rather than letting
+    # install_applications carry on to its `wait`.
+    kubectl() { mock_kubectl "$@" || exit $?; }
+    export RECEIPT_PATH="$mock/receipt.json"
+    export MOCK_ROOT="$mock"
+    # shellcheck disable=SC2034  # read by the sourced installer's install_applications
+    MANIFEST_DIR="$tree"
+    install_applications
+  ) >"$log" 2>&1 || ec=$?
+  return "$ec"
+}
+
+# GREEN: a tree with AppleDouble sidecars beside the real manifests must apply
+# and must not fail.
+apple_double_ok() {
+  local ec=0 applied argv
+  apply_step "$fixture_sourced" "$apple_double_tree" "$WORK/ad-mock" "$WORK/ad.log" || ec=$?
+  if [ "$ec" -ne 0 ]; then
+    printf 'the step failed on an AppleDouble-only tree (exit %s):\n%s\n' "$ec" "$(cat "$WORK/ad.log")"
+    return 1
+  fi
+  applied="$(cat "$WORK/ad-mock/applied.yaml" 2>/dev/null || true)"
+  case "$applied" in
+    *"name: identity"*) : ;;
+    *) printf 'identity.yaml was not applied:\n%s\n' "$applied"; return 1 ;;
+  esac
+  case "$applied" in
+    *"name: gateway"*) : ;;
+    *) printf 'gateway.yaml was not applied:\n%s\n' "$applied"; return 1 ;;
+  esac
+  if mock_has_control_bytes "$WORK/ad-mock/applied.yaml"; then
+    printf 'a sidecar reached the applied output\n'
+    return 1
+  fi
+  case "$(cat "$WORK/ad.log")" in
+    *"ignoring AppleDouble sidecar"*) : ;;
+    *) printf 'the ignored sidecar was never named in the output:\n%s\n' "$(cat "$WORK/ad.log")"; return 1 ;;
+  esac
+  argv="$(cat "$WORK/ad-mock/kubectl-argv" 2>/dev/null || true)"
+  case "$argv" in
+    *"._"*) printf 'the sidecar was handed to kubectl:\n%s\n' "$argv"; return 1 ;;
+  esac
+  printf 'sidecar ignored and named, only the real manifests applied'
+}
+
+# RED control #1: a stray non-sidecar YAML in the directory must be REFUSED,
+# by name, and for the stray file's reason rather than the sidecar's.
+stray_refused() {
+  local ec=0 log
+  apply_step "$fixture_sourced" "$stray_tree" "$WORK/stray-mock" "$WORK/stray.log" || ec=$?
+  log="$(cat "$WORK/stray.log")"
+  if [ "$ec" -eq 0 ]; then
+    printf 'the step applied a directory holding a stray file\n'
+    return 1
+  fi
+  case "$log" in
+    *"stray.yml"*) : ;;
+    *) printf 'the refusal did not name the stray file:\n%s\n' "$log"; return 1 ;;
+  esac
+  case "$log" in
+    *"control characters"*)
+      printf 'the refusal fired for the sidecar, not the stray file:\n%s\n' "$log"
+      return 1
+      ;;
+  esac
+  printf 'refused, naming stray.yml'
+}
+
+# RED control #2: the glob filter removed (the loop reads EVERY entry, as
+# `kubectl apply -f <dir>` always did) hands the sidecar to kubectl and the
+# apply breaks again — so the filter is proven load-bearing, not decorative.
+nofilter_breaks() {
+  local installer="$1" ec=0 log
+  if cmp -s "$installer" "$fixture_sourced"; then
+    printf 'the filter mutation did not change the installer — a vacuous control\n'
+    return 1
+  fi
+  if ! grep -qF 'for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do' "$installer"; then
+    printf 'the mutated (unfiltered) loop is not present in the fixture\n'
+    return 1
+  fi
+  apply_step "$installer" "$apple_double_tree" "$WORK/nofilter-mock" "$WORK/nofilter.log" || ec=$?
+  log="$(cat "$WORK/nofilter.log")"
+  if [ "$ec" -eq 0 ]; then
+    printf 'the sidecar was applied without breaking — the filter is not load-bearing\n'
+    return 1
+  fi
+  case "$log" in
+    *"control characters"*) : ;;
+    *) printf 'the apply did not break on the sidecar:\n%s\n' "$log"; return 1 ;;
+  esac
+  printf 'the sidecar broke the apply again (exit %s)' "$ec"
+}
+
+# Build the two trees. The premise is asserted before the proof: a control whose
+# fixture is missing the thing it names proves nothing.
+mkdir -p "$apple_double_tree"
+cp "$MANIFESTS/identity.yaml" "$apple_double_tree/"
+cp "$MANIFESTS/gateway.yaml" "$apple_double_tree/"
+plant_apple_double "$apple_double_tree/._identity.yaml"
+plant_apple_double "$apple_double_tree/._gateway.yaml"
+
+mkdir -p "$stray_tree"
+cp "$MANIFESTS/identity.yaml" "$stray_tree/"
+plant_apple_double "$stray_tree/._identity.yaml"
+printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: stray\n' >"$stray_tree/stray.yml"
+
+if [ -f "$apple_double_tree/._identity.yaml" ] && [ -f "$apple_double_tree/identity.yaml" ] \
+  && mock_has_control_bytes "$apple_double_tree/._identity.yaml"; then
+  pass 'premise: the AppleDouble tree carries a NUL-bearing ._identity.yaml beside the real manifests'
+else
+  fail 'premise: the AppleDouble tree carries a NUL-bearing ._identity.yaml beside the real manifests' 'the fixture is not the shape the control names'
+fi
+
+if [ -f "$stray_tree/stray.yml" ] && ! mock_has_control_bytes "$stray_tree/stray.yml"; then
+  pass 'premise: the stray tree carries a non-sidecar YAML named stray.yml'
+else
+  fail 'premise: the stray tree carries a non-sidecar YAML named stray.yml' 'the fixture is not the shape the control names'
+fi
+
+# The filter-removed fixture: one sed changes the helper's loop to read every
+# entry, exactly as the pre-fix directory apply did.
+nofilter_installer="$WORK/install-nofilter.sh"
+sed 's|for f in "$dir"/\*\.yaml; do|for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do|' \
+  "$fixture_sourced" >"$nofilter_installer"
+
+run 'the step applies a tree with AppleDouble sidecars (sidecar ignored and named)' green apple_double_ok
+run 'control: a stray non-sidecar YAML is refused by name (the apply goes red)' green stray_refused
+run 'control: removing the glob filter lets AppleDouble break the apply again' green nofilter_breaks "$nofilter_installer"
 
 # ===========================================================================
 # Summary

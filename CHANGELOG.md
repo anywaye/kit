@@ -19,6 +19,22 @@
   `tests/substrate_test.sh` §12b refuses any `command:` whose first element
   begins with a flag, with the `-js` shape as its red control and a binary-first
   fixture as its green one, so the class cannot ship silently again.
+- **A macOS-shipped tree made the installer apply AppleDouble sidecars, and one
+  of them killed the install.** `kubectl apply -f <dir>` reads every file in the
+  directory, **dotfiles included**, so a tree shipped with
+  `tar czf - . | ssh box 'tar xzf -'` left `._identity.yaml` beside each
+  Application and step 6 handed it to the API server —
+  `error parsing …/._identity.yaml: error converting YAML to JSON: yaml:
+  control characters are not allowed`. `install.sh` now resolves each manifest
+  directory deliberately: the intended `*.yaml` files are applied, AppleDouble
+  `._*` sidecars are ignored and named in the output, and any other entry is
+  **refused by name** — a stray file in a manifest directory is a mistake to fix
+  or a convention to record, never a silent skip. The `applications/`, `tls/`
+  and `data/` apply sites all route through the same check, and the filter is
+  the glob (no second filename list to drift). `tests/substrate_test.sh` §20
+  proves it: a sidecar-bearing tree applies cleanly, a stray non-sidecar YAML
+  goes red naming the file, and a fixture with the glob filter removed hands the
+  sidecar to kubectl and breaks the apply again.
 - **The Postgres Cluster named a field CNPG v1.30.1 does not have, and the gate
   was green over it.** `templates/substrate/manifests/data/postgres-cluster.yaml`
   wrote `spec.storageConfiguration`, the operator's **pre-1.24** name; the pin

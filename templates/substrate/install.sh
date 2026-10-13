@@ -1043,6 +1043,99 @@ install_pull_secret() {
   kit_substrate_out "      pull secret applied in ${#REGISTRY_PULL_NAMESPACES[@]} namespaces (short-lived by design — a re-run exchanges a fresh capability for a fresh credential)"
 }
 
+# --- reading a manifest DIRECTORY deliberately -------------------------------
+# WHAT `kubectl apply -f <dir>` ACTUALLY READS, AND THE TRANSPORT THAT BROKE ONE.
+#
+# `kubectl apply -f <dir>` does not read "the manifests"; it reads every regular
+# file the directory holds, DOTFILES INCLUDED. A macOS workstation that shipped
+# this tree with the idiom an operator will reach for —
+#
+#   tar czf - . | ssh box 'tar xzf -'
+#
+# — leaves AppleDouble sidecars beside every real file: `._install.sh`,
+# `._manifests/`, and `._identity.yaml` beside each Application. BSD tar emits
+# them for the resource fork / Finder metadata. The apply then handed the
+# sidecar to the API server and the install DIED on the FIRST of them, measured
+# live on the box:
+#
+#   error parsing /var/lib/cafaye/substrate/manifests/applications/._identity.yaml:
+#   error converting YAML to JSON: yaml: control characters are not allowed
+#
+# `COPYFILE_DISABLE=1 tar --no-xattrs` reduces the sidecars but does not remove
+# the class — a Windows copy, an editor's `foo.yaml~` backup, or a `.DS_Store`
+# left in the directory is the same defect from another transport. So the
+# installer does not apply a directory and hope: it RESOLVES THE LIST, applies
+# exactly the manifests, IGNORES AppleDouble debris (and says so), and REFUSES —
+# naming the file — anything else it finds, because a stray file in a manifest
+# directory is either a mistake to fix or a convention to record, and silent
+# skipping is the one outcome the next author cannot see.
+#
+# THE FILTER IS THE GLOB, NOT AN ENUMERATED ALLOWLIST. `"$dir"/*.yaml` is the
+# intended set and it is read from the directory, so a manifest added or renamed
+# is picked up with no second list to keep in step — a hand-written list that
+# drifts from the directory is its own bug. Bash's `*` does not match a leading
+# dot, which is what already keeps `._identity.yaml` out; the check below makes
+# that exclusion EXPLICIT rather than incidental, and the "unexpected entries"
+# half turns everything that is neither an intended `*.yaml` manifest nor
+# AppleDouble debris into a loud refusal rather than a quiet skip.
+KIT_MANIFEST_FILES=()
+
+# kit_substrate_check_manifest_dir <dir> — refuse, naming it, if <dir> holds
+# anything that is neither an intended `*.yaml` manifest nor AppleDouble debris.
+# AppleDouble sidecars are named once, through kit_substrate_out, so the skip is
+# visible rather than silent.
+kit_substrate_check_manifest_dir() {
+  local dir="$1" entry base
+  local -a unexpected=() sidecars=()
+  # Three patterns reach every entry: plain names, a leading single dot, and a
+  # leading double dot. An unmatched glob stays literal, so `[ -e ]` is the
+  # guard rather than a `nullglob` that would change the shell's state.
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || continue
+    base="${entry##*/}"
+    case "$base" in
+      ._*)
+        # AppleDouble — a transport artifact, expected wherever a macOS tar or
+        # a Windows copy has been. Ignored, and named so the skip is visible.
+        sidecars+=("$base")
+        continue
+        ;;
+    esac
+    if [ -f "$entry" ]; then
+      case "$base" in
+        *.yaml) continue ;;
+      esac
+    fi
+    unexpected+=("$base")
+  done
+  if [ "${#sidecars[@]}" -gt 0 ]; then
+    kit_substrate_out "      ignoring AppleDouble sidecar(s) in ${dir}: ${sidecars[*]} (macOS tar/cp debris, not manifests)"
+  fi
+  if [ "${#unexpected[@]}" -gt 0 ]; then
+    kit_substrate_refuse "" \
+      "remove it from ${dir}, or record the convention — a manifest directory holds only its *.yaml manifests" \
+      "${dir} holds unexpected entries: ${unexpected[*]}"
+  fi
+}
+
+# kit_substrate_manifest_files <dir> — set KIT_MANIFEST_FILES to the intended
+# manifest paths under <dir>, in glob order, AppleDouble excluded, and refuse
+# (never return) if the directory holds anything unexpected or no manifest at
+# all. The caller reads KIT_MANIFEST_FILES rather than re-globbing, so the list
+# and the check can never disagree.
+kit_substrate_manifest_files() {
+  local dir="$1" f
+  KIT_MANIFEST_FILES=()
+  kit_substrate_check_manifest_dir "$dir"
+  for f in "$dir"/*.yaml; do
+    [ -f "$f" ] || continue
+    KIT_MANIFEST_FILES+=("$f")
+  done
+  if [ "${#KIT_MANIFEST_FILES[@]}" -eq 0 ]; then
+    kit_substrate_refuse "" "restore ${dir}'s manifests" "${dir} holds no *.yaml manifests — refusing to apply nothing"
+  fi
+}
+
 # --- step 6: the first Applications ----------------------------------------
 # LOCAL manifests, so CLIENT-SIDE apply — see the note above step 2. These are
 # kit's own files: small enough that the last-applied-configuration annotation
@@ -1054,7 +1147,13 @@ install_applications() {
   if dry_run "kubectl apply -f ${MANIFEST_DIR}"; then
     return 0
   fi
-  kubectl --kubeconfig="$KUBECONFIG" apply -f "$MANIFEST_DIR"
+  # Resolve the directory deliberately — see the note above this function for
+  # the AppleDouble failure `kubectl apply -f <dir>` used to cause.
+  kit_substrate_manifest_files "$MANIFEST_DIR"
+  local -a apply_args=()
+  local f
+  for f in "${KIT_MANIFEST_FILES[@]}"; do apply_args+=(-f "$f"); done
+  kubectl --kubeconfig="$KUBECONFIG" apply "${apply_args[@]}"
   # No wait here, and the reason is a property of the install variant rather
   # than of forgetfulness. The wait that used to close this step named
   # argocd-server, which core-install does not ship — the core variant has no
@@ -1121,7 +1220,15 @@ install_cluster_issuers() {
   # CLIENT-SIDE apply, deliberately: a LOCAL manifest (see the note above step
   # 2) — two small ClusterIssuers, re-applied on every run, and owned by this
   # installer.
-  sed "s/ACME_EMAIL_PLACEHOLDER/$KIT_SUBSTRATE_ACME_EMAIL/" "$TLS_DIR"/*.yaml |
+  #
+  # THE FILE LIST IS RESOLVED, NOT A BARE GLOB. `"$TLS_DIR"/*.yaml` happens to
+  # exclude AppleDouble already (bash's `*` skips a leading dot), but the
+  # exclusion is left to be incidental here for one directory and explicit in
+  # the helper for another — so this site names the same deliberate list the
+  # applications step does, and a stray file in `manifests/tls/` is refused
+  # rather than quietly not applied. See the note above install_applications.
+  kit_substrate_manifest_files "$TLS_DIR"
+  sed "s/ACME_EMAIL_PLACEHOLDER/$KIT_SUBSTRATE_ACME_EMAIL/" "${KIT_MANIFEST_FILES[@]}" |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
   kit_substrate_out "      applied letsencrypt-staging and letsencrypt-prod"
 }
@@ -1216,6 +1323,12 @@ install_postgres_cluster() {
   # re-applied on every run, and owned by this installer — which is exactly why
   # the mode takes the re-run's ability to reclaim a field away on the remote
   # manifests and leaves it intact here.
+  #
+  # The file below is applied BY NAME, so its list is deliberate by
+  # construction; the check is over the DIRECTORY, so a stray file shipped
+  # beside it (AppleDouble ignored, anything else refused by name) is surfaced
+  # rather than silently ignored. See the note above install_applications.
+  kit_substrate_check_manifest_dir "$DATA_DIR"
   kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/postgres-cluster.yaml"
   # The pods, not the Cluster phase: pod Ready means the instance passed its
   # readiness probe, which is the observable property the services need. A
@@ -1255,7 +1368,10 @@ install_redis_and_secrets() {
     else
       kit_substrate_out "      secret redis-password exists, keeping its password (never regenerated, never printed)"
     fi
-    # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds).
+    # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
+    # by name, so the file is deliberate; the directory is checked so a stray
+    # file beside it is surfaced rather than skipped (see install_applications).
+    kit_substrate_check_manifest_dir "$DATA_DIR"
     kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/redis.yaml"
     kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment redis -n data --timeout=180s
   fi
@@ -1658,6 +1774,10 @@ install_nats() {
   else
     kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
       kubectl --kubeconfig="$KUBECONFIG" apply -f -
+    # Applied BY NAME, so the file is deliberate; the directory is checked so a
+    # stray file beside it is surfaced rather than skipped (see
+    # install_applications).
+    kit_substrate_check_manifest_dir "$DATA_DIR"
     sed "s/NATS_IMAGE_PLACEHOLDER/nats:${NATS_VERSION}/" "$DATA_DIR/nats.yaml" |
       kubectl --kubeconfig="$KUBECONFIG" apply -f -
     kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment nats -n data --timeout=180s

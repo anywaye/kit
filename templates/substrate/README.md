@@ -212,6 +212,32 @@ export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET='<provider-signing-secret>'
 bash templates/substrate/install.sh
 ```
 
+### Shipping the tree to a box from a macOS workstation
+
+The script reads `manifests/` from beside itself, so a box that runs it from a
+checkout needs the whole tree there. **A macOS `tar` leaves AppleDouble
+sidecars** — `._identity.yaml` beside every Application — and `kubectl apply -f
+<dir>` reads dotfiles, which is how a Mac-shipped tree died at step 6:
+
+```
+error parsing …/manifests/applications/._identity.yaml:
+error converting YAML to JSON: yaml: control characters are not allowed
+```
+
+The installer now swallows `._*` and refuses anything else unexpected (see
+`install.sh`'s note above `install_applications`), so a sidecar cannot defeat
+the install. Ship the tree clean anyway:
+
+```sh
+COPYFILE_DISABLE=1 tar --no-xattrs -czf - . | ssh box 'tar xzf -'
+rsync -a --exclude '._*' --exclude '.DS_Store' ./ box:/var/lib/cafaye/substrate/
+ditto -c -k --norsrc --noextattr . - | ssh box 'ditto -x -k --norsrc - /var/lib/cafaye/substrate'
+```
+
+`COPYFILE_DISABLE=1` stops BSD `tar` writing the sidecars and `--no-xattrs`
+drops extended attributes; `ditto --norsrc --noextattr` and `rsync`'s
+`--exclude` are the equivalents.
+
 `KIT_SUBSTRATE_SMTP_ADAPTER` (default `smtp`) and `KIT_SUBSTRATE_SMTP_PORT`
 (default `587`) are validated, not required. `KIT_SUBSTRATE_MAIL_FROM` /
 `_NAME` are optional passthroughs — unset stays unwired (a reduced surface,
@@ -549,6 +575,13 @@ is an operator action, and the URL works only when observed.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
+- **Every manifest directory is read deliberately.** Step 6 applies the
+  `*.yaml` manifests it resolves, ignores AppleDouble `._*` sidecars (and names
+  them in the output), and refuses any other entry by name; the `tls/` and
+  `data/` sites route through the same check. A tree carrying `._identity.yaml`
+  applies cleanly, a stray non-sidecar YAML goes **red** naming the file, and a
+  fixture with the glob filter removed hands the sidecar to kubectl and breaks
+  the apply again (**red**) — so the filter is proven load-bearing.
 - The Cluster manifest names one cluster (`data/postgres`) and carries the
   per-role provisioning (`REVOKE … FROM PUBLIC`, the `inRoles` membership,
   the connection limit, the timeouts, no `imageName`, and pointedly no
