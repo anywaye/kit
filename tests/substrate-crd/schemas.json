@@ -1,6 +1,130 @@
 {
   "note": "The property-name graph of each pinned CRD's spec, derived by tests/substrate-crd/regen.py from the same release URL templates/substrate/install.sh applies. Object -> {key: model}, array -> {'[]': model}, primitive or additionalProperties map -> True, arbitrary-key map -> '*'. NOT a type check and not exhaustive of Kubernetes semantics: it catches a field NAME the pinned CRD does not declare, which is exactly the class of defect CNPG's strict decoding refuses at apply time.",
   "schemas": {
+    "argoproj.io/v1alpha1/AppProject": {
+      "clusterResourceBlacklist": {
+        "[]": {
+          "group": "*",
+          "kind": "*",
+          "name": "*"
+        }
+      },
+      "clusterResourceWhitelist": {
+        "[]": {
+          "group": "*",
+          "kind": "*",
+          "name": "*"
+        }
+      },
+      "description": "*",
+      "destinationServiceAccounts": {
+        "[]": {
+          "defaultServiceAccount": "*",
+          "namespace": "*",
+          "server": "*"
+        }
+      },
+      "destinations": {
+        "[]": {
+          "name": "*",
+          "namespace": "*",
+          "server": "*"
+        }
+      },
+      "namespaceResourceBlacklist": {
+        "[]": {
+          "group": "*",
+          "kind": "*"
+        }
+      },
+      "namespaceResourceWhitelist": {
+        "[]": {
+          "group": "*",
+          "kind": "*"
+        }
+      },
+      "orphanedResources": {
+        "ignore": {
+          "[]": {
+            "group": "*",
+            "kind": "*",
+            "name": "*"
+          }
+        },
+        "warn": "*"
+      },
+      "permitOnlyProjectScopedClusters": "*",
+      "roles": {
+        "[]": {
+          "description": "*",
+          "groups": {
+            "[]": "*"
+          },
+          "jwtTokens": {
+            "[]": {
+              "exp": "*",
+              "iat": "*",
+              "id": "*"
+            }
+          },
+          "name": "*",
+          "policies": {
+            "[]": "*"
+          }
+        }
+      },
+      "signatureKeys": {
+        "[]": {
+          "keyID": "*"
+        }
+      },
+      "sourceIntegrity": {
+        "git": {
+          "policies": {
+            "[]": {
+              "gpg": {
+                "keys": {
+                  "[]": "*"
+                },
+                "mode": "*"
+              },
+              "repos": {
+                "[]": {
+                  "url": "*"
+                }
+              }
+            }
+          }
+        }
+      },
+      "sourceNamespaces": {
+        "[]": "*"
+      },
+      "sourceRepos": {
+        "[]": "*"
+      },
+      "syncWindows": {
+        "[]": {
+          "andOperator": "*",
+          "applications": {
+            "[]": "*"
+          },
+          "clusters": {
+            "[]": "*"
+          },
+          "description": "*",
+          "duration": "*",
+          "kind": "*",
+          "manualSync": "*",
+          "namespaces": {
+            "[]": "*"
+          },
+          "schedule": "*",
+          "syncOverrun": "*",
+          "timeZone": "*"
+        }
+      }
+    },
     "argoproj.io/v1alpha1/Application": {
       "destination": {
         "name": "*",
@@ -2653,6 +2777,12 @@
     }
   },
   "sources": {
+    "argoproj.io/v1alpha1/AppProject": {
+      "crdName": "appprojects.argoproj.io",
+      "pin": "ARGOCD_VERSION",
+      "url": "https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.4/manifests/core-install.yaml",
+      "version": "v3.5.4"
+    },
     "argoproj.io/v1alpha1/Application": {
       "crdName": "applications.argoproj.io",
       "pin": "ARGOCD_VERSION",

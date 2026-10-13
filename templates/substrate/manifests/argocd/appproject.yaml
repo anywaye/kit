@@ -1,0 +1,74 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: argocd
+spec:
+  # The default project for the cafaye substrate — the only project the eight
+  # Applications name. core-install.yaml ships the AppProject CRD but no
+  # AppProject object (neither does the full install.yaml — both are CRD-only;
+  # the controller auto-creates a maximal default in some installs, but the
+  # core variant does not, so without this nothing syncs and step 11 times out
+  # waiting for deployment/identity that Argo never creates:
+  #   Application referencing project default which does not exist
+  # ).
+  #
+  # WHY LEAST PRIVILEGE, AND WHY IT IS TIGHTER THAN THE HAND-FIX.
+  # The manager's hand-fix was sourceRepos *, destinations */*, clusterResourceWhitelist
+  # */* — maximal, because that is the shape `kubectl get applications` stops
+  # complaining on without thinking about what the Applications actually need.
+  # That shape is the controller's own auto-created default, and it is the
+  # right default for a cluster that has to run unknown Applications. This
+  # substrate is not that cluster: it runs eight known Applications whose
+  # charts and namespaces are enumerated in this repository, so the project
+  # can be scoped to exactly those.
+  #
+  #   sourceRepos        the three repoURLs the eight Applications name and
+  #                      no other: the two upstream Helm repos for the
+  #                      observability four and oci://ghcr.io/cafaye/charts
+  #                      for the four service charts. A project that allows *
+  #                      lets an Application pull from a repo this repository
+  #                      never reviewed; a project that lists these three
+  #                      refuses it before a chart is fetched.
+  #
+  #   destinations       the five namespaces the Applications deploy into
+  #                      (observability, identity, gateway, courier, parlor)
+  #                      on the one cluster this substrate runs
+  #                      (https://kubernetes.default.svc). A project that
+  #                      allows */* lets an Application deploy into kube-system
+  #                      or argocd itself; this one does not.
+  #
+  #   clusterResourceWhitelist / namespaceResourceWhitelist
+  #                      not listed, so the defaults apply: no cluster-scoped
+  #                      resources and all namespaced resources. The service
+  #                      charts create Deployments, Services, ConfigMaps and
+  #                      Secrets in their own namespace and nothing
+  #                      cluster-scoped; the observability charts do the same
+  #                      inside observability. Allowing a clusterResource would
+  #                      let a chart create a ClusterRole that binds to any
+  #                      namespace, which is exactly the privilege the
+  #                      database-per-service boundary exists to prevent.
+  #                      If a chart later needs a cluster-scoped kind, that
+  #                      kind is added here explicitly, with the reason beside
+  #                      it — the project is the one place a cluster-scoped
+  #                      grant is visible.
+  #
+  # If the maximal shape is ever needed again, the reason must be written
+  # beside it — a project that allows * is a project that has stopped being
+  # a boundary.
+  description: "The default project for the cafaye substrate — the eight Applications' project"
+  sourceRepos:
+    - https://grafana.github.io/helm-charts
+    - https://prometheus-community.github.io/helm-charts
+    - oci://ghcr.io/cafaye/charts
+  destinations:
+    - namespace: observability
+      server: https://kubernetes.default.svc
+    - namespace: identity
+      server: https://kubernetes.default.svc
+    - namespace: gateway
+      server: https://kubernetes.default.svc
+    - namespace: courier
+      server: https://kubernetes.default.svc
+    - namespace: parlor
+      server: https://kubernetes.default.svc

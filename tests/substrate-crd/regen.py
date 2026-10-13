@@ -35,6 +35,12 @@ INSTALL = HERE.parent.parent / "templates/substrate/install.sh"
 OUT = HERE / "schemas.json"
 
 # pin name -> (CRD metadata.name, release-manifest URL template)
+# ARGOCD_VERSION appears twice because core-install ships two CRDs the substrate
+# uses — Application and AppProject — and the AppProject is what the packet's
+# defect is about: core-install's CRD but no object, so the Applications'
+# `spec.project: default` never syncs. Both CRDs come from the same pinned
+# manifest, so the pin is one fact with two models; the sources dict keeps the
+# pin's version beside each key so a bump without re-deriving still goes red.
 TARGETS = {
     "CNPG_VERSION": (
         "clusters.postgresql.cnpg.io",
@@ -47,6 +53,16 @@ TARGETS = {
     "CERT_MANAGER_VERSION": (
         "clusterissuers.cert-manager.io",
         "https://github.com/cert-manager/cert-manager/releases/download/{v}/cert-manager.yaml",
+    ),
+}
+# A second CRD from the same pinned Argo CD manifest — not a second pin.
+# Kept separate so a hand-edit that adds a field to schemas.json without
+# re-deriving is visible as a second source the gate checks.
+EXTRA_TARGETS = {
+    "argoproj.io/v1alpha1/AppProject": (
+        "ARGOCD_VERSION",
+        "appprojects.argoproj.io",
+        "https://raw.githubusercontent.com/argoproj/argo-cd/{v}/manifests/core-install.yaml",
     ),
 }
 
@@ -118,6 +134,14 @@ def main() -> int:
         schemas[key] = model({"type": "object", "properties": spec_props(crd)})
         sources[key] = {"pin": pin, "version": version, "crdName": crd_name, "url": url}
         print(f"{key}: {len(schemas[key])} top-level fields from {version}")
+    for key, (pin, crd_name, url_tpl) in EXTRA_TARGETS.items():
+        version = versions[pin]
+        url = url_tpl.format(v=version, bare=version.lstrip("v"))
+        crd = crd_doc(fetch(url), crd_name)
+        # key is already the canonical API/version/kind for this CRD
+        schemas[key] = model({"type": "object", "properties": spec_props(crd)})
+        sources[key] = {"pin": pin, "version": version, "crdName": crd_name, "url": url}
+        print(f"{key}: {len(schemas[key])} top-level fields from {version} (extra)")
     payload = {
         "note": (
             "The property-name graph of each pinned CRD's spec, derived by "

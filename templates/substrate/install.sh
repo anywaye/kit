@@ -328,6 +328,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST_DIR="$SCRIPT_DIR/manifests/applications"
 TLS_DIR="$SCRIPT_DIR/manifests/tls"
 DATA_DIR="$SCRIPT_DIR/manifests/data"
+ARGOCD_MANIFEST_DIR="$SCRIPT_DIR/manifests/argocd"
 
 # --- the guard --------------------------------------------------------------
 # kit_substrate_guard <component> — is this component already installed?
@@ -795,7 +796,7 @@ install_argocd() {
   # The third and largest remote manifest, and the second of the two CRDs that
   # overflowed the annotation ceiling on the box. Same flags, same reason; a
   # mode chosen per step is how a substrate ends up half-applied.
-  if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"; then
+  if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml and apply ${ARGOCD_MANIFEST_DIR}/appproject.yaml (the default AppProject the Applications name)"; then
     return 0
   fi
   kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
@@ -803,6 +804,37 @@ install_argocd() {
   kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
     "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
   kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=300s
+  # The AppProject core-install does not ship. Eight Applications name
+  # `spec.project: default`, so without an AppProject named `default` the
+  # controller reports `Application referencing project default which does not
+  # exist` and creates nothing — step 11 then times out waiting for a
+  # Deployment Argo never made. The hand-fix was a maximal project
+  # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
+  # is least-privilege — sourceRepos exactly the three repoURLs the
+  # Applications use, destinations exactly the five namespaces they deploy
+  # into on https://kubernetes.default.svc, and no cluster-scoped whitelist
+  # (the charts create only namespaced resources). That is the tightest set
+  # that still syncs, and the reason is written here rather than only in the
+  # manifest, so a reader who widens it knows what they are widening.
+  #
+  # WHY STEP 4 AND NOT STEP 6. The project must exist BEFORE the Applications
+  # that name it — Argo's application-controller reconciles an Application
+  # only when its project exists, so applying the project in the same
+  # `kubectl apply -f <dir>` as the Applications relies on apply ordering and
+  # on the controller re-queuing the Unknown Application after the project
+  # appears. Applying it here, right after Argo CD is Available and before
+  # any Application is applied at step 6, makes the ordering explicit in the
+  # install's own steps rather than in kubectl's file sort or the
+  # controller's retry. It is also idempotent: a re-run finds the Argo CD
+  # Deployments and skips the whole step, including this apply — a project
+  # that must be present is not re-applied on every run, but it is present
+  # because the first run put it there.
+  #
+  # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
+  # by name, so the file is deliberate; the directory is checked so a stray
+  # file beside it is surfaced rather than skipped (see install_applications).
+  kit_substrate_check_manifest_dir "$ARGOCD_MANIFEST_DIR"
+  kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"
 }
 
 # --- step 5: the image pull secret ------------------------------------------
@@ -1814,10 +1846,27 @@ install_nats() {
 }
 
 # --- step 11: courier's identity credential, minted on this box -------------
-# The two bounds below are this step's own 300s, split the way steps 1 and 8
-# are: 120s for Argo to create the Deployment, then rollout inside what is
+# The two bounds below are this step's own 360s, split the way steps 1 and 8
+# are: 180s for Argo to create the Deployment, then rollout inside what is
 # left. Overridable so the suite can shorten the first half.
-: "${IDENTITY_DEPLOY_TIMEOUT:=120}"
+#
+# WHY 180 AND NOT 120. Argo CD's application-controller reconciles on a watch
+# event when an Application is created, but its resync / hard refresh interval
+# defaults to 180s (3 minutes, `timeout.reconciliation` / `status.processors`
+# in the controller's args — the same 3m the live box's controller was
+# observed at), and a cold box after steps 7-10 is exactly the place where
+# the watch event is most likely to be missed or delayed: the API server was
+# busy creating the CNPG Cluster's pods, the controller was waiting on
+# repo-server to be Available, and step 11 arrived before the next resync.
+# The previous bound was 120+180=300s; measured live, Argo had not created
+# deployment/identity 120s after the Applications were applied even ignoring
+# the missing AppProject — the Unknown Applications never started syncing, so
+# the wait timed out on an empty list. 180s covers one full resync period
+# plus the image-pull / rollout that follows, and keeps the total at 360s
+# rather than growing it arbitrarily. A bound that is shorter than the
+# controller's own refresh is a bound that fails on a healthy cluster, which
+# is the silent skip section 17 exists to refuse.
+: "${IDENTITY_DEPLOY_TIMEOUT:=180}"
 : "${IDENTITY_ROLLOUT_TIMEOUT:=180}"
 # install → boot → MINT → patch → restart, in ONE run on ONE box.
 #
@@ -1853,7 +1902,7 @@ mint_courier_identity_token() {
   # named object never takes) — the same class as step 1's node wait and step
   # 8's CNPG pod wait, so the same shape: the Deployment must EXIST first
   # (bounded, above), then its rollout is watched with the part of this step's
-  # 300s that is left. A genuinely unsynced Application still fails — exactly
+  # 360s that is left. A genuinely unsynced Application still fails — exactly
   # as it did before — and now names the Deployment that never appeared
   # instead of a rollout that never started.
   kit_substrate_await_list "$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity

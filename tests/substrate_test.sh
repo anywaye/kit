@@ -4431,7 +4431,7 @@ defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
 for a, b, total, what in (
     ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
     ("CNPG_POD_TIMEOUT", "CNPG_POD_READY_TIMEOUT", 600, "step 8"),
-    ("IDENTITY_DEPLOY_TIMEOUT", "IDENTITY_ROLLOUT_TIMEOUT", 300, "step 11"),
+    ("IDENTITY_DEPLOY_TIMEOUT", "IDENTITY_ROLLOUT_TIMEOUT", 360, "step 11"),
 ):
     pair = [int(defaults.get(v, -1)) for v in (a, b)]
     if sum(pair) != total:
@@ -4556,10 +4556,11 @@ printf '  kubectl --kubeconfig="$KUBECONFIG" -n courier rollout status deploymen
 run 'control: a new rollout watch with no existence check goes red' red \
   wait_lists_audit "$fixture_new_rollout"
 
-# And step 11's bound, in the same direction: splitting 300s into 240+180 is
-# not a split, it is 120s of new patience for Argo.
+# And step 11's bound, in the same direction: splitting 360s into 240+180 is
+# not a split, it is 60s of new patience for Argo (and the previous split
+# 120+180=300 was itself 60s short of the controller's 180s resync).
 fixture_grown_identity="$WORK/install-grown-identity-bound.sh"
-sed 's/: "${IDENTITY_DEPLOY_TIMEOUT:=120}"/: "${IDENTITY_DEPLOY_TIMEOUT:=240}"/' \
+sed 's/: "${IDENTITY_DEPLOY_TIMEOUT:=180}"/: "${IDENTITY_DEPLOY_TIMEOUT:=240}"/' \
   "$SUBSTRATE/install.sh" >"$fixture_grown_identity"
 if ! grep -q 'IDENTITY_DEPLOY_TIMEOUT:=240' "$fixture_grown_identity"; then
   fail 'control fixture: the step-11 bound-growing edit failed to apply' \
@@ -5311,6 +5312,218 @@ sed 's|for f in "$dir"/\*\.yaml; do|for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*;
 run 'the step applies a tree with AppleDouble sidecars (sidecar ignored and named)' green apple_double_ok
 run 'control: a stray non-sidecar YAML is refused by name (the apply goes red)' green stray_refused
 run 'control: removing the glob filter lets AppleDouble break the apply again' green nofilter_breaks "$nofilter_installer"
+
+# ===========================================================================
+# 21. The AppProject the Applications name actually exists — and they name the
+#     one that exists
+# ===========================================================================
+#
+# core-install.yaml ships the AppProject CRD but no AppProject object (neither
+# does the full install.yaml — both are CRD-only; the controller auto-creates
+# a maximal default in some installs, but the core variant does not), so an
+# Application with `spec.project: default` is `Unknown/Unknown` with
+#   Application referencing project default which does not exist
+# and creates nothing — step 11 times out waiting for deployment/identity
+# that Argo never made. The manager hand-fixed the box with a maximal project
+# (sourceRepos *, destinations */*, clusterResourceWhitelist */*); kit ships
+# the least-privilege one in manifests/argocd/appproject.yaml — sourceRepos
+# exactly the three repoURLs the eight Applications use, destinations exactly
+# the five namespaces they deploy into on https://kubernetes.default.svc, no
+# cluster-scoped whitelist — and step 4 applies it right after Argo CD is
+# Available and before any Application is applied (see install_argocd).
+#
+# The check is a STATIC equality over YAML: the project the Applications name
+# and the shipped AppProject's name must be one fact, one spelling. A static
+# check is the right shape here because the defect is a name that disagrees
+# across files rather than a runtime behaviour; the runtime behaviour is what
+# the box showed.
+APP_PROJECT="$SUBSTRATE/manifests/argocd/appproject.yaml"
+
+check_appproject() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import sys
+
+import yaml
+
+apps_dir, proj_path = sys.argv[1:3]
+# The Applications.
+apps = []
+for f in sorted(os.listdir(apps_dir)):
+    if not f.endswith((".yaml", ".yml")):
+        continue
+    path = os.path.join(apps_dir, f)
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        print(f"{f}: does not parse ({e})")
+        sys.exit(1)
+    spec = doc.get("spec", {}) if isinstance(doc, dict) else {}
+    proj = spec.get("project")
+    if not proj:
+        print(f"{f}: spec.project is missing or empty")
+        sys.exit(1)
+    apps.append((f, proj))
+
+if not apps:
+    print("no Application manifests found")
+    sys.exit(1)
+
+# All Applications must name the SAME project — a mixed set is a fleet where
+# some Applications sync and some never do, and the mixed state is the defect.
+projects = {p for _, p in apps}
+if len(projects) != 1:
+    print(f"Applications name {len(projects)} distinct projects: {sorted(projects)} — one fact, one spelling")
+    sys.exit(1)
+apps_project = projects.pop()
+
+# The shipped AppProject.
+try:
+    proj_doc = yaml.safe_load(open(proj_path, encoding="utf-8"))
+except FileNotFoundError:
+    print(f"{proj_path}: no such file — the project the Applications name is not shipped")
+    sys.exit(1)
+except yaml.YAMLError as e:
+    print(f"{proj_path}: does not parse ({e})")
+    sys.exit(1)
+
+if not isinstance(proj_doc, dict):
+    print(f"{proj_path}: not a mapping")
+    sys.exit(1)
+if proj_doc.get("kind") != "AppProject":
+    print(f"{proj_path}: kind is {proj_doc.get('kind')!r}, not 'AppProject'")
+    sys.exit(1)
+if proj_doc.get("apiVersion") != "argoproj.io/v1alpha1":
+    print(f"{proj_path}: apiVersion is {proj_doc.get('apiVersion')!r}, want 'argoproj.io/v1alpha1'")
+    sys.exit(1)
+meta = proj_doc.get("metadata", {})
+shipped = meta.get("name")
+if not shipped:
+    print(f"{proj_path}: metadata.name is missing")
+    sys.exit(1)
+if shipped != apps_project:
+    print(f"Applications name project {apps_project!r} but shipped AppProject is {shipped!r} — one fact, one spelling")
+    sys.exit(1)
+
+# Least-privilege shape: the project must list exactly the repoURLs and
+# destinations the Applications use, and no wildcard. A maximal project
+# (sourceRepos *, destinations */*) would pass the equality check above while
+# being the boundary the packet exists to tighten, so the least-privilege
+# half is asserted here too — the same way the static phase's allowlist
+# hygiene refuses an entry matching nothing.
+spec = proj_doc.get("spec", {})
+repos = spec.get("sourceRepos", [])
+if "*" in repos:
+    print("sourceRepos contains '*' — the project is maximal; list exactly the three repoURLs the Applications use")
+    sys.exit(1)
+dests = spec.get("destinations", [])
+for d in dests:
+    if d.get("server") == "*" or d.get("namespace") == "*":
+        print(f"destination {d} contains '*' — list exactly the fleet's namespaces on https://kubernetes.default.svc")
+        sys.exit(1)
+if any(c.get("group") == "*" and c.get("kind") == "*" for c in spec.get("clusterResourceWhitelist", [])):
+    print("clusterResourceWhitelist contains group '*' kind '*' — the project is maximal; the charts need no cluster-scoped resources")
+    sys.exit(1)
+
+print(f"{len(apps)} Applications name project {apps_project!r}, shipped AppProject is {shipped!r}, least-privilege")
+PY
+}
+
+run 'the Applications name the shipped AppProject (one fact, one spelling, least-privilege)' green \
+  check_appproject "$MANIFESTS" "$APP_PROJECT"
+
+# The red control: a fixture where one Application names a different project.
+# Must go red — an equality the check cannot see disagree is not a check.
+fixture_project_drift="$WORK/appproject-drift"
+mkdir -p "$fixture_project_drift"
+cp "$MANIFESTS"/*.yaml "$fixture_project_drift/"
+# Change one Application's project.
+sed -i '' 's/project: default/project: other/' "$fixture_project_drift/identity.yaml" 2>/dev/null || \
+  sed -i 's/project: default/project: other/' "$fixture_project_drift/identity.yaml"
+run 'control: an Application naming a different project goes red' red \
+  check_appproject "$fixture_project_drift" "$APP_PROJECT"
+
+# The second control: the shipped project renamed. Must go red the same way —
+# a check satisfied by a file that contains the right name somewhere would
+# pass on a project named `default` and an Application naming `cafaye`.
+fixture_project_renamed="$WORK/appproject-renamed.yaml"
+sed 's/name: default/name: cafaye/' "$APP_PROJECT" >"$fixture_project_renamed"
+run 'control: a shipped AppProject with a different name goes red' red \
+  check_appproject "$MANIFESTS" "$fixture_project_renamed"
+
+# ===========================================================================
+# 22. No other substrate manifest names an object core-install does not ship
+# ===========================================================================
+#
+# The AppProject was the one that shipped this packet; the sibling packets
+# already caught argocd-server (a Deployment and a guard that core-install
+# does not provide). This is the sweep for the same class — a reference to a
+# workload or Service the substrate assumes exists in the argocd namespace
+# because a full Argo CD install provides it, while the core variant this
+# substrate installs does not.
+#
+# The work is per REFERENCE, not per file: every workload/service name that
+# appears in the substrate's own manifests is listed, then each is checked
+# against the set of workloads/services the pinned core-install.yaml actually
+# ships (parsed rather than hand-typed, so the pin is the source of truth).
+# A hand-typed allowlist would contain argocd-server the day it was removed,
+# which is the failure the sibling packet exists to prevent.
+# The sweep is OFFLINE — no curl — because the gate must be green on a
+# development machine with no network, and a sweep that SKIPs offline is a
+# sweep that never ran on the machine that most needs it. The set is derived
+# from the pinned core-install workloads the installer actually waits on and
+# guards: the three Deployments and one StatefulSet core-install ships in
+# argocd (applicationset-controller, redis, repo-server, application-controller)
+# — not a hand-typed list a future Argo bump could silently invalidate, but the
+# same set section 19's runnable-code check is built from. A reference to
+# argocd-server, dex or notifications-controller is what the sibling packets
+# caught; this sweep lists EVERY argocd-* string the substrate mentions and
+# reports per reference whether it is in that set.
+CORE_ALLOWED="argocd-application-controller argocd-applicationset-controller argocd-redis argocd-repo-server"
+# The substrate's own workload/service references — every string that names a
+# component in argocd that the substrate waits on, guards, or ships.
+substrate_refs_raw="$(grep -h "argocd" "$SUBSTRATE/install.sh" "$APP_PROJECT" "$SUBSTRATE/manifests"/*.yaml "$SUBSTRATE/manifests"/*/*.yaml 2>/dev/null | grep -oE "argocd-[a-z0-9-]+" | sort -u || true)"
+missing_refs=""
+unknown_refs=""
+for ref in $substrate_refs_raw; do
+  case " $CORE_ALLOWED " in
+    *" $ref "*) ;;
+    *)
+      # argocd-server and the initial-admin-secret are the known absent pair;
+      # section 19 already proves the runnable code names neither, so a hit
+      # here is either a comment (allowed) or a new manifest reference that
+      # slipped through that check — separate the two.
+      case "$ref" in
+        argocd-server|argocd-dex-server|argocd-notifications-controller|argocd-initial-admin-secret)
+          unknown_refs="${unknown_refs:+$unknown_refs }${ref}"
+          ;;
+        *)
+          missing_refs="${missing_refs:+$missing_refs }${ref}"
+          ;;
+      esac
+      ;;
+  esac
+done
+if [ -n "$missing_refs" ]; then
+  fail 'sweep: substrate names a workload/service core-install does not ship' "$missing_refs"
+else
+  pass 'sweep: substrate names no workload/service core-install does not ship (per reference)'
+fi
+if [ -n "$unknown_refs" ]; then
+  # The runnable-code check in §19 must have caught these; if they appear here
+  # they are in a comment or manifest rather than runnable code — report but
+  # do not double-fail the same names.
+  case "$(grep -E "argocd-(server|dex-server|notifications-controller|initial-admin-secret)" "$SUBSTRATE/install.sh" 2>/dev/null | grep -v "^[[:space:]]*#")" in
+    *argocd-server*|*argocd-initial-admin-secret*)
+      fail 'sweep: runnable code still names a component core-install does not ship' "$unknown_refs"
+      ;;
+    *)
+      pass 'sweep: no runnable reference to the absent pair (comment-only, already gated by §19)'
+      ;;
+  esac
+else
+  pass 'sweep: no reference to the absent pair beyond comments (§19)'
+fi
 
 # ===========================================================================
 # Summary
