@@ -1239,7 +1239,7 @@ if container.get("image") != "NATS_IMAGE_PLACEHOLDER":
 # is the argv the runtime execs: Kubernetes replaces the image's entrypoint
 # with `command` and appends `args` to it. Reading only one of them would pass
 # a manifest whose flags sit in the wrong field — which is the defect this
-# packet is about, and which the check in §12c refuses by shape.
+# packet is about, and which the check in §12b refuses by shape.
 tokens = list(container.get("command") or []) + list(container.get("args") or [])
 for flag in ("-js", "-sd", "/data", "-m", "8222"):
     if flag not in tokens:
@@ -1510,6 +1510,211 @@ sed 's|--env="NATS_URL=$NATS_URL"|--env="NATS_URL=nats://nats.data.svc.cluster.l
   "$SUBSTRATE/install.sh" >"$fixture_two_writers"
 run 'control: a second spelling of the address in the stream-init pod goes red' red \
   check_nats_service_url "$fixture_two_writers" "$DATA_DIR/nats.yaml"
+
+# ===========================================================================
+# 12b. A container's `command:` is an ENTRYPOINT, never a flag list — the
+#      compose/k8s field confusion, gated
+# ===========================================================================
+#
+# THE DEFECT, and why no reader of either file can catch it. The nats manifest
+# carried the local stack's flag list under `command:`, because the compose file
+# spells the same list under the same key. Compose APPENDS its `command:` to the
+# image's ENTRYPOINT; Kubernetes REPLACES the entrypoint with `command:` and
+# carries arguments in `args:`. One spelling, two meanings, two files. The box
+# said so once — `exec: "-js": executable file not found in $PATH`,
+# CrashLoopBackOff, and step 10's `kubectl wait --for=condition=Available
+# deployment nats` timing out with nothing in `gh run view --log-failed` to read,
+# because no step failed: the container never started.
+#
+# WHAT IS ASSERTED, AND HOW NARROWLY. Kubernetes execs `command[0]` as a binary
+# name resolved in the image's PATH. A first element beginning with `-` cannot
+# name a binary, so it cannot run — on ANY image, because the entrypoint it would
+# have been appended to has been replaced. So the check refuses exactly that
+# shape:
+#
+#   COVERED   every non-Argo document under manifests/: any LIST under a
+#             `command:` key whose FIRST element begins with `-`, and any
+#             `command:` spelled as one string beginning with `-`. That reaches
+#             a container's `command:` and a probe's or lifecycle handler's
+#             `exec.command:` alike, because both are argv.
+#
+#   NOT COVERED  argoproj.io Applications. Those are chart requests: a
+#             `command:` inside their values is a Helm value whose meaning
+#             belongs to the chart, not a Kubernetes field, and the charts are
+#             out of this packet's scope. They are COUNTED and reported as
+#             skipped, never passed over in silence.
+#
+#   ALSO NOT COVERED  whether a non-flag `command:` names a binary the image
+#             actually carries. `command: [nats-server]` and
+#             `command: [sh, -c, …]` are both accepted on shape. Whether those
+#             binaries exist is a property of the image, whose tag is pinned in
+#             install.sh — proving it needs a runtime, which is what README says
+#             this suite cannot do.
+#
+# NO ALLOWLIST, and that is deliberate. The brief allows an exception for "a
+# site whose entrypoint is documented as such"; there is no such site, because
+# replacing the entrypoint is what makes a flag-named binary unrunnable on every
+# image. An entry that permits nothing is a ratchet, which is the very thing the
+# static phase's allowlist rules exist to refuse.
+#
+# AND THE CHECK MUST NOT BE SATISFIABLE BY EXAMINING NOTHING. It prints how many
+# `command:` sites it read, and the assertion below reads that number back out of
+# the real tree's own output. A check that walks an empty tree and reports "0
+# flag-shaped" is green and worthless.
+check_container_command_fields() {
+  "$PY" - "$1" <<'PY'
+import os
+import sys
+
+import yaml
+
+root = sys.argv[1]
+problems = []
+argo_docs = 0
+command_sites = 0
+ARGO_GROUPS = {"argoproj.io"}
+
+
+def command_values(node, path):
+    """Every `command:` VALUE in this document, at any depth.
+
+    A Kubernetes `command` is a string list, but a malformed manifest can spell
+    it as one string; both are read, because both are a value a reader would
+    call "the command", and the defect the check exists for is a value that
+    begins with a flag. Normalised to a list so the first element is `cmd[0]`
+    either way.
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "command":
+                if isinstance(v, list):
+                    yield path, v
+                elif isinstance(v, str):
+                    yield path, [v]
+            yield from command_values(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            yield from command_values(item, f"{path}[{i}]")
+
+
+for dirpath, _dirs, files in os.walk(root):
+    for f in sorted(files):
+        if not f.endswith((".yaml", ".yml")):
+            continue
+        rel = os.path.relpath(os.path.join(dirpath, f), root)
+        raw = open(os.path.join(dirpath, f), encoding="utf-8").read()
+        try:
+            docs = [d for d in yaml.safe_load_all(raw) if d]
+        except yaml.YAMLError as e:
+            problems.append(f"{rel}: does not parse ({e})")
+            continue
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            api = doc.get("apiVersion", "")
+            group = api.split("/")[0] if "/" in api else ""
+            if group in ARGO_GROUPS:
+                argo_docs += 1
+                continue
+            kind = doc.get("kind", "?")
+            for path, cmd in command_values(doc, kind):
+                if not cmd or not all(isinstance(c, str) for c in cmd):
+                    continue
+                command_sites += 1
+                if cmd[0].startswith("-"):
+                    problems.append(
+                        f"{rel}: {path}.command[0] is {cmd[0]!r} — Kubernetes "
+                        "REPLACES the image's entrypoint with `command:`, it "
+                        "does not append to it, so this asks the kernel to exec "
+                        f"a binary named {cmd[0]!r}. The flags belong in "
+                        "`args:` (compose's `command:` appends; Kubernetes's "
+                        "replaces)"
+                    )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{command_sites} command site(s) read, none flag-shaped; "
+      f"{argo_docs} argoproj.io document(s) skipped (Helm values, not "
+      "Kubernetes fields)")
+PY
+}
+
+run 'no container command: starts with a flag (the compose/k8s field confusion)' green \
+  check_container_command_fields "$SUBSTRATE/manifests"
+
+# The real tree's own site count, read back out of the output. Without this the
+# check is satisfiable by a tree it never walked.
+command_sites_out="$(check_container_command_fields "$SUBSTRATE/manifests")" || true
+case "$command_sites_out" in
+  *"4 command site(s) read"*)
+    pass "the check read 4 command sites (nats, redis, and redis's two probes) and none flag-shaped"
+    ;;
+  *)
+    fail "the check read the real tree's own command sites" \
+      "got: ${command_sites_out:-<nothing>} — expected the site count, so a check that walked nothing cannot pass"
+    ;;
+esac
+
+# THE RED CONTROL IS THE DEFECT ITSELF, restored: the flag list back under
+# `command:`, `args:` gone, nothing else in the tree touched. A fixture that has
+# silently stopped carrying the defect is a control that proves nothing, so the
+# fixture asserts its own premise before it is used.
+fixture_cmd_flags="$WORK/command-flag-shape"
+mkdir -p "$fixture_cmd_flags"
+cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_flags/"
+sed -e '/^          command:$/d' \
+  -e '/^            - "nats-server"$/d' \
+  -e 's/^          args:$/          command:/' \
+  "$SUBSTRATE/manifests/data/nats.yaml" >"$fixture_cmd_flags/data/nats.yaml"
+if ! grep -q '^          command:$' "$fixture_cmd_flags/data/nats.yaml" ||
+  grep -q '^          args:$' "$fixture_cmd_flags/data/nats.yaml" ||
+  ! grep -q '^            - "-js"$' "$fixture_cmd_flags/data/nats.yaml"; then
+  fail 'control: the flag-shaped fixture is not flag-shaped' \
+    'the transform did not put the flag list back under command: — this control would prove nothing'
+else
+  run 'control: a command: starting with a flag goes red (the -js shape that shipped)' red \
+    check_container_command_fields "$fixture_cmd_flags"
+fi
+
+# The other half, and the one that keeps the check honest about what it keys on:
+# a `command:` that NAMES the binary and carries the flags after it must stay
+# GREEN. Without this the check is "a flag appears somewhere in command:", and
+# the fix — naming the binary — would be refused along with the bug.
+fixture_cmd_binary="$WORK/command-binary-first"
+mkdir -p "$fixture_cmd_binary"
+cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_binary/"
+sed -e '/^          args:$/d' \
+  "$SUBSTRATE/manifests/data/nats.yaml" >"$fixture_cmd_binary/data/nats.yaml"
+if ! grep -q '^            - "nats-server"$' "$fixture_cmd_binary/data/nats.yaml" ||
+  grep -q '^          args:$' "$fixture_cmd_binary/data/nats.yaml"; then
+  fail 'control: the binary-first fixture is not binary-first' \
+    'the transform did not fold the flags under a command: naming the binary'
+else
+  run 'control: a command: naming the binary, flags after it, stays green' green \
+    check_container_command_fields "$fixture_cmd_binary"
+fi
+
+# The third shape, and the reason the checker reads a scalar too: a `command:`
+# spelled as one string that begins with a flag. (`command` is a []string in the
+# Kubernetes schema, so the API server would reject this at apply — but the gate
+# sees the tree first, and a value that begins with a flag is the same defect one
+# shape over.) The premise asserts the fixture still PARSES, so a red here cannot
+# be a YAML error wearing the finding's clothes.
+fixture_cmd_scalar="$WORK/command-scalar-flag"
+mkdir -p "$fixture_cmd_scalar"
+cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_scalar/"
+sed -e 's/^          command:$/          command: "-js"/' \
+  -e '/^            - "nats-server"$/d' \
+  "$SUBSTRATE/manifests/data/nats.yaml" >"$fixture_cmd_scalar/data/nats.yaml"
+if ! grep -q '^          command: "-js"$' "$fixture_cmd_scalar/data/nats.yaml" ||
+  ! "$PY" -c 'import sys, yaml; list(yaml.safe_load_all(open(sys.argv[1])))' "$fixture_cmd_scalar/data/nats.yaml" 2>/dev/null; then
+  fail 'control: the scalar-command fixture is not a valid scalar command' \
+    'the transform did not leave a parseable `command: "-js"` — this control would prove nothing'
+else
+  run 'control: a scalar command: beginning with a flag goes red' red \
+    check_container_command_fields "$fixture_cmd_scalar"
+fi
 
 # ===========================================================================
 # 13. identity-secrets carries a generated MFA key by default
