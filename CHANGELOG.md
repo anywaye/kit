@@ -20,6 +20,36 @@
   error, with a direct convention check per mock, an argv assertion that the
   repair travelled on `/dev/stdin`, and two red controls — step 8's spelling
   reverted to `-`, and the mint aborted by it.
+- **Nothing ran a service's database migrations, so a box that "finished" the
+  substrate booted the fleet against an empty schema.** The Postgres Cluster
+  created one empty database per service, the Applications started the
+  services against it, and no step applied a schema: `identity` logged
+  `level=ERROR msg="outbox publisher pass failed; retrying"
+  error="… relation \"outbox_events\" does not exist (SQLSTATE 42P01)"` forever,
+  and step 12's integration probe caught it from outside as `identity would not
+  mint a signup timestamp` — a 500 on the missing table. The new **step 10**
+  runs one one-shot migrate Job per schema-owning service (`identity`,
+  `courier`), in that service's own **running image** (read back from the
+  Deployment Argo synced, so there is no second pin) and connected as its
+  **OWNER** role — a migration is DDL and `<svc>_app` owns nothing. It waits on
+  the pod's phase, prints the pod's logs and fails the install naming the
+  service and its OWNER DSN, so no pod is ever left `Ready` over an empty
+  database. `gateway` (an explicit no-op `bin/migrate`) and `parlor` (no
+  database at all) are named in the plan and skipped. Idempotent twice over:
+  the tools' version tables make a replay a no-op, and a marker Secret records
+  the image whose schema was applied so a re-run does not launch the pods.
+  **The migrate inventory is a finding, not an assumption:** `identity`'s
+  repository ships `bin/migrate` (a `psql` loop over `migrations/*.sql`) but its
+  **image** is `gcr.io/distroless/static-debian12:nonroot` — no shell, no
+  `psql`, no migration files — so it cannot migrate from the image it runs;
+  `courier`'s release ships `/app/bin/migrate` (`Courier.Release.migrate`) and
+  needs `COURIER_OWNER_DATABASE_URL` (plus `DATABASE_URL`, which its release
+  eval raises without). The exact service-repo edit for `identity` is named in
+  `REPORT-roll-c5-migrations.md`. `tests/substrate_test.sh` §13g executes the
+  step against the file-backed `kubectl`: the run, the OWNER DSN in each Job's
+  argv, the per-service marker, the re-run guard (no new pod), and a `Failed`
+  pod that must fail the step naming the service — with the inventory-shrinks
+  control. NATS becomes step 11 and the courier mint step 12; `TOTAL` 11 → 12.
 - **An OCI Helm `Application` named the registry root, not the chart's own
   path, and every sync in the fleet's first end-to-end install failed.** The
   four service `Application`s in `templates/substrate/manifests/applications/`

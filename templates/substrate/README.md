@@ -58,11 +58,23 @@ this file only describes what is here and what is proven.
    exactly the keys its chart reads (see [The services' secrets](#the-services-secrets)
    below). Generated values are once-only with read-back; externally-sourced
    values are shape-validated and never echoed; `NATS_URL` is a constant, so
-   this step reads back nothing that step 10's broker would have had to
+   this step reads back nothing that step 11's broker would have had to
    create. Two guarded halves in one
    step, so a half-finished step 9 resumes the secrets without touching
    Redis.
-10. **NATS with JetStream and the fleet's stream** — one Deployment + Service
+10. **The services' database schemas** — one one-shot migrate Job per
+    schema-owning service (`identity`, `courier`), in that service's own
+    **running image** (read back from the Deployment Argo synced, so there is
+    no second pin) and connected as its **OWNER** role (a migration is DDL;
+    `<svc>_app` owns nothing). The pod's phase is waited to completion, its
+    logs are printed on failure, and the step fails the install naming the
+    service and its OWNER DSN — never a pod `Ready` over an empty schema.
+    `gateway` (an explicit no-op `bin/migrate`) and `parlor` (no database at
+    all) are named in the plan and skipped. Idempotent twice over: the tools'
+    version tables make a replay a no-op, and a marker Secret records the
+    image whose schema was applied so a re-run does not even launch the pods.
+    See [The services' database schemas](#the-services-database-schemas).
+11. **NATS with JetStream and the fleet's stream** — one Deployment + Service
     + PVC in `data`, applied from `manifests/data/nats.yaml` with the pinned
     image substituted at apply time, then the one-shot stream init defining
     stream `cafaye` (same subjects, retention, storage and replicas as the
@@ -70,7 +82,7 @@ this file only describes what is here and what is proven.
     guarded like every other step; the stream init runs on every install and
     is a no-op when the stream exists (`info || add`), failing the install
     loudly when it does not.
-11. **Courier's identity credential** — minted on this box from identity's own
+12. **Courier's identity credential** — minted on this box from identity's own
     API (the same four calls the local launch harness makes, over a
     port-forward to the cluster-local Service), written as ONE value into both
     `identity-secrets` (`COURIER_TOKEN`) and `courier-secrets`
@@ -355,7 +367,7 @@ not a gate.
 ## The data layer: Postgres, Redis and NATS
 
 `manifests/data/` holds three files, and all three are applied by `install.sh`
-(steps 8–10), not by Argo: the Postgres cluster, Redis and NATS are platform state,
+(steps 8–11), not by Argo: the Postgres cluster, Redis and NATS are platform state,
 not services, and the install already carries that class of component
 (cert-manager, CNPG's operator).
 
@@ -403,13 +415,64 @@ generated `redis-password` secret, never a literal `--requirepass`.
 Service + PVC running the broker with `-js` and file storage on the
 `nats-data` volume, with `/healthz` probes on the monitor port — the same
 signal the local stack's healthcheck uses. The manifest carries
-`NATS_IMAGE_PLACEHOLDER` where the tag goes; install.sh step 10 substitutes
+`NATS_IMAGE_PLACEHOLDER` where the tag goes; install.sh step 11 substitutes
 the pinned image at apply time, so the pin lives in exactly one place. The
 fleet's stream (`cafaye`: `identity.>`, `billing.>`, `courier.>`, `muse.>`,
 `darkroom.>` — file storage, `limits` retention, 7d max-age, `old` discard,
-1 replica) is defined by step 10's one-shot init, mirroring the local
+1 replica) is defined by step 11's one-shot init, mirroring the local
 `nats-stream-init` flag for flag; `tests/substrate_test.sh` parses both
 renders and refuses drift.
+
+## The services' database schemas
+
+**Step 10 runs the migrations, and it exists because nothing did.** The
+Postgres Cluster (step 8) creates an **empty** database per service; the
+Applications (step 6) boot the services against it; the fleet's charts assume a
+migrated database because in CI the migrate step is explicit. So a box that
+"finished" the substrate booted identity against a schema with no
+`outbox_events`, and identity's own logs said so forever:
+
+```
+level=ERROR msg="outbox publisher pass failed; retrying"
+  error="outbox: claiming a batch: ERROR: relation \"outbox_events\" does not exist (SQLSTATE 42P01)"
+```
+
+Step 12's integration probe then caught it from outside — `identity would not
+mint a signup timestamp`, a 500 on the missing table.
+
+**The mechanism.** One one-shot Job per schema-owning service, and two facts
+are read from the running world rather than restated:
+
+- **The image is the Deployment's own image**, read back from the Deployment
+  Argo synced. A migration must come from the same build as the service it
+  migrates for, so there is no second pin here to keep in step.
+- **The DSN is the OWNER role.** A migration is DDL; the application's
+  `<svc>_app` role owns nothing and cannot create a table. The Job connects as
+  `postgres-role-<svc>` (the role step 8 provisions and the tool records its
+  version table under), while the service keeps connecting as `<svc>_app`.
+
+The pod is run with `--restart=Never`, its phase is watched to `Succeeded`, and
+a `Failed` phase prints the pod's logs and **fails the install**, naming the
+service and its OWNER DSN. There is no `kubectl exec … migrate || true`, no
+sleep, and no "the service migrates at boot" assumed — that last one is
+checked, not believed.
+
+**The inventory, which is a finding and not an assumption:**
+
+| service | migrations? | entrypoint | DSN env | notes |
+| --- | --- | --- | --- | --- |
+| `identity` | yes — `migrations/*.sql`, 35 files | `bin/migrate` (a `psql` loop over the Up sections) | `DATABASE_URL` | **the repository ships the entrypoint; the image does not.** `ghcr.io/cafaye/identity` is `gcr.io/distroless/static-debian12:nonroot` — no shell, no `psql`, no migration files — so it cannot migrate from the image it runs. The service-repo edit is named in `REPORT-roll-c5-migrations.md`. |
+| `gateway` | no | `bin/migrate` is an explicit no-op | — | no driver, no pool, no `DATABASE_URL`; the file says so out loud. |
+| `courier` | yes — `priv/repo/migrations`, Ecto | `/app/bin/migrate` (release overlay → `courier eval Courier.Release.migrate`) | `COURIER_OWNER_DATABASE_URL` (+ `DATABASE_URL`) | the release eval loads `runtime.exs`, which raises without `DATABASE_URL`, and configures `Courier.OwnerRepo` only from the owner variable — both are passed. |
+| `parlor` | no | — | — | a front end: its runtime reads `IDENTITY_URL` / `BILLING_URL` / `OTEL_*`, no database. Its database and roles exist only because the Cluster provisions one per named service. |
+
+**Idempotent twice over.** The migrate tools keep a version table
+(`goose_db_version`, `schema_migrations`), so applying an already-applied
+migration is a no-op — but a re-run should not even launch the pods. A marker
+Secret (`substrate-migrations` in `data`) records, per service, the **image**
+whose schema was applied; the guard skips the whole step while every marker
+still matches the running Deployment, and a new image re-enters the step and
+lets the tool apply what is pending.
 
 **The broker's address reaches the services through their secrets.** The
 local compose stack sets `NATS_URL: nats://nats:4222` on every service that
@@ -434,9 +497,9 @@ environment variable and the key list IS the service's env list:
 
 | Secret | Keys | Provenance |
 |---|---|---|
-| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 12; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 12 minted; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
-| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 12; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
 
 The key lists were enumerated from the code, not guesswork: identity's
@@ -461,7 +524,7 @@ once `identity-secrets` exists its stored key wins over any override, because
 the stored key is a persistent encryption key and re-running with a different
 value must not fork it. **Minted on this box** — courier's
 `COURIER_IDENTITY_TOKEN`, and the same value written into identity's
-`COURIER_TOKEN` beside it, both by step 11. **Generated on this box** — the
+`COURIER_TOKEN` beside it, both by step 12. **Generated on this box** — the
 OIDC signing key and its key id, when an issuer is set (the key is the
 customer's own; it is born here, and the id is a thumbprint of the key so a
 verifier's cached `kid` keeps matching). What is left comes **from the
@@ -594,7 +657,7 @@ is an operator action, and the URL works only when observed.
 
 - `install.sh` parses (`bash -n`) and is shellcheck-clean.
 - `DRY_RUN=1` runs to completion with the database list set,
-  printing the eleven steps in order, each with an action.
+  printing the twelve steps in order, each with an action.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
@@ -626,7 +689,7 @@ is an operator action, and the URL works only when observed.
 - The NATS manifest carries one Deployment + Service + PVC with `-js` file
   storage and monitor-port probes, its image the `NATS_IMAGE_PLACEHOLDER`
   `install.sh` substitutes — fixtures without `-js` or floating on `latest`
-  go **red** — and step 10 defines stream `cafaye` idempotently
+  go **red** — and step 11 defines stream `cafaye` idempotently
   (`info || add`) with the local stack's subject set and flags, while the
   drift check parses both renders and refuses divergence (a fixture missing a
   publisher, or with a drifted `max-age`, goes **red**).
@@ -644,7 +707,7 @@ is an operator action, and the URL works only when observed.
   secret that goes into it — and the capability and the credential are both absent
   from the output; identity's OIDC signing key is a 2048-bit RSA PEM with a
   `box-`-plus-16-hex key id, generated on the box, distinct on a second box,
-  never regenerated on a re-run, and absent from the output; and step 11's
+  never regenerated on a re-run, and absent from the output; and step 12's
   mint writes ONE value into both secret halves, restarts both deployments,
   and leaves that value out of the output. Every one of the no-print claims
   has a control that plants the value in a log and must go **red**.

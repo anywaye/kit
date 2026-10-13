@@ -135,20 +135,20 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The eleven steps, in order. The markers are `[1/11]` … `[11/11]`; the check
+# The twelve steps, in order. The markers are `[1/12]` … `[12/12]`; the check
 # reads them out of the output in the order they appear and compares against
 # the expected sequence, so a script that printed them out of order — or
 # skipped one — would go red here rather than passing on the presence of all
-# eleven. The `|| true` is load-bearing: with no `[n/11]` markers printed yet,
+# twelve. The `|| true` is load-bearing: with no `[n/12]` markers printed yet,
 # grep exits 1, and under `set -o pipefail` a failing command substitution
 # would take the harness down before the status is ever read — the same shape
 # the `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/11\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/12\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11" ]; then
-  pass 'DRY_RUN prints the eleven steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12" ]; then
+  pass 'DRY_RUN prints the twelve steps in order'
 else
-  fail 'DRY_RUN prints the eleven steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the twelve steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
@@ -1291,7 +1291,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=11", "TOTAL is not 11 — step 11 (the courier credential minted on this box) widens the plan and the DRY_RUN order check with it")
+need("TOTAL=12", "TOTAL is not 12 — step 10 (the services' schemas), step 11 (NATS) and step 12 (the courier credential minted on this box) widen the plan and the DRY_RUN order check with it")
 need('NATS_VERSION="2.10.24-alpine"', "no exact NATS_VERSION pin beside the other pins")
 need('NATS_BOX_VERSION="0.20.0"', "no exact NATS_BOX_VERSION pin for the stream-init image")
 if not re.search(r"(?m)^install_nats\(\)", code):
@@ -1941,19 +1941,56 @@ mock_kubectl() {
         # --no-headers prints one line per object that exists. Step 11's await
         # polls this until Argo creates the Deployment, so the mint's fixture
         # seeds `deploy-<name>` the way a box past step 6 holds it.
+        #
+        # `-o jsonpath={…containers[0].image}` reads the image the Deployment
+        # runs — the value step 10's migrate Job is built from, so the fixture
+        # stores it in `deploy-<name>/image` and a missing file is an empty
+        # image, which is the same "no Deployment yet" state.
         shift || true
         local dep_name="${1:-}"
         shift || true
-        local dep_ns=""
+        local dep_ns="" dep_tmpl=""
         while [ $# -gt 0 ]; do
           case "$1" in
             -n) dep_ns="$2"; shift 2 ;;
+            -o) dep_tmpl="$2"; shift 2 ;;
             *) shift ;;
           esac
         done
         if [ -d "$MOCK_ROOT/$dep_ns/deploy-$dep_name" ]; then
-          printf '%s   1/1   1   1   10d\n' "$dep_name"
+          case "$dep_tmpl" in
+            *image*)
+              cat "$MOCK_ROOT/$dep_ns/deploy-$dep_name/image" 2>/dev/null || true
+              ;;
+            *)
+              printf '%s   1/1   1   1   10d\n' "$dep_name"
+              ;;
+          esac
         fi
+        return 0
+      fi
+      if [ "${1:-}" = "pod" ]; then
+        # The one-shot pods steps 10 and 11 run: existence is `pod-<name>`, the
+        # phase is the file inside it. A missing pod exits 1, exactly as a real
+        # `get pod` does, so a wait loop can tell "not scheduled yet" from a
+        # phase.
+        shift || true
+        local pod_name="${1:-}"
+        shift || true
+        local pod_ns="$fallback_ns" pod_tmpl=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -n) pod_ns="$2"; shift 2 ;;
+            -o) pod_tmpl="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        local pdir="$MOCK_ROOT/$pod_ns/pod-$pod_name"
+        [ -d "$pdir" ] || return 1
+        case "$pod_tmpl" in
+          *status.phase*) cat "$pdir/phase" 2>/dev/null || printf 'Pending' ;;
+          *) printf '%s   0/1   Pending   0   1s\n' "$pod_name" ;;
+        esac
         return 0
       fi
       if [ "${1:-}" = "cluster.postgresql.cnpg.io" ]; then
@@ -2118,6 +2155,80 @@ mock_kubectl() {
         while IFS= read -r pair; do
           printf '%s' "${pair#*=}" >"$d/${pair%%=*}"
         done
+      return 0
+      ;;
+    run)
+      # `kubectl run <name> -n <ns> --restart=Never --image=… --env=K=V …
+      # --command -- <cmd>` — the one-shot pod shape steps 10 and 11 use. The
+      # mock stores what it was asked to run (image, command, env, phase) in
+      # `pod-<name>/`, so an assertion can read back the OWNER DSN the migrate
+      # Job was given rather than trusting the argv line. MOCK_POD_PHASE forces
+      # the red control: a migration that Failed.
+      local run_name="${1:-}"
+      shift || true
+      local run_ns="$fallback_ns" run_image="" run_cmd="" run_env=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) run_ns="$2"; shift 2 ;;
+          --restart=*) shift ;;
+          --image=*) run_image="${1#--image=}"; shift ;;
+          --env=*)
+            run_env="${run_env}${run_env:+
+}${1#--env=}"
+            shift
+            ;;
+          --command) shift ;;
+          --)
+            shift
+            run_cmd="$*"
+            break
+            ;;
+          *) shift ;;
+        esac
+      done
+      local rdir="$MOCK_ROOT/$run_ns/pod-$run_name"
+      mkdir -p "$rdir"
+      printf '%s' "$run_image" >"$rdir/image"
+      printf '%s' "$run_cmd" >"$rdir/command"
+      printf '%s' "$run_env" >"$rdir/env"
+      printf '%s' "${MOCK_POD_PHASE:-Succeeded}" >"$rdir/phase"
+      [ -n "${MOCK_POD_LOGS:-}" ] && printf '%s' "$MOCK_POD_LOGS" >"$rdir/logs"
+      return 0
+      ;;
+    delete)
+      # `delete pod NAME` / `delete secret NAME`, with or without
+      # `--ignore-not-found`. Removing a directory that is not there is what
+      # --ignore-not-found means, so both spellings succeed.
+      local del_res="${1:-}"
+      shift || true
+      local del_name="${1:-}"
+      shift || true
+      local del_ns="$fallback_ns"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) del_ns="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      case "$del_res" in
+        pod) rm -rf "${MOCK_ROOT:?}/${del_ns:?}/pod-${del_name:?}" ;;
+        secret) rm -rf "${MOCK_ROOT:?}/${del_ns:?}/${del_name:?}" ;;
+        *) ;;
+      esac
+      return 0
+      ;;
+    logs)
+      # `logs pod/NAME -n NS` — the pod's stored logs, or nothing.
+      local log_ref="${1:-}"
+      shift || true
+      local log_ns="$fallback_ns"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) log_ns="$2"; shift 2 ;;
+          *) shift ;;
+        esac
+      done
+      cat "$MOCK_ROOT/$log_ns/pod-${log_ref#pod/}/logs" 2>/dev/null || true
       return 0
       ;;
     port-forward)
@@ -3762,6 +3873,226 @@ run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(c
 run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
 
 # ===========================================================================
+# 13g. Step 10 — the services' schemas are applied, idempotently, and a failed
+#      migration fails the step naming the service
+# ===========================================================================
+#
+# THE DEFECT THIS STEP EXISTS FOR. Nothing ran a service's migrations, so a box
+# that "finished" the substrate booted identity against an empty database and
+# the outbox loop retried forever on `relation "outbox_events" does not exist`.
+# The step runs one one-shot Job per schema-owning service (identity, courier),
+# in that service's own RUNNING image (read back from the Deployment), as the
+# OWNER role, and waits for the pod's phase.
+#
+# Three things are asserted, each with a control that must answer differently:
+#
+#   1. THE RUN. Both pods are launched, identity's Job is given the OWNER DSN
+#      (`identity`, not `identity_app`), courier's Job is given
+#      `COURIER_OWNER_DATABASE_URL` (owner) AND `DATABASE_URL` (app, because its
+#      release eval raises without it). The marker secret is written.
+#   2. THE GUARD. A second run is a no-op — no `run` invocation is added — so a
+#      re-run applies nothing new.
+#   3. THE RED CONTROL. A pod that reaches `Failed` makes the step exit non-zero
+#      and name the service and its OWNER role — never a green install over an
+#      empty schema.
+#
+# The mock stores the image/command/env/phase of every `kubectl run`, and the
+# pod is deleted on success exactly as a real box deletes it — so the assertions
+# read the recorded argv, which survives the delete.
+migrate_seed_fixture() {
+  mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier"
+  printf 'data\nidentity\ncourier\n' >"$MOCK_ROOT/namespaces"
+  # The OWNER role passwords step 8 makes (the migrate Job's credential) and the
+  # app passwords step 8 makes beside them (courier's DATABASE_URL).
+  mock_seed data postgres-role-identity password "owner-identity-pw"
+  mock_seed data postgres-role-courier password "owner-courier-pw"
+  mock_seed data postgres-role-courier-app password "app-courier-pw"
+  # The Deployments Argo synced from step 6 — step 10 reads the image off them,
+  # so there is no second pin to keep in step.
+  mock_seed identity deploy-identity image "ghcr.io/cafaye/identity:0.1.0"
+  mock_seed courier deploy-courier image "ghcr.io/cafaye/courier:0.1.0"
+}
+
+MOCK_ROOT="$WORK/migrate-run"
+mkdir -p "$MOCK_ROOT"
+migrate_run_ec=0
+(
+  migrate_seed_fixture
+  export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-run-receipt.json"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  install_migrations >"$WORK/migrate-run.log" 2>&1
+) || migrate_run_ec=$?
+migrate_argv="$MOCK_ROOT/kubectl-argv"
+if [ "$migrate_run_ec" -ne 0 ]; then
+  fail 'step 10 runs and completes when both migrations succeed' "$(cat "$WORK/migrate-run.log")"
+else
+  pass 'step 10 runs and completes when both migrations succeed'
+fi
+# The OWNER DSN, proven by the role name in the recorded argv. `identity_app`
+# would be the application role, which owns nothing and cannot run DDL.
+if grep -q -- '--env=DATABASE_URL=postgres://identity:owner-identity-pw@' "$migrate_argv" 2>/dev/null; then
+  pass "step 10 migrates identity as its OWNER role (identity, not identity_app)"
+else
+  fail "step 10 migrates identity as its OWNER role (identity, not identity_app)" \
+    "argv did not carry the owner DSN: $(grep -o 'DATABASE_URL=[^ ]*' "$migrate_argv" 2>/dev/null | head -3)"
+fi
+if grep -q -- '--env=COURIER_OWNER_DATABASE_URL=ecto://courier:owner-courier-pw@' "$migrate_argv" 2>/dev/null; then
+  pass "step 10 migrates courier as its OWNER role via COURIER_OWNER_DATABASE_URL"
+else
+  fail "step 10 migrates courier as its OWNER role via COURIER_OWNER_DATABASE_URL" \
+    "argv did not carry the owner DSN"
+fi
+if grep -q -- '--env=DATABASE_URL=ecto://courier_app:app-courier-pw@' "$migrate_argv" 2>/dev/null; then
+  pass "step 10 also gives courier its app DATABASE_URL (its release eval raises without it)"
+else
+  fail "step 10 also gives courier its app DATABASE_URL (its release eval raises without it)" \
+    "argv did not carry the app DSN"
+fi
+# The image comes from the Deployment, not a literal in install.sh.
+if grep -q -- '--image=ghcr.io/cafaye/identity:0.1.0' "$migrate_argv" 2>/dev/null &&
+   grep -q -- '--image=ghcr.io/cafaye/courier:0.1.0' "$migrate_argv" 2>/dev/null; then
+  pass 'step 10 migrates in each service own RUNNING image (read off the Deployment)'
+else
+  fail 'step 10 migrates in each service own RUNNING image (read off the Deployment)' \
+    "argv images: $(grep -o -- '--image=[^ ]*' "$migrate_argv" 2>/dev/null | sort -u | tr '\n' ' ')"
+fi
+if [ "$(mock_get data substrate-migrations identity)" = "ghcr.io/cafaye/identity:0.1.0" ] &&
+   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ]; then
+  pass 'step 10 records the applied image per service (the re-run marker)'
+else
+  fail 'step 10 records the applied image per service (the re-run marker)' \
+    "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)'"
+fi
+# A service with no schema is named in the plan and skipped, not run.
+if grep -q -- '--image=.*parlor' "$migrate_argv" 2>/dev/null; then
+  fail 'step 10 does not run a migrate Job for parlor (it owns no schema)' "a parlor run was recorded"
+else
+  pass 'step 10 does not run a migrate Job for parlor (it owns no schema)'
+fi
+
+# --- the guard: a re-run applies nothing new ----------------------------------
+runs_before="$(grep -c '^run ' "$migrate_argv" 2>/dev/null || true)"
+migrate_rerun_ec=0
+(
+  migrate_seed_fixture
+  export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-rerun-receipt.json"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  install_migrations >"$WORK/migrate-rerun.log" 2>&1
+) || migrate_rerun_ec=$?
+runs_after="$(grep -c '^run ' "$migrate_argv" 2>/dev/null || true)"
+if [ "$migrate_rerun_ec" -ne 0 ]; then
+  fail 'step 10 is a no-op on a re-run (its guard skips)' "$(cat "$WORK/migrate-rerun.log")"
+elif [ "$runs_after" != "$runs_before" ]; then
+  fail 'step 10 is a no-op on a re-run (its guard skips)' \
+    "a re-run launched $((runs_after - runs_before)) more pod(s)"
+elif ! grep -q 'already applied' "$WORK/migrate-rerun.log"; then
+  fail 'step 10 is a no-op on a re-run (its guard skips)' "the step did not say it skipped: $(cat "$WORK/migrate-rerun.log")"
+else
+  pass 'step 10 is a no-op on a re-run (its guard skips)'
+fi
+
+# --- the red control: a failed migration fails the step, naming the service ---
+MOCK_ROOT="$WORK/migrate-fail"
+mkdir -p "$MOCK_ROOT"
+migrate_fail_ec=0
+(
+  migrate_seed_fixture
+  export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-fail-receipt.json"
+  export MOCK_POD_PHASE="Failed"
+  export MOCK_POD_LOGS="permission denied for schema public"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  install_migrations >"$WORK/migrate-fail.log" 2>&1
+) || migrate_fail_ec=$?
+if [ "$migrate_fail_ec" -eq 0 ]; then
+  fail 'control: a failed migration fails the step (a green install over an empty schema)' \
+    "install_migrations exited 0 on a Failed pod"
+elif ! grep -q 'identity' "$WORK/migrate-fail.log"; then
+  fail 'control: a failed migration fails the step (a green install over an empty schema)' \
+    "the failure did not name the service: $(cat "$WORK/migrate-fail.log")"
+elif ! grep -q 'OWNER' "$WORK/migrate-fail.log"; then
+  fail 'control: a failed migration fails the step (a green install over an empty schema)' \
+    "the failure did not name the DSN/role: $(cat "$WORK/migrate-fail.log")"
+else
+  pass 'control: a failed migration fails the step, naming the service and its OWNER role'
+fi
+# The pod's logs are surfaced — a Failed phase with no explanation is a dead end.
+if grep -q 'permission denied for schema public' "$WORK/migrate-fail.log"; then
+  pass 'control: the failed migration prints the pod logs'
+else
+  fail 'control: the failed migration prints the pod logs' "the logs were not printed"
+fi
+
+# The static shape: install_migrations is a step main calls, its guard exists,
+# and the inventory lists the two schema-owning services. A comment can satisfy
+# none of these, and the fixture above proves the live path.
+check_migration_step() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+problems = []
+
+
+def need(sub, msg):
+    if sub not in code:
+        problems.append(msg)
+
+
+need("TOTAL=12", "TOTAL is not 12")
+if not re.search(r"(?m)^install_migrations\(\)", code):
+    problems.append("no install_migrations step")
+if not re.search(r"(?m)^  install_migrations$", code):
+    problems.append("main never calls install_migrations")
+if not re.search(r"(?m)^migration_guard_applied\(\)", code):
+    problems.append("no migration_guard_applied guard")
+# The guard is USED, not merely defined: install_migrations must consult it, or
+# a re-run re-launches every migrate pod.
+body = re.search(r"(?m)^install_migrations\(\)\s*\{(.*?)\n\}", code, re.S)
+if not body or "migration_guard_applied" not in body.group(1):
+    problems.append("install_migrations never consults its guard")
+if not re.search(r"(?m)^owner_database_url_for\(\)", code):
+    problems.append("no owner_database_url_for — the migrate DSN must be the OWNER role")
+# The inventory: the two services with a schema, and no silent third.
+m = re.search(r"migration_service_has_schema\(\)\s*\{(.*?)\n\}", code, re.S)
+if not m:
+    problems.append("no migration_service_has_schema inventory")
+else:
+    for svc in ("identity", "courier"):
+        if svc not in m.group(1):
+            problems.append(f"{svc} is not in the migration inventory")
+# The failure path names the service and prints the logs.
+need("did not succeed", "the failure path has no message")
+need("logs \"pod/kit-migrate-", "the failure path does not print the pod logs")
+# The banned shape: the migrate COMMAND swallowed so a failed migration reads
+# as a green step. `delete … || true` is fine (and required); `$cmd || true` is
+# the defect. Match the run's command position, not the pod's name.
+if re.search(r"--command -- \$cmd[^\n]*\|\| true", code):
+    problems.append("the migrate command is swallowed with `|| true`")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("step 10 exists, is called, has a guard and an OWNER-role inventory")
+PY
+}
+
+run 'step 10 has a step, a guard and an OWNER-role inventory' green check_migration_step "$SUBSTRATE/install.sh"
+
+# The control: an inventory with courier removed must go red under the same
+# check — an inventory the check cannot see shrink is documentation.
+fixture_mig_inventory="$WORK/install-mig-inventory.sh"
+sed 's/    identity | courier) return 0 ;;/    identity) return 0 ;;/' \
+  "$SUBSTRATE/install.sh" >"$fixture_mig_inventory"
+run 'control: an inventory missing a service goes red' red check_migration_step "$fixture_mig_inventory"
+
+# ===========================================================================
 # 14. --headless — stdout is progress-only, and progress is secret-free
 # ===========================================================================
 #
@@ -3818,7 +4149,7 @@ EMITTERS = {
 # NOT checked by rule 2, because a printf that cannot carry `$pw` is a DSN
 # with no password in it. The assertion at the bottom of this check keeps the
 # list honest: a value producer called anywhere else goes red.
-VALUE_PRODUCERS = {"database_url_for", "oidc_key_id_for"}
+VALUE_PRODUCERS = {"database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for"}
 
 # Every variable in install.sh that HOLDS secret material, by name. This is a
 # closed list, not a pattern: a `*SECRET*` glob would also match `secret_name`
@@ -3938,7 +4269,10 @@ for name in sorted(VALUE_PRODUCERS):
         if not src[line_start : m.start()].strip():
             continue  # the definition
         window = src[max(0, line_start - 2) : m.start()]
-        if "$(" not in window:
+        # A command substitution, either spelling: `$(...)` captures the output
+        # and `<(...)` feeds it to another command. Both keep the value off the
+        # process stdout; a bare call would not.
+        if "$(" not in window and "<(" not in window:
             problems.append(
                 f"{name} is called outside a command substitution — its "
                 "output would reach stdout"
