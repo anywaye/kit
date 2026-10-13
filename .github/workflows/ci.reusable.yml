@@ -436,6 +436,9 @@ jobs:
   language:
     name: language
     runs-on: ubuntu-latest
+    # The gate job: a `case` over the requested language, no toolchain. 5
+    # bounds a wedged runner without ever touching a healthy one.
+    timeout-minutes: 5
     steps:
       - name: the language is one this file has a job for
         # `${{ }}` is deliberately NOT interpolated into this body. zizmor's
@@ -489,6 +492,11 @@ jobs:
     name: none
     if: ${{ inputs.language == 'none' }}
     runs-on: ubuntu-latest
+    # `language: none` runs the adopting repo's whole `tests/validate.sh`,
+    # docker stacks and live tiers included — the single heaviest job kit
+    # hands out. 60 is several times a healthy run and still a sixth of the
+    # 360-minute default a caller cannot override.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -514,6 +522,10 @@ jobs:
     name: go
     if: ${{ inputs.language == 'go' }}
     runs-on: ubuntu-latest
+    # Module download, build, lint, test and coverage. Go compiles quickly but
+    # a cold module cache is not free; 30 leaves the suite room and caps a
+    # hung test.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -686,6 +698,10 @@ jobs:
     name: rust
     if: ${{ inputs.language == 'rust' }}
     runs-on: ubuntu-latest
+    # Cargo fetch, fmt, the test build and `cargo llvm-cov` (a full
+    # instrumented rebuild). Rust is the slowest language toolchain kit runs,
+    # so 45 rather than the others' 30.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -755,6 +771,9 @@ jobs:
     name: ruby
     if: ${{ inputs.language == 'ruby' }}
     runs-on: ubuntu-latest
+    # `bundle install`, rubocop, the suite and rake coverage. 30 covers a cold
+    # gem install and caps a hung test.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -906,6 +925,9 @@ jobs:
     name: elixir
     if: ${{ inputs.language == 'elixir' }}
     runs-on: ubuntu-latest
+    # `mix deps.get`, format check, the suite and coveralls. 30 covers a cold
+    # Hex fetch and caps a hung test.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -973,6 +995,9 @@ jobs:
     name: python
     if: ${{ inputs.language == 'python' }}
     runs-on: ubuntu-latest
+    # `uv sync`, lint, the suite and coverage. 25 is ample for a fast
+    # toolchain and bounds a hung test.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1051,6 +1076,9 @@ jobs:
     name: node
     if: ${{ inputs.language == 'node' }}
     runs-on: ubuntu-latest
+    # `npm ci`, eslint, the suite and coverage. 25 covers a cold install and
+    # bounds a hung test.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1222,6 +1250,9 @@ jobs:
     name: bun
     if: ${{ inputs.language == 'bun' }}
     runs-on: ubuntu-latest
+    # `bun install`, typecheck, the suite and coverage. 25, the same shape as
+    # node above.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1306,6 +1337,10 @@ jobs:
     name: telemetry (${{ matrix.language }})
     if: ${{ inputs.telemetry == 'true' }}
     runs-on: ubuntu-latest
+    # Installs SIX toolchains (go, ruby, elixir, python, node, rust) and then
+    # runs one conformance suite. The setup actions dominate; 30 bounds a
+    # matrix leg that hangs on a download.
+    timeout-minutes: 30
     strategy:
       # One language at a time. Six runners for six stdlib suites costs more
       # than it returns, and a failure is easier to read from a serial log.
@@ -1464,6 +1499,9 @@ jobs:
     name: zizmor
     if: ${{ inputs.zizmor == 'true' }}
     runs-on: ubuntu-latest
+    # `pip install zizmor`, a sparse fetch of kit, and one audit. 15 bounds a
+    # stalled network install.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1553,6 +1591,9 @@ jobs:
     name: tenancy
     if: ${{ inputs.tenancy == 'true' }}
     runs-on: ubuntu-latest
+    # A sparse fetch of core plus `tenancy-check`. 20 bounds a stalled fetch
+    # and leaves the checker room on a large tree.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:

@@ -141,6 +141,9 @@ jobs:
   resolve:
     name: resolve (read the chart's appVersion)
     runs-on: ubuntu-latest
+    # A checkout and one `grep` of Chart.yaml. 10 seconds of real work; the
+    # bound exists only to stop a wedged runner from billing.
+    timeout-minutes: 10
     outputs:
       app-version: ${{ steps.read.outputs.app-version }}
     steps:
@@ -192,6 +195,15 @@ jobs:
   # `./.github/workflows/{filename}` (and `$/...` for GHEC), and measured
   # on this tree with `actionlint`, which resolves the same path and
   # reports `could not read reusable workflow file` on any other spelling.
+  # NEITHER `uses:` JOB CARRIES `timeout-minutes`, AND GITHUB WILL NOT LET IT.
+  # A job whose body is `uses:` may carry only name/uses/with/secrets/needs/if/
+  # permissions (actionlint reports the key as unavailable here), so a caller
+  # — even a reusable workflow calling a reusable workflow — cannot bound the
+  # waiting job. The bound lives where the work does: image.reusable.yml's
+  # `build` is 60 minutes and chart.reusable.yml's `chart` is 15, and a waiting
+  # `uses:` job ends when its bounded callee does. Adding a number here would
+  # not add a ceiling; GitHub would reject the whole file. The gate's
+  # `workflow timeouts` check enforces both facts.
   image:
     name: image
     needs: resolve
@@ -201,6 +213,8 @@ jobs:
       # Derived above, never a knob. A caller that could pass this would
       # be a caller that could publish a chart pinning a tag nothing made.
       app-version: ${{ needs.resolve.outputs.app-version }}
+  # Same rule as `image` above: a `uses:` job cannot carry `timeout-minutes`;
+  # the chart job's ceiling is chart.reusable.yml's own 15 minutes.
   chart:
     name: chart
     uses: ./.github/workflows/chart.reusable.yml

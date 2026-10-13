@@ -122,6 +122,10 @@ jobs:
   chart:
     name: chart (and publish, if asked)
     runs-on: ubuntu-latest
+    # Curl-install helm (pinned), read Chart.yaml, `helm package`, log in and
+    # push. All small and local except the helm download; 15 bounds a stalled
+    # download or registry push.
+    timeout-minutes: 15
     # `packages: write` is DECLARED HERE AND GRANTED BY THE CALLER — see the
     # header. In a reusable workflow this is a ceiling, not a grant: the
     # effective permission is the caller's, intersected with this. A caller

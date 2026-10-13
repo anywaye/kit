@@ -212,6 +212,13 @@ jobs:
   build:
     name: build (and publish, if asked)
     runs-on: ubuntu-latest
+    # THE SLOWEST JOB KIT HANDS OUT. It builds and pushes a multi-arch image
+    # (default `linux/amd64,linux/arm64`) under QEMU — every arm64 layer is
+    # emulated — so the bound is generous on purpose: a bound tight enough to
+    # kill a healthy cold build is a worse failure than a large one, and 60
+    # is still a sixth of the 360-minute default. It bounds billing when a
+    # registry push or a build stage hangs.
+    timeout-minutes: 60
     # `packages: write` is DECLARED HERE AND GRANTED BY THE CALLER. In a
     # reusable workflow this is a ceiling, not a grant: the effective
     # permission is the caller's, intersected with this. A caller that omits
