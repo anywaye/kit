@@ -2,6 +2,23 @@
 
 ### Substrate
 
+- **The NATS manifest gave Kubernetes a flag where it expected a binary.**
+  `templates/substrate/manifests/data/nats.yaml` carried the local stack's flag
+  list under `command:` — `[-js, -sd, /data, -m, 8222]` — because
+  `templates/compose/docker-compose.yml` spells the same list under the same
+  key. Compose's `command:` **appends** to the image's ENTRYPOINT; Kubernetes'
+  `command:` **replaces** it and carries arguments in `args:`. So step 10 applied
+  the broker, the kubelet tried to exec a binary literally named `-js`, and the
+  install timed out:
+
+      StartError: … exec: "-js": executable file not found in $PATH
+
+  The flags move to `args:` beside a `command:` naming `nats-server`; the
+  compose-vs-Kubernetes field semantics are written at the code site, and the
+  comment that said "the local service's command, flag for flag" is gone.
+  `tests/substrate_test.sh` §12b refuses any `command:` whose first element
+  begins with a flag, with the `-js` shape as its red control and a binary-first
+  fixture as its green one, so the class cannot ship silently again.
 - **The Postgres Cluster named a field CNPG v1.30.1 does not have, and the gate
   was green over it.** `templates/substrate/manifests/data/postgres-cluster.yaml`
   wrote `spec.storageConfiguration`, the operator's **pre-1.24** name; the pin
