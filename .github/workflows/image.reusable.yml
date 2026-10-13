@@ -329,8 +329,7 @@ jobs:
           tags="$META_TAGS"
           if [ -n "$APP_VERSION" ]; then
             tags="$(printf '%s\n' "$tags" | awk -v want="$IMAGE:$APP_VERSION" '$0 != want')"
-            tags="$tags
-          $IMAGE:$APP_VERSION"
+            tags="$(printf '%s\n%s' "$tags" "$IMAGE:$APP_VERSION")"
           fi
           # Multiline output through GITHUB_OUTPUT's heredoc form; a plain
           # `key=value` line would carry only the first tag.

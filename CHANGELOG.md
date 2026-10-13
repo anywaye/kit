@@ -2,6 +2,15 @@
 
 ### Substrate
 
+- **The image workflow's `add the chart's appVersion as a tag` step held a
+  quoted assignment split across two physical lines, and `tests/validate.sh`
+  § "every run: body" mis-read it as a prefix assignment (`tags="$tags` as the
+  assignment, `$IMAGE:…` as its command) and went red on every run — including
+  master, so a green gate proved nothing about the branch's own substrate work.
+  The assignment is now `tags="$(printf '%s\n%s' "$tags" "$IMAGE:…")"` — the
+  same bytes, without the open-quote newline that confused the check, and the
+  `every run:` section is green.**
+
 - **Every chart dialled a bare service name, and every service is in its own
   namespace — so no cross-service address resolved on a box.** The substrate
   puts `identity`, `gateway`, `courier` and `parlor` each in a namespace of its
