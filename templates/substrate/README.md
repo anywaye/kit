@@ -84,12 +84,17 @@ this file only describes what is here and what is proven.
     loudly when it does not.
 12. **Courier's identity credential** — minted on this box from identity's own
     API (the same four calls the local launch harness makes, over a
-    port-forward to the cluster-local Service), written as ONE value into both
-    `identity-secrets` (`COURIER_TOKEN`) and `courier-secrets`
-    (`COURIER_IDENTITY_TOKEN`), and both deployments restarted. Nothing
-    crosses a boundary and nothing is printed. This is the loop that used to
-    be manual — mint in one terminal, paste into a second run — and a mismatch
-    between its two halves surfaced as identity's `403`.
+    port-forward to the cluster-local Service), and written as a WHOLE PAIR
+    into each side: `identity-secrets` gets `COURIER_BASE_URL` +
+    `COURIER_TOKEN`, `courier-secrets` gets `COURIER_IDENTITY_URL` +
+    `COURIER_IDENTITY_TOKEN`, both deployments restarted. The two tokens are
+    one value; each base URL is the peer's in-cluster Service, read from that
+    service's chart. identity refuses to boot on half a pair, and courier's
+    introspection URL otherwise falls back to the compose spelling — so no
+    path writes one key without the other. Nothing crosses a boundary and
+    nothing is printed. This is the loop that used to be manual — mint in one
+    terminal, paste into a second run — and a mismatch between its two halves
+    surfaced as identity's `403`.
 
 Every version is pinned exactly. The pins were verified against the GitHub
 releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
@@ -498,11 +503,13 @@ environment variable and the key list IS the service's env list:
 | Secret | Keys | Provenance |
 |---|---|---|
 | `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 12; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 12 minted; the rest from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL`, `COURIER_BASE_URL`, `COURIER_TOKEN` (`OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted and `COURIER_BASE_URL` is courier's Service, written in the same patch; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 12; the rest from the environment |
 | `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL`, `ASSERTION_SIGNING_KEY` | `REDIS_URL` built from step 9's password; `ASSERTION_SIGNING_KEY` generated on the box (a PKCS#8 RSA-2048 PEM the chart mounts as `signing.pem`) |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_IDENTITY_URL`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11 and `COURIER_IDENTITY_URL` is identity's Service, written in the same patch; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
 
 The key lists were enumerated from the code, not guesswork: identity's
@@ -585,7 +592,20 @@ the value was minted outside the box and pasted into a second run. Step 11
 does it inside one run: the key is minted on this box from identity's own API
 (`POST /v1/accounts/{id}/api-keys`), written into both secrets, and both
 deployments are restarted. The guard is the VALUE — a re-run that finds the
-credential already minted has nothing to mint. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
+credential already minted has nothing to mint.
+
+**Each token is written WITH its base URL, because they are one fact.**
+identity's courier block is all-or-nothing: `COURIER_BASE_URL` and
+`COURIER_TOKEN` together, or neither (`internal/config/config.go`,
+`loadCourier` — a lone token is a refusal to boot, the live defect that
+produced this rule). courier's `COURIER_IDENTITY_URL` defaults to
+`http://identity:8080` (`config/runtime.exs`), the compose-network spelling,
+which does not resolve across the `courier`/`identity` namespace boundary. So
+step 11 writes `COURIER_BASE_URL=http://courier.courier.svc.cluster.local:4000`
+(courier's chart: Service `courier`, port 4000) beside identity's token, and
+`COURIER_IDENTITY_URL=http://identity.identity.svc.cluster.local:8080`
+(identity's chart: Service `identity`, port 8080) beside courier's — each in
+ONE merge patch, so no path writes half a pair. And `COURIER_ERROR_RELAY_TOKEN` is generated here, but it is a
 *shared* secret every service presents to the relay — sibling services do
 not read it yet, so wiring them to this value is a named follow-up, not a
 second copy of it.

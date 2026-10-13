@@ -206,6 +206,34 @@ NATS_BOX_VERSION="0.20.0"
 # limited to the caller's, and `svc.<namespace>.svc.cluster.local` crosses it.
 NATS_URL="nats://nats.data.svc.cluster.local:4222"
 
+# TWO SERVICE URLs, and each is the OTHER service's in-cluster Service. They
+# are constants here for the same reason NATS_URL is — one fact, one line —
+# and they are here rather than in a secret record because they are not
+# secrets: they are the address of a Service, derived from two charts.
+#
+#   COURIER_URL   — identity's `COURIER_BASE_URL`. Read from the courier chart
+#                   (`courier/chart/values.yaml`: `service.port: 4000`, the
+#                   Elixir container port) and the Service template
+#                   (`courier/chart/templates/service.yaml`: `name: courier`),
+#                   deployed into namespace `courier` by
+#                   `templates/substrate/manifests/applications/courier.yaml`.
+#   IDENTITY_URL  — courier's `COURIER_IDENTITY_URL`, the base of identity's
+#                   introspection endpoint (`POST /v1/introspections`). Read
+#                   from the identity chart (`identity/chart/values.yaml`:
+#                   `service.port: 8080`) and its Service template
+#                   (`name: identity`), namespace `identity`.
+#
+# WHY THEY ARE WRITTEN AT ALL. identity refuses to boot with half a courier
+# block (`internal/config/config.go` `loadCourier`: "COURIER_BASE_URL and
+# COURIER_TOKEN must both be set, or neither of them"), and courier's
+# `COURIER_IDENTITY_URL` DEFAULTS to `http://identity:8080`
+# (`config/runtime.exs`), which cannot resolve across the `courier`/`identity`
+# namespace boundary — it is the compose-network spelling. So both URLs are
+# written by step 11, beside the token of the same block: two environment
+# values that must move together are one fact with two names.
+COURIER_URL="http://courier.courier.svc.cluster.local:4000"
+IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
+
 # --- operator-supplied values ----------------------------------------------
 # --- the box's own identity and capability ------------------------------------
 # KIT_SUBSTRATE_BOX_ID is the enrolled identity of THIS box — a UUID the
@@ -1733,9 +1761,9 @@ validate_mfa_override() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
-#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
+#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
 #
 # THE SPLIT IS BY PROVENANCE:
@@ -1758,6 +1786,18 @@ validate_mfa_override() {
 #     is patched into both secrets that have to hold it. `COURIER_TOKEN` in
 #     identity-secrets is the SAME value, which courier requires and which no
 #     hand-off can be trusted to get right.
+#   minted on the box in step 12, never printed, never an input —
+#     COURIER_IDENTITY_TOKEN, and the BASE URL of each side's peer written
+#     with it (identity's COURIER_BASE_URL and courier's COURIER_IDENTITY_URL).
+#     The token is an API key identity itself mints, so the old two-terminal
+#     loop (install → boot → mint by hand → paste into a second run) is gone:
+#     the same four calls run on this box and the value is patched into both
+#     secrets that have to hold it. `COURIER_TOKEN` in identity-secrets is the
+#     SAME value, which courier requires and which no hand-off can be trusted
+#     to get right. Each secret gets its WHOLE pair in ONE patch: a token
+#     without its base URL is a half-block, and identity's own loader refuses
+#     to boot on one (`loadCourier`), which is the live defect this pair
+#     closes.
 #   from the environment, shape-validated, never echoed — courier's SMTP
 #     settings and the provider's signing secret KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET
 #     (see the header for the variable names). This is now the ONE long-lived
@@ -2303,8 +2343,9 @@ install_nats() {
 #
 # WHAT NEVER LEAVES: the minted value is a shell variable, written into two
 # secrets, and printed nowhere — not in DRY_RUN, not on a refusal, not on
-# success. The pair is written as ONE value in ONE step, which is the only
-# shape that cannot drift.
+# success. The token is written as ONE value in ONE step, and each secret's
+# base URL is written in the same patch as its token — the only shape that
+# cannot drift.
 mint_courier_identity_token() {
   log_step "courier's identity credential, minted on this box"
   # The guard is the resume path, and it is the VALUE rather than a step flag:
@@ -2313,7 +2354,7 @@ mint_courier_identity_token() {
     kit_substrate_out "      credential already minted on this box, skipping (rotate by replacing the secret and restarting the pods)"
     return 0
   fi
-  if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets and courier-secrets with the same value and restart both deployments"; then
+  if dry_run "mint courier's API key from identity's own API (register → session → account → api-key), then patch identity-secrets (COURIER_BASE_URL + COURIER_TOKEN) and courier-secrets (COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN) and restart both deployments"; then
     return 0
   fi
 
@@ -2339,7 +2380,19 @@ mint_courier_identity_token() {
   local forward_pid=$!
   # The forward is torn down on EVERY path out of this function — a mint that
   # fails halfway must not leave an unauthenticated local port listening.
-  trap 'kill "$forward_pid" 2>/dev/null || true' RETURN
+  #
+  # THE TRAP REMOVES ITSELF, and that is not tidiness. A `RETURN` trap is
+  # GLOBAL: bash runs it after EVERY function return, not only the return of
+  # the function that set it. So a bare `trap 'kill "$forward_pid" …' RETURN`
+  # fires correctly when this function returns (the `local` is still in scope;
+  # measured, the pid is visible) and then fires AGAIN when the CALLER returns
+  # — `main`, at the end of the install — where `forward_pid` has left scope and
+  # `set -u` turns the reference into `forward_pid: unbound variable`. The trap
+  # command itself then fails, and that failure is the process's exit status:
+  # the install printed `install.done`, completed all eleven steps, and exited
+  # 1. `trap - RETURN` inside the trap makes it run at most once, on the one
+  # return where the variable is still in scope.
+  trap 'kill "$forward_pid" 2>/dev/null || true; trap - RETURN' RETURN
 
   # EXISTENCE, THEN USE. `kubectl port-forward` establishes its local listener
   # ASYNCHRONOUSLY — it must reach the API server, resolve svc/identity and dial
@@ -2421,23 +2474,34 @@ mint_courier_identity_token() {
     return 1
   }
 
-  # ONE value, TWO secrets — and a PATCH, not a create. `kubectl apply` with a
-  # whole Secret object is a REPLACE: writing `COURIER_TOKEN` through one would
-  # delete `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the
-  # OIDC keys from identity-secrets in the same breath. A merge patch adds the
-  # key and touches nothing else, and it is built by `jq` so a token with a
-  # quote in it cannot break the JSON or land in an argv (`--patch-file=/dev/stdin`
-  # reads it from a pipe; kubectl has no `-` convention for `--patch-file`, so
-  # `--patch-file=-` would open a file literally named `-`).
-  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_TOKEN":$t}}')" |
+  # ONE value per secret, TWO keys per patch — and a PATCH, not a create.
+  # `kubectl apply` with a whole Secret object is a REPLACE: writing through one
+  # would delete `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and
+  # the OIDC keys from identity-secrets in the same breath. A merge patch adds
+  # the keys and touches nothing else, and it is built by `jq` so a token with a
+  # quote in it cannot break the JSON or land in an argv
+  # (`--patch-file=/dev/stdin` reads it from a pipe; kubectl has no `-`
+  # convention for `--patch-file`, so `--patch-file=-` would open a file
+  # literally named `-`).
+  #
+  # EACH PATCH CARRIES A WHOLE PAIR, because the two keys of a pair are one
+  # fact with two names: identity refuses to boot with `COURIER_TOKEN` and no
+  # `COURIER_BASE_URL` (`loadCourier`: "must both be set, or neither of them"),
+  # and courier's `COURIER_IDENTITY_URL` would otherwise fall back to the
+  # compose spelling `http://identity:8080`, which does not cross the
+  # namespace boundary. Both halves go in ONE patch so no path can write one
+  # without the other.
+  printf '%s' "$(jq -nc --arg url "$COURIER_URL" --arg t "$token" \
+    '{"stringData":{"COURIER_BASE_URL":$url,"COURIER_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
     --type=merge --patch-file=/dev/stdin
-  printf '%s' "$(jq -nc --arg t "$token" '{"stringData":{"COURIER_IDENTITY_TOKEN":$t}}')" |
+  printf '%s' "$(jq -nc --arg url "$IDENTITY_URL" --arg t "$token" \
+    '{"stringData":{"COURIER_IDENTITY_URL":$url,"COURIER_IDENTITY_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n courier patch secret courier-secrets \
     --type=merge --patch-file=/dev/stdin
   kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
-  kit_substrate_out "      credential minted on this box, written to identity-secrets and courier-secrets, both deployments restarted"
+  kit_substrate_out "      credential minted on this box, written to identity-secrets and courier-secrets with each side's base URL, both deployments restarted"
 }
 
 # --- main -------------------------------------------------------------------

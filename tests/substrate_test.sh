@@ -1096,22 +1096,32 @@ if len(records) != 4:
     print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
 # A key is WRITTEN in one of two spellings: `--from-literal=KEY=` (the secrets
-# step 9 creates) or the merge patch step 11 sends, whose body is built as
-# `{"stringData":{"KEY":$t}}`. Both are writes and both are checked, so the
-# record cannot be satisfied by a key that only appears in a comment or a
-# variable name. The control below removes one of each.
-patch_keys = set(re.findall(r'"stringData":\{"([A-Z_]+)":\$t\}', code))
+# step 9 creates) or the merge patch step 11 sends, whose body is built as a
+# `stringData` object. Both are writes and both are checked, so the record
+# cannot be satisfied by a key that only appears in a comment or a variable
+# name. The patch keys are read out of EVERY `stringData` block rather than off
+# a `KEY:$t` literal, because a patch now carries a whole PAIR of keys
+# (`COURIER_BASE_URL` + `COURIER_TOKEN`, `COURIER_IDENTITY_URL` +
+# `COURIER_IDENTITY_TOKEN`) and a regex keyed to the trailing `:$t}` would see
+# only the token half. The controls below remove one `--from-literal` key and
+# one key out of a patch.
+patch_keys = set()
+for block in re.findall(r'"stringData"\s*:\s*\{([^}]*)\}', code):
+    patch_keys.update(re.findall(r'"([A-Z_]+)"\s*:', block))
 # Conditional keys: set only when the operator sets the surface (identity's
-# OIDC block and its issuer, its courier credential, courier's mail-from). They
+# OIDC block and its issuer, OAUTH_ENCRYPTION_KEY, courier's mail-from). They
 # are deliberately UNRECORDED — absent is a valid reduced surface, and the
 # record lists the keys every install creates. MFA_ENCRYPTION_KEY is NOT
 # conditional: the installer generates it on first creation, so every
-# install creates it and the record must name it. OIDC_SIGNING_KEY and its
-# id are now GENERATED ON THE BOX rather than supplied, but still only when
-# the operator sets an issuer — the surface stays all-or-nothing, so they
-# stay unrecorded beside the issuer that gates them.
+# install creates it and the record must name it. The COURIER credential pair
+# is NOT conditional either: step 11 always mints it on the live path, so
+# every install writes COURIER_BASE_URL + COURIER_TOKEN and
+# COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN, and the record names them.
+# OIDC_SIGNING_KEY and its id are now GENERATED ON THE BOX rather than
+# supplied, but still only when the operator sets an issuer — the surface
+# stays all-or-nothing, so they stay unrecorded beside the issuer that gates
+# them.
 conditional = {
-    "COURIER_TOKEN",
     "OIDC_SIGNING_KEY",
     "OIDC_SIGNING_KEY_ID",
     "OIDC_ISSUER",
@@ -1151,13 +1161,18 @@ fixture_dropped_key="$WORK/install-dropped-key.sh"
 grep -v -- '--from-literal=COURIER_SMTP_PASSWORD=' "$SUBSTRATE/install.sh" >"$fixture_dropped_key"
 run 'control: a secret with a key removed goes red' red check_secret_record "$fixture_dropped_key"
 
-# The second control, for the other spelling: step 11's mint writes its key
-# through a merge patch, and a fixture with that patch removed must go red
-# too. Without it the widened check would be proven only by the --from-literal
-# path, which is the path that never changed.
+# The second control, for the other spelling: step 11's mint writes each pair
+# through a merge patch, and a fixture with one key removed from that patch
+# must go red too. Without it the widened check would be proven only by the
+# --from-literal path, which is the path that never changed. One control per
+# half of the pair: the courier token and identity's base URL.
 fixture_dropped_patch="$WORK/install-dropped-patch.sh"
-grep -v -- '"stringData":{"COURIER_IDENTITY_TOKEN":$t}' "$SUBSTRATE/install.sh" >"$fixture_dropped_patch"
-run 'control: a secret whose patch is removed goes red' red check_secret_record "$fixture_dropped_patch"
+sed 's/,"COURIER_IDENTITY_TOKEN":\$t//' "$SUBSTRATE/install.sh" >"$fixture_dropped_patch"
+run 'control: a secret whose patched key is removed goes red' red check_secret_record "$fixture_dropped_patch"
+
+fixture_dropped_url="$WORK/install-dropped-url.sh"
+sed 's/"COURIER_BASE_URL":\$url,//' "$SUBSTRATE/install.sh" >"$fixture_dropped_url"
+run 'control: a patched base URL removed from the pair goes red' red check_secret_record "$fixture_dropped_url"
 
 # The reverse control: a fixture setting a key the record does not name (and
 # the conditional set does not excuse). Must go red the other way.
@@ -5890,8 +5905,17 @@ mint_step() {
       'mfa_smtp_env' \
       'mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"' \
       'mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"' \
-      'mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"' \
-      'mint_courier_identity_token'
+      'mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"'
+    # The 4th argument is `wrap` to call the mint from inside a FUNCTION, the
+    # way `main` calls it. The distinction is the whole defect B control: a
+    # `RETURN` trap is global, so it fires at the CALLER's return too, where
+    # `forward_pid` has left scope. A top-level call (the default) never
+    # triggers that, so only the wrapped shape can prove the exit code.
+    if [ "${4:-}" = wrap ]; then
+      printf 'mint_caller() { mint_courier_identity_token; }\nmint_caller\n'
+    else
+      printf 'mint_courier_identity_token\n'
+    fi
   } >"$script"
   mint_ec=0
   bash "$script" >"$ROLLOUT_DIR/run.log" 2>&1 || mint_ec=$?
@@ -6057,6 +6081,97 @@ run 'step 11 writes one minted value into both secrets through /dev/stdin' green
   check_mint_writes_both_secrets "$mint_fixed"
 run 'control: the - patch spelling aborts the mint, as it does on the box' red \
   check_mint_writes_both_secrets "$fixture_patch_dash"
+
+# ---------------------------------------------------------------------------
+# 18b. Step 11 writes BOTH HALVES of each credential pair, and exits 0
+# ---------------------------------------------------------------------------
+# Two live defects, one step. (A) the mint wrote `COURIER_TOKEN` alone, and
+# identity's fail-closed loader (`identity/internal/config/config.go`,
+# `loadCourier`) refused to boot on half a pair — the same for courier, whose
+# `COURIER_IDENTITY_URL` (`courier/config/runtime.exs`) otherwise falls back to
+# the compose-network spelling `http://identity:8080` that cannot cross a
+# namespace. (B) the `RETURN` trap that tears down the port-forward is global,
+# so it fired again when the CALLER (`main`) returned, where `forward_pid` had
+# left scope: `line …: forward_pid: unbound variable`, exit 1 AFTER
+# `install.done` printed.
+#
+# THE PAIR'S FOUR KEYS AND THEIR VALUES, read from the two charts:
+#   identity-secrets/COURIER_BASE_URL       = courier's Service, `courier`
+#     namespace, port 4000 (`courier/chart/values.yaml` service.port; Service
+#     `courier` in `courier/chart/templates/service.yaml`).
+#   identity-secrets/COURIER_TOKEN          = the value the mint returned.
+#   courier-secrets/COURIER_IDENTITY_URL    = identity's Service, `identity`
+#     namespace, port 8080 (`identity/chart/values.yaml`; Service `identity`).
+#   courier-secrets/COURIER_IDENTITY_TOKEN  = the same minted value.
+#
+# The sibling packet's chart-inventory check is not on this branch, so the
+# pair is asserted EXPLICITLY against those read values. check_secret_record
+# above is the textual half of the same claim — the record now names all four.
+COURIER_BASE_URL_EXPECTED="http://courier.courier.svc.cluster.local:4000"
+IDENTITY_BASE_URL_EXPECTED="http://identity.identity.svc.cluster.local:8080"
+
+check_mint_writes_pair() {
+  mint_step "$1" 2 5
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  local store="$ROLLOUT_DIR/store" bad="" p path want got
+  local -a pairs=(
+    "identity/identity-secrets/COURIER_BASE_URL|$COURIER_BASE_URL_EXPECTED"
+    "identity/identity-secrets/COURIER_TOKEN|$COURIER_MINT_TOKEN"
+    "courier/courier-secrets/COURIER_IDENTITY_URL|$IDENTITY_BASE_URL_EXPECTED"
+    "courier/courier-secrets/COURIER_IDENTITY_TOKEN|$COURIER_MINT_TOKEN"
+  )
+  for p in "${pairs[@]}"; do
+    path="$store/${p%%|*}"
+    want="${p#*|}"
+    got="$(cat "$path" 2>/dev/null || true)"
+    [ "$got" = "$want" ] || bad="${bad} ${p%%|*}=${got:-<missing>} (want ${want});"
+  done
+  if [ -n "$bad" ]; then
+    printf 'the minted pair is incomplete:%s\n' "$bad"
+    return 1
+  fi
+  echo "step 11 wrote both halves of each pair — token and base URL — in one patch"
+}
+run 'step 11 writes both halves of each credential pair' green \
+  check_mint_writes_pair "$mint_fixed"
+
+# The red control: the token half is written, the base URL half is not. This is
+# the exact shape that shipped and refused to boot.
+fixture_half_pair="$WORK/install-mint-half-pair.sh"
+sed 's/"COURIER_BASE_URL":\$url,//' "$mint_fixed" >"$fixture_half_pair"
+run 'control: a mint writing a token without its base URL goes red' red \
+  check_mint_writes_pair "$fixture_half_pair"
+
+# The done path must be EXIT 0. `check_mint_exit_zero` runs the mint WRAPPED in
+# a function, as `main` calls it; the control is the pre-fix trap, with its
+# self-removal stripped, which must exit non-zero for the caller-return reason.
+check_mint_exit_zero() {
+  mint_step "$1" 2 5 wrap
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s when called from a caller\n%s\n' \
+      "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  echo "the done path exits 0 with the mint called from a caller, as main calls it"
+}
+fixture_trap_nonself="$WORK/install-mint-trap-nonself.sh"
+sed -e '/^main "$@"$/d' -e 's/; trap - RETURN//' "$SUBSTRATE/install.sh" >"$fixture_trap_nonself"
+# The control fixture is only a control if the self-removal is really gone and
+# the trap is still there: a mutation that broke nothing would prove nothing.
+if grep -q "trap 'kill \"\$forward_pid\" 2>/dev/null || true; trap - RETURN' RETURN" "$fixture_trap_nonself" \
+  || ! grep -q "trap 'kill \"\$forward_pid\" 2>/dev/null || true' RETURN" "$fixture_trap_nonself"; then
+  fail 'control fixture: the pre-fix trap is the shape step 11 ran' \
+    "the self-removal deletion did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  run 'step 11 exits 0 when the mint is called from a caller, as main calls it' green \
+    check_mint_exit_zero "$mint_fixed"
+  run 'control: a RETURN trap that does not remove itself exits 1 after the mint' red \
+    check_mint_exit_zero "$fixture_trap_nonself"
+fi
 
 # ===========================================================================
 # 19. Step 6 waits on nothing — the core-install reality, executed
