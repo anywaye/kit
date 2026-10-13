@@ -6977,6 +6977,153 @@ else
 fi
 
 # ===========================================================================
+# 23. THE SERVICES' TELEMETRY IS OFF ON THE BOX, ON ONE SPELLING
+# ===========================================================================
+#
+# THE DEFECT. Every service's COMPILED default OTLP endpoint is the COMPOSE
+# stack's name — `http://otel-collector:4318` for identity/courier/parlor and
+# `:4317` for gateway. The box deploys no such Service and no OTLP endpoint at
+# all: alloy is pinned at chart 1.13.0 with no values, so its default config is
+# `config/example.alloy` (a `logging` block and `discovery.kubernetes`, no
+# `otelcol.receiver.otlp`) and its default Service exposes only `http-metrics`
+# on 12345; and the substrate ships no Tempo. So a fresh box's services retry
+# forever and log a DNS failure every ten seconds.
+#
+# THE CLAIM. Every service the substrate configures is told to turn its SDK off
+# with the OTel spec's own switch — `OTEL_SDK_DISABLED=true`, the mechanism
+# core's `otel-endpoint.schema.json` pins for the no-op path — and the switch is
+# spelled ONCE and referenced, never retyped. The three generated-chart services
+# get it through their secret (their charts inject env with
+# `envFrom: secretRef`); gateway's hand-written chart reads clear env from a
+# ConfigMap, so its Application carries the same key/value in
+# `spec.source.helm.values`. The two sites must AGREE.
+#
+# THE CONTROLS answer differently: the switch dropped from the constant, the
+# switch NAME drifted in the constant, one secret's reference removed, and
+# gateway's Application losing the key or drifting its value — each must go red.
+check_service_telemetry() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import re
+import sys
+
+import yaml
+
+install_path, apps_dir = sys.argv[1], sys.argv[2]
+
+# The switch core's schema pins, named once here so a drift is a comparison.
+SWITCH_KEY = "OTEL_SDK_DISABLED"
+SWITCH_VALUE = "true"
+
+src = open(install_path, encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+
+problems = []
+
+# 1. The switch is DEFINED once, with the spec's own key and value. The
+#    `=(--from-literal=` anchor is what makes this the DEFINITION and not one of
+#    the references (`"${SERVICE_OTEL_DISABLED[@]}"`).
+defs = re.findall(r"SERVICE_OTEL_DISABLED=\(--from-literal=([A-Z_]+)=([^)]+)\)", code)
+if len(defs) != 1:
+    problems.append(f"expected exactly one SERVICE_OTEL_DISABLED definition, found {len(defs)}")
+elif tuple(defs[0]) != (SWITCH_KEY, SWITCH_VALUE):
+    problems.append(f"the off-switch is {defs[0]!r}, want {(SWITCH_KEY, SWITCH_VALUE)!r}")
+
+# 2. Every generated-chart service's secret carries it BY REFERENCE. A window
+#    after the create line is long enough for the multi-line invocations and
+#    short enough not to reach the next secret.
+for secret in ("identity-secrets", "courier-secrets", "parlor-secrets"):
+    m = re.search(r"create secret generic " + re.escape(secret) + r"\b", code)
+    if not m:
+        problems.append(f"{secret} is never created")
+        continue
+    window = code[m.start():m.start() + 1400]
+    if "SERVICE_OTEL_DISABLED" not in window:
+        problems.append(f"{secret} is created without the telemetry off-switch")
+    elif f"--from-literal={SWITCH_KEY}=" in window:
+        problems.append(f"{secret} retypes the switch instead of referencing the constant")
+
+# 3. gateway: the one chart that does not envFrom its secret. Its Application
+#    must carry the same key/value through spec.source.helm.values.
+gw_path = os.path.join(apps_dir, "gateway.yaml")
+try:
+    with open(gw_path, encoding="utf-8") as fh:
+        gw = yaml.safe_load(fh)
+except (OSError, yaml.YAMLError) as exc:  # noqa: BLE001 - reported, never swallowed
+    problems.append(f"gateway.yaml cannot be read: {exc}")
+    gw = {}
+source = (gw.get("spec") or {}).get("source") or {}
+values = (source.get("helm") or {}).get("values")
+if not values:
+    problems.append("gateway.yaml carries no spec.source.helm.values, so the switch never reaches gateway")
+else:
+    env = (yaml.safe_load(values) or {}).get("env") or {}
+    if str(env.get(SWITCH_KEY)) != SWITCH_VALUE:
+        problems.append(
+            f"gateway.yaml's helm values set env.{SWITCH_KEY}={env.get(SWITCH_KEY)!r}, "
+            f"want {SWITCH_VALUE!r}"
+        )
+
+# 4. "Every service" is the four the substrate ships, and each must have a
+#    secret to carry the switch or an Application that does. A service dropped
+#    from the secret step is a service nothing configures.
+services = set(re.findall(r"create secret generic (\S+)-secrets", code))
+for svc in ("identity", "gateway", "courier", "parlor"):
+    if f"{svc}-secrets" not in services:
+        problems.append(f"{svc} has no secret in install.sh")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("every service is told to disable its SDK, on one spelling, and the two sites agree")
+PY
+}
+
+run 'every service is told to disable its SDK, on one spelling' green \
+  check_service_telemetry "$SUBSTRATE/install.sh" "$MANIFESTS"
+
+# The control that the switch can be dropped from the definition at all.
+fixture_no_switch="$WORK/install-no-switch.sh"
+sed 's/^SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)$/SERVICE_OTEL_DISABLED=()/' \
+  "$SUBSTRATE/install.sh" >"$fixture_no_switch"
+run 'control: the off-switch dropped from the constant goes red' red \
+  check_service_telemetry "$fixture_no_switch" "$MANIFESTS"
+
+# The control that the switch NAME is load-bearing — a name no SDK reads is the
+# defect wearing the fix's clothes, so the check must not accept it.
+fixture_drifted_switch="$WORK/install-drifted-switch.sh"
+sed 's/--from-literal=OTEL_SDK_DISABLED=true/--from-literal=OTEL_TELEMETRY_OFF=true/' \
+  "$SUBSTRATE/install.sh" >"$fixture_drifted_switch"
+run 'control: a drifted switch name in the constant goes red' red \
+  check_service_telemetry "$fixture_drifted_switch" "$MANIFESTS"
+
+# The control that one service's REFERENCE is load-bearing: identity keeps the
+# definition but stops referencing it, so its pod would fall back to the
+# compose name.
+fixture_identity_no_switch="$WORK/install-identity-no-switch.sh"
+sed 's/"\${identity_args\[@\]}" "\${SERVICE_OTEL_DISABLED\[@\]}"/"\${identity_args[@]}"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_identity_no_switch"
+run 'control: a service secret without the switch goes red' red \
+  check_service_telemetry "$fixture_identity_no_switch" "$MANIFESTS"
+
+# The controls for gateway's half: its Application losing the key, and its value
+# drifting. A fixture apps directory holds only gateway.yaml — that is the only
+# file this check reads out of the directory.
+fixture_gw_name="$WORK/apps-gateway-name"
+mkdir -p "$fixture_gw_name"
+sed 's/OTEL_SDK_DISABLED: "true"/OTEL_DISABLED: "true"/' \
+  "$MANIFESTS/gateway.yaml" >"$fixture_gw_name/gateway.yaml"
+run 'control: gateway with a drifted switch name goes red' red \
+  check_service_telemetry "$SUBSTRATE/install.sh" "$fixture_gw_name"
+
+fixture_gw_value="$WORK/apps-gateway-value"
+mkdir -p "$fixture_gw_value"
+sed 's/OTEL_SDK_DISABLED: "true"/OTEL_SDK_DISABLED: "false"/' \
+  "$MANIFESTS/gateway.yaml" >"$fixture_gw_value/gateway.yaml"
+run 'control: gateway losing the switch value goes red' red \
+  check_service_telemetry "$SUBSTRATE/install.sh" "$fixture_gw_value"
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

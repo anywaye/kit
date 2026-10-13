@@ -11,6 +11,27 @@ spec:
     repoURL: oci://ghcr.io/cafaye/charts/gateway
     chart: gateway
     targetRevision: 0.1.0
+    # THE TELEMETRY KILL SWITCH, HERE AND NOT IN gateway-secrets.
+    #
+    # The generated service charts inject env with `envFrom: secretRef`, so
+    # install.sh writes `OTEL_SDK_DISABLED=true` into identity/courier/parlor's
+    # secrets and it becomes an environment variable. gateway's chart is
+    # hand-written: it reads its CLEAR env from a ConfigMap rendered from
+    # `.Values.env`, and its secret only through a `secretKeyRef` for REDIS_URL
+    # and a `volumes.secret` item for the assertion key. So a key in
+    # gateway-secrets never reaches the pod, and this Application — kit's own
+    # file — carries the switch as a Helm value override instead.
+    #
+    # The box deploys no OTLP endpoint (alloy is pinned with no values and its
+    # default config has no `otelcol.receiver.otlp`; there is no Tempo), so
+    # without this gateway retries `http://otel-collector:4317` forever and logs
+    # `traces export: ... produced zero addresses` every ten seconds. Helm
+    # merges maps, so this ADDS one key to the chart's `env:` rather than
+    # replacing it.
+    helm:
+      values: |
+        env:
+          OTEL_SDK_DISABLED: "true"
   destination:
     server: https://kubernetes.default.svc
     namespace: gateway

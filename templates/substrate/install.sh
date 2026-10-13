@@ -251,6 +251,44 @@ NATS_URL="nats://nats.data.svc.cluster.local:4222"
 COURIER_URL="http://courier.courier.svc.cluster.local:4000"
 IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
 
+# --- the services' telemetry on a box: DELIBERATELY OFF ---------------------
+# THE BOX DEPLOYS NO OTLP ENDPOINT, SO THE SERVICES MUST NOT TRY TO REACH ONE.
+#
+# Measured, not assumed. The observability set is alloy + loki + grafana +
+# prometheus (`manifests/applications/`), and alloy is pinned at chart 1.13.0
+# with NO values: the chart's default config is `config/example.alloy` — a
+# `logging` block and `discovery.kubernetes` components, and no
+# `otelcol.receiver.otlp` — and its default Service exposes only
+# `http-metrics` on 12345 (`alloy.extraPorts` is empty). So alloy does not
+# accept OTLP as shipped, and the substrate ships no Tempo at all: DEPLOYMENT.md
+# ("Traces | deferred") is the fleet's decision, and there is nowhere for a span
+# to land. `kubectl get svc -n observability` on the live box returns nothing.
+#
+# The services' COMPILED default is `http://otel-collector:4318` (identity,
+# courier, parlor) / `:4317` (gateway) — the COMPOSE stack's name, which
+# resolves only inside the compose network. On a box it resolves to nothing, and
+# the OTel SDK retries forever, so identity logs this every ten seconds:
+#
+#   level=INFO msg="traces export: Post \"http://otel-collector:4318/v1/traces\":
+#     dial tcp: lookup otel-collector on 10.43.0.10:53: no such host"
+#
+# The fix is the SDK's OWN kill switch, not a log-level change and not a
+# re-point at a name that does not resolve: core's `otel-endpoint.schema.json`
+# pins the no-op to `OTEL_SDK_DISABLED` and requires it to be free (no buffer,
+# no retry, no warning per export, no dial on boot). With it set, the service
+# logs one line at startup and nothing per export. When Tempo becomes an
+# Application this is what comes OUT: the endpoint variable goes IN, one fact in
+# one place.
+#
+# ONE SPELLING, ONE LINE, AND THE ONE EXCEPTION NAMED. The generated charts
+# inject env with `envFrom: secretRef`, so a key written into a service secret
+# below IS an environment variable; the array is referenced, never retyped.
+# gateway's chart is hand-written and reads its CLEAR env from a ConfigMap
+# rather than its secret, so its Application carries the same key/value in
+# `spec.source.helm.values` — the one service whose chart shape differs, and the
+# reason is written at the site that differs.
+SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)
+
 # --- operator-supplied values ----------------------------------------------
 # --- the box's own identity and capability ------------------------------------
 # KIT_SUBSTRATE_BOX_ID is the enrolled identity of THIS box — a UUID the
@@ -1795,10 +1833,18 @@ validate_mfa_override() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE OTEL_SDK_DISABLED
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
-#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
-#   RECORD parlor-secrets: DATABASE_URL
+#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN OTEL_SDK_DISABLED
+#   RECORD parlor-secrets: DATABASE_URL OTEL_SDK_DISABLED
+#
+# OTEL_SDK_DISABLED is the telemetry kill switch (see the constant's comment at
+# the top of the file): the box deploys no OTLP endpoint, so every service is
+# told to turn its SDK off rather than retry forever against the compose stack's
+# `otel-collector`. It is in these three records because the generated charts
+# `envFrom` their secret — the key IS the env var. gateway's secret does NOT
+# carry it: its hand-written chart reads clear env from a ConfigMap, so the same
+# key/value rides its Application's `spec.source.helm.values` instead.
 #
 # THE SPLIT IS BY PROVENANCE:
 #   generated on the box, never printed, generated ONCE and read back —
@@ -1973,7 +2019,8 @@ install_service_secrets() {
   if kubectl --kubeconfig="$KUBECONFIG" get secret identity-secrets -n identity >/dev/null 2>&1; then
     kit_substrate_out "      secret identity-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
-    kubectl --kubeconfig="$KUBECONFIG" create secret generic identity-secrets -n identity "${identity_args[@]}" >/dev/null
+    kubectl --kubeconfig="$KUBECONFIG" create secret generic identity-secrets -n identity \
+      "${identity_args[@]}" "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
     kit_substrate_out "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
   fi
 
@@ -2043,6 +2090,7 @@ install_service_secrets() {
       --from-literal=COURIER_SMTP_PASSWORD="$KIT_SUBSTRATE_SMTP_PASSWORD" \
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
+      "${SERVICE_OTEL_DISABLED[@]}" \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
     kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 12 — minted on this box)"
   fi
@@ -2064,7 +2112,8 @@ install_service_secrets() {
     kit_substrate_out "      secret parlor-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic parlor-secrets -n parlor \
-      --from-literal=DATABASE_URL="$(database_url_for parlor)" >/dev/null
+      --from-literal=DATABASE_URL="$(database_url_for parlor)" \
+      "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
     kit_substrate_out "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
   fi
 }
