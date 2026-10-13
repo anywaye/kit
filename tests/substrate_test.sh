@@ -3317,6 +3317,16 @@ run 'step 1 refuses within its bound when the node never registers' green k3s_br
 # as an empty-list race. All three populations are asserted, because a check
 # that only fires on the awaits would be satisfied by deleting every wait.
 #
+# `rollout status` is the same race in a different verb, and the audit reads
+# it too. It watches a NAMED object — deployment/identity in step 11 — but
+# the NAMED excuse does not apply: nothing in that function applied the object
+# synchronously, because Argo creates it ASYNCHRONOUSLY from step 6's
+# Applications. A missing named object is NotFound, exit 1, not a wait (the
+# empty-list no-op branch is the path a named object never takes) — so a
+# rollout status is excused ONLY by a matching kit_substrate_await_list above
+# it, never by an apply. The `deployment/identity` spelling is split on `/`
+# where the wait path reads separate kind and name tokens.
+#
 # And the bound is part of the rule. Splitting one wait into two is the easiest
 # way to double a step's patience, so the four numbers must still add up to the
 # totals the steps always had: 120s for the node, 600s for the CNPG pods.
@@ -3367,7 +3377,7 @@ def split_args(toks):
     return (kind, sel, name, ns)
 
 
-unexcused, awaited, applied, named = [], 0, 0, 0
+unexcused, awaited, applied, named, rollout_awaited = [], 0, 0, 0, 0
 for fn, lines in funcs.items():
     # Walk the function IN ORDER, because an excuse that comes after the wait
     # is not an excuse: an apply below it has not created the list the wait
@@ -3379,6 +3389,33 @@ for fn, lines in funcs.items():
             awaits.append(split_args(m.group(1).replace('"', "").split()))
         elif "kubectl" in ln and re.search(r"\bapply\b", ln):
             apply_seen = True
+        if "kubectl" in ln and re.search(r"\brollout\s+status\b", ln):
+            m2 = re.search(r"\brollout\s+status\s+(\S+)", ln)
+            target = m2.group(1)
+            if "/" in target:
+                rkind, rname = target.split("/", 1)
+            else:
+                rkind, rname = target, None
+            rns = None
+            mn = re.search(r"(?:-n|--namespace)\s+(\S+)", ln)
+            if mn:
+                rns = mn.group(1)
+            else:
+                mn = re.search(r"--namespace=(\S+)", ln)
+                if mn:
+                    rns = mn.group(1)
+            if (rkind, rname, rns) in [(a[0], a[2], a[3]) for a in awaits if a]:
+                rollout_awaited += 1
+                continue
+            # A rollout watches an object a CONTROLLER synced, so a synchronous
+            # apply above it is not an excuse the way it is for a wait — only
+            # a matching await excuses it.
+            unexcused.append(
+                f"{fn}(): rollout status watches {rkind}/{rname} "
+                f"(ns {rns or 'cluster-scoped'}) with no kit_substrate_await_list "
+                "for it first — a missing object is NotFound, not a wait"
+            )
+            continue
         if "kubectl" not in ln or not re.search(r"\bwait\s+--for=condition=", ln):
             continue
         toks = re.search(r"\bwait\s+--for=condition=(\S+)\s+(.*)$", ln).group(2)
@@ -3423,6 +3460,10 @@ if applied < 2:
 if named < 4:
     print(f"expected the named waits to still be there, found {named}")
     sys.exit(1)
+if rollout_awaited < 1:
+    print("expected step 11's rollout watch to prove the Deployment exists "
+          "first (Argo syncs it asynchronously), found none")
+    sys.exit(1)
 
 # The bound is part of the fix: two waits must not add up to more patience
 # than the one wait had.
@@ -3430,6 +3471,7 @@ defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
 for a, b, total, what in (
     ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
     ("CNPG_POD_TIMEOUT", "CNPG_POD_READY_TIMEOUT", 600, "step 8"),
+    ("IDENTITY_DEPLOY_TIMEOUT", "IDENTITY_ROLLOUT_TIMEOUT", 300, "step 11"),
 ):
     pair = [int(defaults.get(v, -1)) for v in (a, b)]
     if sum(pair) != total:
@@ -3441,7 +3483,8 @@ for a, b, total, what in (
 print(
     f"{awaited} list wait(s) prove existence first, "
     f"{applied} ride a synchronous apply, "
-    f"{named} named wait(s) need neither"
+    f"{named} named wait(s) need neither, "
+    f"{rollout_awaited} rollout watch(es) prove existence first"
 )
 PY
 }
@@ -3523,6 +3566,370 @@ else
       ;;
   esac
 fi
+
+# Step 11's watch, proved the same way: drop its await and the rule must go
+# red NAMING the Deployment. A rule that cannot see the line it was widened
+# for is the exact blindness the handoff names.
+fixture_drop_deploy_await="$WORK/install-drop-deploy-await.sh"
+sed '/kit_substrate_await_list "\$IDENTITY_DEPLOY_TIMEOUT" deployment/d' \
+  "$SUBSTRATE/install.sh" >"$fixture_drop_deploy_await"
+mode_out=""; mode_ec=0
+mode_out="$(wait_lists_audit "$fixture_drop_deploy_await" 2>&1)" || mode_ec=$?
+case "$mode_ec:$mode_out" in
+  0:*)
+    fail 'control: a rollout watch with no existence check goes red' "exit 0 — the check cannot see a missing await"
+    ;;
+  *"deployment/identity"*)
+    pass 'control: a rollout watch with no existence check goes red, naming the Deployment'
+    ;;
+  *)
+    fail 'control: a rollout watch with no existence check goes red, naming the Deployment' "$mode_out"
+    ;;
+esac
+
+# A SECOND rollout watch, arriving with no await — the control that stops this
+# being a rule about one remembered line rather than about the verb.
+fixture_new_rollout="$WORK/install-new-rollout.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_new_rollout"
+printf '  kubectl --kubeconfig="$KUBECONFIG" -n courier rollout status deployment/courier --timeout=60s\n' \
+  >>"$fixture_new_rollout"
+run 'control: a new rollout watch with no existence check goes red' red \
+  wait_lists_audit "$fixture_new_rollout"
+
+# And step 11's bound, in the same direction: splitting 300s into 240+180 is
+# not a split, it is 120s of new patience for Argo.
+fixture_grown_identity="$WORK/install-grown-identity-bound.sh"
+sed 's/: "${IDENTITY_DEPLOY_TIMEOUT:=120}"/: "${IDENTITY_DEPLOY_TIMEOUT:=240}"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_grown_identity"
+if ! grep -q 'IDENTITY_DEPLOY_TIMEOUT:=240' "$fixture_grown_identity"; then
+  fail 'control fixture: the step-11 bound-growing edit failed to apply' \
+    "the sed did not change the number, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  mode_out=""; mode_ec=0
+  mode_out="$(wait_lists_audit "$fixture_grown_identity" 2>&1)" || mode_ec=$?
+  case "$mode_ec:$mode_out" in
+    0:*)
+      fail 'control: growing the Deployment bound goes red' "exit 0 — a step that waits longer passes the audit"
+      ;;
+    *grew*)
+      pass 'control: growing the Deployment bound goes red'
+      ;;
+    *)
+      fail 'control: growing the Deployment bound goes red' "$mode_out"
+      ;;
+  esac
+fi
+
+# ===========================================================================
+# 18. Step 11 watches the Deployment only after it exists — the Argo race, executed
+# ===========================================================================
+#
+# Section 17 proves the rule; this proves the step. `rollout status` on a
+# Deployment Argo has not created yet is NotFound, exit 1 — not a wait — and
+# steps 7 through 10 sit between step 6's Applications and this watch, so a
+# warm box never notices while a slow Argo sync kills the install at step 11.
+#
+# The harness runs mint_courier_identity_token for real against a file-backed
+# kubectl with Argo's timing: a GET of a missing Deployment exits 0 printing
+# nothing (real kubectl), rollout status of one is NotFound (real kubectl),
+# and both succeed once the sync lands. Secrets and patches behave like
+# mock_kubectl's, so the mint's writes are still asserted, not just its exit.
+#
+# THREE CASES, the same shape as section 16:
+#   1. slow Argo — the Deployment lands on the second poll. The mint must
+#      complete, both secrets holding the one minted value.
+#   2. dead Argo — it never lands. The step must REFUSE inside its bound,
+#      naming the missing Deployment, with no watch run and nothing written.
+#   3. THE CONTROL — the pre-fix shape with the await removed, against slow
+#      Argo. It must abort with NotFound and no existence check before it.
+ROLLOUT_DIR="$WORK/rollout"
+mkdir -p "$ROLLOUT_DIR"
+
+# rollout_kubectl — Argo, on a slow box. DEPLOY_APPEARS_AT is the poll after
+# which the sync lands. Every invocation is recorded, because "watched after
+# it existed" is an order and not a return code.
+rollout_kubectl() {
+  printf '%s\n' "$*" >>"$ROLLOUT_DIR/argv"
+  case "$*" in
+    *"rollout status deployment/identity"*)
+      if [ ! -f "$ROLLOUT_DIR/deployed" ]; then
+        printf 'error: deployments.apps "identity" not found\n' >&2
+        return 1
+      fi
+      printf 'deployment "identity" successfully rolled out\n'
+      return 0
+      ;;
+    *"rollout restart"*)
+      return 0
+      ;;
+    *"port-forward"*)
+      # A real one blocks forever; this one returns instantly, like mock_kubectl's.
+      return 0
+      ;;
+    *"get deployment identity"*)
+      # A GET of an empty list is not an error: kubectl exits 0 and prints
+      # nothing. The sync is a few seconds away, which is the race.
+      local polls
+      polls=$(( $(cat "$ROLLOUT_DIR/polls" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$polls" >"$ROLLOUT_DIR/polls"
+      if [ "$polls" -ge "${DEPLOY_APPEARS_AT:-2}" ]; then
+        : >"$ROLLOUT_DIR/deployed"
+        printf 'identity   1/1   1   1   10d\n'
+      fi
+      return 0
+      ;;
+    *"get secret "*)
+      # The two shapes read_secret_key uses — existence, and the base64 a
+      # jsonpath read decodes — over the same store mock_kubectl keeps.
+      local seen="" rname="" rns="" rtmpl="" a
+      for a in "$@"; do
+        case "$a" in
+          --kubeconfig=*) ;;
+          get | secret) ;;
+          -n) seen="ns" ;;
+          -o) seen="tmpl" ;;
+          *)
+            case "$seen" in
+              ns) rns="$a"; seen="" ;;
+              tmpl) rtmpl="$a"; seen="" ;;
+              *) [ -z "$rname" ] && rname="$a" ;;
+            esac
+            ;;
+        esac
+      done
+      local rdir="$MOCK_ROOT/$rns/$rname"
+      if [ -z "$rtmpl" ]; then
+        if [ -d "$rdir" ]; then return 0; else return 1; fi
+      fi
+      local rkey="${rtmpl#jsonpath={.data.}"
+      rkey="${rkey%\}}"
+      if [ -z "$rkey" ] || [ "$rkey" = "$rtmpl" ] || [ ! -f "$rdir/$rkey" ]; then
+        return 1
+      fi
+      base64 <"$rdir/$rkey" | tr -d '\n'
+      return 0
+      ;;
+    *"patch secret "*)
+      # A merge patch, read from --patch-file=- and merged over the store —
+      # the same contract mock_kubectl's patch branch holds, so "no other key
+      # is wiped" means something here too.
+      local p prev="" patch_ns="" patch_name="" patch_file_arg="" body=""
+      for p in "$@"; do
+        case "$p" in
+          -n) prev="ns" ;;
+          secret) prev="name" ;;
+          --type=merge) ;;
+          --type) prev="skip" ;;
+          --patch-file=*) patch_file_arg="${p#--patch-file=}" ;;
+          *)
+            case "$prev" in
+              ns) patch_ns="$p"; prev="" ;;
+              name) patch_name="$p"; prev="" ;;
+              skip) prev="" ;;
+            esac
+            ;;
+        esac
+      done
+      if [ -z "$patch_name" ]; then
+        echo "rollout_kubectl: patch without a secret name" >&2
+        return 1
+      fi
+      case "$patch_file_arg" in
+        -) body="$(cat)" ;;
+        *) echo "rollout_kubectl: patch without --patch-file=-" >&2; return 1 ;;
+      esac
+      local pdir="$MOCK_ROOT/$patch_ns/$patch_name"
+      mkdir -p "$pdir"
+      printf '%s' "$body" | jq -r '.stringData // {} | to_entries[] | "\(.key)=\(.value)"' |
+        while IFS= read -r pair; do
+          printf '%s' "${pair#*=}" >"$pdir/${pair%%=*}"
+        done
+      return 0
+      ;;
+    *)
+      printf 'rollout_kubectl: unhandled %s\n' "$*" >&2
+      return 1
+      ;;
+  esac
+}
+
+# mint_step <sourced-fixture> <appears-at> <deploy-timeout> — run step 11 for
+# real against that fixture, and leave the exit status behind in $mint_ec.
+# The port-forward is stubbed (it never blocks here) and curl is the mint's
+# own exchange from 13e; the sleeps and the openssl rand are the real ones.
+#
+# The step runs in a CHILD bash, not in a `( … ) || ec=$?` subshell — and the
+# distinction is the whole mechanism. Under `set -e`, a subshell that is a
+# component of `||` runs with errexit DISABLED, and this bash does not
+# re-enable it on an inner `set -e` either (measured: `( set -e; false; echo
+# x ) || …` prints x). A guarded subshell would therefore march past a failing
+# `rollout status` and exit 0 — the opposite of the box, where the same
+# failure aborts the install, and exactly what the pre-fix control below
+# looked like before this harness existed. The child is a component of
+# nothing: its `set -e` is real, a failing kubectl aborts it, and the
+# parent's `||` reads an honest exit status. It carries the mocks via
+# `declare -f`, so there is still exactly one copy of each mock.
+mint_step() {
+  rm -f "$ROLLOUT_DIR/argv" "$ROLLOUT_DIR/polls" "$ROLLOUT_DIR/deployed" "$ROLLOUT_DIR/run.log"
+  rm -rf "$ROLLOUT_DIR/store"
+  mkdir -p "$ROLLOUT_DIR/store"
+  local script="$ROLLOUT_DIR/mint-run.sh"
+  {
+    printf 'set -euo pipefail\n'
+    printf 'ROLLOUT_DIR=%q\n' "$ROLLOUT_DIR"
+    printf 'MOCK_ROOT=%q\n' "$ROLLOUT_DIR/store"
+    printf 'FIXTURE=%q\n' "$1"
+    printf 'DEPLOY_APPEARS_AT=%q\n' "$2"
+    printf 'IDENTITY_DEPLOY_TIMEOUT=%q\n' "$3"
+    printf 'IDENTITY_ROLLOUT_TIMEOUT=%q\n' "5"
+    # BEFORE the source, because the installer reads the receipt path at
+    # source time and a value exported after it is a value it never saw.
+    printf 'KIT_SUBSTRATE_RECEIPT=%q\n' "$ROLLOUT_DIR/receipt.json"
+    printf 'COURIER_MINT_TOKEN=%q\n' "$COURIER_MINT_TOKEN"
+    declare -f mock_seed mfa_smtp_env courier_mint_curl rollout_kubectl
+    printf '%s\n' \
+      'export DRY_RUN=0 HEADLESS=0' \
+      '# shellcheck source=/dev/null' \
+      '. "$FIXTURE"' \
+      'kubectl() { rollout_kubectl "$@"; }' \
+      'curl() { courier_mint_curl "$@"; }' \
+      'mfa_smtp_env' \
+      'mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"' \
+      'mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"' \
+      'mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"' \
+      'mint_courier_identity_token'
+  } >"$script"
+  mint_ec=0
+  bash "$script" >"$ROLLOUT_DIR/run.log" 2>&1 || mint_ec=$?
+}
+
+mint_fixed="$WORK/install-mint-fixed.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$mint_fixed"
+mint_prefix="$WORK/install-mint-prefix.sh"
+sed -e '/^main "$@"/d' -e '/kit_substrate_await_list "\$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity/d' \
+  "$SUBSTRATE/install.sh" >"$mint_prefix"
+
+# The control fixture is only a control if it really is the pre-fix shape: the
+# await must be gone from it, and the rollout watch must still be there. A
+# mutation that broke nothing would pass case 3 for the wrong reason.
+if grep -q 'IDENTITY_DEPLOY_TIMEOUT" deployment' "$mint_prefix" \
+  || ! grep -q 'rollout status deployment/identity' "$mint_prefix"; then
+  fail 'control fixture: the pre-fix mint step is the shape step 11 ran' \
+    "the await-line deletion did not apply, so case 3 would prove nothing"
+  failures=$((failures + 1))
+else
+  # CASE 1, green: slow Argo still mints. The Deployment lands on the second
+  # poll, so the loop has to tolerate a missing object once and keep going —
+  # and the watch must come AFTER the sync rather than racing it. The order is
+  # proved the way section 16 proves it: a watch that ran early would have met
+  # NotFound and, under `set -e`, ended the run.
+  mint_step "$mint_fixed" 2 5
+  mint_slow_ok() {
+    if [ "$mint_ec" -ne 0 ]; then
+      printf 'the mint exited %s — Argo syncing a few seconds late still kills the install\n%s\n' \
+        "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+      return 1
+    fi
+    if [ "$(cat "$ROLLOUT_DIR/store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ]; then
+      printf 'courier-secrets does not hold the minted value\n'
+      return 1
+    fi
+    if [ "$(cat "$ROLLOUT_DIR/store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ]; then
+      printf 'identity-secrets does not hold the same minted value\n'
+      return 1
+    fi
+    if ! grep -q 'rollout status deployment/identity' "$ROLLOUT_DIR/argv"; then
+      printf 'the rollout watch never ran — the step gave up before watching\n%s\n' \
+        "$(cat "$ROLLOUT_DIR/run.log")"
+      return 1
+    fi
+    # The empty polls really were empty: DEPLOY_APPEARS_AT is 2, so the first
+    # poll must have seen nothing and the sync must be the SECOND one. A
+    # fixture that never ran the race would pass on a step that races.
+    if [ "$(cat "$ROLLOUT_DIR/polls" 2>/dev/null || echo 0)" -ne 2 ]; then
+      printf 'Argo synced on the first poll, so the missing-object case never happened\n'
+      return 1
+    fi
+    printf 'the mint survived a late Deployment and patched both secrets with one value'
+  }
+  run 'step 11 mints when Argo creates the Deployment a few seconds late' \
+    green mint_slow_ok
+
+  # CASE 3, THE CONTROL: the pre-fix shape against slow Argo. It must abort
+  # with NotFound, and the signature that proves it is the ARGV: the pre-fix
+  # step never asked whether the Deployment existed, so it went straight to a
+  # watch that could not be satisfied.
+  mint_step "$mint_prefix" 2 5
+  case "$mint_ec:$(cat "$ROLLOUT_DIR/run.log" 2>/dev/null):$(cat "$ROLLOUT_DIR/argv" 2>/dev/null)" in
+    0:*:*:*)
+      fail 'control: a rollout watched before Argo syncs aborts the install' \
+        "exit 0 — the control did not reproduce the defect it is named for"
+      ;;
+    *"not found"*:*"get deployment"*)
+      fail 'control: a rollout watched before Argo syncs aborts the install' \
+        "the pre-fix fixture still checked for existence, so it is not the shape step 11 ran"
+      ;;
+    *"not found"*:*)
+      if grep -q 'rollout status deployment/identity' "$ROLLOUT_DIR/argv"; then
+        pass 'control: a rollout watched before Argo syncs aborts, with no existence check before it'
+      else
+        fail 'control: a rollout watched before Argo syncs aborts the install' \
+          "the watch did not run, so the control failed for some other reason"
+      fi
+      ;;
+    *)
+      fail 'control: a rollout watched before Argo syncs aborts the install' \
+        "exit $mint_ec: $(cat "$ROLLOUT_DIR/run.log" 2>/dev/null)"
+      ;;
+  esac
+fi
+
+# CASE 2: an Argo sync that never lands. The step must REFUSE inside its
+# bound, not hang and not lie. The bound is shortened to 2s here, and the
+# elapsed time is measured rather than asserted by exit status alone — a wait
+# that exceeded its own budget would pass a glance at the message.
+mint_never_ok() {
+  local started elapsed
+  started="$(date +%s)"
+  mint_step "$mint_fixed" 999 2
+  elapsed=$(( $(date +%s) - started ))
+  if [ "$mint_ec" -eq 0 ]; then
+    printf 'a Deployment Argo never created was answered with success\n%s\n' \
+      "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  if [ "$elapsed" -gt 20 ]; then
+    printf 'the refusal took %ss — the bound is 2s, so this is a hang\n' "$elapsed"
+    return 1
+  fi
+  case "$(cat "$ROLLOUT_DIR/run.log")" in
+    *"kubectl get deployment identity"*)
+      case "$(cat "$ROLLOUT_DIR/run.log")" in
+        *"empty"*) : ;;
+        *)
+          printf 'the refusal does not name the empty list\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      printf 'the refusal does not name the missing Deployment\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+      return 1
+      ;;
+  esac
+  if grep -q 'rollout status deployment/identity' "$ROLLOUT_DIR/argv"; then
+    printf 'the step watched a rollout for a Deployment that never existed\n'
+    return 1
+  fi
+  if [ -f "$ROLLOUT_DIR/store/identity/identity-secrets/COURIER_TOKEN" ] \
+    || [ -f "$ROLLOUT_DIR/store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" ]; then
+    printf 'the refusal still wrote half a credential\n'
+    return 1
+  fi
+  printf 'refused in %ss, naming the missing Deployment, with no watch and no write' "$elapsed"
+}
+run 'step 11 refuses within its bound when Argo never creates the Deployment' green mint_never_ok
 
 # ===========================================================================
 # Summary
