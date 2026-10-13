@@ -1682,9 +1682,11 @@ reconcile_gateway_assertion_key() {
   resolve_gateway_assertion_key
   # A merge patch, built by jq so a PEM's newlines survive: a whole-Secret apply
   # would drop REDIS_URL. `read_secret_key` would return the same bytes on a
-  # later run, so the patch is idempotent.
+  # later run, so the patch is idempotent. Read from `/dev/stdin`, not `-`:
+  # kubectl has no `-` convention for `--patch-file` (it opens a file named
+  # `-`), and every other patch in this file uses the same door.
   printf '%s' "$(jq -nc --arg k "$ASSERTION_SIGNING_KEY" '{"stringData":{"ASSERTION_SIGNING_KEY":$k}}')" |
-    kubectl --kubeconfig="$KUBECONFIG" -n gateway patch secret gateway-secrets --type=merge --patch-file=- >/dev/null
+    kubectl --kubeconfig="$KUBECONFIG" -n gateway patch secret gateway-secrets --type=merge --patch-file=/dev/stdin >/dev/null
   kit_substrate_out "      secret gateway-secrets existed without ASSERTION_SIGNING_KEY — patched it in (gateway's pod mounts this key; without it the mount never resolves)"
 }
 
