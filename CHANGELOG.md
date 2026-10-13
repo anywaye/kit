@@ -45,6 +45,33 @@
   name, a name in the wrong namespace, a name no manifest ships, a service that
   loses its address, and a drifted installer name.
 
+- **Nothing was instrumented, so no install could say how long it took.**
+  `install.sh`'s JSONL carried no timestamps at all, so a step's duration could
+  only be reconstructed from the cluster's object-creation times — archaeology
+  that says nothing about a cold box or a bad change. Now `step.start` carries
+  `seconds` = the step's **offset** since the install began, `step.done` carries
+  `seconds` = the step's **duration** (a skipped step reports the string
+  `"skipped"`, never `0`), and the final `install.done` carries the total and a
+  `steps[]` table of `{step, phase, seconds}`, which interactive mode prints as a
+  compact table. The clock is **monotonic** — `/proc/uptime` on the box, the
+  highest-resolution wall clock off Linux, where only differences are taken — and
+  the window opens *after* the guard decides a component is absent, so a step's
+  time is the step's work and not the guard's probe.
+  `tests/substrate_test.sh` §24 requires every step to be timed, the total to
+  cover the steps it names, and a positive duration somewhere; a step with no
+  timing, a total smaller than its steps, and a run of constant zeroes all go
+  red, and a guard-forced-present fixture proves a skipped step says `skipped`.
+- **The three operator installs are applied first and waited on together.**
+  cert-manager, CNPG and Argo CD are independent — separate namespaces, separate
+  CRDs, applies that reference nothing the others create — so steps 2–4 now
+  apply their manifests back to back and step 4 waits for all three once. Waiting
+  inside each step held CNPG's apply behind cert-manager's rollout and Argo CD's
+  behind CNPG's, so the three steps added up. Measured on `contabo` with the
+  three Deployments deleted to force a cold run (the installer recreated them):
+  serial `4.220 + 18.220 + 24.350 = 46.79s`, grouped
+  `2.810 + 2.860 + 20.170 = 25.84s` — about 21s, 45%, off the three steps. A
+  component present at its guard is not waited on again, so a warm re-run still
+  skips. `tests/substrate_test.sh` §25 pins the shape with two controls.
 - **identity refused to boot on the *next* check after the credential pair: a
   courier base URL and token with no link template.** Wiring the courier block
   makes `loadCourier` continue into `resolveLinkTemplates` and
