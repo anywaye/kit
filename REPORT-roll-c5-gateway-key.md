@@ -1,7 +1,8 @@
 # roll-c5-gateway-key — the secret key the chart mounts and the installer never wrote
 
 **Status:** fixed and proved; narrow gate green. Branch `roll/c5-gateway-key`,
-commits `172f440` (fix) and `510985f` (check). Not pushed, not merged.
+commits `172f440` (fix), `510985f` (chart check), `1a05c98` (repair-path test).
+Not pushed, not merged.
 
 **The defect, measured live:** gateway's pod never started. `README.md` in the
 chart says the assertion key is mounted; the installer wrote only `REDIS_URL`.
@@ -186,13 +187,22 @@ created here.
 `bash tests/substrate_test.sh` (narrow gate):
 
 ```
--- substrate_test: 209 passed, 0 failed, 0 skipped
-PASS: 209 passed, 0 failed, 0 skipped
+-- substrate_test: 214 passed, 0 failed, 0 skipped
+PASS: 214 passed, 0 failed, 0 skipped
 exit: 0
 ```
 
-Four `run` checks are new (1 real + 3 controls); `bash -n` on `install.sh` and
-`substrate_test.sh` is clean; `shellcheck -S warning` is clean on both.
+Nine `run` checks are new: four for the chart half (1 real + 3 controls) and
+five for the live-box repair path (the repair, the PKCS#8 shape with a PKCS#1
+control, the never-printed assertion, and the idempotent second pass), plus the
+mock's merge patch is made value-faithful so a multi-line PEM is stored whole.
+`bash -n` on `install.sh` and `substrate_test.sh` is clean; `shellcheck -S
+warning` is clean on both.
+
+The live-box repair is tested against its real shape: a seeded store where all
+four service secrets exist (so the `secrets` guard skips the step) and
+`gateway-secrets` holds `REDIS_URL` only. That is the one path the fresh-store
+tests never reach, and it is the path the manager's re-run takes.
 
 ---
 
@@ -210,7 +220,17 @@ Four `run` checks are new (1 real + 3 controls); `bash -n` on `install.sh` and
   misordering, and the re-run fixes it.
 - **Did not weaken `check_secret_record`.** The new check is additive; the
   existing record tripwire and all its controls are untouched and green.
-- **Did not run the full `tests/validate.sh` gate to completion in this
-  attempt** — the narrow gate the packet names is `substrate_test.sh`, which is
-  green. A `--no-observability` gate run was started; its result is in the
-  handoff.
+- **Did not run the full `tests/validate.sh` gate to a green** — the narrow
+  gate the packet names is `substrate_test.sh`, which is green (214/0/0), and
+  `validate.sh --no-observability` was run: **every substrate and secret check
+  is green** (its embedded `substrate_test` reported 209 passed, 0 failed, 0
+  skipped at that point; five repair-path checks were added after), 8 checks
+  skip for environmental reasons (SQL needs a real Postgres, `rustc` is not
+  installed, `node --check` cannot read TypeScript), and **one pre-existing
+  check fails that this packet did not touch**:
+  `every run: body` flags `.github/workflows/image.reusable.yml` for a prefix
+  assignment read back as a shell variable. That file is byte-identical to
+  `master` (`git diff master -- .github/workflows/` is empty), and the packet
+  forbids touching `.github/workflows/`; it belongs to whichever packet owns the
+  workflow, not this one.
+
