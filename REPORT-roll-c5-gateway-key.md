@@ -1,8 +1,20 @@
 # roll-c5-gateway-key — the secret key the chart mounts and the installer never wrote
 
 **Status:** fixed and proved; narrow gate green. Branch `roll/c5-gateway-key`,
-commits `172f440` (fix), `510985f` (chart check), `1a05c98` (repair-path test).
-Not pushed, not merged.
+rebased onto `master` (`9e1dc47`). Commits: `bd6ee42` (fix), `3c1ec2f` (chart
+check), `48c3c9b` (report), `439daf4` (repair-path test), `cdc5e00` (report),
+`7dfc3ba` (the `/dev/stdin` reconciliation). Not pushed, not merged.
+
+**Rebase note.** `master` advanced while this packet ran: the sibling
+`roll-c4-patchfile` packet established that `kubectl` has no `-` convention for
+`--patch-file` and moved every patch site to `/dev/stdin`. This branch was
+rebased onto it, the `CHANGELOG.md` conflict resolved by keeping both entries,
+and the new reconcile's copied `--patch-file=-` corrected to `/dev/stdin`
+(`7dfc3ba`). The one substantive overlap is `mock_kubectl`'s patch handler:
+`roll-c4-patchfile` taught it the `/dev/stdin` door, and this packet made it
+**value-faithful** (a multi-line PEM is written verbatim, not truncated through a
+line-oriented `key=value` stream). Both changes are needed and both are in the
+rebased tree.
 
 **The defect, measured live:** gateway's pod never started. `README.md` in the
 chart says the assertion key is mounted; the installer wrote only `REDIS_URL`.
@@ -184,11 +196,11 @@ created here.
 
 ## 5. Suite counts
 
-`bash tests/substrate_test.sh` (narrow gate):
+`bash tests/substrate_test.sh` (narrow gate, rebased onto `master`):
 
 ```
--- substrate_test: 214 passed, 0 failed, 0 skipped
-PASS: 214 passed, 0 failed, 0 skipped
+-- substrate_test: 219 passed, 0 failed, 0 skipped
+PASS: 219 passed, 0 failed, 0 skipped
 exit: 0
 ```
 
@@ -196,8 +208,9 @@ Nine `run` checks are new: four for the chart half (1 real + 3 controls) and
 five for the live-box repair path (the repair, the PKCS#8 shape with a PKCS#1
 control, the never-printed assertion, and the idempotent second pass), plus the
 mock's merge patch is made value-faithful so a multi-line PEM is stored whole.
-`bash -n` on `install.sh` and `substrate_test.sh` is clean; `shellcheck -S
-warning` is clean on both.
+(The rebased count is 219 rather than 214 because `roll-c4-patchfile` added five
+of its own.) `bash -n` on `install.sh` and `substrate_test.sh` is clean;
+`shellcheck -S warning` is clean on both.
 
 The live-box repair is tested against its real shape: a seeded store where all
 four service secrets exist (so the `secrets` guard skips the step) and
