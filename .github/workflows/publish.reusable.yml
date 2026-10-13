@@ -48,20 +48,32 @@
 # than like a missing grant — which is why the example above shows the
 # permission on the caller.
 #
-# THE TWO SEAMS, AND WHY BOTH ENDS LIVE IN KIT.
+# THE THREE SEAMS, AND WHY EVERY END LIVES IN KIT.
 #   1. The registry string. `chart.reusable.yml` pushes to a registry; every
 #      Argo CD Application in `templates/substrate/manifests/applications/`
 #      pulls from `oci://ghcr.io/cafaye/charts`. Both files are in kit, which is
 #      what makes this provable in this repository's own gate — the check
 #      compares the workflow's default registry against every Application's
 #      `source.repoURL` and fails on a disagreement.
-#   2. The version. Each Application pins `targetRevision: 0.1.0`, and a
+#   2. The chart version. Each Application pins `targetRevision: 0.1.0`, and a
 #      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
 #      Helm chart is its `version`, so the push tag and the pull
 #      `targetRevision` must be the chart's version — not a git sha, not
 #      `latest`. A chart pushed as `0.1.1` while the Application says `0.1.0`
 #      is a service that never deploys, and Argo reports no error: it just
 #      never finds the artifact.
+#   3. The image tag. The chart's `values.yaml` pins `image.tag` to the chart's
+#      own `appVersion` — a value a release commits, never `latest` — so the
+#      publish that serves that chart must produce an image tag by that exact
+#      name, or the box asks the registry for a tag nothing published and sits
+#      in `ImagePullBackOff` with nothing in the failure naming this workflow.
+#      `image.reusable.yml` publishes that tag when this file gives it the
+#      value, and this file is the place that reads it: the composer is the
+#      only party that knows `chart-dir`, so it reads `Chart.yaml`'s
+#      `appVersion` in a resolved job below and passes it down. No second
+#      place holds the number, and a service with no chart still composes —
+#      the read resolves to empty and the image keeps its sha/branch/latest
+#      three. `sha-<40>` is untouched.
 name: publish
 
 on:
@@ -110,6 +122,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE READ, AND WHY IT IS A JOB OF ITS OWN. A job whose whole body is
+  # `uses:` cannot carry steps — GitHub permits only `name/uses/with/
+  # secrets/strategy/needs/if/concurrency/permissions/cache-mode` on it —
+  # so the Chart.yaml read is a small runner job whose OUTPUT feeds the
+  # composed image call. `needs:` is one of the few keywords a `uses:` job
+  # may carry, which is what makes the hand-off legal.
+  #
+  # IT REFUSES A CHART WITH NO appVersion, AND ONLY THAT. A chart whose
+  # Chart.yaml carries no appVersion is a chart whose values pin a tag
+  # nobody can produce — the exact defect this file exists to close — so
+  # the read fails and names the field. A MISSING chart is different and
+  # is not a failure: there is nothing to publish a chart for, the image
+  # half still runs (this job succeeded, output empty), and the chart job
+  # below still refuses loudly on its own, exactly as it did before this
+  # job existed. An image-only service therefore does not break, and a
+  # mis-located chart does not pass silently.
+  resolve:
+    name: resolve (read the chart's appVersion)
+    runs-on: ubuntu-latest
+    outputs:
+      app-version: ${{ steps.read.outputs.app-version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: read the chart's appVersion
+        id: read
+        env:
+          CHART_DIR: ${{ inputs.chart-dir }}
+        run: |
+          set -euo pipefail
+          chart="$CHART_DIR/Chart.yaml"
+          if [ ! -f "$chart" ]; then
+            {
+              echo "### no chart at \`$chart\`"
+              echo
+              echo "The image publishes with its sha/branch/latest tags only."
+              echo "The chart job below still requires a Chart.yaml at that"
+              echo "path — the same refusal it made before this job existed."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "publish: no Chart.yaml at $chart — no image version tag"
+            echo "app-version=" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # `|| true`: a grep with no match exits 1, and under set -e that
+          # would take the step down before the empty check can say which
+          # field is missing. The empty check is the real refusal.
+          app="$(grep -m1 '^appVersion:' "$chart" | sed 's/^appVersion:[[:space:]]*//' | tr -d "\"'" || true)"
+          if [ -z "$app" ]; then
+            echo "publish: $chart exists but carries no appVersion — its values.yaml pins an image tag this workflow could never produce" >&2
+            exit 1
+          fi
+          echo "publish: chart appVersion $app — the image gets that tag so the chart's values.yaml resolves"
+          echo "app-version=$app" >>"$GITHUB_OUTPUT"
+
   # THE PATHS ARE ROOT-RELATIVE, AND THAT IS GITHUB'S GRAMMAR, NOT A STYLE
   # CHOICE. GitHub resolves a local reusable workflow relative to the
   # repository root as `./.github/workflows/<file>`; anything else — a
@@ -125,9 +193,13 @@ jobs:
   # reports `could not read reusable workflow file` on any other spelling.
   image:
     name: image
+    needs: resolve
     uses: ./.github/workflows/image.reusable.yml
     with:
       push: ${{ inputs.push }}
+      # Derived above, never a knob. A caller that could pass this would
+      # be a caller that could publish a chart pinning a tag nothing made.
+      app-version: ${{ needs.resolve.outputs.app-version }}
   chart:
     name: chart
     uses: ./.github/workflows/chart.reusable.yml

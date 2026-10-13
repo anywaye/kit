@@ -64,11 +64,22 @@
 #                         `kamal deploy` should be given.
 #   <branch>              moving. What a human reads on the package page.
 #   latest                moving, and only on the default branch.
+#   <appVersion>          moving with a release, and the reason the seam
+#                         holds: the chart the box pulls pins
+#                         `image.tag` to its own appVersion, so the
+#                         registry must hold a tag by that name. It is
+#                         DERIVED — publish.reusable.yml reads it from
+#                         Chart.yaml and passes it in as `app-version` —
+#                         because a tag a human must remember to push in
+#                         two places is a tag one of them forgets. Empty
+#                         input means no fourth tag, unchanged behavior.
 #
-# NO SEMVER TAG. A release tag is a claim about a version of the software, and
-# cutting one is a decision. This workflow's whole output is "the commit's image
-# exists", and adding a semver tag to it would let a deploy pin `v1.0.0` to
-# whatever commit happened to be on master that week.
+# NO SEMVER TAG OTHER THAN THE CHART'S OWN. A release tag is a claim about
+# a version of the software, and cutting one is a decision. This workflow's
+# whole output is "the commit's image exists"; the `appVersion` above is
+# the one version string that is NOT a decision made here — it is copied
+# from the chart that consumes the image, which is the only place the box
+# will ever ask for a version by name.
 #
 # `provenance: mode=max` and `sbom: true` are ON, and they cost one manifest
 # index entry each. A registry holding launch artifacts with no recorded
@@ -105,6 +116,25 @@ on:
         required: false
         type: boolean
         default: false
+      app-version:
+        description: >-
+          One EXTRA tag on the published image, and the reason it exists is
+          a seam this workflow cannot see from inside: every service chart's
+          values.yaml pins `image.tag` to the chart's own appVersion, so a
+          box that pulls the published chart asks the registry for
+          `ghcr.io/<org>/<repo>:<appVersion>` — a tag nothing publishes,
+          and the symptom is `ImagePullBackOff` with nothing pointing at
+          the publish path. The value is DERIVED, never typed at a call
+          site: publish.reusable.yml reads it from `<chart-dir>/Chart.yaml`
+          and passes it in, so the tag a chart pins and the tag a publish
+          produces are one fact read from one file. The three tags below
+          are unchanged; this adds a fourth. EMPTY by default, and it stays
+          that way: a service with an image and no chart — or any direct
+          caller of this workflow — gets the original tag set exactly as
+          before, and nothing here depends on a chart existing.
+        required: false
+        type: string
+        default: ''
       context:
         description: >-
           Build context, relative to the repository root. '.' unless a service
@@ -191,7 +221,14 @@ jobs:
       contents: read
       packages: write
     outputs:
-      digest: ${{ steps.meta.outputs.digest }}
+      # The digest comes from the BUILD action, which is the one that
+      # writes a manifest list to a registry. It used to be read from
+      # `steps.meta.outputs.digest` — an output docker/metadata-action has
+      # never produced — so the image workflow's `digest` output was empty
+      # for every caller and actionlint's schema flagged it on every run.
+      # The tag set is unaffected: metadata-action still owns the tags, the
+      # build owns the digest, and the two are different jobs' outputs.
+      digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.resolve.outputs.image }}
     steps:
       - uses: actions/checkout@v7
@@ -256,6 +293,46 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # THE CHART'S APPVERSION AS A TAG — the seam. The chart a box pulls
+      # pins `image.tag` to its Chart.yaml appVersion (gateway's Chart.yaml
+      # says so in prose), so a publish that produces only sha/branch/latest
+      # leaves the chart pointing at a tag nothing creates: ImagePullBackOff,
+      # weeks later, with nothing in the failure naming the publish path.
+      #
+      # Why it is a step and not a `type=raw` line in the metadata action
+      # above: the metadata action's `enable=` grammar does not take this
+      # workflow's inputs, so an empty value could not blank the line — the
+      # empty default (an image-only service, a direct caller) would push a
+      # tag named ''. Appending in a shell step is refused by construction
+      # instead. The dedupe is exact-line: `awk` drops any existing
+      # `image:appVersion` line and this appends the derived one, so a
+      # caller that already names the appVersion is unchanged, and
+      # `type=sha` and friends never collide with a semver string.
+      #
+      # Everything goes in through `env:`, never the script body — the same
+      # template-injection discipline the `resolve image` step above states.
+      - name: add the chart's appVersion as a tag
+        id: apptag
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          APP_VERSION: ${{ inputs.app-version }}
+          META_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags="$META_TAGS"
+          if [ -n "$APP_VERSION" ]; then
+            tags="$(printf '%s\n' "$tags" | awk -v want="$IMAGE:$APP_VERSION" '$0 != want')"
+            tags="$tags
+          $IMAGE:$APP_VERSION"
+          fi
+          # Multiline output through GITHUB_OUTPUT's heredoc form; a plain
+          # `key=value` line would carry only the first tag.
+          {
+            echo 'tags<<TAGS_EOF'
+            printf '%s\n' "$tags"
+            echo 'TAGS_EOF'
+          } >>"$GITHUB_OUTPUT"
+
       # THE STAMP'S FIELDS, resolved through the stamper rather than assembled
       # here. This step exists so that the REFUSAL is real: `github.repository`
       # is `owner/repo` verbatim and `github.sha` is a sha, but an
@@ -301,13 +378,14 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: build
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platforms }}
           push: ${{ inputs.push && github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.apptag.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # THE STAMP. Every build arg the seven Dockerfiles declare, passed
           # explicitly, including the ones this workflow already knew: the
@@ -366,4 +444,4 @@ jobs:
           echo "published $IMAGE at $DIGEST"
         env:
           IMAGE: ${{ steps.resolve.outputs.image }}
-          DIGEST: ${{ steps.meta.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}

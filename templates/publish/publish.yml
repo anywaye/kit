@@ -29,14 +29,22 @@
 # because a second push makes the first run's artifacts irrelevant.
 #
 # WHAT LANDS ON A PUSH. The image at `ghcr.io/<org>/<repo>:sha-<full 40
-# chars>` (plus `<branch>`, plus `latest` on the default branch), and the
-# chart at `oci://ghcr.io/cafaye/charts/<chart name>:<chart version>`. The
-# chart's name and version are READ FROM Chart.yaml by the workflow — they
-# are not inputs and not written here — and the version is the OCI tag: the
-# Argo CD `Application` in kit's substrate pulls `targetRevision: 0.1.0`
-# because the chart's `Chart.yaml` says `version: 0.1.0`. The two are the
-# same fact written twice, and a service that bumps one and not the other
-# is a service that never deploys.
+# chars>` (plus `<branch>`, plus `latest` on the default branch, plus the
+# chart's own `appVersion` — the composer reads it from `<chart-dir>/
+# Chart.yaml` so the tag the chart's `values.yaml` pins is a tag the
+# registry actually holds), and the chart at `oci://ghcr.io/cafaye/charts/
+# <chart name>:<chart version>`. The chart's name and version are READ
+# FROM Chart.yaml by the workflow — they are not inputs and not written
+# here — and the version is the OCI tag: the Argo CD `Application` in
+# kit's substrate pulls `targetRevision: 0.1.0` because the chart's
+# `Chart.yaml` says `version: 0.1.0`. The two are the same fact written
+# twice, and a service that bumps one and not the other is a service that
+# never deploys.
+#
+# `chart-dir` defaults to `chart/`, where `caf gen chart` writes. A service
+# that keeps its chart elsewhere names the directory at the call site —
+# gateway's is `chart-dir: charts/gateway/` — and that is the only input a
+# service's publish.yml has ever needed beyond `push: true`.
 ---
 name: publish
 
