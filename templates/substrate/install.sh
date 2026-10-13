@@ -25,11 +25,17 @@
 #      gateway-secrets, courier-secrets, parlor-secrets, one per namespace,
 #      each exactly the keys its chart reads (see the SECRET RECORD on
 #      install_service_secrets)
-#   10. NATS with JetStream (single instance) and the fleet's stream — one
+#   10. the services' database schemas — one migrate Job per schema-owning
+#      service (identity, courier), in that service's own running image and as
+#      its OWNER role, waited to completion; gateway and parlor own no schema
+#      and are named-and-skipped. Without this the fleet boots against an empty
+#      database: identity's outbox loop retries forever on a missing
+#      `outbox_events`, which is the failure this step ends.
+#   11. NATS with JetStream (single instance) and the fleet's stream — one
 #      Deployment + Service + PVC in `data`, plus the one-shot stream init
 #      defining stream `cafaye`, mirroring templates/compose's nats-stream-init
 #      (same subjects, retention, storage, replicas — the gate refuses drift).
-#   11. courier's identity credential, MINTED ON THE BOX from identity's own
+#   12. courier's identity credential, MINTED ON THE BOX from identity's own
 #      API and patched in place — the install → boot → mint → patch → restart
 #      loop nothing outside this box takes part in.
 #
@@ -100,7 +106,7 @@
 #   KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY / _OAUTH_ENCRYPTION_KEY /
 #                                  _COURIER_TOKEN — optional identity surfaces;
 #                                  each lands in identity-secrets only when
-#                                  set, except COURIER_TOKEN, which step 11
+#                                  set, except COURIER_TOKEN, which step 12
 #                                  writes with the value it minted itself (see
 #                                  below). MFA_ENCRYPTION_KEY is NOT optional:
 #                                  it is generated on first creation (or taken
@@ -110,7 +116,7 @@
 # Every value above is validated by shape and never echoed, the way the
 # capability already works. The values this script GENERATES — every key in
 # the SECRET RECORD's generated half, the OIDC signing key, and the courier
-# credential step 11 mints — are born here, stored here, and never printed.
+# credential step 12 mints — are born here, stored here, and never printed.
 #
 # The decisions are in DEPLOYMENT.md. This file is the executable half of it:
 # Argo core (not HA), Traefik (k3s's default) for ingress, traces deferred —
@@ -395,7 +401,7 @@ kit_substrate_guard() {
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
-TOTAL=11
+TOTAL=12
 # The phase the install is in — set by main before each step, read by the
 # emit path and the receipt. It names the STEP, not the sub-step, so the
 # receipt's phase is always one of the eleven (or preflight/complete).
@@ -641,7 +647,7 @@ preflight() {
   fi
 
   # openssl generates identity's OIDC signing key ON THIS BOX (it is the
-  # customer's own key and never travels), and jq reads step 11's mint
+  # customer's own key and never travels), and jq reads step 12's mint
   # response. Both are refusals, not warnings: the first would otherwise be
   # discovered by an operator with a copy-paste runbook to fall back on, which
   # is exactly the invariant-3 violation this install exists to remove.
@@ -650,7 +656,7 @@ preflight() {
   fi
 
   if ! command -v jq >/dev/null 2>&1; then
-    kit_substrate_refuse "" "install jq — step 11 reads the minted credential out of identity's response" "jq is required — step 11 reads the minted credential out of identity's response"
+    kit_substrate_refuse "" "install jq — step 12 reads the minted credential out of identity's response" "jq is required — step 12 reads the minted credential out of identity's response"
   fi
 
   if [ "$(uname -s)" != "Linux" ]; then
@@ -807,7 +813,7 @@ install_argocd() {
   # The AppProject core-install does not ship. Eight Applications name
   # `spec.project: default`, so without an AppProject named `default` the
   # controller reports `Application referencing project default which does not
-  # exist` and creates nothing — step 11 then times out waiting for a
+  # exist` and creates nothing — step 12 then times out waiting for a
   # Deployment Argo never made. The hand-fix was a maximal project
   # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
   # is least-privilege — sourceRepos exactly the three repoURLs the
@@ -1200,7 +1206,7 @@ install_applications() {
   # `kubectl wait --for=condition=Available` has nothing to watch and would
   # time out and fail the same way. It is level-triggered: Applications
   # applied before it is up are reconciled when it comes up, and the real
-  # "Argo reconciled" signal is step 11's rollout watch on deployment/identity.
+  # "Argo reconciled" signal is step 12's rollout watch on deployment/identity.
 }
 
 # --- step 7: the Let's Encrypt ClusterIssuers --------------------------------
@@ -1517,6 +1523,35 @@ database_url_for() {
   fi
 }
 
+# owner_database_url_for <service> — the OWNER DSN, for MIGRATIONS ONLY.
+#
+# WHY A MIGRATION IS NOT THE APP'S CONNECTION. `database_url_for` above names
+# `<svc>_app`, the LOGIN the service runs as, which owns nothing and — measured
+# against the Cluster manifest — holds no DDL privilege. A migration is DDL: the
+# first `CREATE TABLE` would fail `permission denied for schema public`, from a
+# step whose job is to create the schema. So the migrate Job connects as the
+# OWNER (`postgres-role-<svc>`, the role step 8 provisions and the migration
+# tool records its version table under), and the service keeps connecting as
+# `<svc>_app`. The roles are the SAME database; only the credential differs, and
+# picking the credential is exactly what this function is for. courier's
+# `Courier.Release.migrate` says the same thing in its moduledoc.
+#
+# The scheme is per service, the same distinction `database_url_for` states.
+owner_database_url_for() {
+  local pw
+  pw="$(read_secret_key data "postgres-role-$1" password)"
+  if [ -z "$pw" ]; then
+    kit_substrate_refuse "run step 8 (the Postgres Cluster) first" \
+      "re-run 'caf box apply --phase 8' on the box, then this step" \
+      "secret postgres-role-$1 is missing in namespace data"
+  fi
+  if [ "$1" = "courier" ]; then
+    printf 'ecto://%s:%s@postgres-rw.data.svc.cluster.local:5432/%s' "$1" "$pw" "$1"
+  else
+    printf 'postgres://%s:%s@postgres-rw.data.svc.cluster.local:5432/%s?sslmode=disable' "$1" "$pw" "$1"
+  fi
+}
+
 # --- identity's OIDC signing key, born on this box ---------------------------
 # ONE key, generated here, read back once-only, never printed.
 #
@@ -1626,7 +1661,7 @@ validate_mfa_override() {
 #     (a self-contained shared value, generated like the raise text
 #     suggests), the Redis password (redis half above), each Postgres role's
 #     password (step 8).
-#   minted on the box in step 11, never printed, never an input —
+#   minted on the box in step 12, never printed, never an input —
 #     COURIER_IDENTITY_TOKEN. It is an API key identity itself mints, so the
 #     old two-terminal loop (install → boot → mint by hand → paste into a
 #     second run) is gone: the same four calls run on this box and the value
@@ -1785,7 +1820,7 @@ install_service_secrets() {
   # COURIER_SECRET_BOX_KEY (32 bytes base64, the spelling the comment in
   # runtime.exs suggests), COURIER_ERROR_RELAY_TOKEN (32 bytes hex, likewise).
   # From the environment: the relay settings and the provider's signing secret.
-  # COURIER_IDENTITY_TOKEN is NOT set here and is NOT an input: step 11 mints
+  # COURIER_IDENTITY_TOKEN is NOT set here and is NOT an input: step 12 mints
   # it from identity's own API, on this box, and patches this secret with the
   # value — the loop that used to run across two terminals runs inside one run.
   # A missing key is a `System.get_env(…) || raise` at boot — the cheapest
@@ -1813,7 +1848,7 @@ install_service_secrets() {
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
-    kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 11 — minted on this box)"
+    kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 12 — minted on this box)"
   fi
   # Optional mail-from passthrough: courier falls back to its compiled
   # default without these, so they ride the same conditional pattern as the
@@ -1838,7 +1873,214 @@ install_service_secrets() {
   fi
 }
 
-# --- step 10: NATS with JetStream and the fleet's stream -----------------------
+# --- step 10: the services' database schemas ---------------------------------
+# NOTHING ELSE IN THIS FILE RUNS A SERVICE'S MIGRATIONS, AND THAT WAS THE
+# DEFECT. The Postgres Cluster (step 8) creates an empty database per service;
+# the Applications (step 6) boot the services against it; the fleet's charts
+# assume a migrated database because in CI the migrate step is explicit. So a
+# box that "finished" the substrate booted identity against a schema with no
+# `outbox_events`, and identity's own logs said so forever:
+#
+#   level=ERROR msg="outbox publisher pass failed; retrying"
+#     error="outbox: claiming a batch: ERROR: relation \"outbox_events\" does not
+#     exist (SQLSTATE 42P01)"
+#
+# The installer's own integration probe (step 12) then caught it from outside —
+# `identity would not mint a signup timestamp`, a 500 on the missing table.
+#
+# THE MECHANISM, AND WHY THIS ONE. Two shapes were credible: an Argo CD
+# PreSync hook Job in each service chart, or a step here that runs each
+# service's migrate entrypoint. The PreSync hook is the stronger ordering (it
+# runs BEFORE the workload, so no replica ever boots against an old schema), but
+# it lives in the service charts — repositories this one does not own — and it
+# would need the migrate entrypoint in the image anyway. So the step is here,
+# and the two facts that make it correct are both read from the running world
+# rather than restated:
+#
+#   - THE IMAGE IS THE RUNNING DEPLOYMENT'S IMAGE, read back from the
+#     Deployment Argo synced. A migration must come from the SAME build as the
+#     service it migrates for; a second pin here would be a second thing to
+#     keep in step, and the one that drifts is the one nobody reads.
+#   - THE DSN IS THE OWNER ROLE (see owner_database_url_for): a migration is
+#     DDL and the application's `<svc>_app` role owns nothing.
+#
+# WHAT IT IS NOT. Not `kubectl exec … migrate || true`, and not a sleep, and not
+# "the service migrates at boot" — that last one is checked rather than assumed:
+# a service whose image cannot run a migration (identity ships a static binary
+# in a distroless image with no shell, no psql and no migration files; courier
+# ships its release's `/app/bin/migrate`) is a FINDING, and the step fails
+# loudly naming the service and refusing to leave a pod "Ready" over an empty
+# schema. A failed migration is a failed step: the pod's phase is watched to
+# completion, its logs are printed on failure, and the install stops.
+#
+# A SERVICE WITH NO SCHEMA IS A FINDING, NOT AN ASSUMPTION. gateway's
+# `bin/migrate` is an explicit no-op — no driver, no pool, no `DATABASE_URL`,
+# no migrations — and parlor's chart documents no database and its runtime reads
+# none (it is a front end; the `parlor` database and roles exist only because
+# the Cluster provisions one per named service). Both are named in the plan and
+# skipped, so the day either grows a schema this step is the file to extend and
+# the omission is visible rather than silent.
+#
+# IDEMPOTENT, TWICE OVER. The migrate tools keep a version table
+# (`goose_db_version`, `schema_migrations`) so applying an already-applied
+# migration is a no-op — but a re-run should not even launch the pods. A marker
+# Secret in `data` records, per service, the IMAGE whose schema was applied; the
+# guard skips the whole step when every marker still matches the running
+# Deployment, and a new image re-enters the step and lets the tool apply what is
+# pending.
+KIT_SUBSTRATE_MIGRATE_MARKER="${KIT_SUBSTRATE_MIGRATE_MARKER:-substrate-migrations}"
+
+# migration_service_has_schema <service> — does this service own a schema?
+# A closed list, and the list IS the inventory: adding a service here without a
+# matching `migration_command_for` is a red plan, not a silently skipped step.
+migration_service_has_schema() {
+  case "$1" in
+    identity | courier) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# migration_command_for <service> — the entrypoint, run in the service's image.
+# Overridable so a service that moves its migrator does not need a kit release;
+# the override is per service so one service's path cannot misdirect another's.
+migration_command_for() {
+  case "$1" in
+    # identity's repo entrypoint: `bin/migrate`, a psql loop over
+    # `migrations/*.sql` (its Down section is cut out by bin/migration-up-section).
+    # It is in the repository, NOT in the image today — see the step header and
+    # the report; the exact service-repo edit that puts it there is named there.
+    identity) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_identity:-bin/migrate}" ;;
+    # courier's release overlays a `bin/migrate` -> `courier eval
+    # Courier.Release.migrate`, which runs as Courier.OwnerRepo.
+    courier) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_courier:-/app/bin/migrate}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# migration_env_args_for <service> — the `--env=NAME=DSN` arguments for the Job,
+# one array element each. courier's release eval loads runtime.exs, which raises
+# without DATABASE_URL AND configures Courier.OwnerRepo only from
+# COURIER_OWNER_DATABASE_URL, so it needs both; identity's `bin/migrate` reads
+# DATABASE_URL and only DATABASE_URL.
+migration_env_args_for() {
+  case "$1" in
+    identity)
+      printf '%s\n' "--env=DATABASE_URL=$(owner_database_url_for identity)"
+      ;;
+    courier)
+      printf '%s\n' "--env=COURIER_OWNER_DATABASE_URL=$(owner_database_url_for courier)"
+      printf '%s\n' "--env=DATABASE_URL=$(database_url_for courier)"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# migration_guard_applied — has every schema-owning service's marker been
+# written for the image it is running? True means the step is a no-op.
+migration_guard_applied() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 1
+  fi
+  local svc image marked
+  for svc in identity courier; do
+    migration_service_has_schema "$svc" || continue
+    image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
+      -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+    [ -n "$image" ] || return 1
+    marked="$(read_secret_key data "$KIT_SUBSTRATE_MIGRATE_MARKER" "$svc")"
+    [ "$marked" = "$image" ] || return 1
+  done
+  return 0
+}
+
+install_migrations() {
+  log_step "the database schemas of the services that own one (identity, courier)"
+  if migration_guard_applied; then
+    kit_substrate_out "      every schema already applied at the running image, skipping (a new image re-enters this step)"
+    return 0
+  fi
+  if dry_run "run one migrate Job per schema-owning service, in that service's own running image, connected as its OWNER role (identity/identity, courier/courier), and wait for completion; gateway and parlor own no schema and are skipped"; then
+    return 0
+  fi
+
+  local svc image cmd phase tries
+  local -a env_args=() marker_args=() failed=()
+  for svc in identity courier; do
+    migration_service_has_schema "$svc" || continue
+    # The image the Running Deployment runs — the same build as the service.
+    image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
+      -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+    if [ -z "$image" ]; then
+      echo "error: deployment/${svc} does not exist yet — Argo has not synced it, so the image to migrate with is unknown; re-run step ${STEP}" >&2
+      exit 1
+    fi
+    cmd="$(migration_command_for "$svc")"
+    env_args=()
+    while IFS= read -r arg; do
+      env_args+=("$arg")
+    done < <(migration_env_args_for "$svc")
+
+    kit_substrate_out "      migrating ${svc} as its OWNER role, in ${image}"
+    # The same one-shot discipline step 11's stream init uses: delete a leftover
+    # from a previous run, run the pod with Never semantics, watch its phase.
+    kubectl --kubeconfig="$KUBECONFIG" delete pod "kit-migrate-${svc}" -n "$svc" --ignore-not-found >/dev/null 2>&1 || true
+    if ! kubectl --kubeconfig="$KUBECONFIG" run "kit-migrate-${svc}" -n "$svc" \
+      --restart=Never \
+      --image="$image" \
+      "${env_args[@]}" \
+      --command -- $cmd; then
+      # The image could not even start the command — a distroless service with
+      # no migrate entrypoint. That is the finding the step exists to surface,
+      # not a transient. Fall through to the phase read, which reports it.
+      :
+    fi
+    phase=""
+    tries=36
+    while [ "$tries" -gt 0 ]; do
+      phase="$(kubectl --kubeconfig="$KUBECONFIG" get pod "kit-migrate-${svc}" -n "$svc" \
+        -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+      case "$phase" in
+        Succeeded)
+          kubectl --kubeconfig="$KUBECONFIG" delete pod "kit-migrate-${svc}" -n "$svc" >/dev/null 2>&1 || true
+          kit_substrate_out "      ${svc}'s schema is applied"
+          break
+          ;;
+        Failed)
+          break
+          ;;
+      esac
+      tries=$((tries - 1))
+      sleep 5
+    done
+    if [ "$phase" != "Succeeded" ]; then
+      echo "error: the migration for ${svc} did not succeed (last pod phase: '${phase:-Unknown}')" >&2
+      echo "error:   service: ${svc}" >&2
+      echo "error:   dsn:     $(owner_database_url_for "$svc" | sed 's#://[^:]*:[^@]*@#://OWNER:<redacted>@#') (role ${svc}, the OWNER)" >&2
+      echo "error:   image:   ${image}" >&2
+      echo "error: the pod is left in namespace ${svc} for diagnosis; its logs follow:" >&2
+      kubectl --kubeconfig="$KUBECONFIG" logs "pod/kit-migrate-${svc}" -n "$svc" >&2 2>&1 || true
+      failed+=("$svc")
+      continue
+    fi
+    marker_args+=("--from-literal=${svc}=${image}")
+  done
+
+  if [ "${#failed[@]}" -gt 0 ]; then
+    echo "error: the substrate will not report a finished install while a service's schema is empty: ${failed[*]}" >&2
+    echo "error: fix the migrate entrypoint for the service(s) named above, then re-run — every completed step is skipped by its guard" >&2
+    exit 1
+  fi
+
+  # The marker that makes a re-run a no-op. Delete-then-create rather than
+  # apply: the value is per-image and a leftover key for a service that no
+  # longer has a schema would be a lie the guard then reads.
+  kubectl --kubeconfig="$KUBECONFIG" delete secret "$KIT_SUBSTRATE_MIGRATE_MARKER" -n data --ignore-not-found >/dev/null 2>&1 || true
+  kubectl --kubeconfig="$KUBECONFIG" create secret generic "$KIT_SUBSTRATE_MIGRATE_MARKER" -n data \
+    "${marker_args[@]}" >/dev/null
+  kit_substrate_out "      schemas applied for: identity, courier (marker secret ${KIT_SUBSTRATE_MIGRATE_MARKER} in data)"
+}
+
+# --- step 11: NATS with JetStream and the fleet's stream -----------------------
 # One Deployment + Service + PVC in `data` (manifests/data/nats.yaml: an
 # accessory like Redis — no clustering, no credentials, no client TLS on one
 # box), plus the stream the fleet publishes to, defined idempotently.
@@ -1914,7 +2156,7 @@ install_nats() {
   exit 1
 }
 
-# --- step 11: courier's identity credential, minted on this box -------------
+# --- step 12: courier's identity credential, minted on this box -------------
 # The two bounds below are this step's own 360s, split the way steps 1 and 8
 # are: 180s for Argo to create the Deployment, then rollout inside what is
 # left. Overridable so the suite can shorten the first half.
@@ -1926,7 +2168,7 @@ install_nats() {
 # observed at), and a cold box after steps 7-10 is exactly the place where
 # the watch event is most likely to be missed or delayed: the API server was
 # busy creating the CNPG Cluster's pods, the controller was waiting on
-# repo-server to be Available, and step 11 arrived before the next resync.
+# repo-server to be Available, and step 12 arrived before the next resync.
 # The previous bound was 120+180=300s; measured live, Argo had not created
 # deployment/identity 120s after the Applications were applied even ignoring
 # the missing AppProject — the Unknown Applications never started syncing, so
@@ -2125,6 +2367,8 @@ main() {
   install_postgres_cluster
   CURRENT_PHASE="redis-and-secrets"
   install_redis_and_secrets
+  CURRENT_PHASE="migrations"
+  install_migrations
   CURRENT_PHASE="nats"
   install_nats
   CURRENT_PHASE="courier-mint"
