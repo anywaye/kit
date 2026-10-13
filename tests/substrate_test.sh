@@ -2383,11 +2383,21 @@ mock_kubectl() {
       esac
       local d="$MOCK_ROOT/$patch_ns/$patch_name"
       mkdir -p "$d"
-      # Every "key": "value" pair under stringData, merged over what is stored.
-      printf '%s' "$body" | jq -r '.stringData // {} | to_entries[] | "\(.key)=\(.value)"' |
-        while IFS= read -r pair; do
-          printf '%s' "${pair#*=}" >"$d/${pair%%=*}"
-        done
+      # Every key under stringData is merged over what is stored. The value is
+      # written VERBATIM, one jq call per key, rather than through a
+      # line-oriented `key=value` stream: a value with a newline in it — a
+      # multi-line PEM, which is exactly what gateway's assertion key is —
+      # would otherwise be split across writes and truncated to its last line.
+      # Real kubectl preserves the bytes; the mock has to as well, or the repair
+      # that patches a PEM in looks like it worked when it stored garbage.
+      local -a patch_keys=()
+      local patch_key
+      while IFS= read -r patch_key; do
+        [ -n "$patch_key" ] && patch_keys+=("$patch_key")
+      done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
+      for patch_key in ${patch_keys[@]+"${patch_keys[@]}"}; do
+        printf '%s' "$body" | jq -jr --arg k "$patch_key" '.stringData[$k] // empty' >"$d/$patch_key"
+      done
       return 0
       ;;
     run)
@@ -4034,6 +4044,96 @@ case "$oidc_id_rerun" in
     ;;
   *) fail 'oidc: the key id is read back with the key' "id: $oidc_id_rerun" ;;
 esac
+
+# 13d-bis. A gateway-secrets that PREDATES the assertion key is healed on a
+# re-run. This is the live box exactly: all four service secrets exist (so the
+# `secrets` guard would skip install_service_secrets whole) and gateway-secrets
+# holds REDIS_URL only. The repair has to run above the guard, or it never runs
+# on the only box that needs it. The key is generated and merge-patched; the
+# stored REDIS_URL survives, and the key is a PKCS#8 PEM gateway can parse.
+pkey_shape_ok() {
+  local pem line bits
+  pem="$1"
+  line="$(printf '%s' "$pem" | head -1)"
+  case "$line" in
+    *"BEGIN RSA PRIVATE KEY"*)
+      printf 'a PKCS#1 "BEGIN RSA PRIVATE KEY" — gateway parses PKCS#8 and refuses this\n'
+      return 1
+      ;;
+    *"BEGIN PRIVATE KEY"*) ;;
+    *)
+      printf 'not a PKCS#8 PEM private key (%s)\n' "$line"
+      return 1
+      ;;
+  esac
+  bits="$(printf '%s' "$pem" | openssl pkey -noout -text 2>/dev/null | sed -n 's/.*Private-Key: (\([0-9][0-9]*\) bit.*/\1/p' | head -1)"
+  if [ -z "$bits" ]; then
+    printf 'openssl could not parse the stored key\n'
+    return 1
+  fi
+  if [ "$bits" -lt 2048 ]; then
+    printf 'the key is %s bits — below the RSA floor\n' "$bits"
+    return 1
+  fi
+  printf 'a %s-bit PKCS#8 RSA PEM private key\n' "$bits"
+}
+
+MOCK_ROOT="$WORK/legacy-gateway"
+mkdir -p "$MOCK_ROOT"
+legacy_ec=0
+(
+  mfa_seed_roles
+  # All four secrets exist — the guard's own contract — and gateway-secrets is
+  # the pre-fix shape: REDIS_URL only.
+  mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
+  mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
+  mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
+  mock_seed identity identity-secrets NATS_URL "nats://nats.data.svc.cluster.local:4222"
+  mock_seed gateway gateway-secrets REDIS_URL "redis://:pw@redis.data.svc.cluster.local:6379"
+  mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/courier"
+  mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  install_service_secrets >"$WORK/legacy-gateway.log" 2>&1
+) || legacy_ec=$?
+if [ "$legacy_ec" -ne 0 ]; then
+  fail 'repair: the assertion-key repair runs on a re-run that skips the guard' "$(cat "$WORK/legacy-gateway.log")"
+elif [ -z "$(mock_get gateway gateway-secrets ASSERTION_SIGNING_KEY)" ]; then
+  fail 'repair: the assertion-key repair runs on a re-run that skips the guard' "ASSERTION_SIGNING_KEY is still missing — the guard skipped the repair"
+elif [ "$(mock_get gateway gateway-secrets REDIS_URL)" != "redis://:pw@redis.data.svc.cluster.local:6379" ]; then
+  fail 'repair: the assertion-key repair runs on a re-run that skips the guard' "REDIS_URL did not survive the merge patch"
+else
+  pass 'repair: the assertion-key repair runs on a re-run that skips the guard'
+fi
+legacy_key="$(mock_get gateway gateway-secrets ASSERTION_SIGNING_KEY)"
+if [ -n "$legacy_key" ]; then
+  run 'repair: the generated key is a PKCS#8 RSA PEM at the RSA floor' green pkey_shape_ok "$legacy_key"
+  run 'repair: the generated key never reaches the installer output' green oidc_log_clean "$(cat "$WORK/legacy-gateway.log")" "$legacy_key"
+  # The control: a PKCS#1 PEM (the `-----BEGIN RSA PRIVATE KEY-----` header) must
+  # be refused by the same shape check, or the check cannot tell the two
+  # encodings apart. The header alone is the control because the header is
+  # exactly what the check tests first, and it is stable across OpenSSL versions
+  # (`genrsa` writes PKCS#1 on 1.1 and PKCS#8 on 3.x).
+  run 'control: a PKCS#1 RSA PEM is refused (gateway parses PKCS#8)' red pkey_shape_ok \
+    "$(printf -- '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKfake\n-----END RSA PRIVATE KEY-----')"
+fi
+# The re-run is stable: a second pass finds the key and does not touch it.
+MOCK_ROOT="$WORK/legacy-gateway" legacy_rerun_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  install_service_secrets >>"$WORK/legacy-gateway.log" 2>&1
+) || legacy_rerun_ec=$?
+if [ "$legacy_rerun_ec" -eq 0 ] && [ "$(mock_get gateway gateway-secrets ASSERTION_SIGNING_KEY)" = "$legacy_key" ]; then
+  pass 'repair: a second pass keeps the stored key (never rotates)'
+else
+  fail 'repair: a second pass keeps the stored key (never rotates)' "the key changed or the re-run failed"
+fi
 
 # 13e. The courier loop is box-internal: one run mints the credential through
 # identity's own API, writes the SAME value into both secrets that have to hold
