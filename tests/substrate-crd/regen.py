@@ -94,7 +94,9 @@ def model(node: dict) -> object:
     if node.get("type") == "array":
         return {"[]": model(node.get("items", {}))}
     props = node.get("properties")
-    open_keys = node.get("additionalProperties") is not None
+    # `additionalProperties: false` CLOSES the object; only a truthy schema (or
+    # a schema mapping) opens it. `is not None` would read `false` as open.
+    open_keys = node.get("additionalProperties") not in (None, False)
     if props is None:
         return "*"
     built = {k: model(v) for k, v in props.items()}
