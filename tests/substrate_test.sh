@@ -4574,12 +4574,17 @@ EMITTERS = {
 
 # Functions whose stdout is a COMMAND SUBSTITUTION at every call site. Their
 # output is a value handed to another command — database_url_for builds a DSN
-# carrying a generated password, oidc_key_id_for builds a thumbprint — so it
-# must reach its caller and never a terminal. They are excused from rule 1 and
-# NOT checked by rule 2, because a printf that cannot carry `$pw` is a DSN
-# with no password in it. The assertion at the bottom of this check keeps the
-# list honest: a value producer called anywhere else goes red.
-VALUE_PRODUCERS = {"database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for"}
+# carrying a generated password, oidc_key_id_for builds a thumbprint, and the
+# three timing helpers build a clock reading or a duration — so it must reach
+# its caller and never a terminal. They are excused from rule 1 and NOT checked
+# by rule 2, because a printf that cannot carry `$pw` is a DSN with no password
+# in it, and a printf that cannot carry a duration is a clock with no reading.
+# The assertion at the bottom of this check keeps the list honest: a value
+# producer called anywhere else goes red.
+VALUE_PRODUCERS = {
+    "database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for",
+    "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
+}
 
 # Every variable in install.sh that HOLDS secret material, by name. This is a
 # closed list, not a pattern: a `*SECRET*` glob would also match `secret_name`
@@ -7394,6 +7399,177 @@ sed 's|redis\.data\.svc\.cluster\.local|redis.gateway.svc.cluster.local|g' \
   "$SUBSTRATE/install.sh" >"$fixture_install_ns"
 run 'control: a drifted in-cluster name in the installer goes red' red \
   check_cross_namespace_addresses "$MANIFESTS" "$SUBSTRATE/manifests/data" "$fixture_install_ns"
+
+# ===========================================================================
+# 24. EVERY RUN REPORTS ITS OWN SPEED — the step timing is present and honest
+# ===========================================================================
+# `install.sh` used to carry no timestamps at all, so a step's duration could
+# not be recovered after the fact. Now every step emits `seconds`, measured on
+# the step's own boundary, and the final event carries the total and the
+# per-step table. This check is what makes the number TRUSTWORTHY rather than
+# decorative: a step with no timing, a run with no positive duration, and a
+# total smaller than the steps it names all go red. The controls are fixtures
+# assembled here, never a copy of the tree.
+check_timing() {
+  "$PY" - "$1" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+starts = 0
+dones = 0
+step_sum = 0.0
+last_offset = None
+problems = []
+total = None
+steps_table = None
+
+with open(path, encoding="utf-8") as fh:
+    for lineno, line in enumerate(fh, 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError as exc:
+            problems.append(f"line {lineno} is not JSON: {exc}")
+            continue
+        name = ev.get("event")
+        if name == "step.start":
+            starts += 1
+            secs = ev.get("seconds")
+            if not isinstance(secs, (int, float)) or secs < 0:
+                problems.append(f"line {lineno}: step.start has no non-negative seconds: {secs!r}")
+                continue
+            # The offsets come off a monotonic clock, so they never go
+            # backwards; a decreasing offset is a clock that was edited or a
+            # number that was not measured.
+            if last_offset is not None and secs < last_offset:
+                problems.append(f"line {lineno}: step.start offset {secs} is behind the previous {last_offset}")
+            last_offset = secs
+        elif name == "step.done":
+            dones += 1
+            if "seconds" not in ev:
+                problems.append(f"line {lineno}: step.done reports no timing")
+                continue
+            secs = ev["seconds"]
+            if secs == "skipped":
+                continue
+            if not isinstance(secs, (int, float)) or secs < 0:
+                problems.append(f"line {lineno}: step.done seconds is neither a duration nor 'skipped': {secs!r}")
+                continue
+            step_sum += secs
+        elif name == "install.done":
+            total = ev.get("seconds")
+            steps_table = ev.get("steps")
+
+if starts == 0:
+    problems.append("no step.start events")
+if dones == 0:
+    problems.append("no step.done events")
+if step_sum <= 0:
+    problems.append("no step reports a positive duration — the timing is a constant, not a measurement")
+if total is None or not isinstance(total, (int, float)) or total < 0:
+    problems.append(f"install.done carries no non-negative total seconds: {total!r}")
+elif total + 1e-9 < step_sum:
+    problems.append(f"the total ({total}) is smaller than the sum of the steps it names ({round(step_sum, 3)})")
+if not isinstance(steps_table, list) or not steps_table:
+    problems.append("install.done carries no steps table")
+else:
+    table_sum = 0.0
+    for row in steps_table:
+        s = row.get("seconds")
+        if isinstance(s, (int, float)):
+            table_sum += s
+        elif s != "skipped":
+            problems.append(f"steps table row has no duration: {row!r}")
+    if isinstance(total, (int, float)) and total + 1e-9 < table_sum:
+        problems.append(f"the total ({total}) is smaller than its own steps table ({round(table_sum, 3)})")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{dones} steps timed, total {total}s >= sum {round(step_sum, 3)}s")
+PY
+}
+
+timing_jsonl="$WORK/timing.jsonl"
+KIT_SUBSTRATE_RECEIPT="$WORK/timing-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS" \
+  HEADLESS=1 DRY_RUN=1 bash "$SUBSTRATE/install.sh" >"$timing_jsonl" 2>"$WORK/timing.err" || true
+
+timing_starts="$(grep -c '"event":"step.start"' "$timing_jsonl" || true)"
+timing_dones="$(grep -c '"event":"step.done"' "$timing_jsonl" || true)"
+if [ "$timing_starts" -eq 12 ] && [ "$timing_dones" -eq 12 ]; then
+  pass 'every step emits a start and a done event'
+else
+  fail 'every step emits a start and a done event' \
+    "${timing_starts} start(s), ${timing_dones} done(s) — expected 12 and 12"
+fi
+
+run 'the step timings are present and the total covers the steps' green check_timing "$timing_jsonl"
+
+# The install.done event's own `steps` table is the human table's source, so a
+# reader can take the whole answer off one line.
+if grep -q '"event":"install.done".*"steps":\[' "$timing_jsonl"; then
+  pass 'the final event carries the per-step table'
+else
+  fail 'the final event carries the per-step table' "$(tail -1 "$timing_jsonl")"
+fi
+
+# Control 1: a step.done with no `seconds` at all. This is the packet's named
+# red control — a step that reports no timing must not pass.
+fixture_no_timing="$WORK/timing-no-seconds.jsonl"
+{
+  printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.100}'
+  printf '%s\n' '{"event":"step.done","step":1,"phase":"k3s","message":"k3s: done"}'
+  printf '%s\n' '{"event":"install.done","step":1,"phase":"k3s","message":"up","seconds":1.000,"steps":[{"step":1,"phase":"k3s","seconds":0.100}]}'
+} >"$fixture_no_timing"
+run 'control: a step that reports no timing goes red' red check_timing "$fixture_no_timing"
+
+# Control 2: a total that is a fabricated constant, smaller than the steps it
+# names. A number nobody measured is exactly what this check exists to refuse.
+fixture_short_total="$WORK/timing-short-total.jsonl"
+{
+  printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.100}'
+  printf '%s\n' '{"event":"step.done","step":1,"phase":"k3s","message":"k3s: 5.000s","seconds":5.000}'
+  printf '%s\n' '{"event":"install.done","step":1,"phase":"k3s","message":"up","seconds":0.500,"steps":[{"step":1,"phase":"k3s","seconds":5.000}]}'
+} >"$fixture_short_total"
+run 'control: a total smaller than the steps it names goes red' red check_timing "$fixture_short_total"
+
+# Control 3: every duration is a constant zero. "Present, non-negative and
+# summing to no more than the total" is satisfied by twelve zeroes, so the
+# check refuses a run in which nothing was measured.
+fixture_zero_steps="$WORK/timing-zero.jsonl"
+{
+  printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.000}'
+  printf '%s\n' '{"event":"step.done","step":1,"phase":"k3s","message":"k3s: 0.000s","seconds":0.000}'
+  printf '%s\n' '{"event":"install.done","step":1,"phase":"k3s","message":"up","seconds":0.000,"steps":[{"step":1,"phase":"k3s","seconds":0.000}]}'
+} >"$fixture_zero_steps"
+run 'control: a run of constant-zero durations goes red' red check_timing "$fixture_zero_steps"
+
+# THE SKIP HALF. A skipped step did no work, so it reports `skipped` — never a
+# `0` that would read as "this step is free". The fixture forces the guard to
+# answer "present" for every component, which is the state a warm box is in.
+# It lives in its OWN directory with a `manifests` symlink, because the script
+# resolves its manifests from `$SCRIPT_DIR` and the steps without a guard (5,
+# 6, 8, 10, 12) still plan against them in DRY_RUN. The premise is asserted
+# first: if the fixture produced no skip, the check below would be green on
+# nothing.
+fixture_skip_dir="$WORK/skip-fixture"
+mkdir -p "$fixture_skip_dir"
+ln -s "$SUBSTRATE/manifests" "$fixture_skip_dir/manifests"
+sed 's/^kit_substrate_guard() {$/kit_substrate_guard() { STEP_SKIPPED=1; return 0;/' \
+  "$SUBSTRATE/install.sh" >"$fixture_skip_dir/install.sh"
+skip_jsonl="$WORK/timing-skip.jsonl"
+KIT_SUBSTRATE_RECEIPT="$WORK/skip-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS" \
+  HEADLESS=1 DRY_RUN=1 bash "$fixture_skip_dir/install.sh" >"$skip_jsonl" 2>"$WORK/skip.err" || true
+if grep -q '"seconds":"skipped"' "$skip_jsonl"; then
+  pass 'a skipped step reports skipped, not 0'
+else
+  fail 'a skipped step reports skipped, not 0' "$(head -4 "$skip_jsonl")"
+fi
+run 'a run whose guards find the components present still times cleanly' green \
+  check_timing "$skip_jsonl"
 
 # ===========================================================================
 # Summary

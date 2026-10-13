@@ -344,12 +344,46 @@ bash templates/substrate/install.sh --headless          # or HEADLESS=1
 a **stream of JSONL progress events, one object per line, and nothing else**:
 
 ```
-{"event":"install.start","step":0,"phase":"install","message":"install begins: 11 steps, receipt at /var/lib/kit/substrate-receipt.json"}
-{"event":"step.start","step":1,"phase":"k3s","message":"k3s v1.37.1+k3s1 — single node, sqlite datastore"}
+{"event":"install.start","step":0,"phase":"install","message":"install begins: 12 steps, receipt at /var/lib/kit/substrate-receipt.json"}
+{"event":"step.start","step":1,"phase":"k3s","message":"k3s v1.37.1+k3s1 — single node, sqlite datastore","seconds":0.052}
+{"event":"step.done","step":1,"phase":"k3s","message":"k3s: 4.180s","seconds":4.180}
 {"event":"refusal","step":8,"phase":"cluster-issuers","input_needed":"KIT_SUBSTRATE_ACME_EMAIL","human":"export … on the box and re-run","message":"…"}
 ```
 
-Interactive mode is unchanged and prints the same plain text, byte for byte.
+Interactive mode is unchanged and prints the same plain text, byte for byte,
+plus the timing table below.
+
+**Every run reports its own speed, and the numbers are the step's own.** The
+installer used to carry no timestamps at all, so "how long did this take, and
+which step was the cost" could only be reconstructed from the cluster's
+object-creation times — archaeology that says nothing about a cold box or a bad
+change. Now:
+
+- **`seconds` on `step.start`** is the step's **offset** since the install
+  began, so a reader can see a step start serializing (two steps whose windows
+  no longer touch are two steps that stopped overlapping).
+- **`seconds` on `step.done`** is the step's **duration**, measured from the
+  step's **own** boundary: the guard's `kubectl` probe is excluded (the window
+  opens after the guard decides the component is absent) and a **skipped** step
+  reports the string `"skipped"`, never `0` — a skipped step did no work, and
+  `0` would read as "this step is free".
+- **`seconds` on the final `install.done`** is the run's total, and it carries a
+  **`steps` array** of `{step, phase, seconds}` — the per-step table, in the
+  JSONL. The same table is printed in interactive mode, compactly:
+
+  ```
+    step  phase                seconds
+    1     k3s                  4.180
+    2     cert-manager         10.020
+    …
+    total                      96.400
+  ```
+
+The clock is monotonic: on the box it reads `/proc/uptime`, so an NTP step or a
+clock edit does not move it; off Linux the highest-resolution wall clock the
+machine has is used, because only differences are ever taken. The measurement
+is exercised by `tests/substrate_test.sh`, whose controls require a step with no
+timing and a total smaller than its own steps to go red.
 
 **The split between the two writers is the property.** `kit_substrate_emit`
 owns stdout — JSONL, headless only. `kit_substrate_out` owns human text — stdout

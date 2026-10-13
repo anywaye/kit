@@ -166,9 +166,15 @@
 #   The mode an agent drives. `caf box apply --phase N` runs this script with
 #   the flag and reads stdout as a STREAM OF JSONL EVENTS, one object per
 #   line, and nothing else: `{"event":"step.start","step":1,"phase":"k3s",
-#   "message":"k3s v1.37.1+k3s1 — single node, sqlite datastore"}`. Every human
-#   line that interactive mode prints goes to STDERR instead, so stdout is
-#   progress-only and a parser never has to guess.
+#   "message":"k3s v1.37.1+k3s1 — single node, sqlite datastore","seconds":0.052}`.
+#   Every human line that interactive mode prints goes to STDERR instead, so
+#   stdout is progress-only and a parser never has to guess.
+#   EVERY RUN REPORTS ITS OWN SPEED. `seconds` on step.start is the step's
+#   OFFSET since the install began; on step.done it is the step's DURATION,
+#   measured on the step's own boundary (a skipped step reports the string
+#   "skipped", never `0`). The final `install.done` carries the total and a
+#   `steps` array of {step, phase, seconds}, so "how long did this take, and
+#   which step was the cost" is one line rather than a stopwatch.
 #   The install-receipt file (KIT_SUBSTRATE_RECEIPT, default
 #   /var/lib/kit/substrate-receipt.json) is rewritten at every state change and
 #   names the phase, the next step, the input needed and where the human goes.
@@ -436,16 +442,62 @@ TLS_DIR="$SCRIPT_DIR/manifests/tls"
 DATA_DIR="$SCRIPT_DIR/manifests/data"
 ARGOCD_MANIFEST_DIR="$SCRIPT_DIR/manifests/argocd"
 
-# --- the guard --------------------------------------------------------------
-# kit_substrate_guard <component> — is this component already installed?
-# Returns 0 if present (skip), 1 if absent (install). In DRY_RUN it always
-# returns 1, so the step is printed rather than skipped: a dry run shows the
-# whole plan every time, which is what makes it a plan and not a no-op.
-kit_substrate_guard() {
-  local component="$1"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    return 1
+# --- timing -----------------------------------------------------------------
+# EVERY RUN REPORTS ITS OWN SPEED. Before this, the JSONL carried no timestamps
+# at all, so "how long did this take, and which step was the cost" could only be
+# reconstructed from the cluster's object-creation times — archaeology that says
+# nothing about a cold box or a bad change. The clock below is monotonic and the
+# measurement is taken on each step's OWN boundary, so the numbers are the
+# step's, not the run's.
+#
+# kit_substrate_now — a MONOTONIC millisecond clock. On the box this reads
+# /proc/uptime (seconds since boot), which does not follow the NTP step or the
+# operator's clock edit that a wall-clock reading would; `date +%s` is the
+# packet's accepted floor and would be wrong exactly on the box that had just
+# had its clock set. Off Linux there is no /proc, so the highest-resolution wall
+# clock the machine has is used instead (bash 5's EPOCHREALTIME, then perl's
+# Time::HiRes, then `date +%s`); those fallbacks are for a developer machine
+# running DRY_RUN, where the absolute value is meaningless anyway. Only
+# DIFFERENCES are ever taken, so the base (boot time vs epoch) does not matter.
+kit_substrate_now() {
+  if [ -r /proc/uptime ]; then
+    awk '{printf "%.0f\n", $1 * 1000}' /proc/uptime
+    return 0
   fi
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    printf '%s' "$EPOCHREALTIME" | awk -F. '{printf "%d%03d\n", $1, substr($2 "000", 1, 3)}'
+    return 0
+  fi
+  if command -v perl >/dev/null 2>&1; then
+    perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000'
+    return 0
+  fi
+  printf '%s000\n' "$(date +%s)"
+}
+
+# kit_substrate_seconds <milliseconds> — the decimal-seconds spelling the JSONL
+# and the table carry. Milliseconds is the resolution a step is actually read
+# at, and "0.004" is a duration where "0" is a shrug; the field is still named
+# `seconds` because that is what it is a number of.
+kit_substrate_seconds() {
+  printf '%d.%03d' "$(( $1 / 1000 ))" "$(( $1 % 1000 ))"
+}
+
+# kit_substrate_elapsed — whole milliseconds since the install began, for the
+# `seconds` a step.start carries (the step's OFFSET, so a reader can see a step
+# start serializing) as opposed to the DURATION a step.done carries.
+kit_substrate_elapsed() {
+  kit_substrate_seconds "$(( $(kit_substrate_now) - INSTALL_START_MS ))"
+}
+
+# --- the guard --------------------------------------------------------------
+# kit_substrate_present <component> — is this component already installed?
+# Returns 0 if present, 1 if absent. The body is unchanged from the guard this
+# replaces; the timing wrapper below is what makes a step's clock start AFTER
+# the guard's check, so a step's time is the step's work and not the guard's
+# kubectl probe — and a skipped step is marked, not timed.
+kit_substrate_present() {
+  local component="$1"
   case "$component" in
     k3s)
       [ -x /usr/local/bin/k3s ] && systemctl is-active --quiet k3s 2>/dev/null
@@ -497,6 +549,28 @@ kit_substrate_guard() {
   esac
 }
 
+# kit_substrate_guard <component> — the step-facing wrapper around the probe
+# above. Returns 0 if present (skip), 1 if absent (install), and stamps the
+# timing state on the way:
+#   * present  → STEP_SKIPPED=1, so the step reports `skipped` and NOT a `0.000`
+#                that would read as "this step is free".
+#   * absent   → STEP_START_MS=now, the step's OWN boundary, after the probe.
+# In DRY_RUN the probe is skipped and every step is stamped as if it would run,
+# so a plan is timed end to end rather than reported as twelve skips.
+kit_substrate_guard() {
+  local component="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    STEP_START_MS="$(kit_substrate_now)"
+    return 1
+  fi
+  if kit_substrate_present "$component"; then
+    STEP_SKIPPED=1
+    return 0
+  fi
+  STEP_START_MS="$(kit_substrate_now)"
+  return 1
+}
+
 # --- helpers ----------------------------------------------------------------
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
@@ -504,8 +578,26 @@ STEP=0
 TOTAL=12
 # The phase the install is in — set by main before each step, read by the
 # emit path and the receipt. It names the STEP, not the sub-step, so the
-# receipt's phase is always one of the eleven (or preflight/complete).
+# receipt's phase is always one of the twelve (or preflight/complete).
 CURRENT_PHASE="install"
+
+# --- timing state -----------------------------------------------------------
+# INSTALL_START_MS — stamped once, in main, before preflight, so the total
+#   covers the whole run rather than the steps alone.
+# STEP_PHASE — the phase the step IN FLIGHT belongs to. Captured at log_step
+#   because main sets CURRENT_PHASE to the NEXT step's phase before calling it,
+#   so by the time the previous step is finalised CURRENT_PHASE has moved on.
+# STEP_START_MS — stamped by the guard when it decides the component is absent;
+#   empty until then.
+# STEP_SKIPPED — set by the guard when the component is already present.
+# STEP_LEDGER — one `step<TAB>phase<TAB>seconds` line per completed step, in
+#   order. The final event's `steps` array and the human table both read it, so
+#   there is one accounting and not two.
+INSTALL_START_MS=""
+STEP_PHASE="install"
+STEP_START_MS=""
+STEP_SKIPPED=0
+STEP_LEDGER=""
 
 # --- the headless emit path ---------------------------------------------------
 # TWO writers, and the split between them is the whole property.
@@ -549,17 +641,26 @@ kit_substrate_out() {
   fi
 }
 
-# kit_substrate_emit <event> <message> — emit one progress event.
+# kit_substrate_emit <event> <message> [<extra-json>] — emit one progress event.
+# <extra-json> is a RAW JSON fragment of additional fields (leading comma
+# included), e.g. `,"seconds":1.250` or `,"seconds":"skipped"`. It is appended
+# verbatim, so the caller is responsible for it being valid JSON — which is why
+# the only two callers that pass it build it from a number this file formatted
+# itself or from a fixed keyword.
 kit_substrate_emit() {
-  local event="$1" message="$2"
+  local event="$1" message="$2" extra="${3:-}"
   if [ "$HEADLESS" -eq 1 ]; then
-    printf '{"event":"%s","step":%s,"phase":%s,"message":%s}\n' \
-      "$event" "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$message")"
+    printf '{"event":"%s","step":%s,"phase":%s,"message":%s%s}\n' \
+      "$event" "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$message")" "$extra"
   else
     case "$event" in
       step.start) echo "[${STEP}/${TOTAL}] $message" ;;
       step.skip)  echo "      already installed, skipping" ;;
       step.plan)  echo "      DRY_RUN: $message" ;;
+      # step.done is a MACHINE event. Interactive mode already saw the step's
+      # start line and its own output; the run's speeds are the final table, so
+      # printing a line per step here would be noise, not a table.
+      step.done)  ;;
       *)          echo "$message" ;;
     esac
   fi
@@ -572,8 +673,90 @@ kit_substrate_skip() {
   kit_substrate_emit step.skip "already installed, skipping"
 }
 
+# kit_substrate_step_finalize — close the step in flight, if any, and append it
+# to the ledger. Called by the NEXT log_step (and once by main after the last
+# step), so a step that returns early — a skip, a dry-run plan — is still
+# closed without twelve end-of-step calls that a later edit could forget.
+#
+# Three shapes, and the first is the one the packet names: a SKIPPED step did
+# no work, so it reports the string "skipped" and never `0.000`, which would
+# read as "this step is free" — the misleading number the timing exists to
+# avoid. A measured step reports the window [guard decision, now]. The third,
+# "unknown", is unreachable in a completed run (a step that never reached its
+# guard would have to have skipped it) and exists so a future step that forgets
+# the guard reports a word rather than a silent zero.
+kit_substrate_step_finalize() {
+  [ "$STEP" -gt 0 ] || return 0
+  local secs
+  if [ "$STEP_SKIPPED" -eq 1 ]; then
+    secs="skipped"
+  elif [ -n "$STEP_START_MS" ]; then
+    secs="$(kit_substrate_seconds "$(( $(kit_substrate_now) - STEP_START_MS ))")"
+  else
+    secs="unknown"
+  fi
+  STEP_LEDGER="${STEP_LEDGER}${STEP}	${STEP_PHASE}	${secs}
+"
+  # The step.done event names the step's OWN phase. main has already set
+  # CURRENT_PHASE to the NEXT step's phase by the time the next log_step
+  # finalises this one, so it is restored around the emit.
+  local saved_phase="$CURRENT_PHASE"
+  CURRENT_PHASE="$STEP_PHASE"
+  if [ "$secs" = "skipped" ] || [ "$secs" = "unknown" ]; then
+    kit_substrate_emit step.done "$STEP_PHASE: $secs" ",\"seconds\":$(json_str "$secs")"
+  else
+    kit_substrate_emit step.done "$STEP_PHASE: ${secs}s" ",\"seconds\":${secs}"
+  fi
+  CURRENT_PHASE="$saved_phase"
+  STEP_SKIPPED=0
+  STEP_START_MS=""
+}
+
+# kit_substrate_steps_json — the ledger as a JSON array, for the final event.
+# `seconds` is a number for a measured step and the string "skipped"/"unknown"
+# otherwise, exactly as in the step.done events, so a consumer reads one shape.
+kit_substrate_steps_json() {
+  printf '%s' "$STEP_LEDGER" | jq -R -s -c '
+    split("\n")
+    | map(select(length > 0) | split("\t"))
+    | map({step: (.[0] | tonumber),
+           phase: .[1],
+           seconds: (if .[2] == "skipped" or .[2] == "unknown"
+                     then .[2] else (.[2] | tonumber) end)})'
+}
+
+# kit_substrate_print_table — the human face of the same ledger: one line per
+# step, a name and a duration, then the total. A compact table, not prose,
+# because the question it answers is "which step was the cost".
+kit_substrate_print_table() {
+  local total="$1" line n phase secs
+  kit_substrate_out "  step  phase                seconds"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    n="${line%%	*}"
+    phase="${line#*	}"
+    secs="${phase#*	}"
+    phase="${phase%%	*}"
+    kit_substrate_out "$(printf '  %-5s %-20s %s' "$n" "$phase" "$secs")"
+  done <<EOF
+$STEP_LEDGER
+EOF
+  kit_substrate_out "  total                      ${total}"
+}
+
 log_step() {
+  # Finalise the PREVIOUS step first: its window closed when this step's
+  # log_step began. This is the whole reason the boundary is here and not at
+  # the end of each of the twelve steps — there is one place to get right.
+  kit_substrate_step_finalize
   STEP=$((STEP + 1))
+  STEP_PHASE="$CURRENT_PHASE"
+  # The step's window opens HERE, by default. A step that has a guard re-stamps
+  # it after the guard's probe (so the probe is not charged to the step), and a
+  # step with no guard — five of the twelve have none, because their work is
+  # idempotent without a presence check — keeps this stamp. Either way every
+  # step is measured; none reports `unknown` for want of a guard.
+  STEP_START_MS="$(kit_substrate_now)"
   # The receipt follows the install: at each step start it names the phase and
   # the next step, so a crash mid-step leaves a receipt pointing at that step.
   R_PHASE="$CURRENT_PHASE"
@@ -583,7 +766,10 @@ log_step() {
   R_STATUS="running"
   R_MESSAGE=""
   kit_substrate_write_receipt
-  kit_substrate_emit step.start "$*"
+  # `seconds` on step.start is the step's OFFSET since the install began (so a
+  # reader can see a step start serializing); on step.done it is the step's
+  # DURATION. Two numbers, one key, and this comment is where that is stated.
+  kit_substrate_emit step.start "$*" ",\"seconds\":$(kit_substrate_elapsed)"
 }
 
 # dry_run <description> — print what would happen and return 0 (skip the real
@@ -2707,6 +2893,10 @@ main() {
     esac
   done
 
+  # The clock starts before preflight, so the total is the install's
+  # start-to-done and not just the steps'.
+  INSTALL_START_MS="$(kit_substrate_now)"
+
   # The receipt opens the install: it names the phase, the next step and the
   # (empty) input needed, so a reader — human or agent — knows what this run
   # is and where it starts before the first step emits.
@@ -2750,6 +2940,14 @@ main() {
   CURRENT_PHASE="courier-mint"
   mint_courier_identity_token
 
+  # Close the LAST step (every other step was closed by the next one's
+  # log_step), then read the total off the same clock. `total` and the steps
+  # come from one accounting, so the final event's total can never disagree
+  # with the table it carries.
+  kit_substrate_step_finalize
+  local total_seconds
+  total_seconds="$(kit_substrate_seconds "$(( $(kit_substrate_now) - INSTALL_START_MS ))")"
+
   # The receipt closes the install: phase complete, no next step, and the
   # human sent to the Argo CD UI — the one place a person goes now that the
   # box has done its work.
@@ -2766,11 +2964,14 @@ main() {
   R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   kit_substrate_write_receipt
   if [ "$HEADLESS" -eq 1 ]; then
-    kit_substrate_emit install.done "$R_MESSAGE"
+    kit_substrate_emit install.done "$R_MESSAGE" \
+      ",\"seconds\":${total_seconds},\"steps\":$(kit_substrate_steps_json)"
   else
     kit_substrate_out ""
     kit_substrate_out "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
     kit_substrate_out "Argo CD state:  kubectl -n argocd get applications"
+    kit_substrate_out ""
+    kit_substrate_print_table "$total_seconds"
   fi
 }
 
