@@ -944,7 +944,12 @@ exchange_registry_credential() {
 }
 
 # apply_pull_secret — writes the credential as a docker-registry Secret in each
-# namespace that pulls the fleet's images.
+# namespace that pulls the fleet's images, making the namespace first.
+#
+# WHY IT MAKES THE NAMESPACE: the argument is at the code site, because it is
+# the ordering decision this step owns. In one line — the secret has to exist
+# before the first pod that pulls with it is scheduled, and on a wiped box five
+# of those six namespaces do not exist until step 6's Applications create them.
 #
 # THE VALUE NEVER ENTERS ARGV. It travels from curl's response into a shell
 # variable, then into the Secret through `/dev/stdin` in a pipe: `kubectl
@@ -966,6 +971,53 @@ exchange_registry_credential() {
 apply_pull_secret() {
   local ns
   for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
+    # THE NAMESPACE IS MADE HERE, BEFORE THE SECRET, AND THAT IS THE WHOLE FIX.
+    #
+    # Measured live on a box that had been wiped, and only a wiped box could
+    # have shown it: this step wrote the secret into argocd (step 4 created
+    # that namespace) and then stopped with
+    #   Error from server (NotFound): error when creating "STDIN":
+    #   namespaces "identity" not found
+    # because the other five did not exist yet — the Argo CD Applications at
+    # step 6 create them, with `CreateNamespace=true`. `set -e` ended the
+    # install at its second namespace, leaving a box with one namespace of the
+    # six the fleet pulls with and a run that reported nothing usable.
+    #
+    # WHY THE SECRET IS STILL WRITTEN EARLY, AT STEP 5. It has to be. The first
+    # pod that pulls a fleet image is Argo CD's own — the Application
+    # controller pulls whatever the Applications sync — and everything after
+    # that schedules inside a window this installer does not control. A pull
+    # secret applied after the pods that need it is a CrashLoopBackOff nobody
+    # can attribute to an ordering choice made three steps earlier. So the
+    # credential is bought and written as early as it can be, and the missing
+    # namespaces are MADE rather than waited for.
+    #
+    # WHY HERE AND NOT MOVED INTO STEP 6. Step 6 asks Argo to create those
+    # namespaces, and Argo creates them when it syncs — a moment chosen by the
+    # sync, not by a line in this file. Moving the secret there would put it
+    # back inside the race it exists to prevent, and it would still be wrong
+    # for argocd: nothing at step 6 creates the namespace Argo CD itself runs
+    # in, because Argo CD was installed into an existing one.
+    #
+    # WHY IDEMPOTENT. `create --dry-run=client -o yaml | apply -f -` is this
+    # repository's own idiom and it is the one the Secret itself uses two
+    # screens below: a namespace that already exists is answered `unchanged`,
+    # so a re-run is a no-op rather than an `AlreadyExists`. And a namespace
+    # this step makes is the same instruction Argo's `CreateNamespace=true`
+    # will later issue — the same object asked for twice, idempotently, which
+    # is why making it here is safe rather than a conflict. The operator who
+    # created these namespaces by hand on the affected box worked around
+    # exactly this, and a fixed installer must produce that same state itself.
+    if ! kubectl --kubeconfig="$KUBECONFIG" create namespace "$ns" --dry-run=client -o yaml |
+      kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null; then
+      # Refused, never skipped. A retry-until-it-appears loop would be waiting
+      # for something nothing in this install creates; an `|| true` on the
+      # apply would leave the namespace absent and the run green. Both turn a
+      # hole the operator can see into one they discover at image-pull time,
+      # in a voice that names neither this line nor the namespace.
+      REGISTRY_DOCKERCONFIGJSON=""
+      kit_substrate_refuse "" "check that the k3s cluster is reachable from this box and that no admission policy refuses namespace creation, then re-run — the pull secret cannot be written into a namespace that does not exist" "the namespace ${ns} could not be created, so the image pull secret cannot be written into it — every pod scheduled into ${ns} would fail to pull"
+    fi
     if kubectl --kubeconfig="$KUBECONFIG" get secret "$REGISTRY_PULL_SECRET_NAME" -n "$ns" >/dev/null 2>&1; then
       kit_substrate_out "      secret ${REGISTRY_PULL_SECRET_NAME} exists in ${ns} — replacing it (the credential is minutes-lived by design; a fresh exchange buys a fresh one)"
     else
@@ -983,7 +1035,7 @@ apply_pull_secret() {
 
 install_pull_secret() {
   log_step "the GHCR image pull secret, exchanged for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
-  if dry_run "exchange the registry capability at ${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials and apply ${REGISTRY_PULL_SECRET_NAME} in: ${REGISTRY_PULL_NAMESPACES[*]}"; then
+  if dry_run "exchange the registry capability at ${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials, ensure each of ${REGISTRY_PULL_NAMESPACES[*]} exists, and apply ${REGISTRY_PULL_SECRET_NAME} in it"; then
     return 0
   fi
   exchange_registry_credential
