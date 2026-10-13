@@ -155,14 +155,43 @@ jobs:
           echo "wrong password." >&2
           exit 1
 
-      # HELM, PINNED. The upstream script's own pin mechanism; never @latest.
-      # `helm version --client` at the end prints the pin in the log, so a
-      # floating install is visible rather than assumed.
+      # HELM, PINNED, AND THE PIN IS CHECKED RATHER THAN PRINTED.
+      #
+      # The upstream script's own pin mechanism; never @latest. The pin is one
+      # shell value below, used twice — once to install and once to verify — so
+      # the number cannot be written in two places and drift.
+      #
+      # THE VERIFICATION USED TO KILL THE JOB, EVERYWHERE, ON ITS FIRST RUN.
+      # It ran `helm version --client`, which is valid for Helm 3 and is
+      # REFUSED by Helm 4: this file pins v4, and v4 removed `--client` along
+      # with the client/server split Tiller needed. The step printed
+      # `Error: unknown flag: --client`, exited 1, and the chart job — which had
+      # never once run to completion in the fleet — died at its own verification
+      # line, before it packaged anything. Measured on identity's publish run.
+      #
+      # `helm version --template '{{.Version}}'` is the form v4 DOES have. Per
+      # Helm 4.3.0's own `helm version` documentation the options are `--short`
+      # and `--template` (and `-h`); `--client` is gone. A developer's local
+      # helm is typically v3, where `--client` is valid — which is exactly why
+      # the bug slipped through: nothing local could see it.
+      #
+      # AND THE CHECK CAN FAIL. A version printed for the log is a log line, not
+      # a verification: if the installer resolves anything other than the pin,
+      # this step names the version it got and the version it asked for, and
+      # exits non-zero. That is the difference between "the log shows the pin"
+      # and "the job refuses a version that is not the pin".
       - name: install helm (pinned)
+        env:
+          HELM_PIN: v4.3.0
         run: |
           set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version v4.3.0
-          helm version --client
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version "$HELM_PIN"
+          helm_version="$(helm version --template '{{.Version}}')"
+          if [ "$helm_version" != "$HELM_PIN" ]; then
+            echo "chart: helm $helm_version is not the pinned $HELM_PIN — the pin moved, or the installer resolved a different release" >&2
+            exit 1
+          fi
+          echo "chart: helm $helm_version (the pin)"
 
       # THE CHART'S IDENTITY, READ FROM THE CHART. Not inputs — see the header.
       # Refuses loudly when either is empty: a chart with no name or version

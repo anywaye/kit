@@ -340,6 +340,72 @@ jobs:
             echo 'TAGS_EOF'
           } >>"$GITHUB_OUTPUT"
 
+      # THE STAMPER'S HOME, AND WHY IT IS FETCHED RATHER THAN ASSUMED.
+      #
+      # `docker/provenance.sh` lives in KIT. It does not live in a caller's
+      # repository — identity, gateway, courier and parlor have no `docker/`
+      # directory at all — so the step below, which used to run
+      # `sh docker/provenance.sh --validate`, was reading a path that has never
+      # existed in the CALLER's checkout. On the first run that ever reached it,
+      # in every caller, it failed with
+      #
+      #   sh: 0: cannot open docker/provenance.sh: No such file
+      #
+      # and no image in the fleet has ever been published. The script is in kit;
+      # the workflow that needs it was executing in a checkout of the service.
+      #
+      # THE REF IS THE REUSABLE WORKFLOW'S OWN COMMIT — NOT `master`, AND NOT AN
+      # INPUT A SERVICE MUST REMEMBER TO RAISE. `job.workflow_sha` is documented
+      # as "the commit SHA of the workflow file that defines the current job"
+      # and, for a reusable workflow, that file is THIS one rather than the
+      # caller's (`job.workflow_ref` says the same for the path). So the stamper
+      # is read from the exact commit of kit that is running this job — the same
+      # commit image.reusable.yml and publish.reusable.yml were resolved from.
+      # There is no `master` literal to go stale, and no second pin beside the
+      # caller's `uses:` line. A caller pinned to a SHA gets that SHA's stamper.
+      #
+      # WHY A `git fetch` INTO $RUNNER_TEMP AND NOT `actions/checkout`. The
+      # checkout action refuses a `path:` outside the workspace (its own
+      # `input-helper.ts` throws "Repository path … is not under …"), and a kit
+      # checkout INSIDE the workspace would be a second git repository sitting
+      # in the build CONTEXT — this job builds from `inputs.context`, which
+      # defaults to `.`, so its files would be swept into every `docker build`.
+      # `$RUNNER_TEMP` is per-job scratch, outside the context, emptied when the
+      # job ends. This is the same shape `ci.reusable.yml`'s conformance
+      # fallback already uses for the same two reasons.
+      #
+      # NO SECRET. `cafaye/kit` is public, so the clone needs no token;
+      # `GIT_TERMINAL_PROMPT=0` makes a future private repo fail instead of
+      # hanging on a prompt CI cannot answer.
+      #
+      # AND IT REFUSES BY NAME IF THE FILE IS ABSENT. A stamp that silently
+      # skips when the script is missing is worse than no stamp: the image ships
+      # unstamped and nothing says so. So the fetch asserts the file exists at
+      # the path it computed and names both the path and the ref it fetched, and
+      # exits non-zero. The consumer-facing refusal is that sentence, not the
+      # shell's "No such file" three layers down.
+      - name: kit (the provenance stamper)
+        env:
+          KIT_REF: ${{ job.workflow_sha }}
+          KIT_SPARSE: docker
+        run: |
+          set -euo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          kit_dir="$RUNNER_TEMP/kit-provenance"
+          git init --quiet "$kit_dir"
+          git -C "$kit_dir" remote add origin "https://github.com/cafaye/kit.git"
+          git -C "$kit_dir" sparse-checkout set --no-cone "$KIT_SPARSE"
+          git -C "$kit_dir" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
+          git -C "$kit_dir" checkout --quiet FETCH_HEAD
+          script="$kit_dir/docker/provenance.sh"
+          if [ ! -f "$script" ]; then
+            echo "image: kit's provenance stamper was not found at $script" >&2
+            echo "image: fetched cafaye/kit@$KIT_REF with sparse path '$KIT_SPARSE' and it carried no docker/provenance.sh" >&2
+            echo "image: the stamp cannot run without it, and an image that ships unstamped is worse than one that refuses" >&2
+            exit 1
+          fi
+          echo "KIT_PROVENANCE_SCRIPT=$script" >>"$GITHUB_ENV"
+
       # THE STAMP'S FIELDS, resolved through the stamper rather than assembled
       # here. This step exists so that the REFUSAL is real: `github.repository`
       # is `owner/repo` verbatim and `github.sha` is a sha, but an
@@ -374,9 +440,16 @@ jobs:
           # `source_dirty` stays a prefix assignment because nothing reads it
           # here — the stamper is its only consumer. Two different shapes for two
           # different jobs, which is the point: the shape follows the consumer.
+          #
+          # THE PATH IS THE FETCHED SCRIPT, NOT THE CHECKOUT'S. `$KIT_PROVENANCE_
+          # SCRIPT` is written by the `kit (the provenance stamper)` step above to
+          # `$GITHUB_ENV`, so it is the `docker/provenance.sh` from kit at this
+          # workflow's own commit — the one file no service repository carries.
+          # A bare `docker/provenance.sh` here reads the CALLER's checkout, which
+          # has never held it.
           KIT_PROVENANCE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           export KIT_PROVENANCE_BUILT_AT
-          KIT_PROVENANCE_SOURCE_DIRTY=clean sh docker/provenance.sh --validate
+          KIT_PROVENANCE_SOURCE_DIRTY=clean sh "$KIT_PROVENANCE_SCRIPT" --validate
           {
             echo "source=$KIT_PROVENANCE_SOURCE"
             echo "revision=$KIT_PROVENANCE_REVISION"

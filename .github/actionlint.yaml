@@ -1,0 +1,30 @@
+# actionlint configuration — one reasoned entry, and why it is not a weakened
+# check.
+#
+# `image.reusable.yml` fetches kit's own `docker/provenance.sh` from the ref
+# named by `job.workflow_sha`. That context property is real, documented
+# GitHub: "The commit SHA of the workflow file that defines the current job"
+# — and for a reusable workflow that file is kit's, not the caller's. It is the
+# one ref that cannot drift from the workflow that is running (a caller pinned
+# to a SHA gets that SHA's stamper, and there is no `master` literal to go
+# stale). `job.workflow_ref` and `job.workflow_repository` are its siblings in
+# the same documented `job` context, available in a step's `env:`.
+#
+# actionlint 1.7.12's built-in type for the `job` context predates those three
+# properties, so it reports
+#
+#   property "workflow_sha" is not defined in object type {check_run_id: …}
+#
+# on a valid expression. This is a false positive from a stale schema, not a
+# defect in the workflow, and the entry below is scoped to the ONE file and the
+# ONE property that hits it. It is deliberately not a wildcard: a second, real
+# actionlint finding in this file would still fail the run, and any `job.*`
+# property that is genuinely misspelled (there is only `workflow_sha` used)
+# still does.
+#
+# When actionlint's schema catches up, delete this file; the workflow does not
+# depend on it.
+paths:
+  .github/workflows/image.reusable.yml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
