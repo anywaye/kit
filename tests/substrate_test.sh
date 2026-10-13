@@ -1956,6 +1956,24 @@ mock_kubectl() {
         fi
         return 0
       fi
+      if [ "${1:-}" = "cluster.postgresql.cnpg.io" ]; then
+        # The `cluster` guard's probe: does the CNPG Cluster object exist? The
+        # fixture plants `data/cluster-postgres` to say it does, which is how a
+        # re-run is modelled — and the only way a test can reach the guard
+        # branch of install_postgres_cluster that skips the re-provision.
+        shift || true
+        local cl_name="${1:-}"
+        shift || true
+        local cl_ns="$fallback_ns"
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -n) cl_ns="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        [ -f "$MOCK_ROOT/$cl_ns/cluster-$cl_name" ] && return 0
+        return 1
+      fi
       if [ "${1:-}" != "secret" ]; then
         echo "mock_kubectl: unhandled get ${1:-}" >&2
         return 1
@@ -2437,6 +2455,264 @@ if [ "$control_short_ec" -eq 0 ] && [ "$control_short_url" = "nats://nats:4222" 
 else
   fail 'control: the compose spelling is stored verbatim, and is not the broker address' "exit ${control_short_ec}; stored: '${control_short_url}'"
 fi
+
+# ===========================================================================
+# 12c. The role-secret wiring: every managed role's passwordSecret carries
+#      that ROLE's name in `username`, and DATABASE_URL reads the app secret
+# ===========================================================================
+#
+# THE DEFECT THIS SECTION EXISTS FOR, measured on the live box. CNPG's
+# managed-role reconciler sets a role's password from the Secret named in
+# `passwordSecret` ONLY when the Secret's `username` key equals the ROLE's
+# name. Step 8 named the Secret for the service (`postgres-role-identity-app`,
+# a hyphen) and wrote that same spelling into `username`, so CNPG refused to
+# set the password for all four `_app` roles and said so only in the Cluster's
+# status:
+#
+#   cannotReconcile:
+#     identity_app:
+#     - the username in secret "postgres-role-identity-app" does not match
+#       role "identity_app"
+#
+# `pg_authid.rolpassword` held a SCRAM verifier for `identity` and NULL for
+# `identity_app`, and every pod logged `FATAL: password authentication failed
+# for user "identity_app" (SQLSTATE 28P01)`.
+#
+# WHY THIS IS A CHECK AND NOT A PARAGRAPH. The mismatch is invisible to every
+# other check in this file: the Cluster applies, the roles exist, the Secret
+# exists, the Deployment's envFrom resolves, and the only witnesses are a
+# status field nobody reads and a NULL nobody selects. So the wiring is
+# asserted from BOTH ends the installer controls: step 8 is EXECUTED against
+# the file-backed kubectl, and its output is compared to the Cluster manifest
+# the same step applies. `database_url_for` — step 9's own naming function —
+# is executed too, and the DSN it builds must carry the app role's name and
+# the app Secret's password; a URL built from the owner Secret is a login as
+# the wrong role.
+check_role_secret_wiring() {
+  local install_sh="$1" cluster="$2" root ec=0
+  root="$(mktemp -d "$WORK/role-wiring.XXXXXX")"
+  # Source the installer with its `main` call removed, the same shape every
+  # other sourced fixture in this file uses: without the strip, `. install.sh`
+  # would RUN the install.
+  sed '/^main "$@"/d' "$install_sh" >"$root/install-no-main.sh"
+  (
+    export MOCK_ROOT="$root"
+    mkdir -p "$MOCK_ROOT"
+    # `data` exists by the time step 8 writes into it (step 8's own
+    # `create namespace data`); the mock's write verbs require it, exactly as
+    # the API server does.
+    printf 'data\n' >"$MOCK_ROOT/namespaces"
+    export KUBECONFIG=/dev/null
+    # shellcheck source=/dev/null
+    . "$root/install-no-main.sh"
+    kubectl() { mock_kubectl "$@"; }
+    create_postgres_role_secrets >"$root/step8.log" 2>&1
+    local svc
+    for svc in identity gateway courier parlor; do
+      database_url_for "$svc" >"$root/url-$svc.txt"
+    done
+  ) || ec=$?
+  if [ "$ec" -ne 0 ]; then
+    echo "the step-8/step-9 functions failed (exit $ec): $(head -2 "$root/step8.log" 2>/dev/null)"
+    return 1
+  fi
+  "$PY" - "$root" "$cluster" <<'PY'
+import os
+import sys
+
+import yaml
+
+root, cluster = sys.argv[1], sys.argv[2]
+doc = yaml.safe_load(open(cluster, encoding="utf-8"))
+roles = doc.get("spec", {}).get("managed", {}).get("roles", [])
+problems = []
+
+store = {}
+data_dir = os.path.join(root, "data")
+if os.path.isdir(data_dir):
+    for name in os.listdir(data_dir):
+        d = os.path.join(data_dir, name)
+        if not os.path.isdir(d):
+            continue
+
+        def value(key, _d=d):
+            try:
+                return open(os.path.join(_d, key), encoding="utf-8").read()
+            except OSError:
+                return ""
+
+        store[name] = {"username": value("username"), "password": value("password")}
+
+declared = set()
+for r in roles:
+    name = r.get("name")
+    secret = (r.get("passwordSecret") or {}).get("name")
+    if not secret:
+        problems.append(f"role {name} names no passwordSecret")
+        continue
+    declared.add(secret)
+    if secret not in store:
+        problems.append(f"role {name}: step 8 creates no secret named {secret}")
+        continue
+    # THE ASSERTION THE LIVE DEFECT VIOLATED.
+    if store[secret]["username"] != name:
+        problems.append(
+            f"role {name}: secret {secret} has username"
+            f" {store[secret]['username']!r} — CNPG refuses to set the password"
+            f" unless it is {name!r}"
+        )
+    if not store[secret]["password"]:
+        problems.append(f"role {name}: secret {secret} carries no password")
+for secret in sorted(store):
+    if secret not in declared:
+        problems.append(f"step 8 creates {secret}, which no managed role names")
+
+# The DATABASE_URL half: step 9's naming function must read the APP role's
+# secret and password, and the DSN must name the app role and the database.
+for svc in ("identity", "gateway", "courier", "parlor"):
+    try:
+        url = open(os.path.join(root, f"url-{svc}.txt"), encoding="utf-8").read()
+    except OSError:
+        problems.append(f"database_url_for {svc} produced nothing")
+        continue
+    app_secret = f"postgres-role-{svc}-app"
+    pw = store.get(app_secret, {}).get("password", "")
+    if not pw:
+        problems.append(f"{app_secret} has no password for {svc}'s DATABASE_URL")
+    elif f":{pw}@" not in url:
+        problems.append(
+            f"{svc}'s DATABASE_URL does not carry {app_secret}'s password — the"
+            " DSN was built from a different secret or a different key"
+        )
+    if f"://{svc}_app:" not in url:
+        problems.append(f"{svc}'s DATABASE_URL does not connect as {svc}_app")
+    if f"/{svc}" not in url:
+        problems.append(f"{svc}'s DATABASE_URL does not name database {svc}")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(
+    f"{len(roles)} managed roles: each passwordSecret carries username=role,"
+    " and DATABASE_URL reads the app secret"
+)
+PY
+}
+
+run 'the role secrets and the Cluster agree: username is the role name, DATABASE_URL reads the app secret' green \
+  check_role_secret_wiring "$SUBSTRATE/install.sh" "$DATA_DIR/postgres-cluster.yaml"
+
+# Control A — the live defect reintroduced: step 8 hyphenates the app suffix
+# into `username` (the secret's spelling, not the role's). Must go red.
+fixture_user_drift="$WORK/install-username-drift.sh"
+sed 's|--from-literal=username="\$role"|--from-literal=username="${role//_/-}"|' \
+  "$SUBSTRATE/install.sh" >"$fixture_user_drift"
+run 'control: a hyphenated app username (the live defect) goes red' red \
+  check_role_secret_wiring "$fixture_user_drift" "$DATA_DIR/postgres-cluster.yaml"
+
+# Control B — one service's ROLE name drifts in the manifest. The secret is
+# unchanged, so the username no longer matches it. One service, one edit.
+fixture_role_drift="$WORK/cluster-role-name-drift.yaml"
+sed 's/^      - name: identity_app$/      - name: identity-app/' \
+  "$DATA_DIR/postgres-cluster.yaml" >"$fixture_role_drift"
+run 'control: one role name drifting from its secret goes red' red \
+  check_role_secret_wiring "$SUBSTRATE/install.sh" "$fixture_role_drift"
+
+# Control C — DATABASE_URL reads the OWNER secret instead of the app secret:
+# a DSN that logs in as the wrong role with the wrong password. Must go red.
+fixture_dsn_drift="$WORK/install-dsn-drift.sh"
+sed 's|read_secret_key data "postgres-role-\$1-app" password|read_secret_key data "postgres-role-$1" password|' \
+  "$SUBSTRATE/install.sh" >"$fixture_dsn_drift"
+run 'control: a DATABASE_URL built from the owner secret goes red' red \
+  check_role_secret_wiring "$fixture_dsn_drift" "$DATA_DIR/postgres-cluster.yaml"
+
+# The re-run half, EXECUTED. The live box already had a Cluster, so step 8's
+# `cluster` guard would skip the re-provision — and a reconcile placed behind
+# that guard would never run on the one box that needs it. This drives
+# `install_postgres_cluster` with the guard answering "the Cluster exists" and
+# every app role's Secret seeded with the broken `username` spelling, then
+# asserts the usernames were repaired and the passwords were NOT regenerated.
+check_rerun_repairs_username() {
+  local install_sh="$1" root ec=0 svc problems=""
+  root="$(mktemp -d "$WORK/rerun-repair.XXXXXX")"
+  mkdir -p "$root/data"
+  printf 'data\n' >"$root/namespaces"
+  : >"$root/data/cluster-postgres" # the guard's probe: a Cluster already exists
+  # The step resolves the Cluster manifest from its own directory, so the
+  # fixture carries the real manifests beside the stripped installer.
+  cp -R "$SUBSTRATE/manifests" "$root/manifests"
+  MOCK_ROOT="$root"
+  for svc in identity gateway courier parlor; do
+    mock_seed data "postgres-role-$svc" username "$svc"
+    mock_seed data "postgres-role-$svc" password "pw-$svc"
+    mock_seed data "postgres-role-$svc-app" username "$svc-app" # the live defect's spelling
+    mock_seed data "postgres-role-$svc-app" password "pw-$svc-app"
+  done
+  sed '/^main "$@"/d' "$install_sh" >"$root/install-no-main.sh"
+  (
+    export MOCK_ROOT="$root" KUBECONFIG=/dev/null
+    # shellcheck source=/dev/null
+    . "$root/install-no-main.sh"
+    kubectl() { mock_kubectl "$@"; }
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor"
+    export DRY_RUN=0
+    install_postgres_cluster >"$root/rerun.log" 2>&1
+  ) || ec=$?
+  MOCK_ROOT="$root"
+  if [ "$ec" -ne 0 ]; then
+    echo "install_postgres_cluster (re-run) failed (exit $ec): $(head -2 "$root/rerun.log")"
+    return 1
+  fi
+  case "$(cat "$root/rerun.log")" in
+    *"already installed, skipping"*) : ;;
+    *) problems="$problems; the guard branch was not taken — this was not the re-run path" ;;
+  esac
+  for svc in identity gateway courier parlor; do
+    [ "$(mock_get data "postgres-role-$svc-app" username)" = "${svc}_app" ] ||
+      problems="$problems; $svc-app username was not repaired to ${svc}_app"
+    [ "$(mock_get data "postgres-role-$svc-app" password)" = "pw-$svc-app" ] ||
+      problems="$problems; $svc-app password was regenerated"
+  done
+  if [ -n "$problems" ]; then
+    echo "${problems#; }"
+    return 1
+  fi
+  echo "the re-run repaired 4 app-role usernames and kept every password"
+}
+
+run 'a re-run repairs the app-role usernames even though the cluster guard skips the apply' green \
+  check_rerun_repairs_username "$SUBSTRATE/install.sh"
+
+# Control D — the reconcile moved BELOW the guard (the shape this packet's fix
+# must not have). The guard then returns before it runs, the usernames stay
+# broken, and the check must go red. The fixture asserts its own premise: the
+# transform refuses to write a file it could not make.
+fixture_guard_first="$WORK/install-reconcile-behind-guard.sh"
+"$PY" - "$SUBSTRATE/install.sh" "$fixture_guard_first" <<'PY'
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+before = (
+    "  create_postgres_role_secrets\n"
+    "  if kit_substrate_guard cluster; then\n"
+    '    kit_substrate_out "      already installed, skipping"\n'
+    "    return 0\n"
+    "  fi\n"
+)
+after = (
+    "  if kit_substrate_guard cluster; then\n"
+    '    kit_substrate_out "      already installed, skipping"\n'
+    "    return 0\n"
+    "  fi\n"
+    "  create_postgres_role_secrets\n"
+)
+if before not in src:
+    print("the guard/reconcile block was not found — the control cannot be built")
+    sys.exit(1)
+open(sys.argv[2], "w", encoding="utf-8").write(src.replace(before, after, 1))
+PY
+run 'control: a reconcile behind the cluster guard never repairs a re-run' red \
+  check_rerun_repairs_username "$fixture_guard_first"
 
 # ===========================================================================
 # 13. No long-lived secret enters the installer (invariant 3's input side)

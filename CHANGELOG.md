@@ -26,6 +26,28 @@
   Measured live: patching one `Application` to
   `oci://ghcr.io/cafaye/charts/identity` moved it to `Synced` and created the
   fleet's first `identity` Deployment.
+- **CNPG never set the app roles' passwords, because the Secret's `username`
+  key was the secret's name and not the role's.** Every service's pod logged
+  `FATAL: password authentication failed for user "identity_app" (SQLSTATE
+  28P01)` while the Cluster reported healthy. CNPG's managed-role reconciler
+  sets a role's password from the Secret named in `passwordSecret` only when
+  that Secret's `username` key equals the **role's** name; step 8 named the
+  Secret for the service (`postgres-role-identity-app`, a hyphen) and wrote
+  that same spelling into `username`, so the operator recorded the refusal in
+  `status.managedRolesStatus.cannotReconcile` and left
+  `pg_authid.rolpassword` NULL for all four `_app` roles — the owner roles
+  (`<svc>`, both spellings) reconciled to a SCRAM verifier and looked fine.
+  The `username` key is now `$role` (`identity` / `identity_app`), computed
+  independently of the secret name, and the loop is the named function
+  `create_postgres_role_secrets` so it can be executed in a test. A re-run
+  keeps the stored password and merge-patches the `username` key, so a box
+  already installed with the broken spelling heals on the next pass. The
+  reason and the live evidence (`cannotReconcile` text, the NULL, the FATAL)
+  are at the code site. `tests/substrate_test.sh` §12c executes step 8 against
+  the file-backed kubectl and compares the result to the Cluster manifest and
+  to `database_url_for`'s own DSN, with three red controls: the hyphenated
+  username (the live defect), one role name drifting from its Secret, and a
+  DATABASE_URL built from the owner Secret.
 - **The NATS manifest gave Kubernetes a flag where it expected a binary.**
   `templates/substrate/manifests/data/nats.yaml` carried the local stack's flag
   list under `command:` — `[-js, -sd, /data, -m, 8222]` — because

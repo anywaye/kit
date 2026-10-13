@@ -480,6 +480,20 @@ parlor, `ecto://` for courier — each service's own spelling), and the
 password read back from step 8's role secret. `gateway-tls` is NOT created
 here — cert-manager fills it from the ClusterIssuer.
 
+**Each `postgres-role-<role>` secret carries the ROLE's name in `username`,
+not the secret's.** CNPG's managed-role reconciler sets a role's password from
+the Secret named in `passwordSecret` only when that Secret's `username` key
+equals the **role's** name; when it does not, the operator records the refusal
+in the Cluster's `status.managedRolesStatus.cannotReconcile` and leaves
+`pg_authid.rolpassword` NULL for that role — which surfaces far from its cause
+as `FATAL: password authentication failed … (SQLSTATE 28P01)` in every pod.
+The secret is named for the service (`postgres-role-identity-app`, a hyphen)
+while the role is `identity_app` (an underscore), so the two spellings are
+distinct on purpose and `install.sh` writes the role's. A re-run keeps the
+stored password and repairs the `username` key in place, so a box installed
+before this fix heals on the next pass without a new password — the role's
+password is derived from the Secret, and CNPG re-reconciles when it changes.
+
 **`COURIER_IDENTITY_TOKEN` and identity's `COURIER_TOKEN` must be the SAME
 value** — courier's own README says so, and two different keys produce
 identity's `403` and courier's `503`, a symptom that reads like a network
