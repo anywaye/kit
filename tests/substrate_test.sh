@@ -3186,6 +3186,247 @@ k3s_broken_ok() {
 run 'step 1 refuses within its bound when the node never registers' green k3s_broken_ok
 
 # ===========================================================================
+# 17. A wait that can face an empty list proves existence first
+# ===========================================================================
+#
+# Section 16 proves step 1's wait. This is the RULE, so a wait added later is
+# covered by construction rather than by memory.
+#
+# `kubectl wait --for=<condition> <kind>` comes in two shapes and only one of
+# them can race:
+#
+#   LIST      `--all`, or a selector `-l key=value`. The list is a QUERY, and
+#             a query against a cluster where nothing matches YET is empty —
+#             which kubectl answers with `error: no matching resources found`
+#             rather than by waiting.
+#   NAMED     one named object. It exists or it does not, and a GET of the
+#             missing one fails loudly by name.
+#
+# So a LIST wait is excused by one of TWO things, and which one is the whole
+# classification:
+#
+#   1. an apply of the objects it selects, earlier in the SAME function. Apply
+#      is a synchronous round trip — the deployments exist the moment it
+#      returns, so the list cannot be empty. cert-manager's and Argo CD's
+#      `--all` waits are this, and they are safe.
+#   2. a kit_substrate_await_list of the same kind, selector and namespace.
+#      This is the one for objects a CONTROLLER creates asynchronously — the
+#      Node object behind the kubelet, the Cluster's pods behind the CNPG
+#      operator.
+#
+# A NAMED wait needs neither: it runs after a synchronous apply of that same
+# object, and a GET of a missing named object fails loudly by name rather than
+# as an empty-list race. All three populations are asserted, because a check
+# that only fires on the awaits would be satisfied by deleting every wait.
+#
+# And the bound is part of the rule. Splitting one wait into two is the easiest
+# way to double a step's patience, so the four numbers must still add up to the
+# totals the steps always had: 120s for the node, 600s for the CNPG pods.
+wait_lists_audit() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+# Comments stripped first, as everywhere in this file: the rule is about what
+# the installer RUNS, and this file's own prose names both shapes.
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+# A backslash continuation is ONE command, and the join is load-bearing here:
+# a `kubectl wait … -l \` split across lines is one wait.
+code = code.replace("\\\n", " ")
+
+funcs = {"<top>": []}
+cur = "<top>"
+for ln in code.split("\n"):
+    m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", ln)
+    if m:
+        cur = m.group(1)
+        funcs.setdefault(cur, [])
+        continue
+    funcs.setdefault(cur, []).append(ln)
+
+
+def split_args(toks):
+    """(kind, selector, name, namespace) out of a kubectl argument list."""
+    kind = toks[0] if toks else ""
+    sel = name = ns = None
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t == "--all":
+            sel = "--all"
+        elif t in ("-l", "--selector"):
+            sel = "-l " + toks[i + 1]
+            i += 1
+        elif t in ("-n", "--namespace"):
+            ns = toks[i + 1]
+            i += 1
+        elif t.startswith("--namespace="):
+            ns = t.split("=", 1)[1]
+        elif not t.startswith("-"):
+            name = t
+        i += 1
+    return (kind, sel, name, ns)
+
+
+unexcused, awaited, applied, named = [], 0, 0, 0
+for fn, lines in funcs.items():
+    # Walk the function IN ORDER, because an excuse that comes after the wait
+    # is not an excuse: an apply below it has not created the list the wait
+    # is about to query.
+    awaits, apply_seen = [], False
+    for ln in lines:
+        m = re.search(r"""kit_substrate_await_list\s+"?\$[A-Za-z_]+"?\s+(.+)$""", ln)
+        if m:
+            awaits.append(split_args(m.group(1).replace('"', "").split()))
+        elif "kubectl" in ln and re.search(r"\bapply\b", ln):
+            apply_seen = True
+        if "kubectl" not in ln or not re.search(r"\bwait\s+--for=condition=", ln):
+            continue
+        toks = re.search(r"\bwait\s+--for=condition=(\S+)\s+(.*)$", ln).group(2)
+        kind, sel, name, ns = split_args(toks.split())
+        if sel is None:
+            # A NAMED object: it exists or it does not, and the missing one
+            # fails loudly by name rather than as an empty-list race.
+            named += 1
+            continue
+        # The pairing key. `--all` and an absent selector are the same query,
+        # so an await that spells one is matched against a wait that spells
+        # the other — a rule that depended on the spelling would be a rule
+        # about spelling.
+        key = (kind, None if sel == "--all" else sel, ns)
+        if key in [(a[0], None if a[1] in ("--all", None) else a[1], a[3]) for a in awaits if a]:
+            awaited += 1
+            continue
+        if apply_seen:
+            applied += 1
+            continue
+        unexcused.append(
+            f"{fn}(): the LIST wait on {kind} {sel} "
+            f"(ns {ns or 'cluster-scoped'}) is neither preceded by an apply of "
+            "what it selects nor by a kit_substrate_await_list for the same "
+            "list — an empty list is an error, not a wait"
+        )
+
+if unexcused:
+    print("; ".join(unexcused))
+    sys.exit(1)
+
+# Non-vacuity, in all three populations. A file that deleted every wait would
+# find nothing to audit and would pass on the empty case.
+if awaited < 2:
+    print(f"expected at least 2 awaited list waits (the node, the CNPG pods), "
+          f"found {awaited}")
+    sys.exit(1)
+if applied < 2:
+    print(f"expected the two --all waits that ride a synchronous apply "
+          f"(cert-manager, Argo CD), found {applied}")
+    sys.exit(1)
+if named < 4:
+    print(f"expected the named waits to still be there, found {named}")
+    sys.exit(1)
+
+# The bound is part of the fix: two waits must not add up to more patience
+# than the one wait had.
+defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
+for a, b, total, what in (
+    ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
+    ("CNPG_POD_TIMEOUT", "CNPG_POD_READY_TIMEOUT", 600, "step 8"),
+):
+    pair = [int(defaults.get(v, -1)) for v in (a, b)]
+    if sum(pair) != total:
+        print(
+            f"{what}'s bound grew: {a}+{b} = {sum(pair)}s, want {total}s "
+            "— splitting a wait into two must not make the step more patient"
+        )
+        sys.exit(1)
+print(
+    f"{awaited} list wait(s) prove existence first, "
+    f"{applied} ride a synchronous apply, "
+    f"{named} named wait(s) need neither"
+)
+PY
+}
+
+run 'every list wait proves the list exists first, and no bound grew' \
+  green wait_lists_audit "$SUBSTRATE/install.sh"
+
+# The control that matters: delete the node's await and the rule must go red
+# NAMING the resource. This is the whole packet in one fixture.
+fixture_drop_node_await="$WORK/install-drop-node-await.sh"
+sed '/kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node/d' \
+  "$SUBSTRATE/install.sh" >"$fixture_drop_node_await"
+mode_out=""; mode_ec=0
+mode_out="$(wait_lists_audit "$fixture_drop_node_await" 2>&1)" || mode_ec=$?
+case "$mode_ec:$mode_out" in
+  0:*)
+    fail 'control: a list wait with no existence check goes red' "exit 0 — the check cannot see a missing await"
+    ;;
+  *"node"*)
+    pass 'control: a list wait with no existence check goes red, naming the resource'
+    ;;
+  *)
+    fail 'control: a list wait with no existence check goes red, naming the resource' "$mode_out"
+    ;;
+esac
+
+# And the second list wait, proved separately: one fixture that only drops the
+# CNPG one. Two waits, two controls — a check that only notices the first is
+# half a rule, and the CNPG half is the one that was quietly racy in the other
+# direction (the pods are created by the OPERATOR, not by this installer).
+fixture_drop_pod_await="$WORK/install-drop-pod-await.sh"
+sed '/kit_substrate_await_list "\$CNPG_POD_TIMEOUT" pod/d' \
+  "$SUBSTRATE/install.sh" >"$fixture_drop_pod_await"
+mode_out=""; mode_ec=0
+mode_out="$(wait_lists_audit "$fixture_drop_pod_await" 2>&1)" || mode_ec=$?
+case "$mode_ec:$mode_out" in
+  0:*)
+    fail 'control: the CNPG pod wait with no existence check goes red' "exit 0 — the check cannot see a missing await"
+    ;;
+  *"pod"*)
+    pass 'control: the CNPG pod wait with no existence check goes red, naming the resource'
+    ;;
+  *)
+    fail 'control: the CNPG pod wait with no existence check goes red, naming the resource' "$mode_out"
+    ;;
+esac
+
+# A THIRD list wait, arriving with no await and no apply above it — the control
+# that stops this being a list of two remembered lines rather than a rule.
+fixture_new_list_wait="$WORK/install-new-list-wait.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_new_list_wait"
+printf '  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=120s\n' \
+  >>"$fixture_new_list_wait"
+run 'control: a new list wait with no existence check goes red' red \
+  wait_lists_audit "$fixture_new_list_wait"
+
+# And the bound, in the direction that would otherwise be invisible: growing
+# the registration budget is the easiest way to make a cold box pass, and it is
+# not a fix — it is the same race with more room.
+fixture_grown_bound="$WORK/install-grown-bound.sh"
+sed 's/: "${NODE_REGISTER_TIMEOUT:=90}"/: "${NODE_REGISTER_TIMEOUT:=300}"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_grown_bound"
+if ! grep -q 'NODE_REGISTER_TIMEOUT:=300' "$fixture_grown_bound"; then
+  fail 'control fixture: the bound-growing edit failed to apply' \
+    "the sed did not change the number, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  mode_out=""; mode_ec=0
+  mode_out="$(wait_lists_audit "$fixture_grown_bound" 2>&1)" || mode_ec=$?
+  case "$mode_ec:$mode_out" in
+    0:*)
+      fail 'control: growing the registration bound goes red' "exit 0 — a step that waits longer passes the audit"
+      ;;
+    *grew*)
+      pass 'control: growing the registration bound goes red'
+      ;;
+    *)
+      fail 'control: growing the registration bound goes red' "$mode_out"
+      ;;
+  esac
+fi
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

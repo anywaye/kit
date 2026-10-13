@@ -57,6 +57,48 @@
 
 ### Substrate
 
+- **A `kubectl wait` on an empty list is an error, not a wait — and it killed
+  step 1 on a wiped box.** `kubectl wait --for=condition=Ready node --all`
+  does not wait when the list is empty; it fails within a second with
+  `error: no matching resources found`. k3s is started by the line above it and
+  the Node object the kubelet registers lands a few seconds LATER, so the wait
+  raced the registration: on a warm box the node won, on a freshly wiped Contabo
+  box nothing had registered and the install died at step 1, exit 1, before any
+  step after it ran. `set -e` makes it fatal.
+  - **The fix is a shape, not a sleep.** `kit_substrate_await_list <budget>
+    <get args>` polls `kubectl get <args> --no-headers` until the list is
+    non-empty, bounded by a deadline, and refuses on timeout naming the object
+    that never appeared. The wait that follows then runs against a list that
+    exists. The poll is a command substitution rather than a pipe into
+    `grep -q .`: `grep -q` closes the pipe on its first match, the producer
+    dies of SIGPIPE, and `pipefail` promotes its 141 — so a long list would read
+    as an empty one and poll until the deadline on a healthy cluster.
+  - **Each budget is SPLIT, not grown**, so the two waits together are the one
+    bound the step always had: step 1 is 90s to register + 30s to Ready (120s
+    as before), step 8 is 60s for the CNPG operator to make a pod + 540s to
+    Ready (600s as before).
+  - **Step 8 had the same race on a different controller.** The Cluster CR is
+    applied synchronously, but its pods are created ASYNCHRONOUSLY by the CNPG
+    operator, so `-l cnpg.io/cluster=postgres` could match ZERO pods the instant
+    the apply returned. Existence is proved first there too.
+  - **Every other wait in the installer was audited and none of them races.**
+    cert-manager's and Argo CD's `--all` waits, and the four named waits
+    (`cnpg-controller-manager`, `argocd-server`, `redis`, `nats`), all run
+    immediately after a synchronous `kubectl apply` of the very objects they
+    select — apply is a round trip that created them, so the list cannot be
+    empty. `tests/substrate_test.sh` §17 states that classification as a
+    coupling: a LIST wait is excused only by an apply of what it selects earlier
+    in the same function, or by a matching `kit_substrate_await_list`.
+  - **Two ways to prove it.** §16 runs step 1 for real against a cluster mock
+    that behaves like a real one — a GET of an empty list exits 0 and prints
+    nothing, and the WAIT on it is the error — with three cases: a cold box that
+    registers on the second poll must reach Ready, a node that never registers
+    must refuse inside its bound naming the empty list, and the pre-fix fixture
+    as the control, which must abort with no existence check before it in the
+    argv log. §17 is the rule, with five controls (each await dropped in turn,
+    a new list wait with no excuse, and a step that grew its bound).
+  - 151 passed → 159.
+
 - **`kubectl apply` is in one of two modes, and the target decides which.** Two
   installer defects hit Circle 1 on the Contabo box (169.58.108.209) that a
   compose run cannot produce, because neither has a container in the path:
