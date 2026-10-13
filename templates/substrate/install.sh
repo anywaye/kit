@@ -634,16 +634,56 @@ install_k3s() {
 }
 
 # --- step 2: cert-manager ----------------------------------------------------
+# THE TWO MODES ARE NOT A STYLE CHOICE, and the installer does not mix them
+# per-object by accident. A manifest fetched from a REMOTE URL (steps 2-4) is
+# applied `--server-side=true --force-conflicts`; a manifest shipped in THIS
+# repository (steps 6-10) stays on client-side apply. Both halves are stated
+# once here and again at their first use, because the reason each way is the
+# thing that stops a later edit from "tidying" them into one shape.
+#
+# REMOTE, server-side: client-side apply's last-applied-configuration
+# annotation overflows Kubernetes's 262144-byte cap on metadata.annotations for
+# cert-manager's, CNPG's and Argo CD's CRDs — measured on the box, named in
+# install_cert_manager below. `--force-conflicts` rides along so a re-run on a
+# box that has already had a hand-repaired client-side apply takes the fields
+# back instead of refusing with "field managed by another client".
+#
+# LOCAL, client-side: these files are small, they are re-applied on every run as
+# the installer's own convergence mechanism, and server-side apply would take
+# away a re-run's ability to reclaim a field it previously owned. The remote
+# manifests are third-party inputs whose ownership the installer must not
+# contest; the local ones are kit's own, and reclaiming them is the point.
 install_cert_manager() {
   log_step "cert-manager ${CERT_MANAGER_VERSION}"
   if kit_substrate_guard cert-manager; then
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"; then
+  # A REMOTE MANIFEST IS APPLIED SERVER-SIDE, and that is measured rather than
+  # preferred. Client-side apply writes the whole object into the
+  # `kubectl.kubernetes.io/last-applied-configuration` annotation, and
+  # cert-manager's, CNPG's and Argo CD's manifests are large enough that the
+  # annotation overflows the 262144-byte ceiling Kubernetes puts on
+  # `metadata.annotations` — the API server refuses the object, not the apply:
+  #   `CustomResourceDefinition "clusters.postgresql.cnpg.io" is invalid:
+  #     metadata.annotations: Too long: may not be more than 262144 bytes`
+  # measured live on the Contabo box (169.58.108.209), on
+  # `clusters.postgresql.cnpg.io` and `applicationsets.argoproj.io`. Server-side
+  # apply keeps that bookkeeping on the API server instead, where the object's
+  # field manager does the work and no annotation grows.
+  #
+  # `--force-conflicts` is not optional either, and it is the same decision seen
+  # from the re-run side. Once a box has had ANY client-side apply of these
+  # objects — a hand-repaired `kubectl apply -f` to get past the failure above,
+  # or an earlier version of this installer — the field managers disagree, and a
+  # plain server-side apply refuses with `field is managed by another client`.
+  # The flags are therefore a pair: the mode that survives the annotation
+  # ceiling is only usable if it also takes the fields back, and mixing modes
+  # per step is exactly the state that leaves a half-applied substrate behind.
+  if dry_run "kubectl apply --server-side=true --force-conflicts -f https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"; then
     return 0
   fi
-  kubectl --kubeconfig="$KUBECONFIG" apply -f \
+  kubectl --kubeconfig="$KUBECONFIG" apply --server-side=true --force-conflicts -f \
     "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
   kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s
 }
@@ -655,10 +695,14 @@ install_cnpg() {
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_VERSION}/releases/cnpg-${CNPG_VERSION#v}.yaml"; then
+  # Same mode as cert-manager above, for the same measured reason: the CNPG
+  # release manifest ships CRDs whose last-applied-configuration annotation
+  # exceeds Kubernetes's 262144-byte ceiling, and this is the one that failed
+  # first on the box.
+  if dry_run "kubectl apply --server-side=true --force-conflicts -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_VERSION}/releases/cnpg-${CNPG_VERSION#v}.yaml"; then
     return 0
   fi
-  kubectl --kubeconfig="$KUBECONFIG" apply -f \
+  kubectl --kubeconfig="$KUBECONFIG" apply --server-side=true --force-conflicts -f \
     "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_VERSION}/releases/cnpg-${CNPG_VERSION#v}.yaml"
   kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager --timeout=180s
 }
@@ -670,12 +714,15 @@ install_argocd() {
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"; then
+  # The third and largest remote manifest, and the second of the two CRDs that
+  # overflowed the annotation ceiling on the box. Same flags, same reason; a
+  # mode chosen per step is how a substrate ends up half-applied.
+  if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"; then
     return 0
   fi
   kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  kubectl --kubeconfig="$KUBECONFIG" apply -n argocd -f \
+  kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
     "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
   kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=300s
 }
@@ -784,6 +831,11 @@ install_pull_secret() {
 }
 
 # --- step 6: the first Applications ----------------------------------------
+# LOCAL manifests, so CLIENT-SIDE apply — see the note above step 2. These are
+# kit's own files: small enough that the last-applied-configuration annotation
+# is nowhere near Kubernetes's cap, re-applied on every run as this installer's
+# convergence mechanism, and owned outright by the installer — so a re-run must
+# keep its ability to reclaim the fields it set.
 install_applications() {
   log_step "the first Applications (identity, gateway, courier, parlor, observability)"
   if dry_run "kubectl apply -f ${MANIFEST_DIR}"; then
@@ -838,6 +890,10 @@ install_cluster_issuers() {
   # The placeholder is substituted in a pipe, never with `sed -i`: the value
   # reaches the API server and is never written to disk, so no copy of the
   # operator's address is left in a file on this box.
+  #
+  # CLIENT-SIDE apply, deliberately: a LOCAL manifest (see the note above step
+  # 2) — two small ClusterIssuers, re-applied on every run, and owned by this
+  # installer.
   sed "s/ACME_EMAIL_PLACEHOLDER/$KIT_SUBSTRATE_ACME_EMAIL/" "$TLS_DIR"/*.yaml |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
   kit_substrate_out "      applied letsencrypt-staging and letsencrypt-prod"
@@ -924,6 +980,10 @@ install_postgres_cluster() {
       fi
     done
   done
+  # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds): small,
+  # re-applied on every run, and owned by this installer — which is exactly why
+  # the mode takes the re-run's ability to reclaim a field away on the remote
+  # manifests and leaves it intact here.
   kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/postgres-cluster.yaml"
   # The pods, not the Cluster phase: pod Ready means the instance passed its
   # readiness probe, which is the observable property the services need. A
@@ -952,6 +1012,7 @@ install_redis_and_secrets() {
     else
       kit_substrate_out "      secret redis-password exists, keeping its password (never regenerated, never printed)"
     fi
+    # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds).
     kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/redis.yaml"
     kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment redis -n data --timeout=180s
   fi
@@ -1342,6 +1403,9 @@ install_service_secrets() {
 # logs and exits non-zero — never hidden behind a restart policy (which is why
 # the pod is deleted only on success; a failed pod is left for diagnosis and
 # removed at the start of the next run by the delete below).
+#
+# The broker's apply is a LOCAL manifest through a pipe, so CLIENT-SIDE — the
+# note above step 2 holds.
 install_nats() {
   log_step "NATS with JetStream ${NATS_VERSION} and stream cafaye (in the data namespace)"
   if kit_substrate_guard nats; then

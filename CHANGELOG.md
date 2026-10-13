@@ -2,6 +2,41 @@
 
 ### Substrate
 
+- **`kubectl apply` is in one of two modes, and the target decides which.** Two
+  installer defects hit Circle 1 on the Contabo box (169.58.108.209) that a
+  compose run cannot produce, because neither has a container in the path:
+  - **A REMOTE manifest is applied `--server-side=true --force-conflicts`.**
+    Client-side apply stores the whole object in the
+    `kubectl.kubernetes.io/last-applied-configuration` annotation, and
+    cert-manager's, CNPG's and Argo CD's manifests are large enough to overflow
+    the 262144-byte cap Kubernetes puts on `metadata.annotations`. The API
+    server refuses the CRD, not the apply:
+    `CustomResourceDefinition "clusters.postgresql.cnpg.io" is invalid:
+    metadata.annotations: Too long: may not be more than 262144 bytes` — and
+    `applicationsets.argoproj.io` the same way. Server-side apply keeps that
+    bookkeeping on the API server, where no annotation grows.
+  - **`--force-conflicts` rides along, because the second defect is the re-run.**
+    After the first was hand-repaired, client-side and server-side tenants of
+    the same fields collided — `field is managed by another client`. A mode
+    chosen per step is exactly the state that leaves a half-applied substrate
+    behind, so the flags are one decision, applied to every remote apply and to
+    its `DRY_RUN` plan string, so what `caf box apply` reads is the mode the
+    installer actually uses.
+  - **A LOCAL manifest stays on client-side apply.** Steps 6-10 apply kit's own
+    files: small, re-applied on every run as the installer's convergence
+    mechanism, and owned outright by the installer — which is why server-side
+    mode for them would take away a re-run's ability to reclaim a field it
+    previously owned. The remote manifests are third-party inputs whose
+    ownership the installer must not contest.
+  - `tests/substrate_test.sh` §14 states the rule as a coupling, not a list:
+    every apply whose target is an `http(s)` URL carries both flags, every
+    apply whose target is a local file or stdin carries neither, and a tree with
+    fewer than three remote applies is RED so the check cannot pass on the
+    empty case. Five controls: either flag removed alone (each must be red
+    NAMING that flag), a fourth remote apply arriving with no flags, a local
+    apply that grew the remote flags, and a plan that lost the flags while the
+    run kept them.
+
 - **`identity-secrets` carries `NATS_URL`, so identity's outbox loop runs on a
   real box.** The substrate installs the broker (step 10: one Deployment +
   Service + PVC in `data`, plus the fleet's stream defined idempotently) and
