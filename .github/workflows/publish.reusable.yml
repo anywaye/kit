@@ -110,14 +110,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # THE PATHS ARE ROOT-RELATIVE, AND THAT IS GITHUB'S GRAMMAR, NOT A STYLE
+  # CHOICE. GitHub resolves a local reusable workflow relative to the
+  # repository root as `./.github/workflows/<file>`; anything else — a
+  # repo-relative path that omits `.github/workflows`, or a subdirectory —
+  # cannot be resolved, and GitHub rejects the run at workflow-resolution
+  # time. That rejection is the silent failure this file once shipped: the
+  # four services' publish runs failed on EVERY push since they were
+  # created with `referenced_workflows: []` — no jobs, no check-runs, no
+  # log line, because nothing ever started. Verified against GitHub's
+  # "Reuse workflows" how-to, whose local syntax is exactly
+  # `./.github/workflows/{filename}` (and `$/...` for GHEC), and measured
+  # on this tree with `actionlint`, which resolves the same path and
+  # reports `could not read reusable workflow file` on any other spelling.
   image:
     name: image
-    uses: ./image.reusable.yml
+    uses: ./.github/workflows/image.reusable.yml
     with:
       push: ${{ inputs.push }}
   chart:
     name: chart
-    uses: ./chart.reusable.yml
+    uses: ./.github/workflows/chart.reusable.yml
     with:
       push: ${{ inputs.push }}
       registry: ${{ inputs.registry }}
