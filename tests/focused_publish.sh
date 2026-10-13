@@ -27,6 +27,13 @@
 #      and no `uses:` job carries the key GitHub refuses. Its three red
 #      controls (a deleted bound; the key on a uses job; a bound above 360)
 #      must go red under the same checker the real tree passes.
+#   5. tests/publish_toolchain_check.sh: the two publish steps that had never
+#      once succeeded — the helm pin's verification (`helm version --client`,
+#      a flag Helm 4 removed) and the provenance stamper (read from the
+#      caller's checkout though it lives in kit). Its five red controls
+#      (`--client`; a comparison that cannot fail; the caller-relative path; a
+#      `master` ref; the missing-file guard removed) must go red under the
+#      same checker the real tree passes.
 #
 # WHAT IT NEVER DOES. It never invokes tests/validate.sh — not the full gate
 # and not `--only`. The re-entrancy this packet removes lived INSIDE the
@@ -104,6 +111,14 @@ if ! bash "$ROOT/tests/workflow_timeouts_check.sh" "$ROOT/.github/workflows"; th
   exit 1
 fi
 
-printf 'FOCUSED=publish  pass=%d skip=%d + chart publish, publish seam and workflow timeouts checks passed (same files the gate calls, all red controls red)\n' "$pass" "$skip"
+# 5. The toolchain seams: no helm flag the pinned v4 lacks, a helm pin that is
+# verified against one value, and the provenance stamper fetched from kit's own
+# commit — the two steps that failed the first time the publish path ran.
+if ! bash "$ROOT/tests/publish_toolchain_check.sh" "$ROOT/.github/workflows"; then
+  printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + publish toolchain check FAILED\n' "$pass" "$fail" "$skip"
+  exit 1
+fi
+
+printf 'FOCUSED=publish  pass=%d skip=%d + chart publish, publish seam, workflow timeouts and publish toolchain checks passed (same files the gate calls, all red controls red)\n' "$pass" "$skip"
 printf 'NOT RUN: tier, telemetry, observability, lint, tenancy, substrate, obs chart sources, and every other check — focused publish proof only, not a platform-test pass. Full proof: bash tests/validate.sh\n'
 exit 0

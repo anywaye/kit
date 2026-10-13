@@ -4447,6 +4447,17 @@ print(prefix + ("notarealsecret" * 3)[:32])
     bash "$ROOT/tests/publish_seam_check.sh" "$1" "$2" "$3" "$4"
   }
 
+  check_publish_toolchain() {
+    # Single source of truth, the same rule: tests/publish_toolchain_check.sh
+    # holds the two steps that had never once succeeded — the helm pin's
+    # verification, which ran a flag Helm 4 removed (`--client`), and the
+    # provenance stamper, which was read from the caller's checkout though it
+    # lives in kit — plus all five red controls. The gate calls it so a PASS
+    # here means exactly what the focused proof (tests/focused_publish.sh)
+    # means.
+    bash "$ROOT/tests/publish_toolchain_check.sh" "$1"
+  }
+
   # -------------------------------------------------------------------------
   # The observability chart sources — every Application resolves to a chart
   # somebody publishes.
@@ -5064,6 +5075,13 @@ PY
       "$ROOT/templates/substrate/manifests/applications" \
       "$ROOT/.." \
       "$ROOT/templates/publish/publish.yml"
+
+  # The two toolchain seams the publish path's first real run exposed: the
+  # helm pin's verification used `--client`, which Helm 4 removed, and the
+  # provenance stamper was read from the caller's checkout though the script
+  # lives in kit. Both were in steps that had never once run, in any caller.
+  check 'publish toolchain  (no helm flag the pinned v4 lacks; the pin is verified against one value; the provenance stamper is fetched from the reusable workflow'"'"'s own commit, guarded by name)' \
+    check_publish_toolchain "$ROOT/.github/workflows"
 
   # -------------------------------------------------------------------------
   # The observability chart sources — every Application resolves to a chart
