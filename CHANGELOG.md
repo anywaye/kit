@@ -2,6 +2,37 @@
 
 ### Substrate
 
+- **Step 11 wrote half a credential pair, and identity refused to boot on it.**
+  The mint patched `COURIER_TOKEN` into `identity-secrets` and
+  `COURIER_IDENTITY_TOKEN` into `courier-secrets`, restarted both, and the
+  restarted identity exited 1 on its own fail-closed loader
+  (`identity/internal/config/config.go`, `loadCourier`):
+
+      invalid courier configuration: COURIER_BASE_URL and COURIER_TOKEN must
+      both be set, or neither of them: a base URL with no credential sends
+      every message as an anonymous caller and courier answers 401
+
+  Each secret now gets its **whole pair in one merge patch**: identity gets
+  `COURIER_BASE_URL=http://courier.courier.svc.cluster.local:4000` (courier's
+  `Service`/port from `courier/chart/values.yaml`) beside the token, and
+  courier gets `COURIER_IDENTITY_URL=http://identity.identity.svc.cluster.local:8080`
+  (identity's chart) beside its token — without which courier's introspection
+  URL falls back to the compose-network spelling `http://identity:8080`, which
+  cannot cross a namespace. `tests/substrate_test.sh` asserts all four keys
+  against the values read from the charts, with a red control for each half
+  and the record tripwire naming both pairs.
+- **`install.done` printed, and the install exited 1.** Right after the done
+  event: `line …: forward_pid: unbound variable`. A `RETURN` trap is global —
+  bash runs it after **every** function return, not only the return of the
+  function that set it — so the port-forward teardown fired correctly at the
+  mint's return and then fired **again** when the caller (`main`) returned,
+  where the `local` had left scope and `set -u` made the reference fatal. The
+  trap command's failure became the process's exit status: eleven steps done,
+  exit 1. The trap now ends with `trap - RETURN`, so it runs at most once, on
+  the return where `forward_pid` is still in scope. `tests/substrate_test.sh`
+  runs the mint from a caller, as `main` does, and asserts exit 0 — with the
+  pre-fix trap as the red control.
+
 - **Every `kubectl patch` in the installer read its body from `--patch-file=-`,
   which kubectl does not accept.** `kubectl` has no `-` stdin convention for
   `--patch-file`: it opens a file literally named `-` and dies before the
