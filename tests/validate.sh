@@ -4433,7 +4433,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # copy of them: two copies of an assertion is one assertion that can drift.
   check_chart_publish() {
     # Single source of truth: tests/chart_publish_check.sh holds the
-    # assertions and both red controls. The gate calls it so that PASS/FAIL
+    # assertions and all four red controls. The gate calls it so that PASS/FAIL
     # here means exactly what the standalone proof means — no second
     # implementation to drift. tests/focused_publish.sh calls the same file
     # directly, which is what keeps the focused run out of the gate's
