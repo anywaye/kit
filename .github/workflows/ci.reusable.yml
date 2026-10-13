@@ -497,10 +497,71 @@ jobs:
     # hands out. 60 is several times a healthy run and still a sixth of the
     # 360-minute default a caller cannot override.
     timeout-minutes: 60
+    services:
+      postgres:
+        # postgres:17-alpine with the default superuser untouched — the fleet's
+        # convention. The tenancy substrate expects roles/databases (alpha,
+        # beta, …) that a bare postgres does not provide, so the provisioning
+        # step below creates them as NOSUPERUSER NOBYPASSRLS, mimicking
+        # templates/compose/postgres/initdb/10-cluster.sh locally. Without it
+        # the substrate's `psql -U alpha -d beta` dies with
+        # `permission denied for database "beta"`.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 5s
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: provision tenancy substrate (alpha, beta)
+        # The tenancy proof needs two isolated tenants. A plain
+        # postgres:17-alpine has only the superuser `postgres`; the substrate
+        # expects `alpha`/`beta` and `alpha_app`/`beta_app` as
+        # NOSUPERUSER NOBYPASSRLS with databases they own. Create them here so
+        # the workflow's services block expresses exactly what
+        # `docker compose up -d postgres` + kit's init does locally.
+        run: |
+          set -euo pipefail
+          psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'alpha') THEN
+              CREATE ROLE alpha LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            ELSE
+              ALTER ROLE alpha WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beta') THEN
+              CREATE ROLE beta LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            ELSE
+              ALTER ROLE beta WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'alpha_app') THEN
+              CREATE ROLE alpha_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            ELSE
+              ALTER ROLE alpha_app WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beta_app') THEN
+              CREATE ROLE beta_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            ELSE
+              ALTER ROLE beta_app WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
+            END IF;
+          END $$;
+          SELECT 'CREATE DATABASE alpha OWNER alpha' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='alpha')\gexec
+          SELECT 'CREATE DATABASE beta OWNER beta' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='beta')\gexec
+          SQL
+          for db in alpha beta; do
+            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "REVOKE ALL ON DATABASE $db FROM PUBLIC"
+            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE $db TO $db"
+            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE $db TO ${db}_app"
+          done
+          echo "provisioned alpha/beta and alpha_app/beta_app as NOSUPERUSER NOBYPASSRLS"
       - name: kit gate
         working-directory: ${{ inputs.working-dir }}
         # The gate bootstraps its own dependencies (PyYAML, yamllint, hadolint)
