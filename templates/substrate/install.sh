@@ -571,6 +571,14 @@ kit_substrate_guard() {
   return 1
 }
 
+# kit_substrate_pending <component> — record that a component was applied this
+# run and its rollout still has to be waited on. Called by steps 2-4 after their
+# apply; drained by step 4's grouped wait. A component already present never
+# reaches here, because its step returned at the guard.
+kit_substrate_pending() {
+  PENDING_WAITS="${PENDING_WAITS} $1"
+}
+
 # --- helpers ----------------------------------------------------------------
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
@@ -598,6 +606,14 @@ STEP_PHASE="install"
 STEP_START_MS=""
 STEP_SKIPPED=0
 STEP_LEDGER=""
+
+# PENDING_WAITS — the operator components APPLIED this run whose rollout has not
+# been waited on yet. The three operator manifests (cert-manager, CNPG, Argo CD)
+# are independent, so they are applied back to back in steps 2-4 and waited on
+# TOGETHER at the end of step 4; the controllers then roll out concurrently
+# instead of one behind the other. A component whose guard found it present is
+# never added, so a warm re-run waits on nothing and step 4 stays a true skip.
+PENDING_WAITS=""
 
 # --- the headless emit path ---------------------------------------------------
 # TWO writers, and the split between them is the whole property.
@@ -1083,7 +1099,15 @@ install_cert_manager() {
   fi
   kubectl --kubeconfig="$KUBECONFIG" apply --server-side=true --force-conflicts -f \
     "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s
+  # THE WAIT IS NOT HERE. The three operator manifests — this one, CNPG's and
+  # Argo CD's — are INDEPENDENT: separate namespaces, separate CRDs, separate
+  # controllers, and applies that do not reference one another. Applied one
+  # step at a time and waited one step at a time, CNPG's apply sits behind
+  # cert-manager's rollout and Argo CD's behind CNPG's, and the three steps add
+  # up. Applied back to back (steps 2-4) and waited on together at the end of
+  # step 4, the three controllers roll out CONCURRENTLY and the waits mostly
+  # return at once. So the wait moves; the apply does not. See install_argocd.
+  kit_substrate_pending cert-manager
 }
 
 # --- step 3: CloudNativePG --------------------------------------------------
@@ -1102,58 +1126,108 @@ install_cnpg() {
   fi
   kubectl --kubeconfig="$KUBECONFIG" apply --server-side=true --force-conflicts -f \
     "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_VERSION}/releases/cnpg-${CNPG_VERSION#v}.yaml"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager --timeout=180s
+  # The wait moved to step 4's grouped wait, for the reason written at step 2:
+  # the three operator applies are independent and their rollouts overlap when
+  # the applies are not serialized behind each other's waits.
+  kit_substrate_pending cnpg
 }
 
 # --- step 4: Argo CD core ---------------------------------------------------
 install_argocd() {
   log_step "Argo CD core ${ARGOCD_VERSION}"
+  # The guard no longer RETURNS on a hit: step 4 also drains the grouped waits
+  # for the operators steps 2 and 3 applied, so a present Argo CD skips only its
+  # own apply and the appproject below — not the waits for its neighbours.
+  local argocd_present=0
   if kit_substrate_guard argocd; then
     kit_substrate_out "      already installed, skipping"
-    return 0
+    argocd_present=1
   fi
   # The third and largest remote manifest, and the second of the two CRDs that
   # overflowed the annotation ceiling on the box. Same flags, same reason; a
   # mode chosen per step is how a substrate ends up half-applied.
-  if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml and apply ${ARGOCD_MANIFEST_DIR}/appproject.yaml (the default AppProject the Applications name)"; then
-    return 0
+  if [ "$argocd_present" -eq 0 ]; then
+    if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml and apply ${ARGOCD_MANIFEST_DIR}/appproject.yaml (the default AppProject the Applications name)"; then
+      return 0
+    fi
+    kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
+      kubectl --kubeconfig="$KUBECONFIG" apply -f -
+    kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
+      "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
+    kit_substrate_pending argocd
   fi
-  kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
-    kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
-    "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=300s
-  # The AppProject core-install does not ship. Eight Applications name
-  # `spec.project: default`, so without an AppProject named `default` the
-  # controller reports `Application referencing project default which does not
-  # exist` and creates nothing — step 12 then times out waiting for a
-  # Deployment Argo never made. The hand-fix was a maximal project
-  # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
-  # is least-privilege — sourceRepos exactly the three repoURLs the
-  # Applications use, destinations exactly the five namespaces they deploy
-  # into on https://kubernetes.default.svc, and no cluster-scoped whitelist
-  # (the charts create only namespaced resources). That is the tightest set
-  # that still syncs, and the reason is written here rather than only in the
-  # manifest, so a reader who widens it knows what they are widening.
-  #
-  # WHY STEP 4 AND NOT STEP 6. The project must exist BEFORE the Applications
-  # that name it — Argo's application-controller reconciles an Application
-  # only when its project exists, so applying the project in the same
-  # `kubectl apply -f <dir>` as the Applications relies on apply ordering and
-  # on the controller re-queuing the Unknown Application after the project
-  # appears. Applying it here, right after Argo CD is Available and before
-  # any Application is applied at step 6, makes the ordering explicit in the
-  # install's own steps rather than in kubectl's file sort or the
-  # controller's retry. It is also idempotent: a re-run finds the Argo CD
-  # Deployments and skips the whole step, including this apply — a project
-  # that must be present is not re-applied on every run, but it is present
-  # because the first run put it there.
-  #
-  # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
-  # by name, so the file is deliberate; the directory is checked so a stray
-  # file beside it is surfaced rather than skipped (see install_applications).
-  kit_substrate_check_manifest_dir "$ARGOCD_MANIFEST_DIR"
-  kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"
+
+  # THE GROUPED WAIT — THE MEASURED SPEED DECISION, AND WHY IT IS SAFE. The
+  # three operator manifests are independent: cert-manager's, CNPG's and Argo
+  # CD's objects live in three namespaces behind three sets of CRDs, and none
+  # of the three applies reads an object another one creates. So applying all
+  # three before waiting on any of them cannot race an empty list — every
+  # `--all` list and every named Deployment here was created by an apply that
+  # has ALREADY returned (a `kubectl apply` is a round trip: the objects exist
+  # when it exits), which is exactly the condition the empty-list rule in
+  # kit_substrate_await_list exists to protect. What changes is only WHEN the
+  # rollouts start: serialized behind each other's waits, the three steps added
+  # up; overlapped, the controllers come up at once and this drain mostly
+  # returns immediately. A component whose guard found it present is not in
+  # PENDING_WAITS, so a warm re-run waits on nothing.
+  local pending waited=0
+  for pending in $PENDING_WAITS; do
+    case "$pending" in
+      cert-manager)
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s
+        waited=1
+        ;;
+      cnpg)
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager --timeout=180s
+        waited=1
+        ;;
+      argocd)
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=300s
+        waited=1
+        ;;
+    esac
+  done
+  PENDING_WAITS=""
+  # A step that waited on an operator another step applied DID real work, so it
+  # is timed rather than reported as a skip — the guard's "present" verdict was
+  # about Argo CD's own apply, not about this wait.
+  if [ "$waited" -eq 1 ]; then
+    STEP_SKIPPED=0
+  fi
+
+  if [ "$argocd_present" -eq 0 ]; then
+    # The AppProject core-install does not ship. Eight Applications name
+    # `spec.project: default`, so without an AppProject named `default` the
+    # controller reports `Application referencing project default which does not
+    # exist` and creates nothing — step 12 then times out waiting for a
+    # Deployment Argo never made. The hand-fix was a maximal project
+    # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
+    # is least-privilege — sourceRepos exactly the three repoURLs the
+    # Applications use, destinations exactly the five namespaces they deploy
+    # into on https://kubernetes.default.svc, and no cluster-scoped whitelist
+    # (the charts create only namespaced resources). That is the tightest set
+    # that still syncs, and the reason is written here rather than only in the
+    # manifest, so a reader who widens it knows what they are widening.
+    #
+    # WHY STEP 4 AND NOT STEP 6. The project must exist BEFORE the Applications
+    # that name it — Argo's application-controller reconciles an Application
+    # only when its project exists, so applying the project in the same
+    # `kubectl apply -f <dir>` as the Applications relies on apply ordering and
+    # on the controller re-queuing the Unknown Application after the project
+    # appears. Applying it here, right after Argo CD is Available and before
+    # any Application is applied at step 6, makes the ordering explicit in the
+    # install's own steps rather than in kubectl's file sort or the
+    # controller's retry. It is also idempotent: a re-run finds the Argo CD
+    # Deployments and skips the whole step, including this apply — a project
+    # that must be present is not re-applied on every run, but it is present
+    # because the first run put it there.
+    #
+    # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
+    # by name, so the file is deliberate; the directory is checked so a stray
+    # file beside it is surfaced rather than skipped (see install_applications).
+    kit_substrate_check_manifest_dir "$ARGOCD_MANIFEST_DIR"
+    kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"
+  fi
 }
 
 # --- step 5: the image pull secret ------------------------------------------

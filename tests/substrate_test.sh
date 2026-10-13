@@ -7572,6 +7572,111 @@ run 'a run whose guards find the components present still times cleanly' green \
   check_timing "$skip_jsonl"
 
 # ===========================================================================
+# 25. The three operator applies are grouped, and their waits with them
+# ===========================================================================
+# THE MEASURED SPEED DECISION, PINNED. cert-manager, CNPG and Argo CD are three
+# independent operator installs — separate namespaces, separate CRDs, applies
+# that reference nothing the others create — so they are applied back to back in
+# steps 2-4 and waited on TOGETHER at the end of step 4. The controllers then
+# roll out concurrently instead of one behind another's wait. This check is what
+# stops a later edit from silently putting a wait back into step 2 or 3 (which
+# re-serializes the rollouts) or dropping one of the three from step 4 (which
+# would leave a controller unwatched before step 5 uses it).
+check_operator_overlap() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+# Comments stripped first: the rule is about what the installer RUNS, and step
+# 2's own comment explains the decision by naming the waits.
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+
+
+def body(name):
+    m = re.search(r"^" + name + r"\(\)\s*\{(.*?)^\}", code, re.M | re.S)
+    return m.group(1) if m else ""
+
+
+cm = body("install_cert_manager")
+cnpg = body("install_cnpg")
+argo = body("install_argocd")
+problems = []
+for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg), ("install_argocd", argo)):
+    if not b:
+        problems.append(f"{name} not found")
+
+# The APPLIES are still where they were — the wait moved, the install did not.
+if "cert-manager.yaml" not in cm:
+    problems.append("step 2 no longer applies the cert-manager manifest")
+if "cnpg-" not in cnpg:
+    problems.append("step 3 no longer applies the CNPG manifest")
+if "core-install.yaml" not in argo:
+    problems.append("step 4 no longer applies the Argo CD core-install manifest")
+
+# Steps 2 and 3 WAIT ON NOTHING: a wait left here re-serializes the rollouts and
+# is the defect this section exists to catch.
+for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg)):
+    if "wait --for=condition" in b:
+        problems.append(f"{name} still waits — the three operator waits belong in step 4, grouped")
+
+# Step 4 waits for all three, by the exact selectors each step used to carry.
+for want, label in (
+    ("wait --for=condition=Available deployment -n cert-manager --all", "cert-manager"),
+    ("wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager", "CNPG"),
+    ("wait --for=condition=Available deployment -n argocd --all", "Argo CD"),
+):
+    if want not in argo:
+        problems.append(f"step 4 does not wait for {label}")
+
+# The pending mechanism is what keeps a warm re-run a true skip: each apply
+# registers, step 4 drains. A component present at its guard never registers.
+for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg), ("install_argocd", argo)):
+    if "kit_substrate_pending" not in b:
+        problems.append(f"{name} does not register its apply for the grouped wait")
+if 'PENDING_WAITS=""' not in argo:
+    problems.append("step 4 does not drain PENDING_WAITS after the grouped wait")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("the three operator applies are grouped and step 4 waits for all three")
+PY
+}
+
+run 'the three operator waits are grouped in step 4, after all three applies' green \
+  check_operator_overlap "$SUBSTRATE/install.sh"
+
+# Control 1: the pre-change shape — cert-manager's wait put back into step 2.
+# This is the serialization the packet's speed decision removes.
+fixture_serial_wait="$WORK/install-serial-wait.sh"
+sed 's|^  kit_substrate_pending cert-manager$|  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s|' \
+  "$SUBSTRATE/install.sh" >"$fixture_serial_wait"
+cm_fixture_body="$(sed -n '/^install_cert_manager()/,/^}/p' "$fixture_serial_wait")"
+case "$cm_fixture_body" in
+  *'wait --for=condition=Available deployment -n cert-manager --all'*)
+    run 'control: a wait put back into step 2 goes red' red check_operator_overlap "$fixture_serial_wait"
+    ;;
+  *)
+    fail 'control fixture: the serial wait was not restored' \
+      "the sed did not put the wait back into step 2, so the control would prove nothing"
+    ;;
+esac
+
+# Control 2: one of the three waits dropped from step 4 — a controller left
+# unwatched before step 5 depends on it.
+fixture_drop_cnpg_wait="$WORK/install-drop-cnpg-wait.sh"
+sed '/wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager/d' \
+  "$SUBSTRATE/install.sh" >"$fixture_drop_cnpg_wait"
+if grep -q 'wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager' \
+  "$fixture_drop_cnpg_wait"; then
+  fail 'control fixture: the CNPG wait was not dropped' \
+    "the sed did not remove the wait, so the control would prove nothing"
+else
+  run 'control: a dropped operator wait goes red' red check_operator_overlap "$fixture_drop_cnpg_wait"
+fi
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

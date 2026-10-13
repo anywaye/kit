@@ -29,6 +29,13 @@ this file only describes what is here and what is proven.
 2. **cert-manager**
 3. **CloudNativePG**
 4. **Argo CD core** — no Dex, no SSO, no Redis HA.
+   Steps 2–4 are three **independent** operator installs (separate namespaces,
+   separate CRDs, applies that reference nothing the others create), so all
+   three manifests are **applied back to back** and then **waited on together**
+   at the end of step 4. Waiting inside each step would hold CNPG's apply behind
+   cert-manager's rollout and Argo CD's behind CNPG's, and the three steps would
+   add up; grouped, the controllers roll out concurrently. A component already
+   present at its guard is not waited on again, so a warm re-run still skips.
 5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
    its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
    minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived
