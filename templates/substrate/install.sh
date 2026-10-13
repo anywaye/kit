@@ -1265,6 +1265,77 @@ install_cluster_issuers() {
   kit_substrate_out "      applied letsencrypt-staging and letsencrypt-prod"
 }
 
+# --- the per-role password secrets step 8 makes -------------------------------
+# One secret per ROLE, not per service: a service's owner role and its app role
+# carry different passwords, and the Cluster names each role's own secret in
+# `passwordSecret`. Each secret holds `username` and `password`.
+#
+# THE `username` KEY IS THE ROLE'S NAME, NOT THE SECRET'S, AND THAT DISTINCTION
+# IS THE WHOLE POINT OF THIS FUNCTION. CNPG's managed-role reconciler refuses to
+# set a role's password when the `username` in its passwordSecret does not match
+# the role's name. It does not fail the step, surface an event on the Cluster,
+# or refuse the apply — it records the refusal in the Cluster's
+# `status.managedRolesStatus.cannotReconcile` and moves on, leaving
+# `pg_authid.rolpassword` NULL for that role. Measured on the live box:
+#
+#   cannotReconcile:
+#     identity_app:
+#     - the username in secret "postgres-role-identity-app" does not match
+#       role "identity_app"
+#
+# while `pg_authid` held a SCRAM verifier for `identity` and NULL for
+# `identity_app`, and every pod connecting as `identity_app` got
+# `FATAL: password authentication failed for user "identity_app" (SQLSTATE 28P01)`.
+#
+# The secret is named for the SERVICE (`postgres-role-identity-app`, hyphen),
+# but the ROLE is `identity_app` (underscore) — so writing the secret's suffix
+# into `username` silently disabled the reconcile for all four app roles while
+# the owner roles (whose secret name and role name are both `<svc>`) reconciled
+# fine. So the value written here is `$role`, computed independently of
+# `$secret_name` rather than derived from the `-app` suffix that names the
+# secret. `tests/substrate_test.sh` asserts the two agree with the Cluster
+# manifest, per role, and that a drift on either side goes red.
+#
+# A RE-RUN KEEPS THE PASSWORD AND REPAIRS THE USERNAME. Regenerating the
+# password under a running pod is a login that breaks between two runs, so the
+# stored value is read back, never remade. But the `username` key on a box
+# installed by the buggy spelling is wrong, and a repair the operator has to
+# remember by hand is a repair that does not happen — so an existing secret is
+# merge-patched with the correct `username`. CNPG watches the Secret and
+# re-reconciles, which is what heals an already-installed box: this side wins,
+# because the role's password is DERIVED from the secret, and the password it
+# derives is the very value `identity-secrets`' DATABASE_URL already carries.
+create_postgres_role_secrets() {
+  local svc role secret_name pw
+  for svc in identity gateway courier parlor; do
+    for role in "$svc" "${svc}_app"; do
+      # The secret name wears the service's spelling (`-app`); the username
+      # key must wear the ROLE's (`_app`). The mapping is explicit so the two
+      # cannot drift together by accident again.
+      case "$role" in
+        *_app) secret_name="postgres-role-$svc-app" ;;
+        *) secret_name="postgres-role-$svc" ;;
+      esac
+      if kubectl --kubeconfig="$KUBECONFIG" get secret "$secret_name" -n data >/dev/null 2>&1; then
+        # Keep the password (never regenerated, never printed); correct the
+        # username if an older run wrote the secret's spelling instead of the
+        # role's. A merge patch of the same value is a no-op, so this is safe
+        # to run on every pass.
+        kubectl --kubeconfig="$KUBECONFIG" -n data patch secret "$secret_name" \
+          --type=merge --patch-file=- >/dev/null <<JSON
+{"stringData":{"username":"$role"}}
+JSON
+        kit_substrate_out "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
+      else
+        pw="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+        kubectl --kubeconfig="$KUBECONFIG" create secret generic "$secret_name" -n data \
+          --from-literal=username="$role" --from-literal=password="$pw" >/dev/null
+        kit_substrate_out "      secret $secret_name created (generated once — a re-run reads it back)"
+      fi
+    done
+  done
+}
+
 # --- step 8: the Postgres Cluster -------------------------------------------
 # The two bounds below are this step's own 600s, split the way step 1's are:
 # 60s for the CNPG operator to create a pod the selector can see, then Ready
@@ -1330,27 +1401,11 @@ install_postgres_cluster() {
   fi
   kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
     kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  # Role passwords: generated ONCE, read back on a re-run. Each secret holds
-  # `username` and `password` (both keys: the Cluster names the secret for the
-  # password, and the username beside it is what makes a `kubectl get`
-  # answerable without consulting the manifest). Hex from /dev/urandom, so the
-  # value is URL-safe for DATABASE_URL below — base64's `+/=` are reserved in
-  # a URL userinfo and would need escaping at every use site. /dev/urandom and
-  # od are coreutils: no openssl assumption on the box.
-  local svc secret_name pw
-  for svc in identity gateway courier parlor; do
-    for suffix in "" "-app"; do
-      if [ -z "$suffix" ]; then secret_name="postgres-role-$svc"; else secret_name="postgres-role-$svc-app"; fi
-      if kubectl --kubeconfig="$KUBECONFIG" get secret "$secret_name" -n data >/dev/null 2>&1; then
-        kit_substrate_out "      secret $secret_name exists, keeping its password (never regenerated, never printed)"
-      else
-        pw="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-        kubectl --kubeconfig="$KUBECONFIG" create secret generic "$secret_name" -n data \
-          --from-literal=username="$svc$suffix" --from-literal=password="$pw" >/dev/null
-        kit_substrate_out "      secret $secret_name created (generated once — a re-run reads it back)"
-      fi
-    done
-  done
+  # The role passwords. hex from /dev/urandom, so the value is URL-safe for
+  # DATABASE_URL below — base64's `+/=` are reserved in a URL userinfo and
+  # would need escaping at every use site. /dev/urandom and od are coreutils:
+  # no openssl assumption on the box.
+  create_postgres_role_secrets
   # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds): small,
   # re-applied on every run, and owned by this installer — which is exactly why
   # the mode takes the re-run's ability to reclaim a field away on the remote
