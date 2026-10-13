@@ -17,7 +17,9 @@
 #   (§9b — the check that would have caught `spec.storageConfiguration`), the
 #   Redis image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
-#   the recorded secret name-and-key list matches what install.sh creates,
+#   the recorded secret name-and-key list matches what install.sh creates, and
+#   every secret NAME and KEY the four service charts mount or read is in that
+#   list — a chart key with no writer is a pod that never starts,
 #   no image floats on `latest`, no secret is a literal in the tree, step 6
 #   waits on nothing — the core-install reality, executed against a mock whose
 #   deployment list is the pinned core-install set, with the pre-fix wait
@@ -1163,6 +1165,237 @@ fixture_extra_key="$WORK/install-extra-key.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_extra_key"
 printf '\n--from-literal=EXTRA_UNRECORDED_KEY=x\n' >>"$fixture_extra_key"
 run 'control: a secret with an unrecorded key goes red' red check_secret_record "$fixture_extra_key"
+
+# ===========================================================================
+# 11b. Every secret key a CHART mounts or names is written by install.sh
+# ===========================================================================
+#
+# WHY THIS EXISTS. The defect this packet was written about: gateway's chart
+# points a `volumes.secret` item at gateway-secrets/ASSERTION_SIGNING_KEY, and
+# step 9 created that secret with REDIS_URL only. The pod sat in
+# ContainerCreating for 152 minutes on `FailedMount: references non-existent
+# secret key` while every other step reported success — a missing generator
+# surfacing as a pod that hangs, the class nobody attributes. The SECRET RECORD
+# check above proves the record and install.sh agree with each other; neither
+# half can see a chart that consumes a key neither names. This check closes the
+# loop: it reads the four service charts beside kit (READ-ONLY) and requires
+# every secret NAME and KEY they consume to be in install.sh's own inventory.
+#
+# THREE REFERENCES, and all three are checked because all three have failed in
+# the fleet at least once: `envFrom.secretRef` (the secret must exist — the
+# generated charts inject every secret key this way), `env.valueFrom.secretKeyRef`
+# (both the secret and the key must exist), and `volumes.secret` with `items`
+# (a required ITEM: a missing key is a `FailedMount`, not a missing env var).
+# Ingress TLS secrets (`*-tls`) are NOT in scope and not scanned: cert-manager
+# fills them from the ClusterIssuer, they are not pod mounts.
+#
+# THE FLEET IS ONE LEVEL UP AND NAMED, NEVER FURTHER — the AGENTS.md rule. A
+# service whose sibling checkout is absent is NAMED in a note; on a fresh clone
+# every service is a note. The check's ABILITY to see a missing writer is proved
+# by the controls below, which build a throwaway fixture fleet rather than
+# depend on a neighbour being present: one carries a key install.sh never
+# writes (must go red) and one carries the key it does (must stay green).
+check_chart_secret_keys() {
+  "$PY" - "$1" "$2" <<'PY'
+import glob
+import os
+import re
+import sys
+
+import yaml
+
+install_path, fleet = sys.argv[1], sys.argv[2]
+
+SERVICES = ("identity", "gateway", "courier", "parlor")
+
+# install.sh's inventory: the SECRET RECORD maps a secret to the keys it writes,
+# and the two writers are the `--from-literal=KEY=` sites plus step 11's merge
+# patch (`{"stringData":{"KEY":$t}}`). check_secret_record above proves the
+# record and the writes agree; this check asks whether the charts are covered.
+src = open(install_path, encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
+recorded = {name: set(keys.split()) for name, keys in records}
+created = set(re.findall(r"create secret generic (\S+)", code))
+patched = set(re.findall(r'"stringData":\{"([A-Z_]+)":\$t\}', code))
+
+problems = []
+notes = []
+
+
+def dotted(values, path):
+    node = values
+    for part in path.split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return None
+    return node
+
+
+def resolve(text, values):
+    # A chart template is not valid YAML while it carries Helm actions, so the
+    # secret references are resolved by name rather than rendered. `.Values.a.b`
+    # is the only expression the four generated charts put in a secret-name or
+    # secret-key position; anything else is left in place and reported below,
+    # never silently skipped.
+    def sub(m):
+        got = dotted(values, m.group(1).strip())
+        return str(got) if got is not None else m.group(0)
+
+    return re.sub(r"\{\{-?\s*\.Values\.([A-Za-z0-9_.]+)\s*-?\}\}", sub, text)
+
+
+def refs_from(text):
+    refs = set()   # (secret, key) the pod REQUIRES
+    names = set()  # secret names referenced at all
+    for m in re.finditer(r"secretRef:\s*\n\s*name:\s*([^\s]+)", text):
+        names.add(m.group(1))
+    for m in re.finditer(r"secretKeyRef:\s*\n\s*name:\s*([^\s]+)\s*\n\s*key:\s*([^\s]+)", text):
+        names.add(m.group(1))
+        refs.add((m.group(1), m.group(2)))
+    # A volume's secretName, and every `- key:` ITEM under it (items live at a
+    # deeper indent than the secretName that introduces them).
+    for m in re.finditer(r"(?m)^(\s*)secretName:\s*([^\s]+)\s*$", text):
+        indent = len(m.group(1))
+        secret = m.group(2)
+        names.add(secret)
+        block = []
+        for line in text[m.end():].split("\n"):
+            if line.strip() and (len(line) - len(line.lstrip())) < indent:
+                break
+            block.append(line)
+        for k in re.findall(r"-\s*key:\s*([^\s]+)", "\n".join(block)):
+            refs.add((secret, k))
+    return refs, names
+
+
+for svc in SERVICES:
+    base = os.path.join(fleet, svc)
+    charts = []
+    for chart_yaml in glob.glob(os.path.join(base, "**", "Chart.yaml"), recursive=True):
+        chart_dir = os.path.dirname(chart_yaml)
+        if os.path.isfile(os.path.join(chart_dir, "templates", "deployment.yaml")):
+            charts.append(chart_dir)
+    if not charts:
+        notes.append(f"{svc}: no sibling chart checkout under {base} — not asserted")
+        continue
+    for chart_dir in sorted(charts):
+        values_path = os.path.join(chart_dir, "values.yaml")
+        try:
+            with open(values_path, encoding="utf-8") as fh:
+                values = yaml.safe_load(fh) or {}
+        except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+            problems.append(f"{values_path} does not parse: {exc}")
+            continue
+        dep_path = os.path.join(chart_dir, "templates", "deployment.yaml")
+        with open(dep_path, encoding="utf-8") as fh:
+            text = resolve(fh.read(), values)
+        refs, names = refs_from(text)
+        for secret in sorted(names):
+            if "{" in secret:
+                problems.append(
+                    f"{svc}: an unresolved Helm expression reached a secret name "
+                    f"({secret}) — the chart cannot be read"
+                )
+            elif secret not in created:
+                problems.append(
+                    f"{svc}: the chart references secret {secret}, which install.sh never creates"
+                )
+        for secret, key in sorted(refs):
+            if "{" in key:
+                problems.append(
+                    f"{svc}: an unresolved Helm expression reached a secret key ({key})"
+                )
+                continue
+            if key not in recorded.get(secret, set()):
+                problems.append(
+                    f"{svc}: the chart mounts {secret}/{key}, which install.sh does not record "
+                    "(and therefore does not write)"
+                )
+            if key not in patched and f"--from-literal={key}=" not in code:
+                problems.append(
+                    f"{svc}: the chart mounts {secret}/{key}, which install.sh never writes"
+                )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+for note in notes:
+    print(f"note: {note}")
+print(f"chart secret references: {len(SERVICES)} services checked, {len(notes)} absent")
+PY
+}
+
+# The real run: the sibling charts beside kit, when a checkout is there.
+run 'every secret key a chart mounts or names is written by install.sh' green \
+  check_chart_secret_keys "$SUBSTRATE/install.sh" "$ROOT/.."
+
+# The controls run against a THROWAWAY fixture fleet, so the check's ability to
+# see a missing writer never depends on a neighbour being checked out. The
+# fixture carries all three reference shapes the four charts use, with the
+# gateway volume ITEM as the load-bearing one (it is the shape that produced the
+# 152-minute ContainerCreating).
+build_chart_fixture() {
+  # $1 = the directory; $2 = the assertion key the chart mounts.
+  local dir="$1" key="$2"
+  mkdir -p "$dir/gateway/charts/gateway/templates"
+  cat >"$dir/gateway/charts/gateway/Chart.yaml" <<'YAML'
+apiVersion: v2
+name: gateway
+version: 0.1.0
+YAML
+  cat >"$dir/gateway/charts/gateway/values.yaml" <<YAML
+secretName: gateway-secrets
+secrets:
+  redisUrlSecretName: gateway-secrets
+  redisUrlSecretKey: REDIS_URL
+  assertionKeySecretName: gateway-secrets
+  assertionKeySecretKey: ${key}
+YAML
+  cat >"$dir/gateway/charts/gateway/templates/deployment.yaml" <<'YAML'
+spec:
+  template:
+    spec:
+      containers:
+        - name: gateway
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secretName }}
+          env:
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.redisUrlSecretName }}
+                  key: {{ .Values.secrets.redisUrlSecretKey }}
+      volumes:
+        - name: assertion-key
+          secret:
+            secretName: {{ .Values.secrets.assertionKeySecretName }}
+            items:
+              - key: {{ .Values.secrets.assertionKeySecretKey }}
+                path: signing.pem
+YAML
+}
+
+fixture_chart_bad="$WORK/chart-fleet-unwritten"
+build_chart_fixture "$fixture_chart_bad" "A_KEY_NOTHING_WRITES"
+run 'control: a chart mounting a key install.sh never writes goes red' red \
+  check_chart_secret_keys "$SUBSTRATE/install.sh" "$fixture_chart_bad"
+
+fixture_chart_good="$WORK/chart-fleet-written"
+build_chart_fixture "$fixture_chart_good" "ASSERTION_SIGNING_KEY"
+run 'control: the same fixture with the written key stays green' green \
+  check_chart_secret_keys "$SUBSTRATE/install.sh" "$fixture_chart_good"
+
+# The envFrom half: a secret NAME the chart reads but install.sh never creates.
+fixture_chart_name="$WORK/chart-fleet-missing-secret"
+build_chart_fixture "$fixture_chart_name" "ASSERTION_SIGNING_KEY"
+sed -i.bak 's/secretName: gateway-secrets/secretName: gateway-secrets-TYPO/' \
+  "$fixture_chart_name/gateway/charts/gateway/values.yaml"
+rm -f "$fixture_chart_name/gateway/charts/gateway/values.yaml.bak"
+run 'control: a chart reading a secret install.sh never creates goes red' red \
+  check_chart_secret_keys "$SUBSTRATE/install.sh" "$fixture_chart_name"
 
 # ===========================================================================
 # 12. NATS with JetStream — the bus the local stack runs, on the box too
