@@ -486,6 +486,59 @@ dry_run() {
   return 1
 }
 
+# --- waits that can face an empty list ---------------------------------------
+# `kubectl wait --for=<condition> <resource> --all` DOES NOT WAIT on an empty
+# list. It fails immediately with `error: no matching resources found` — a
+# non-zero exit inside a second, and under `set -e` that is the end of the
+# install.
+#
+# MEASURED, not theorised: k3s is STARTED by the line above step 1's wait, and
+# the Node object the kubelet registers lands a few seconds LATER. On a warm
+# box the registration has already happened, so the wait finds the object and
+# wins; on a WIPED box nothing has registered, the list is empty, and the wait
+# loses — a fresh Contabo box died at step 1 with exactly that error, exit 1,
+# before any step after it ran. A wait that survives one box state and dies on
+# the other is a race, and this is the shape it takes.
+#
+# A wait that runs immediately after a synchronous `kubectl apply` of the SAME
+# object does not need this, and is NOT given it: the object exists the moment
+# apply returns, because apply is a round trip that created it. The ones that
+# need it are the objects a CONTROLLER creates asynchronously — the Node
+# object behind the kubelet, the Cluster's pods behind the CNPG operator.
+#
+# SO THE SHAPE IS TWO WAITS AND ONE BOUND: prove the list is not empty first
+# (bounded, below), then wait for the condition with the part of the step's
+# budget that is left. The two bounds add up to the total the step always had,
+# because a slow registration must not become a slow install. A genuinely
+# broken cluster still fails — exactly as it did before — and now says which
+# object never appeared instead of reporting a condition that was never
+# measured.
+kit_substrate_await_list() {
+  local budget="$1"; shift
+  kit_substrate_out "      waiting up to ${budget}s for: kubectl get $*"
+  local deadline list
+  deadline=$(( $(date +%s) + budget ))
+  while :; do
+    # A command substitution, NOT a pipe into `grep -q .`: `grep -q` closes the
+    # pipe on its first match, the producer dies of SIGPIPE, and `pipefail`
+    # promotes its 141 to the pipeline's status — so a LONG list would read as
+    # an empty one and poll until the deadline on a healthy cluster. `--no-headers`
+    # prints exactly one line per object and nothing at all for an empty list,
+    # and a GET on an empty list exits 0, so "non-empty output" IS "the list is
+    # not empty", and a failing GET is no answer yet rather than a verdict.
+    list="$(kubectl --kubeconfig="$KUBECONFIG" get "$@" --no-headers 2>/dev/null || true)"
+    if [ -n "$list" ]; then
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      kit_substrate_refuse "" \
+        "timed out after ${budget}s waiting for: kubectl get $* (the list is empty)" \
+        "the object does not exist yet, so there is nothing to wait for — check the controller that owns it (the kubelet for a Node, the CNPG operator for the Cluster's pods, the API server itself), then re-run: every step that already completed is skipped by its guard"
+    fi
+    sleep 2
+  done
+}
+
 # --- the install receipt ------------------------------------------------------
 # The receipt is the resumable-install contract and the agent's map of the
 # install: it names the phase, the next step, the input needed and where the
@@ -628,6 +681,11 @@ preflight() {
 }
 
 # --- step 1: k3s ------------------------------------------------------------
+# THE TWO BOUNDS ARE THIS STEP'S OWN 120s, SPLIT HONESTLY: 90s for the Node
+# object to register, 30s for it to become Ready. Both are overridable so the
+# suite can shorten them — the rule is the split, not the numbers.
+: "${NODE_REGISTER_TIMEOUT:=90}"
+: "${NODE_READY_TIMEOUT:=30}"
 install_k3s() {
   log_step "k3s ${K3S_VERSION} — single node, sqlite datastore"
   if kit_substrate_guard k3s; then
@@ -638,7 +696,16 @@ install_k3s() {
     return 0
   fi
   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready node --all --timeout=120s
+  # TWO WAITS, because the Node object is created ASYNCHRONOUSLY: the line
+  # above starts k3s, and the kubelet registers the Node a few seconds after
+  # that. The wait below used to be a single `wait --for=condition=Ready node
+  # --all`, which on an EMPTY list is not a wait at all — it is `error: no
+  # matching resources found`, exit 1, and the install is dead at step 1. On a
+  # box that had already registered a node the race was invisible; on a wiped
+  # one it was the whole install. So the node must EXIST first, and only then
+  # be waited on for Ready. See the helper above for the measurement.
+  kit_substrate_await_list "$NODE_REGISTER_TIMEOUT" node
+  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready node --all --timeout="$((NODE_READY_TIMEOUT))s"
 }
 
 # --- step 2: cert-manager ----------------------------------------------------
@@ -981,6 +1048,11 @@ install_cluster_issuers() {
 }
 
 # --- step 8: the Postgres Cluster -------------------------------------------
+# The two bounds below are this step's own 600s, split the way step 1's are:
+# 60s for the CNPG operator to create a pod the selector can see, then Ready
+# inside what is left. Overridable so the suite can shorten the first half.
+: "${CNPG_POD_TIMEOUT:=60}"
+: "${CNPG_POD_READY_TIMEOUT:=540}"
 # One CNPG Cluster in the `data` namespace, reproducing the local contract
 # (templates/compose/postgres/initdb/10-cluster.sh) through CNPG's bootstrap
 # plus managed roles — see manifests/data/postgres-cluster.yaml's header for
@@ -1070,7 +1142,18 @@ install_postgres_cluster() {
   # readiness probe, which is the observable property the services need. A
   # phase-string wait encodes a CNPG status vocabulary this script does not
   # own; a label-selected pod wait encodes the contract.
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready pod -l cnpg.io/cluster=postgres -n data --timeout=600s
+  #
+  # TWO WAITS, AND THIS ONE WAS ALWAYS RACY. The Cluster CR is applied
+  # SYNCHRONOUSLY above, but its pods are created ASYNCHRONOUSLY by the CNPG
+  # operator, which has to notice the CR, reconcile it and schedule the
+  # instance — so the selector below can match ZERO pods the instant the apply
+  # returns, and `kubectl wait -l cnpg.io/cluster=postgres` on an empty list is
+  # the same error step 1 hit, on an object owned by a different controller.
+  # It is not the object this step applied, so existence is proved first here
+  # too: 60s for the operator to make a pod, then Ready inside the 600s this
+  # step always had.
+  kit_substrate_await_list "$CNPG_POD_TIMEOUT" pod -l cnpg.io/cluster=postgres -n data
+  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready pod -l cnpg.io/cluster=postgres -n data --timeout="$((CNPG_POD_READY_TIMEOUT))s"
 }
 
 # --- step 9: Redis and the services' secrets ----------------------------------
