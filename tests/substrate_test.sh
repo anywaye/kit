@@ -1945,6 +1945,14 @@ curl_call_ok() {
       printf 'the capability appears in the URL path\n%s\n' "$call"; return 1 ;;
     *) ;;
   esac
+  # The capability is box-bound, so the request names THIS box and never
+  # another one: a body carrying a foreign box id is the shape of a
+  # capability being cashed for somebody else's pull.
+  case "$call" in
+    *"$CAP_OTHER_BOX_UUID"*)
+      printf 'the request names a box that is not this box\n%s\n' "$call"; return 1 ;;
+    *) ;;
+  esac
   printf 'a POST to the exchange route, the capability as a bearer, a body naming the box'
 }
 run 'the exchange speaks the registry-credentials route, bearer + box' green curl_call_ok
