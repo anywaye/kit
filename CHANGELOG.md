@@ -2,6 +2,24 @@
 
 ### Substrate
 
+- **Every `kubectl patch` in the installer read its body from `--patch-file=-`,
+  which kubectl does not accept.** `kubectl` has no `-` stdin convention for
+  `--patch-file`: it opens a file literally named `-` and dies before the
+  request is built, so step 8's username reconcile and step 11's two credential
+  patches never reached the API server on any box:
+
+      error: unable to read patch file: open -: no such file or directory
+
+  Measured on Contabo, back to back: `--patch-file=-` prints that and exits 1,
+  `--patch-file=/dev/stdin` reads the pipe and patches. The three sites now use
+  `/dev/stdin`, the convention step 5 already uses for
+  `--from-file=.dockerconfigjson=/dev/stdin`, and `kubectl apply -f -` — a real
+  convention — is left alone. `tests/substrate_test.sh` was green over this
+  because both mocks modelled `-` as stdin: `mock_kubectl` and
+  `rollout_kubectl` now read `/dev/stdin` and refuse `-` with kubectl's own
+  error, with a direct convention check per mock, an argv assertion that the
+  repair travelled on `/dev/stdin`, and two red controls — step 8's spelling
+  reverted to `-`, and the mint aborted by it.
 - **An OCI Helm `Application` named the registry root, not the chart's own
   path, and every sync in the fleet's first end-to-end install failed.** The
   four service `Application`s in `templates/substrate/manifests/applications/`
@@ -543,8 +561,8 @@
   `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY` and the OIDC keys
   from `identity-secrets` in the same breath, and the symptom would be an
   identity that boots no further after its next restart. The patch body is
-  built by `jq` and read from `--patch-file=-`, so a token with a quote in it
-  can neither break the JSON nor reach an argv. `tests/substrate_test.sh`'s
+  built by `jq` and read from `--patch-file=/dev/stdin`, so a token with a quote
+  in it can neither break the JSON nor reach an argv. `tests/substrate_test.sh`'s
   mock kubectl now MERGES a patch the way kubectl does, so the assertion
   "identity-secrets still holds the keys step 9 wrote" is a real assertion
   rather than an accident of the mock — and the SECRET RECORD check learns the
