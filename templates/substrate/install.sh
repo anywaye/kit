@@ -1305,6 +1305,9 @@ install_cluster_issuers() {
 # re-reconciles, which is what heals an already-installed box: this side wins,
 # because the role's password is DERIVED from the secret, and the password it
 # derives is the very value `identity-secrets`' DATABASE_URL already carries.
+# The call site in `install_postgres_cluster` sits ABOVE that step's `cluster`
+# guard precisely so this runs on a re-run: the guard skips the re-provision,
+# and the reconcile is not part of the re-provision.
 create_postgres_role_secrets() {
   local svc role secret_name pw
   for svc in identity gateway courier parlor; do
@@ -1392,20 +1395,27 @@ install_postgres_cluster() {
         "'$ext' in KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier ([a-z_][a-z0-9_]*)"
     fi
   done
+  if dry_run "create namespace data, create 8 postgres-role-* password secrets (generated once), apply ${DATA_DIR}/postgres-cluster.yaml"; then
+    return 0
+  fi
+  # The namespace first, because the role secrets below live in it. Idempotent
+  # (`create --dry-run=client | apply`): the same write on a fresh box, a no-op
+  # on a re-run.
+  kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
+    kubectl --kubeconfig="$KUBECONFIG" apply -f -
+  # THE ROLE SECRETS ARE RECONCILED ON EVERY RUN, INCLUDING A RE-RUN THAT
+  # SKIPS THE APPLY BELOW — which is why this call sits ABOVE the `cluster`
+  # guard and not below it. The guard's contract is "the Cluster exists, do not
+  # re-provision"; but a box installed with the broken `username` spelling is a
+  # box whose Cluster exists, so a repair behind the guard is a repair that
+  # never runs on the only box that needs it. `create_postgres_role_secrets`
+  # keeps every stored password and only corrects the `username` key, so
+  # running it on a healthy re-run is a no-op merge patch.
+  create_postgres_role_secrets
   if kit_substrate_guard cluster; then
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "create namespace data, create 8 postgres-role-* password secrets (generated once), apply ${DATA_DIR}/postgres-cluster.yaml"; then
-    return 0
-  fi
-  kubectl --kubeconfig="$KUBECONFIG" create namespace data --dry-run=client -o yaml |
-    kubectl --kubeconfig="$KUBECONFIG" apply -f -
-  # The role passwords. hex from /dev/urandom, so the value is URL-safe for
-  # DATABASE_URL below — base64's `+/=` are reserved in a URL userinfo and
-  # would need escaping at every use site. /dev/urandom and od are coreutils:
-  # no openssl assumption on the box.
-  create_postgres_role_secrets
   # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds): small,
   # re-applied on every run, and owned by this installer — which is exactly why
   # the mode takes the re-run's ability to reclaim a field away on the remote
