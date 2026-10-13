@@ -4,7 +4,7 @@
 own namespace, so no cross-service address resolved on a box.
 **Branch:** `roll-c5-crossns` (cut from master). **Worktree:**
 `moon/wt/roll-c5-crossns`.
-**Status:** fix committed (`04296c9`); narrow gate green; issuer pair measured
+**Status:** fix committed (`2c22116`); narrow gate green; issuer pair measured
 and reported.
 
 ---

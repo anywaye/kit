@@ -2,7 +2,7 @@
 
 **Branch:** `roll-c5-crossns` (worktree `moon/wt/roll-c5-crossns`).
 **Status:** the packet is **accomplished**; the branch is ready to merge.
-**Tip:** `04296c9` (fix) + this report/handoff commit.
+**Tip:** `2c22116` (fix) + this report/handoff commit.
 
 ## What the packet was for
 
