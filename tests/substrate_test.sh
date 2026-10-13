@@ -893,6 +893,96 @@ sed 's/^CNPG_VERSION="v1.30.1"/CNPG_VERSION="v1.31.0"/' \
 run 'control: a pin bump without re-deriving the model goes red' red \
   check_crd_fields "$CRD_MODEL" "$SUBSTRATE/manifests" "$fixture_pin_drift"
 
+# The bootstrap ORDER: postInitSQL runs once, at cluster creation, as the
+# superuser — BEFORE the operator reconciles spec.managed.roles (measured on
+# the live box: `role "identity" does not exist` inside postgres-1-initdb,
+# `kubectl get cluster` stuck in `Setting up primary`). So a bootstrap
+# statement that names a role must be preceded, IN THE SAME LIST, by a
+# CREATE ROLE for it — the grant belongs after the creation by construction
+# of the list order, not by luck of the operator's timing. And every role the
+# bootstrap names must also have a managed.roles entry, which is what gives
+# it its password and membership afterwards (a bootstrap-created role with no
+# managed entry is a role no service can log in as).
+#
+# The check walks the postInitSQL list in order, starting from the two roles
+# initdb itself guarantees (the `postgres` superuser, which the bootstrap
+# page forbids deleting, and the `app` owner the initdb database/owner block
+# creates), and fails on the first statement naming a role nothing above it
+# created. `FROM PUBLIC` and `ON DATABASE "x"` name no role and are ignored:
+# only OWNER "...", TO "..." and ROLE "..." are references, and only
+# CREATE ROLE "..." creates.
+check_cluster_bootstrap_order() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+import yaml
+
+path = sys.argv[1]
+try:
+    docs = list(yaml.safe_load_all(open(path, encoding="utf-8")))
+except yaml.YAMLError as e:
+    print(f"does not parse ({e})")
+    sys.exit(1)
+doc = docs[0]
+initdb = doc.get("spec", {}).get("bootstrap", {}).get("initdb", {})
+stmts = initdb.get("postInitSQL", [])
+managed = {
+    r.get("name")
+    for r in doc.get("spec", {}).get("managed", {}).get("roles", [])
+}
+problems = []
+created = {"postgres", "app"}
+ref_needles = (
+    re.compile(r'\bOWNER\s+"([^"]+)"'),
+    re.compile(r'\bTO\s+"([^"]+)"'),
+    re.compile(r'\bROLE\s+"([^"]+)"'),
+)
+for n, stmt in enumerate(stmts, 1):
+    made = re.findall(r'\bCREATE\s+ROLE\s+"([^"]+)"', stmt)
+    if made:
+        for role in made:
+            created.add(role)
+        continue
+    refs = []
+    for needle in ref_needles:
+        refs.extend(needle.findall(stmt))
+    for role in refs:
+        if role not in created:
+            problems.append(
+                f"postInitSQL statement {n} names role {role!r} before"
+                f" anything creates it ({stmt.strip()[:80]}) — managed"
+                " roles are reconciled only after bootstrap finishes"
+            )
+        elif role not in managed and role not in ("postgres", "app"):
+            problems.append(
+                f"postInitSQL names role {role!r} but no managed.roles"
+                " entry creates it — nothing would set its password"
+            )
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{len(stmts)} bootstrap statements, every named role created above its use")
+PY
+}
+
+run 'the Cluster bootstrap SQL creates every role before it names it' green check_cluster_bootstrap_order "$DATA_DIR/postgres-cluster.yaml"
+
+# The control: the same check against a fixture with the CREATE ROLE lines
+# removed — the shape this file had when the box crash-looped. MUST go red.
+fixture_no_creates="$WORK/no-creates-cluster.yaml"
+grep -v 'CREATE ROLE' "$DATA_DIR/postgres-cluster.yaml" >"$fixture_no_creates"
+run 'control: bootstrap SQL naming roles it never creates goes red' red check_cluster_bootstrap_order "$fixture_no_creates"
+
+# The second control: a fixture whose bootstrap CREATES a role no
+# managed.roles entry adopts, then grants to it. The ordering half passes
+# (the CREATE precedes the GRANT) so only the coverage half can fire — a
+# bootstrap role with no managed entry is a login no secret can reach.
+fixture_ghost="$WORK/ghost-role-cluster.yaml"
+awk '/- CREATE DATABASE "identity" OWNER "identity"$/{print "        - CREATE ROLE \"ghost\" WITH LOGIN"; print "        - GRANT CONNECT ON DATABASE \"identity\" TO \"ghost\""}1' \
+  "$DATA_DIR/postgres-cluster.yaml" >"$fixture_ghost"
+run 'control: bootstrap SQL naming a role no managed entry creates goes red' red check_cluster_bootstrap_order "$fixture_ghost"
+
 # The extension list is declared in install.sh with the compose default
 # (`vector`) and validated as identifiers — because no CNPG hook can create
 # extensions per database, the declaration is what the gate can hold. The
