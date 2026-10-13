@@ -12,8 +12,10 @@
 #   proven without a box: the script parses, DRY_RUN runs to completion
 #   printing the ordered steps, every pin is exact, every manifest parses, the
 #   two ClusterIssuers are staging and prod with distinct account keys, the
-#   Postgres Cluster reproduces the local provisioning contract, the Redis
-#   image is pinned exact, the NATS broker is installed with the fleet's
+#   Postgres Cluster reproduces the local provisioning contract, every CRD
+#   field the manifests write is declared by the operator the installer pins
+#   (§9b — the check that would have caught `spec.storageConfiguration`), the
+#   Redis image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates,
 #   no image floats on `latest`, no secret is a literal in the tree, and the
@@ -629,9 +631,9 @@ if "postInitApplicationSQL" in initdb or "postInitApplicationSQLRefs" in initdb:
         " ('Must be superuser') and fails the whole bootstrap; the manifest"
         " header names the gap instead"
     )
-store = spec.get("storageConfiguration", {})
+store = spec.get("storage", {})
 if not store.get("size"):
-    problems.append("spec.storageConfiguration.size is unset")
+    problems.append("spec.storage.size is unset")
 if store.get("storageClass") != "local-path":
     problems.append(
         f"storageClass is {store.get('storageClass')!r}, not 'local-path'"
@@ -699,6 +701,197 @@ fixture_app_sql="$WORK/app-sql-cluster.yaml"
 awk '/^      owner: app$/{print; print "      postInitApplicationSQL:"; print "        - SELECT 1"; next}1' \
   "$DATA_DIR/postgres-cluster.yaml" >"$fixture_app_sql"
 run 'control: a Cluster re-adding postInitApplicationSQL goes red' red check_cluster "$fixture_app_sql"
+
+# ===========================================================================
+# 9b. Every CRD field the manifests use is DECLARED by the operator the
+#     installer pins — the check that would have caught `storageConfiguration`
+# ===========================================================================
+#
+# WHY THIS EXISTS, and why every check above it was blind to the defect. The
+# Cluster was applied on the box and refused:
+#
+#   Cluster in version "v1" cannot be handled as a Cluster: strict decoding
+#     error: unknown field "spec.storageConfiguration"
+#
+# `storageConfiguration` is CNPG's PRE-1.24 name; v1.30.1 — the version
+# install_cnpg applies — declares `spec.storage`. The CRD is structural, so the
+# API server refuses the object rather than ignoring the unknown key. Every
+# check in this file passed on it, including check_cluster, which asserted
+# `spec.storageConfiguration.size` in so many words: a check written from the
+# manifest it was meant to grade is a check that can never disagree with it.
+#
+# THE MODEL IS DERIVED, NOT TYPED. tests/substrate-crd/schemas.json holds the
+# property-name graph of each pinned CRD's `spec`, produced by
+# tests/substrate-crd/regen.py from the SAME release URL install.sh applies —
+# so the allowed names come from the operator, never from the manifest under
+# test. A hand-typed allow-list would contain `storageConfiguration` the day
+# the manifest did, which is the failure this whole section is about.
+#
+# WHAT IT DOES, AND DOES NOT, PROVE. It proves every field NAME the manifests
+# write under `spec` exists in the pinned CRD at that path. It does not prove
+# types, required fields, enum values, or that a field means what the comment
+# says — those still need the box, and README says so. It is the strict-decoding
+# half only, and that half is what refused the install.
+#
+# The model carries the pin it was derived from; the check FAILS if the pin in
+# install.sh has moved without a re-derivation, so a version bump cannot
+# silently grade a manifest against a schema nobody re-fetched.
+CRD_MODEL="$ROOT/tests/substrate-crd/schemas.json"
+check_crd_fields() {
+  "$PY" - "$1" "$2" "$3" <<'PY'
+import json
+import os
+import re
+import sys
+
+import yaml
+
+model_path, manifests_root, install = sys.argv[1:4]
+try:
+    data = json.load(open(model_path, encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as e:
+    print(f"{model_path}: unreadable ({e})")
+    sys.exit(1)
+schemas = data["schemas"]
+sources = data["sources"]
+
+pins = dict(re.findall(
+    r'^(K3S_VERSION|CERT_MANAGER_VERSION|CNPG_VERSION|ARGOCD_VERSION|'
+    r'NATS_VERSION|NATS_BOX_VERSION)="([^"]+)"',
+    open(install, encoding="utf-8").read(), re.M))
+problems = []
+for key, src in sources.items():
+    have = pins.get(src["pin"])
+    if have != src["version"]:
+        problems.append(
+            f"{key}: model derived from {src['version']} but install.sh pins "
+            f"{src['pin']}={have} — re-derive tests/substrate-crd/schemas.json"
+        )
+    if key not in schemas:
+        problems.append(f"{key}: named in sources but has no schema")
+
+# Core Kubernetes API groups carry no CRD of ours, and are not what this check
+# grades; a doc in one of them is counted and skipped. A doc in an UNKNOWN
+# group fails closed, so a CRD that arrives without a model is visible.
+CORE_GROUPS = {
+    "", "apps", "batch", "policy", "autoscaling", "networking.k8s.io",
+    "rbac.authorization.k8s.io", "storage.k8s.io", "apiextensions.k8s.io",
+}
+
+
+def walk(schema, node, path, unknown, seen):
+    if schema is True or schema == "*":
+        return
+    if isinstance(schema, dict):
+        if "[]" in schema:
+            if isinstance(node, list):
+                for i, item in enumerate(node):
+                    walk(schema["[]"], item, f"{path}[{i}]", unknown, seen)
+            return
+        if not isinstance(node, dict):
+            return
+        for k, v in node.items():
+            if k in schema:
+                seen.add(f"{path}.{k}")
+                walk(schema[k], v, f"{path}.{k}", unknown, seen)
+            elif "*" not in schema:
+                unknown.append(f"{path}.{k}")
+
+
+seen_keys = set()
+verified = {}
+core_skipped = 0
+for dirpath, _dirs, files in os.walk(manifests_root):
+    for f in sorted(files):
+        if not f.endswith((".yaml", ".yml")):
+            continue
+        rel = os.path.relpath(os.path.join(dirpath, f), manifests_root)
+        raw = open(os.path.join(dirpath, f), encoding="utf-8").read()
+        try:
+            docs = [d for d in yaml.safe_load_all(raw) if d]
+        except yaml.YAMLError as e:
+            problems.append(f"{rel}: does not parse ({e})")
+            continue
+        for doc in docs:
+            api = doc.get("apiVersion", "")
+            key = f"{api}/{doc.get('kind')}"
+            group = api.split("/")[0] if "/" in api else ""
+            if key in schemas:
+                seen_before = len(seen_keys)
+                walk(schemas[key], doc.get("spec", {}), f"{key}.spec",
+                     problems, seen_keys)
+                verified[key] = verified.get(key, 0) + len(seen_keys) - seen_before
+            elif group in CORE_GROUPS:
+                core_skipped += 1
+            else:
+                problems.append(
+                    f"{rel}: {key}: no CRD model and not a core Kubernetes "
+                    "apiVersion — model the CRD or confirm it is core"
+                )
+
+# A CRD no manifest exercises means a manifest was renamed and this check is
+# no longer looking at it. That is a silent skip, so it fails.
+for key in sources:
+    if key not in verified:
+        problems.append(
+            f"{key}: declared in the model but no manifest under "
+            f"{manifests_root} uses it — has the manifest been renamed?"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+for key in sorted(verified):
+    src = sources[key]
+    print(f"{key}: {verified[key]} field path(s) declared by {src['crdName']} "
+          f"{src['version']} ({src['url'].rsplit('/', 1)[-1]})")
+print(f"{core_skipped} core Kubernetes document(s) skipped (no CRD schema)")
+PY
+}
+
+run 'every CRD field is declared by the pinned operator CRD' green \
+  check_crd_fields "$CRD_MODEL" "$SUBSTRATE/manifests" "$SUBSTRATE/install.sh"
+
+# The named control: the EXACT field the box refused. A fixture putting
+# `storageConfiguration` back must go red under the same check the real tree
+# passes. This is the red proof for the whole section — if this is green, the
+# check is not reading the CRD.
+#
+# The control directory mirrors the REAL manifest tree with exactly one line
+# changed. A directory holding only the mutated Cluster would go red on the
+# "a declared CRD is not exercised" guard instead of on the unknown field — a
+# red for the wrong reason, which proves nothing about the field check.
+fixture_storage_cfg="$WORK/crd-storage"
+mkdir -p "$fixture_storage_cfg/applications" "$fixture_storage_cfg/data" "$fixture_storage_cfg/tls"
+cp -R "$SUBSTRATE/manifests/applications/." "$fixture_storage_cfg/applications/"
+cp -R "$SUBSTRATE/manifests/data/." "$fixture_storage_cfg/data/"
+cp -R "$SUBSTRATE/manifests/tls/." "$fixture_storage_cfg/tls/"
+sed 's/^  storage:$/  storageConfiguration:/' \
+  "$DATA_DIR/postgres-cluster.yaml" >"$fixture_storage_cfg/data/postgres-cluster.yaml"
+run 'control: spec.storageConfiguration goes red' red \
+  check_crd_fields "$CRD_MODEL" "$fixture_storage_cfg" "$SUBSTRATE/install.sh"
+
+# A second control, at depth: a genuine v1.30.1 field with a retired spelling
+# (`storageClassName` instead of `storageClass`) must go red too, so the check
+# is not only looking at the top level. Same full-tree shape as above.
+fixture_nested="$WORK/crd-nested"
+mkdir -p "$fixture_nested/applications" "$fixture_nested/data" "$fixture_nested/tls"
+cp -R "$SUBSTRATE/manifests/applications/." "$fixture_nested/applications/"
+cp -R "$SUBSTRATE/manifests/data/." "$fixture_nested/data/"
+cp -R "$SUBSTRATE/manifests/tls/." "$fixture_nested/tls/"
+sed 's/^    storageClass: local-path$/    storageClassName: local-path/' \
+  "$DATA_DIR/postgres-cluster.yaml" >"$fixture_nested/data/postgres-cluster.yaml"
+run 'control: a nested unknown field (storageClassName) goes red' red \
+  check_crd_fields "$CRD_MODEL" "$fixture_nested" "$SUBSTRATE/install.sh"
+
+# A third control: the model's pin disagrees with install.sh. Bumping the
+# operator without re-deriving the model must go red, or the model silently
+# grades a manifest against a schema nobody re-fetched.
+fixture_pin_drift="$WORK/install-cnpg-drift.sh"
+sed 's/^CNPG_VERSION="v1.30.1"/CNPG_VERSION="v1.31.0"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_pin_drift"
+run 'control: a pin bump without re-deriving the model goes red' red \
+  check_crd_fields "$CRD_MODEL" "$SUBSTRATE/manifests" "$fixture_pin_drift"
 
 # The extension list is declared in install.sh with the compose default
 # (`vector`) and validated as identifiers — because no CNPG hook can create

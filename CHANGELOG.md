@@ -1,5 +1,27 @@
 ## Unreleased
 
+### Substrate
+
+- **The Postgres Cluster named a field CNPG v1.30.1 does not have, and the gate
+  was green over it.** `templates/substrate/manifests/data/postgres-cluster.yaml`
+  wrote `spec.storageConfiguration`, the operator's **pre-1.24** name; the pin
+  (`CNPG_VERSION="v1.30.1"`) declares `spec.storage`, and its CRD is structural,
+  so the box refused the apply — `strict decoding error: unknown field
+  "spec.storageConfiguration"` — rather than dropping the key. The manifest now
+  writes `storage` (the fields under it are unchanged), and the reason is at the
+  code site.
+- **The gate gained the check it lacked, and it is derived from the operator,
+  not typed from the manifest.** `tests/substrate_test.sh` §9b grades every
+  field the manifests write under `spec` against the pinned CRD's own property
+  graph (`tests/substrate-crd/schemas.json`, produced by `regen.py` from the
+  same release URLs `install.sh` applies). The absent check was the defect's
+  accomplice: `check_cluster` asserted `spec.storageConfiguration.size` in so
+  many words — a check written from the file it grades can never disagree with
+  it. Three controls must go red: the `storageConfiguration` name the box
+  refused, a nested retired spelling (`storageClassName`), and a pin bump
+  without re-deriving the model. A service tree is not involved, and the gate
+  stays offline.
+
 ### Publish
 
 - **The publish path had never once run, and the box could not pull what it

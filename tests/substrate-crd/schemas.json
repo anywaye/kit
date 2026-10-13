@@ -1,0 +1,2675 @@
+{
+  "note": "The property-name graph of each pinned CRD's spec, derived by tests/substrate-crd/regen.py from the same release URL templates/substrate/install.sh applies. Object -> {key: model}, array -> {'[]': model}, primitive or additionalProperties map -> True, arbitrary-key map -> '*'. NOT a type check and not exhaustive of Kubernetes semantics: it catches a field NAME the pinned CRD does not declare, which is exactly the class of defect CNPG's strict decoding refuses at apply time.",
+  "schemas": {
+    "argoproj.io/v1alpha1/Application": {
+      "destination": {
+        "name": "*",
+        "namespace": "*",
+        "server": "*"
+      },
+      "ignoreDifferences": {
+        "[]": {
+          "group": "*",
+          "jqPathExpressions": {
+            "[]": "*"
+          },
+          "jsonPointers": {
+            "[]": "*"
+          },
+          "kind": "*",
+          "managedFieldsManagers": {
+            "[]": "*"
+          },
+          "name": "*",
+          "namespace": "*"
+        }
+      },
+      "info": {
+        "[]": {
+          "name": "*",
+          "value": "*"
+        }
+      },
+      "project": "*",
+      "revisionHistoryLimit": "*",
+      "source": {
+        "chart": "*",
+        "directory": {
+          "exclude": "*",
+          "include": "*",
+          "jsonnet": {
+            "extVars": {
+              "[]": {
+                "code": "*",
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "libs": {
+              "[]": "*"
+            },
+            "tlas": {
+              "[]": {
+                "code": "*",
+                "name": "*",
+                "value": "*"
+              }
+            }
+          },
+          "recurse": "*"
+        },
+        "helm": {
+          "apiVersions": {
+            "[]": "*"
+          },
+          "fileParameters": {
+            "[]": {
+              "name": "*",
+              "path": "*"
+            }
+          },
+          "ignoreMissingValueFiles": "*",
+          "kubeVersion": "*",
+          "namespace": "*",
+          "parameters": {
+            "[]": {
+              "forceString": "*",
+              "name": "*",
+              "value": "*"
+            }
+          },
+          "passCredentials": "*",
+          "releaseName": "*",
+          "skipCrds": "*",
+          "skipSchemaValidation": "*",
+          "skipTests": "*",
+          "valueFiles": {
+            "[]": "*"
+          },
+          "values": "*",
+          "valuesObject": "*",
+          "version": "*"
+        },
+        "kustomize": {
+          "apiVersions": {
+            "[]": "*"
+          },
+          "commonAnnotations": "*",
+          "commonAnnotationsEnvsubst": "*",
+          "commonLabels": "*",
+          "components": {
+            "[]": "*"
+          },
+          "forceCommonAnnotations": "*",
+          "forceCommonLabels": "*",
+          "ignoreMissingComponents": "*",
+          "images": {
+            "[]": "*"
+          },
+          "kubeVersion": "*",
+          "labelIncludeTemplates": "*",
+          "labelWithoutSelector": "*",
+          "namePrefix": "*",
+          "nameSuffix": "*",
+          "namespace": "*",
+          "patches": {
+            "[]": {
+              "options": "*",
+              "patch": "*",
+              "path": "*",
+              "target": {
+                "annotationSelector": "*",
+                "group": "*",
+                "kind": "*",
+                "labelSelector": "*",
+                "name": "*",
+                "namespace": "*",
+                "version": "*"
+              }
+            }
+          },
+          "replicas": {
+            "[]": {
+              "count": "*",
+              "name": "*"
+            }
+          },
+          "version": "*"
+        },
+        "name": "*",
+        "path": "*",
+        "plugin": {
+          "env": {
+            "[]": {
+              "name": "*",
+              "value": "*"
+            }
+          },
+          "name": "*",
+          "parameters": {
+            "[]": {
+              "array": {
+                "[]": "*"
+              },
+              "map": "*",
+              "name": "*",
+              "string": "*"
+            }
+          }
+        },
+        "ref": "*",
+        "repoURL": "*",
+        "tagPrefix": "*",
+        "targetRevision": "*"
+      },
+      "sourceHydrator": {
+        "drySource": {
+          "directory": {
+            "exclude": "*",
+            "include": "*",
+            "jsonnet": {
+              "extVars": {
+                "[]": {
+                  "code": "*",
+                  "name": "*",
+                  "value": "*"
+                }
+              },
+              "libs": {
+                "[]": "*"
+              },
+              "tlas": {
+                "[]": {
+                  "code": "*",
+                  "name": "*",
+                  "value": "*"
+                }
+              }
+            },
+            "recurse": "*"
+          },
+          "helm": {
+            "apiVersions": {
+              "[]": "*"
+            },
+            "fileParameters": {
+              "[]": {
+                "name": "*",
+                "path": "*"
+              }
+            },
+            "ignoreMissingValueFiles": "*",
+            "kubeVersion": "*",
+            "namespace": "*",
+            "parameters": {
+              "[]": {
+                "forceString": "*",
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "passCredentials": "*",
+            "releaseName": "*",
+            "skipCrds": "*",
+            "skipSchemaValidation": "*",
+            "skipTests": "*",
+            "valueFiles": {
+              "[]": "*"
+            },
+            "values": "*",
+            "valuesObject": "*",
+            "version": "*"
+          },
+          "kustomize": {
+            "apiVersions": {
+              "[]": "*"
+            },
+            "commonAnnotations": "*",
+            "commonAnnotationsEnvsubst": "*",
+            "commonLabels": "*",
+            "components": {
+              "[]": "*"
+            },
+            "forceCommonAnnotations": "*",
+            "forceCommonLabels": "*",
+            "ignoreMissingComponents": "*",
+            "images": {
+              "[]": "*"
+            },
+            "kubeVersion": "*",
+            "labelIncludeTemplates": "*",
+            "labelWithoutSelector": "*",
+            "namePrefix": "*",
+            "nameSuffix": "*",
+            "namespace": "*",
+            "patches": {
+              "[]": {
+                "options": "*",
+                "patch": "*",
+                "path": "*",
+                "target": {
+                  "annotationSelector": "*",
+                  "group": "*",
+                  "kind": "*",
+                  "labelSelector": "*",
+                  "name": "*",
+                  "namespace": "*",
+                  "version": "*"
+                }
+              }
+            },
+            "replicas": {
+              "[]": {
+                "count": "*",
+                "name": "*"
+              }
+            },
+            "version": "*"
+          },
+          "path": "*",
+          "plugin": {
+            "env": {
+              "[]": {
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "name": "*",
+            "parameters": {
+              "[]": {
+                "array": {
+                  "[]": "*"
+                },
+                "map": "*",
+                "name": "*",
+                "string": "*"
+              }
+            }
+          },
+          "repoURL": "*",
+          "targetRevision": "*"
+        },
+        "hydrateTo": {
+          "targetBranch": "*"
+        },
+        "syncSource": {
+          "path": "*",
+          "repoURL": "*",
+          "targetBranch": "*"
+        }
+      },
+      "sources": {
+        "[]": {
+          "chart": "*",
+          "directory": {
+            "exclude": "*",
+            "include": "*",
+            "jsonnet": {
+              "extVars": {
+                "[]": {
+                  "code": "*",
+                  "name": "*",
+                  "value": "*"
+                }
+              },
+              "libs": {
+                "[]": "*"
+              },
+              "tlas": {
+                "[]": {
+                  "code": "*",
+                  "name": "*",
+                  "value": "*"
+                }
+              }
+            },
+            "recurse": "*"
+          },
+          "helm": {
+            "apiVersions": {
+              "[]": "*"
+            },
+            "fileParameters": {
+              "[]": {
+                "name": "*",
+                "path": "*"
+              }
+            },
+            "ignoreMissingValueFiles": "*",
+            "kubeVersion": "*",
+            "namespace": "*",
+            "parameters": {
+              "[]": {
+                "forceString": "*",
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "passCredentials": "*",
+            "releaseName": "*",
+            "skipCrds": "*",
+            "skipSchemaValidation": "*",
+            "skipTests": "*",
+            "valueFiles": {
+              "[]": "*"
+            },
+            "values": "*",
+            "valuesObject": "*",
+            "version": "*"
+          },
+          "kustomize": {
+            "apiVersions": {
+              "[]": "*"
+            },
+            "commonAnnotations": "*",
+            "commonAnnotationsEnvsubst": "*",
+            "commonLabels": "*",
+            "components": {
+              "[]": "*"
+            },
+            "forceCommonAnnotations": "*",
+            "forceCommonLabels": "*",
+            "ignoreMissingComponents": "*",
+            "images": {
+              "[]": "*"
+            },
+            "kubeVersion": "*",
+            "labelIncludeTemplates": "*",
+            "labelWithoutSelector": "*",
+            "namePrefix": "*",
+            "nameSuffix": "*",
+            "namespace": "*",
+            "patches": {
+              "[]": {
+                "options": "*",
+                "patch": "*",
+                "path": "*",
+                "target": {
+                  "annotationSelector": "*",
+                  "group": "*",
+                  "kind": "*",
+                  "labelSelector": "*",
+                  "name": "*",
+                  "namespace": "*",
+                  "version": "*"
+                }
+              }
+            },
+            "replicas": {
+              "[]": {
+                "count": "*",
+                "name": "*"
+              }
+            },
+            "version": "*"
+          },
+          "name": "*",
+          "path": "*",
+          "plugin": {
+            "env": {
+              "[]": {
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "name": "*",
+            "parameters": {
+              "[]": {
+                "array": {
+                  "[]": "*"
+                },
+                "map": "*",
+                "name": "*",
+                "string": "*"
+              }
+            }
+          },
+          "ref": "*",
+          "repoURL": "*",
+          "tagPrefix": "*",
+          "targetRevision": "*"
+        }
+      },
+      "syncPolicy": {
+        "automated": {
+          "allowEmpty": "*",
+          "enabled": "*",
+          "prune": "*",
+          "selfHeal": "*"
+        },
+        "managedNamespaceMetadata": {
+          "annotations": "*",
+          "labels": "*"
+        },
+        "retry": {
+          "backoff": {
+            "duration": "*",
+            "factor": "*",
+            "maxDuration": "*"
+          },
+          "limit": "*",
+          "refresh": "*"
+        },
+        "syncOptions": {
+          "[]": "*"
+        }
+      }
+    },
+    "cert-manager.io/v1/ClusterIssuer": {
+      "acme": {
+        "caBundle": "*",
+        "disableAccountKeyGeneration": "*",
+        "email": "*",
+        "enableDurationFeature": "*",
+        "externalAccountBinding": {
+          "keyAlgorithm": "*",
+          "keyID": "*",
+          "keySecretRef": {
+            "key": "*",
+            "name": "*"
+          }
+        },
+        "preferredChain": "*",
+        "privateKeySecretRef": {
+          "key": "*",
+          "name": "*"
+        },
+        "profile": "*",
+        "server": "*",
+        "skipTLSVerify": "*",
+        "solvers": {
+          "[]": {
+            "dns01": {
+              "acmeDNS": {
+                "accountSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "host": "*"
+              },
+              "akamai": {
+                "accessTokenSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "clientSecretSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "clientTokenSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "serviceConsumerDomain": "*"
+              },
+              "azureDNS": {
+                "clientID": "*",
+                "clientSecretSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "environment": "*",
+                "hostedZoneName": "*",
+                "managedIdentity": {
+                  "clientID": "*",
+                  "resourceID": "*",
+                  "tenantID": "*"
+                },
+                "resourceGroupName": "*",
+                "subscriptionID": "*",
+                "tenantID": "*",
+                "zoneType": "*"
+              },
+              "cloudDNS": {
+                "hostedZoneName": "*",
+                "project": "*",
+                "serviceAccountSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                }
+              },
+              "cloudflare": {
+                "apiKeySecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "apiTokenSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "email": "*"
+              },
+              "cnameStrategy": "*",
+              "digitalocean": {
+                "tokenSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                }
+              },
+              "rfc2136": {
+                "nameserver": "*",
+                "protocol": "*",
+                "tsigAlgorithm": "*",
+                "tsigKeyName": "*",
+                "tsigSecretSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                }
+              },
+              "route53": {
+                "accessKeyID": "*",
+                "accessKeyIDSecretRef": {
+                  "key": "*",
+                  "name": "*"
+                },
+                "auth": {
+                  "kubernetes": {
+                    "serviceAccountRef": {
+                      "audiences": {
+                        "[]": "*"
+                      },
+                      "name": "*"
+                    }
+                  }
+                },
+                "hostedZoneID": "*",
+                "region": "*",
+                "role": "*",
+                "secretAccessKeySecretRef": {
+                  "key": "*",
+                  "name": "*"
+                }
+              },
+              "webhook": {
+                "config": "*",
+                "groupName": "*",
+                "solverName": "*"
+              }
+            },
+            "http01": {
+              "gatewayHTTPRoute": {
+                "labels": "*",
+                "parentRefs": {
+                  "[]": {
+                    "group": "*",
+                    "kind": "*",
+                    "name": "*",
+                    "namespace": "*",
+                    "port": "*",
+                    "sectionName": "*"
+                  }
+                },
+                "podTemplate": {
+                  "metadata": {
+                    "annotations": "*",
+                    "labels": "*"
+                  },
+                  "spec": {
+                    "affinity": {
+                      "nodeAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "preference": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchFields": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              }
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "nodeSelectorTerms": {
+                            "[]": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchFields": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "podAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "podAffinityTerm": {
+                              "labelSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "matchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "mismatchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "namespaceSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "namespaces": {
+                                "[]": "*"
+                              },
+                              "topologyKey": "*"
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "labelSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "matchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "mismatchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "namespaceSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "namespaces": {
+                              "[]": "*"
+                            },
+                            "topologyKey": "*"
+                          }
+                        }
+                      },
+                      "podAntiAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "podAffinityTerm": {
+                              "labelSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "matchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "mismatchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "namespaceSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "namespaces": {
+                                "[]": "*"
+                              },
+                              "topologyKey": "*"
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "labelSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "matchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "mismatchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "namespaceSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "namespaces": {
+                              "[]": "*"
+                            },
+                            "topologyKey": "*"
+                          }
+                        }
+                      }
+                    },
+                    "imagePullSecrets": {
+                      "[]": {
+                        "name": "*"
+                      }
+                    },
+                    "nodeSelector": "*",
+                    "priorityClassName": "*",
+                    "resources": {
+                      "limits": "*",
+                      "requests": "*"
+                    },
+                    "securityContext": {
+                      "fsGroup": "*",
+                      "fsGroupChangePolicy": "*",
+                      "runAsGroup": "*",
+                      "runAsNonRoot": "*",
+                      "runAsUser": "*",
+                      "seLinuxOptions": {
+                        "level": "*",
+                        "role": "*",
+                        "type": "*",
+                        "user": "*"
+                      },
+                      "seccompProfile": {
+                        "localhostProfile": "*",
+                        "type": "*"
+                      },
+                      "supplementalGroups": {
+                        "[]": "*"
+                      },
+                      "sysctls": {
+                        "[]": {
+                          "name": "*",
+                          "value": "*"
+                        }
+                      }
+                    },
+                    "serviceAccountName": "*",
+                    "tolerations": {
+                      "[]": {
+                        "effect": "*",
+                        "key": "*",
+                        "operator": "*",
+                        "tolerationSeconds": "*",
+                        "value": "*"
+                      }
+                    }
+                  }
+                },
+                "serviceType": "*"
+              },
+              "ingress": {
+                "class": "*",
+                "ingressClassName": "*",
+                "ingressTemplate": {
+                  "metadata": {
+                    "annotations": "*",
+                    "labels": "*"
+                  }
+                },
+                "name": "*",
+                "podTemplate": {
+                  "metadata": {
+                    "annotations": "*",
+                    "labels": "*"
+                  },
+                  "spec": {
+                    "affinity": {
+                      "nodeAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "preference": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchFields": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              }
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "nodeSelectorTerms": {
+                            "[]": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchFields": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "podAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "podAffinityTerm": {
+                              "labelSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "matchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "mismatchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "namespaceSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "namespaces": {
+                                "[]": "*"
+                              },
+                              "topologyKey": "*"
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "labelSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "matchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "mismatchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "namespaceSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "namespaces": {
+                              "[]": "*"
+                            },
+                            "topologyKey": "*"
+                          }
+                        }
+                      },
+                      "podAntiAffinity": {
+                        "preferredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "podAffinityTerm": {
+                              "labelSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "matchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "mismatchLabelKeys": {
+                                "[]": "*"
+                              },
+                              "namespaceSelector": {
+                                "matchExpressions": {
+                                  "[]": {
+                                    "key": "*",
+                                    "operator": "*",
+                                    "values": {
+                                      "[]": "*"
+                                    }
+                                  }
+                                },
+                                "matchLabels": "*"
+                              },
+                              "namespaces": {
+                                "[]": "*"
+                              },
+                              "topologyKey": "*"
+                            },
+                            "weight": "*"
+                          }
+                        },
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                          "[]": {
+                            "labelSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "matchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "mismatchLabelKeys": {
+                              "[]": "*"
+                            },
+                            "namespaceSelector": {
+                              "matchExpressions": {
+                                "[]": {
+                                  "key": "*",
+                                  "operator": "*",
+                                  "values": {
+                                    "[]": "*"
+                                  }
+                                }
+                              },
+                              "matchLabels": "*"
+                            },
+                            "namespaces": {
+                              "[]": "*"
+                            },
+                            "topologyKey": "*"
+                          }
+                        }
+                      }
+                    },
+                    "imagePullSecrets": {
+                      "[]": {
+                        "name": "*"
+                      }
+                    },
+                    "nodeSelector": "*",
+                    "priorityClassName": "*",
+                    "resources": {
+                      "limits": "*",
+                      "requests": "*"
+                    },
+                    "securityContext": {
+                      "fsGroup": "*",
+                      "fsGroupChangePolicy": "*",
+                      "runAsGroup": "*",
+                      "runAsNonRoot": "*",
+                      "runAsUser": "*",
+                      "seLinuxOptions": {
+                        "level": "*",
+                        "role": "*",
+                        "type": "*",
+                        "user": "*"
+                      },
+                      "seccompProfile": {
+                        "localhostProfile": "*",
+                        "type": "*"
+                      },
+                      "supplementalGroups": {
+                        "[]": "*"
+                      },
+                      "sysctls": {
+                        "[]": {
+                          "name": "*",
+                          "value": "*"
+                        }
+                      }
+                    },
+                    "serviceAccountName": "*",
+                    "tolerations": {
+                      "[]": {
+                        "effect": "*",
+                        "key": "*",
+                        "operator": "*",
+                        "tolerationSeconds": "*",
+                        "value": "*"
+                      }
+                    }
+                  }
+                },
+                "serviceType": "*"
+              }
+            },
+            "selector": {
+              "dnsNames": {
+                "[]": "*"
+              },
+              "dnsZones": {
+                "[]": "*"
+              },
+              "matchLabels": "*"
+            },
+            "waitInsteadOfSelfCheck": "*"
+          }
+        }
+      },
+      "ca": {
+        "crlDistributionPoints": {
+          "[]": "*"
+        },
+        "issuingCertificateURLs": {
+          "[]": "*"
+        },
+        "ocspServers": {
+          "[]": "*"
+        },
+        "secretName": "*"
+      },
+      "selfSigned": {
+        "crlDistributionPoints": {
+          "[]": "*"
+        }
+      },
+      "vault": {
+        "auth": {
+          "appRole": {
+            "path": "*",
+            "roleId": "*",
+            "secretRef": {
+              "key": "*",
+              "name": "*"
+            }
+          },
+          "aws": {
+            "iamRoleArn": "*",
+            "mountPath": "*",
+            "region": "*",
+            "role": "*",
+            "serviceAccountRef": {
+              "audiences": {
+                "[]": "*"
+              },
+              "name": "*"
+            },
+            "vaultHeaderValue": "*"
+          },
+          "clientCertificate": {
+            "mountPath": "*",
+            "name": "*",
+            "secretName": "*"
+          },
+          "kubernetes": {
+            "mountPath": "*",
+            "role": "*",
+            "secretRef": {
+              "key": "*",
+              "name": "*"
+            },
+            "serviceAccountRef": {
+              "audiences": {
+                "[]": "*"
+              },
+              "name": "*"
+            }
+          },
+          "tokenSecretRef": {
+            "key": "*",
+            "name": "*"
+          }
+        },
+        "caBundle": "*",
+        "caBundleSecretRef": {
+          "key": "*",
+          "name": "*"
+        },
+        "clientCertSecretRef": {
+          "key": "*",
+          "name": "*"
+        },
+        "clientKeySecretRef": {
+          "key": "*",
+          "name": "*"
+        },
+        "namespace": "*",
+        "path": "*",
+        "server": "*",
+        "serverName": "*"
+      },
+      "venafi": {
+        "cloud": {
+          "apiTokenSecretRef": {
+            "key": "*",
+            "name": "*"
+          },
+          "url": "*"
+        },
+        "ngts": {
+          "credentialsRef": {
+            "name": "*"
+          },
+          "tokenEndpoint": "*",
+          "tsgID": "*",
+          "url": "*"
+        },
+        "tpp": {
+          "caBundle": "*",
+          "caBundleSecretRef": {
+            "key": "*",
+            "name": "*"
+          },
+          "credentialsRef": {
+            "name": "*"
+          },
+          "url": "*"
+        },
+        "zone": "*"
+      }
+    },
+    "postgresql.cnpg.io/v1/Cluster": {
+      "affinity": {
+        "additionalPodAffinity": {
+          "preferredDuringSchedulingIgnoredDuringExecution": {
+            "[]": {
+              "podAffinityTerm": {
+                "labelSelector": {
+                  "matchExpressions": {
+                    "[]": {
+                      "key": "*",
+                      "operator": "*",
+                      "values": {
+                        "[]": "*"
+                      }
+                    }
+                  },
+                  "matchLabels": "*"
+                },
+                "matchLabelKeys": {
+                  "[]": "*"
+                },
+                "mismatchLabelKeys": {
+                  "[]": "*"
+                },
+                "namespaceSelector": {
+                  "matchExpressions": {
+                    "[]": {
+                      "key": "*",
+                      "operator": "*",
+                      "values": {
+                        "[]": "*"
+                      }
+                    }
+                  },
+                  "matchLabels": "*"
+                },
+                "namespaces": {
+                  "[]": "*"
+                },
+                "topologyKey": "*"
+              },
+              "weight": "*"
+            }
+          },
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "[]": {
+              "labelSelector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "matchLabelKeys": {
+                "[]": "*"
+              },
+              "mismatchLabelKeys": {
+                "[]": "*"
+              },
+              "namespaceSelector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "namespaces": {
+                "[]": "*"
+              },
+              "topologyKey": "*"
+            }
+          }
+        },
+        "additionalPodAntiAffinity": {
+          "preferredDuringSchedulingIgnoredDuringExecution": {
+            "[]": {
+              "podAffinityTerm": {
+                "labelSelector": {
+                  "matchExpressions": {
+                    "[]": {
+                      "key": "*",
+                      "operator": "*",
+                      "values": {
+                        "[]": "*"
+                      }
+                    }
+                  },
+                  "matchLabels": "*"
+                },
+                "matchLabelKeys": {
+                  "[]": "*"
+                },
+                "mismatchLabelKeys": {
+                  "[]": "*"
+                },
+                "namespaceSelector": {
+                  "matchExpressions": {
+                    "[]": {
+                      "key": "*",
+                      "operator": "*",
+                      "values": {
+                        "[]": "*"
+                      }
+                    }
+                  },
+                  "matchLabels": "*"
+                },
+                "namespaces": {
+                  "[]": "*"
+                },
+                "topologyKey": "*"
+              },
+              "weight": "*"
+            }
+          },
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "[]": {
+              "labelSelector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "matchLabelKeys": {
+                "[]": "*"
+              },
+              "mismatchLabelKeys": {
+                "[]": "*"
+              },
+              "namespaceSelector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "namespaces": {
+                "[]": "*"
+              },
+              "topologyKey": "*"
+            }
+          }
+        },
+        "enablePodAntiAffinity": "*",
+        "nodeAffinity": {
+          "preferredDuringSchedulingIgnoredDuringExecution": {
+            "[]": {
+              "preference": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchFields": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                }
+              },
+              "weight": "*"
+            }
+          },
+          "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": {
+              "[]": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchFields": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "nodeSelector": "*",
+        "podAntiAffinityType": "*",
+        "tolerations": {
+          "[]": {
+            "effect": "*",
+            "key": "*",
+            "operator": "*",
+            "tolerationSeconds": "*",
+            "value": "*"
+          }
+        },
+        "topologyKey": "*"
+      },
+      "backup": {
+        "barmanObjectStore": {
+          "azureCredentials": {
+            "connectionString": {
+              "key": "*",
+              "name": "*"
+            },
+            "inheritFromAzureAD": "*",
+            "storageAccount": {
+              "key": "*",
+              "name": "*"
+            },
+            "storageKey": {
+              "key": "*",
+              "name": "*"
+            },
+            "storageSasToken": {
+              "key": "*",
+              "name": "*"
+            },
+            "useDefaultAzureCredentials": "*"
+          },
+          "data": {
+            "additionalCommandArgs": {
+              "[]": "*"
+            },
+            "compression": "*",
+            "encryption": "*",
+            "immediateCheckpoint": "*",
+            "jobs": "*",
+            "restoreAdditionalCommandArgs": {
+              "[]": "*"
+            }
+          },
+          "destinationPath": "*",
+          "endpointCA": {
+            "key": "*",
+            "name": "*"
+          },
+          "endpointURL": "*",
+          "googleCredentials": {
+            "applicationCredentials": {
+              "key": "*",
+              "name": "*"
+            },
+            "gkeEnvironment": "*"
+          },
+          "historyTags": "*",
+          "s3Credentials": {
+            "accessKeyId": {
+              "key": "*",
+              "name": "*"
+            },
+            "inheritFromIAMRole": "*",
+            "region": {
+              "key": "*",
+              "name": "*"
+            },
+            "secretAccessKey": {
+              "key": "*",
+              "name": "*"
+            },
+            "sessionToken": {
+              "key": "*",
+              "name": "*"
+            }
+          },
+          "serverName": "*",
+          "tags": "*",
+          "wal": {
+            "archiveAdditionalCommandArgs": {
+              "[]": "*"
+            },
+            "compression": "*",
+            "encryption": "*",
+            "maxParallel": "*",
+            "restoreAdditionalCommandArgs": {
+              "[]": "*"
+            }
+          }
+        },
+        "retentionPolicy": "*",
+        "target": "*",
+        "volumeSnapshot": {
+          "annotations": "*",
+          "className": "*",
+          "labels": "*",
+          "online": "*",
+          "onlineConfiguration": {
+            "immediateCheckpoint": "*",
+            "waitForArchive": "*"
+          },
+          "snapshotOwnerReference": "*",
+          "tablespaceClassName": "*",
+          "walClassName": "*"
+        }
+      },
+      "bootstrap": {
+        "initdb": {
+          "builtinLocale": "*",
+          "dataChecksums": "*",
+          "database": "*",
+          "encoding": "*",
+          "icuLocale": "*",
+          "icuRules": "*",
+          "import": {
+            "databases": {
+              "[]": "*"
+            },
+            "pgDumpExtraOptions": {
+              "[]": "*"
+            },
+            "pgRestoreDataOptions": {
+              "[]": "*"
+            },
+            "pgRestoreExtraOptions": {
+              "[]": "*"
+            },
+            "pgRestorePostdataOptions": {
+              "[]": "*"
+            },
+            "pgRestorePredataOptions": {
+              "[]": "*"
+            },
+            "postImportApplicationSQL": {
+              "[]": "*"
+            },
+            "roles": {
+              "[]": "*"
+            },
+            "schemaOnly": "*",
+            "source": {
+              "externalCluster": "*"
+            },
+            "type": "*"
+          },
+          "locale": "*",
+          "localeCType": "*",
+          "localeCollate": "*",
+          "localeProvider": "*",
+          "options": {
+            "[]": "*"
+          },
+          "owner": "*",
+          "postInitApplicationSQL": {
+            "[]": "*"
+          },
+          "postInitApplicationSQLRefs": {
+            "configMapRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            },
+            "secretRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            }
+          },
+          "postInitSQL": {
+            "[]": "*"
+          },
+          "postInitSQLRefs": {
+            "configMapRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            },
+            "secretRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            }
+          },
+          "postInitTemplateSQL": {
+            "[]": "*"
+          },
+          "postInitTemplateSQLRefs": {
+            "configMapRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            },
+            "secretRefs": {
+              "[]": {
+                "key": "*",
+                "name": "*"
+              }
+            }
+          },
+          "secret": {
+            "name": "*"
+          },
+          "walSegmentSize": "*"
+        },
+        "pg_basebackup": {
+          "database": "*",
+          "owner": "*",
+          "secret": {
+            "name": "*"
+          },
+          "source": "*"
+        },
+        "recovery": {
+          "backup": {
+            "endpointCA": {
+              "key": "*",
+              "name": "*"
+            },
+            "name": "*"
+          },
+          "database": "*",
+          "owner": "*",
+          "recoveryTarget": {
+            "backupID": "*",
+            "exclusive": "*",
+            "targetImmediate": "*",
+            "targetLSN": "*",
+            "targetName": "*",
+            "targetTLI": "*",
+            "targetTime": "*",
+            "targetXID": "*"
+          },
+          "secret": {
+            "name": "*"
+          },
+          "source": "*",
+          "volumeSnapshots": {
+            "storage": {
+              "apiGroup": "*",
+              "kind": "*",
+              "name": "*"
+            },
+            "tablespaceStorage": "*",
+            "walStorage": {
+              "apiGroup": "*",
+              "kind": "*",
+              "name": "*"
+            }
+          }
+        }
+      },
+      "certificates": {
+        "clientCASecret": "*",
+        "replicationTLSSecret": "*",
+        "serverAltDNSNames": {
+          "[]": "*"
+        },
+        "serverCASecret": "*",
+        "serverTLSSecret": "*"
+      },
+      "description": "*",
+      "enablePDB": "*",
+      "enableSuperuserAccess": "*",
+      "env": {
+        "[]": {
+          "name": "*",
+          "value": "*",
+          "valueFrom": {
+            "configMapKeyRef": {
+              "key": "*",
+              "name": "*",
+              "optional": "*"
+            },
+            "fieldRef": {
+              "apiVersion": "*",
+              "fieldPath": "*"
+            },
+            "fileKeyRef": {
+              "key": "*",
+              "optional": "*",
+              "path": "*",
+              "volumeName": "*"
+            },
+            "resourceFieldRef": {
+              "containerName": "*",
+              "divisor": "*",
+              "resource": "*"
+            },
+            "secretKeyRef": {
+              "key": "*",
+              "name": "*",
+              "optional": "*"
+            }
+          }
+        }
+      },
+      "envFrom": {
+        "[]": {
+          "configMapRef": {
+            "name": "*",
+            "optional": "*"
+          },
+          "prefix": "*",
+          "secretRef": {
+            "name": "*",
+            "optional": "*"
+          }
+        }
+      },
+      "ephemeralVolumeSource": {
+        "volumeClaimTemplate": {
+          "metadata": "*",
+          "spec": {
+            "accessModes": {
+              "[]": "*"
+            },
+            "dataSource": {
+              "apiGroup": "*",
+              "kind": "*",
+              "name": "*"
+            },
+            "dataSourceRef": {
+              "apiGroup": "*",
+              "kind": "*",
+              "name": "*",
+              "namespace": "*"
+            },
+            "resources": {
+              "limits": "*",
+              "requests": "*"
+            },
+            "selector": {
+              "matchExpressions": {
+                "[]": {
+                  "key": "*",
+                  "operator": "*",
+                  "values": {
+                    "[]": "*"
+                  }
+                }
+              },
+              "matchLabels": "*"
+            },
+            "storageClassName": "*",
+            "volumeAttributesClassName": "*",
+            "volumeMode": "*",
+            "volumeName": "*"
+          }
+        }
+      },
+      "ephemeralVolumesSizeLimit": {
+        "shm": "*",
+        "temporaryData": "*"
+      },
+      "externalClusters": {
+        "[]": {
+          "barmanObjectStore": {
+            "azureCredentials": {
+              "connectionString": {
+                "key": "*",
+                "name": "*"
+              },
+              "inheritFromAzureAD": "*",
+              "storageAccount": {
+                "key": "*",
+                "name": "*"
+              },
+              "storageKey": {
+                "key": "*",
+                "name": "*"
+              },
+              "storageSasToken": {
+                "key": "*",
+                "name": "*"
+              },
+              "useDefaultAzureCredentials": "*"
+            },
+            "data": {
+              "additionalCommandArgs": {
+                "[]": "*"
+              },
+              "compression": "*",
+              "encryption": "*",
+              "immediateCheckpoint": "*",
+              "jobs": "*",
+              "restoreAdditionalCommandArgs": {
+                "[]": "*"
+              }
+            },
+            "destinationPath": "*",
+            "endpointCA": {
+              "key": "*",
+              "name": "*"
+            },
+            "endpointURL": "*",
+            "googleCredentials": {
+              "applicationCredentials": {
+                "key": "*",
+                "name": "*"
+              },
+              "gkeEnvironment": "*"
+            },
+            "historyTags": "*",
+            "s3Credentials": {
+              "accessKeyId": {
+                "key": "*",
+                "name": "*"
+              },
+              "inheritFromIAMRole": "*",
+              "region": {
+                "key": "*",
+                "name": "*"
+              },
+              "secretAccessKey": {
+                "key": "*",
+                "name": "*"
+              },
+              "sessionToken": {
+                "key": "*",
+                "name": "*"
+              }
+            },
+            "serverName": "*",
+            "tags": "*",
+            "wal": {
+              "archiveAdditionalCommandArgs": {
+                "[]": "*"
+              },
+              "compression": "*",
+              "encryption": "*",
+              "maxParallel": "*",
+              "restoreAdditionalCommandArgs": {
+                "[]": "*"
+              }
+            }
+          },
+          "connectionParameters": "*",
+          "name": "*",
+          "password": {
+            "key": "*",
+            "name": "*",
+            "optional": "*"
+          },
+          "plugin": {
+            "enabled": "*",
+            "isWALArchiver": "*",
+            "name": "*",
+            "parameters": "*"
+          },
+          "sslCert": {
+            "key": "*",
+            "name": "*",
+            "optional": "*"
+          },
+          "sslKey": {
+            "key": "*",
+            "name": "*",
+            "optional": "*"
+          },
+          "sslRootCert": {
+            "key": "*",
+            "name": "*",
+            "optional": "*"
+          }
+        }
+      },
+      "failoverDelay": "*",
+      "imageCatalogRef": {
+        "apiGroup": "*",
+        "kind": "*",
+        "major": "*",
+        "name": "*"
+      },
+      "imageName": "*",
+      "imagePullPolicy": "*",
+      "imagePullSecrets": {
+        "[]": {
+          "name": "*"
+        }
+      },
+      "inheritedMetadata": {
+        "annotations": "*",
+        "labels": "*"
+      },
+      "instances": "*",
+      "livenessProbeTimeout": "*",
+      "logLevel": "*",
+      "managed": {
+        "roles": {
+          "[]": {
+            "bypassrls": "*",
+            "comment": "*",
+            "connectionLimit": "*",
+            "createdb": "*",
+            "createrole": "*",
+            "disablePassword": "*",
+            "ensure": "*",
+            "inRoles": {
+              "[]": "*"
+            },
+            "inherit": "*",
+            "login": "*",
+            "name": "*",
+            "passwordSecret": {
+              "name": "*"
+            },
+            "replication": "*",
+            "superuser": "*",
+            "validUntil": "*"
+          }
+        },
+        "services": {
+          "additional": {
+            "[]": {
+              "selectorType": "*",
+              "serviceTemplate": {
+                "metadata": {
+                  "annotations": "*",
+                  "labels": "*",
+                  "name": "*"
+                },
+                "spec": {
+                  "allocateLoadBalancerNodePorts": "*",
+                  "clusterIP": "*",
+                  "clusterIPs": {
+                    "[]": "*"
+                  },
+                  "externalIPs": {
+                    "[]": "*"
+                  },
+                  "externalName": "*",
+                  "externalTrafficPolicy": "*",
+                  "healthCheckNodePort": "*",
+                  "internalTrafficPolicy": "*",
+                  "ipFamilies": {
+                    "[]": "*"
+                  },
+                  "ipFamilyPolicy": "*",
+                  "loadBalancerClass": "*",
+                  "loadBalancerIP": "*",
+                  "loadBalancerSourceRanges": {
+                    "[]": "*"
+                  },
+                  "ports": {
+                    "[]": {
+                      "appProtocol": "*",
+                      "name": "*",
+                      "nodePort": "*",
+                      "port": "*",
+                      "protocol": "*",
+                      "targetPort": "*"
+                    }
+                  },
+                  "publishNotReadyAddresses": "*",
+                  "selector": "*",
+                  "sessionAffinity": "*",
+                  "sessionAffinityConfig": {
+                    "clientIP": {
+                      "timeoutSeconds": "*"
+                    }
+                  },
+                  "trafficDistribution": "*",
+                  "type": "*"
+                }
+              },
+              "updateStrategy": "*"
+            }
+          },
+          "disabledDefaultServices": {
+            "[]": "*"
+          }
+        }
+      },
+      "maxSyncReplicas": "*",
+      "minSyncReplicas": "*",
+      "monitoring": {
+        "customQueriesConfigMap": {
+          "[]": {
+            "key": "*",
+            "name": "*"
+          }
+        },
+        "customQueriesSecret": {
+          "[]": {
+            "key": "*",
+            "name": "*"
+          }
+        },
+        "disableDefaultQueries": "*",
+        "enablePodMonitor": "*",
+        "metricsQueriesTTL": "*",
+        "podMonitorMetricRelabelings": {
+          "[]": {
+            "action": "*",
+            "modulus": "*",
+            "regex": "*",
+            "replacement": "*",
+            "separator": "*",
+            "sourceLabels": {
+              "[]": "*"
+            },
+            "targetLabel": "*"
+          }
+        },
+        "podMonitorRelabelings": {
+          "[]": {
+            "action": "*",
+            "modulus": "*",
+            "regex": "*",
+            "replacement": "*",
+            "separator": "*",
+            "sourceLabels": {
+              "[]": "*"
+            },
+            "targetLabel": "*"
+          }
+        },
+        "tls": {
+          "enabled": "*"
+        }
+      },
+      "nodeMaintenanceWindow": {
+        "inProgress": "*",
+        "reusePVC": "*"
+      },
+      "plugins": {
+        "[]": {
+          "enabled": "*",
+          "isWALArchiver": "*",
+          "name": "*",
+          "parameters": "*"
+        }
+      },
+      "podSecurityContext": {
+        "appArmorProfile": {
+          "localhostProfile": "*",
+          "type": "*"
+        },
+        "fsGroup": "*",
+        "fsGroupChangePolicy": "*",
+        "runAsGroup": "*",
+        "runAsNonRoot": "*",
+        "runAsUser": "*",
+        "seLinuxChangePolicy": "*",
+        "seLinuxOptions": {
+          "level": "*",
+          "role": "*",
+          "type": "*",
+          "user": "*"
+        },
+        "seccompProfile": {
+          "localhostProfile": "*",
+          "type": "*"
+        },
+        "supplementalGroups": {
+          "[]": "*"
+        },
+        "supplementalGroupsPolicy": "*",
+        "sysctls": {
+          "[]": {
+            "name": "*",
+            "value": "*"
+          }
+        },
+        "windowsOptions": {
+          "gmsaCredentialSpec": "*",
+          "gmsaCredentialSpecName": "*",
+          "hostProcess": "*",
+          "runAsUserName": "*"
+        }
+      },
+      "podSelectorRefs": {
+        "[]": {
+          "name": "*",
+          "selector": {
+            "matchExpressions": {
+              "[]": {
+                "key": "*",
+                "operator": "*",
+                "values": {
+                  "[]": "*"
+                }
+              }
+            },
+            "matchLabels": "*"
+          }
+        }
+      },
+      "postgresGID": "*",
+      "postgresUID": "*",
+      "postgresql": {
+        "enableAlterSystem": "*",
+        "extensions": {
+          "[]": {
+            "bin_path": {
+              "[]": "*"
+            },
+            "dynamic_library_path": {
+              "[]": "*"
+            },
+            "env": {
+              "[]": {
+                "name": "*",
+                "value": "*"
+              }
+            },
+            "extension_control_path": {
+              "[]": "*"
+            },
+            "image": {
+              "pullPolicy": "*",
+              "reference": "*"
+            },
+            "ld_library_path": {
+              "[]": "*"
+            },
+            "name": "*"
+          }
+        },
+        "ldap": {
+          "bindAsAuth": {
+            "prefix": "*",
+            "suffix": "*"
+          },
+          "bindSearchAuth": {
+            "baseDN": "*",
+            "bindDN": "*",
+            "bindPassword": {
+              "key": "*",
+              "name": "*",
+              "optional": "*"
+            },
+            "searchAttribute": "*",
+            "searchFilter": "*"
+          },
+          "port": "*",
+          "scheme": "*",
+          "server": "*",
+          "tls": "*"
+        },
+        "parameters": "*",
+        "pg_hba": {
+          "[]": "*"
+        },
+        "pg_ident": {
+          "[]": "*"
+        },
+        "promotionTimeout": "*",
+        "shared_preload_libraries": {
+          "[]": "*"
+        },
+        "syncReplicaElectionConstraint": {
+          "enabled": "*",
+          "nodeLabelsAntiAffinity": {
+            "[]": "*"
+          }
+        },
+        "synchronous": {
+          "dataDurability": "*",
+          "failoverQuorum": "*",
+          "maxStandbyNamesFromCluster": "*",
+          "method": "*",
+          "number": "*",
+          "standbyNamesPost": {
+            "[]": "*"
+          },
+          "standbyNamesPre": {
+            "[]": "*"
+          }
+        }
+      },
+      "primaryLease": {
+        "leaseDurationSeconds": "*",
+        "releasedLeaseDurationSeconds": "*",
+        "renewDeadlineSeconds": "*",
+        "retryPeriodSeconds": "*"
+      },
+      "primaryUpdateMethod": "*",
+      "primaryUpdateStrategy": "*",
+      "priorityClassName": "*",
+      "probes": {
+        "liveness": {
+          "failureThreshold": "*",
+          "initialDelaySeconds": "*",
+          "isolationCheck": {
+            "connectionTimeout": "*",
+            "enabled": "*",
+            "requestTimeout": "*"
+          },
+          "periodSeconds": "*",
+          "successThreshold": "*",
+          "terminationGracePeriodSeconds": "*",
+          "timeoutSeconds": "*"
+        },
+        "readiness": {
+          "failureThreshold": "*",
+          "initialDelaySeconds": "*",
+          "maximumLag": "*",
+          "periodSeconds": "*",
+          "successThreshold": "*",
+          "terminationGracePeriodSeconds": "*",
+          "timeoutSeconds": "*",
+          "type": "*"
+        },
+        "startup": {
+          "failureThreshold": "*",
+          "initialDelaySeconds": "*",
+          "maximumLag": "*",
+          "periodSeconds": "*",
+          "successThreshold": "*",
+          "terminationGracePeriodSeconds": "*",
+          "timeoutSeconds": "*",
+          "type": "*"
+        }
+      },
+      "projectedVolumeTemplate": {
+        "defaultMode": "*",
+        "defaultUser": "*",
+        "sources": {
+          "[]": {
+            "clusterTrustBundle": {
+              "labelSelector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "name": "*",
+              "optional": "*",
+              "path": "*",
+              "signerName": "*",
+              "user": "*"
+            },
+            "configMap": {
+              "items": {
+                "[]": {
+                  "key": "*",
+                  "mode": "*",
+                  "path": "*",
+                  "user": "*"
+                }
+              },
+              "name": "*",
+              "optional": "*"
+            },
+            "downwardAPI": {
+              "items": {
+                "[]": {
+                  "fieldRef": {
+                    "apiVersion": "*",
+                    "fieldPath": "*"
+                  },
+                  "mode": "*",
+                  "path": "*",
+                  "resourceFieldRef": {
+                    "containerName": "*",
+                    "divisor": "*",
+                    "resource": "*"
+                  },
+                  "user": "*"
+                }
+              }
+            },
+            "podCertificate": {
+              "certificateChainPath": "*",
+              "credentialBundlePath": "*",
+              "keyPath": "*",
+              "keyType": "*",
+              "maxExpirationSeconds": "*",
+              "signerName": "*",
+              "user": "*",
+              "userAnnotations": "*"
+            },
+            "secret": {
+              "items": {
+                "[]": {
+                  "key": "*",
+                  "mode": "*",
+                  "path": "*",
+                  "user": "*"
+                }
+              },
+              "name": "*",
+              "optional": "*"
+            },
+            "serviceAccountToken": {
+              "audience": "*",
+              "expirationSeconds": "*",
+              "path": "*",
+              "user": "*"
+            }
+          }
+        }
+      },
+      "replica": {
+        "enabled": "*",
+        "minApplyDelay": "*",
+        "primary": "*",
+        "promotionToken": "*",
+        "self": "*",
+        "source": "*"
+      },
+      "replicationSlots": {
+        "highAvailability": {
+          "enabled": "*",
+          "slotPrefix": "*",
+          "synchronizeLogicalDecoding": "*"
+        },
+        "synchronizeReplicas": {
+          "enabled": "*",
+          "excludePatterns": {
+            "[]": "*"
+          }
+        },
+        "updateInterval": "*"
+      },
+      "resources": {
+        "claims": {
+          "[]": {
+            "name": "*",
+            "request": "*"
+          }
+        },
+        "limits": "*",
+        "requests": "*"
+      },
+      "schedulerName": "*",
+      "seccompProfile": {
+        "localhostProfile": "*",
+        "type": "*"
+      },
+      "securityContext": {
+        "allowPrivilegeEscalation": "*",
+        "appArmorProfile": {
+          "localhostProfile": "*",
+          "type": "*"
+        },
+        "capabilities": {
+          "add": {
+            "[]": "*"
+          },
+          "drop": {
+            "[]": "*"
+          }
+        },
+        "privileged": "*",
+        "procMount": "*",
+        "readOnlyRootFilesystem": "*",
+        "runAsGroup": "*",
+        "runAsNonRoot": "*",
+        "runAsUser": "*",
+        "seLinuxOptions": {
+          "level": "*",
+          "role": "*",
+          "type": "*",
+          "user": "*"
+        },
+        "seccompProfile": {
+          "localhostProfile": "*",
+          "type": "*"
+        },
+        "windowsOptions": {
+          "gmsaCredentialSpec": "*",
+          "gmsaCredentialSpecName": "*",
+          "hostProcess": "*",
+          "runAsUserName": "*"
+        }
+      },
+      "serviceAccountName": "*",
+      "serviceAccountTemplate": {
+        "metadata": {
+          "annotations": "*",
+          "labels": "*",
+          "name": "*"
+        }
+      },
+      "smartShutdownTimeout": "*",
+      "startDelay": "*",
+      "stopDelay": "*",
+      "storage": {
+        "pvcTemplate": {
+          "accessModes": {
+            "[]": "*"
+          },
+          "dataSource": {
+            "apiGroup": "*",
+            "kind": "*",
+            "name": "*"
+          },
+          "dataSourceRef": {
+            "apiGroup": "*",
+            "kind": "*",
+            "name": "*",
+            "namespace": "*"
+          },
+          "resources": {
+            "limits": "*",
+            "requests": "*"
+          },
+          "selector": {
+            "matchExpressions": {
+              "[]": {
+                "key": "*",
+                "operator": "*",
+                "values": {
+                  "[]": "*"
+                }
+              }
+            },
+            "matchLabels": "*"
+          },
+          "storageClassName": "*",
+          "volumeAttributesClassName": "*",
+          "volumeMode": "*",
+          "volumeName": "*"
+        },
+        "resizeInUseVolumes": "*",
+        "size": "*",
+        "storageClass": "*"
+      },
+      "superuserSecret": {
+        "name": "*"
+      },
+      "switchoverDelay": "*",
+      "tablespaces": {
+        "[]": {
+          "name": "*",
+          "owner": {
+            "name": "*"
+          },
+          "storage": {
+            "pvcTemplate": {
+              "accessModes": {
+                "[]": "*"
+              },
+              "dataSource": {
+                "apiGroup": "*",
+                "kind": "*",
+                "name": "*"
+              },
+              "dataSourceRef": {
+                "apiGroup": "*",
+                "kind": "*",
+                "name": "*",
+                "namespace": "*"
+              },
+              "resources": {
+                "limits": "*",
+                "requests": "*"
+              },
+              "selector": {
+                "matchExpressions": {
+                  "[]": {
+                    "key": "*",
+                    "operator": "*",
+                    "values": {
+                      "[]": "*"
+                    }
+                  }
+                },
+                "matchLabels": "*"
+              },
+              "storageClassName": "*",
+              "volumeAttributesClassName": "*",
+              "volumeMode": "*",
+              "volumeName": "*"
+            },
+            "resizeInUseVolumes": "*",
+            "size": "*",
+            "storageClass": "*"
+          },
+          "temporary": "*"
+        }
+      },
+      "topologySpreadConstraints": {
+        "[]": {
+          "labelSelector": {
+            "matchExpressions": {
+              "[]": {
+                "key": "*",
+                "operator": "*",
+                "values": {
+                  "[]": "*"
+                }
+              }
+            },
+            "matchLabels": "*"
+          },
+          "matchLabelKeys": {
+            "[]": "*"
+          },
+          "maxSkew": "*",
+          "minDomains": "*",
+          "nodeAffinityPolicy": "*",
+          "nodeTaintsPolicy": "*",
+          "topologyKey": "*",
+          "whenUnsatisfiable": "*"
+        }
+      },
+      "walStorage": {
+        "pvcTemplate": {
+          "accessModes": {
+            "[]": "*"
+          },
+          "dataSource": {
+            "apiGroup": "*",
+            "kind": "*",
+            "name": "*"
+          },
+          "dataSourceRef": {
+            "apiGroup": "*",
+            "kind": "*",
+            "name": "*",
+            "namespace": "*"
+          },
+          "resources": {
+            "limits": "*",
+            "requests": "*"
+          },
+          "selector": {
+            "matchExpressions": {
+              "[]": {
+                "key": "*",
+                "operator": "*",
+                "values": {
+                  "[]": "*"
+                }
+              }
+            },
+            "matchLabels": "*"
+          },
+          "storageClassName": "*",
+          "volumeAttributesClassName": "*",
+          "volumeMode": "*",
+          "volumeName": "*"
+        },
+        "resizeInUseVolumes": "*",
+        "size": "*",
+        "storageClass": "*"
+      }
+    }
+  },
+  "sources": {
+    "argoproj.io/v1alpha1/Application": {
+      "crdName": "applications.argoproj.io",
+      "pin": "ARGOCD_VERSION",
+      "url": "https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.4/manifests/core-install.yaml",
+      "version": "v3.5.4"
+    },
+    "cert-manager.io/v1/ClusterIssuer": {
+      "crdName": "clusterissuers.cert-manager.io",
+      "pin": "CERT_MANAGER_VERSION",
+      "url": "https://github.com/cert-manager/cert-manager/releases/download/v1.21.2/cert-manager.yaml",
+      "version": "v1.21.2"
+    },
+    "postgresql.cnpg.io/v1/Cluster": {
+      "crdName": "clusters.postgresql.cnpg.io",
+      "pin": "CNPG_VERSION",
+      "url": "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/v1.30.1/releases/cnpg-1.30.1.yaml",
+      "version": "v1.30.1"
+    }
+  }
+}
