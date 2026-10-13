@@ -50,6 +50,30 @@
   argv, the per-service marker, the re-run guard (no new pod), and a `Failed`
   pod that must fail the step naming the service — with the inventory-shrinks
   control. NATS becomes step 11 and the courier mint step 12; `TOTAL` 11 → 12.
+- **gateway's pod mounted a secret key nothing wrote, and waited forever on
+  the mount.** The chart's `Deployment` consumes two references from
+  `gateway-secrets`: a `secretKeyRef` for `REDIS_URL` and a `volumes.secret`
+  **item** for `ASSERTION_SIGNING_KEY`, mounted as
+  `/etc/gateway/assertion/signing.pem`. Step 9 created the secret with
+  `REDIS_URL` only, and a required volume item is a hard reference — so the pod
+  sat in `ContainerCreating` for 152 minutes on
+
+      MountVolume.SetUp failed for volume "assertion-key" : references
+      non-existent secret key: ASSERTION_SIGNING_KEY
+
+  while every earlier step reported success. Step 9 now **generates** the
+  assertion key on the box — a PKCS#8 RSA-2048 PEM, the spelling gateway parses
+  with `x509.ParsePKCS8PrivateKey`, never an operator input — writes it beside
+  `REDIS_URL`, and names it in the SECRET RECORD. A box installed before the key
+  existed holds all four service secrets, which would make the `secrets` guard
+  skip the step whole, so `reconcile_gateway_assertion_key` runs **above** the
+  guard and merge-patches only the missing key (a signing key has no ciphertext
+  to fork; the same shape the CNPG role-secret repair uses).
+  `check_chart_secret_keys` in `tests/substrate_test.sh` reads the four service
+  charts beside kit and requires every secret name and key they reference —
+  `envFrom.secretRef`, `secretKeyRef`, and `volumes.secret` items — to be in the
+  installer's inventory, with three red controls and a green one built on a
+  throwaway fixture fleet.
 - **An OCI Helm `Application` named the registry root, not the chart's own
   path, and every sync in the fleet's first end-to-end install failed.** The
   four service `Application`s in `templates/substrate/manifests/applications/`
