@@ -4943,7 +4943,7 @@ PY
   # no docker and no cluster — it runs the script's own DRY_RUN mode, which
   # executes nothing.
   section 'static: templates/substrate — the install is real, and its pins are exact'
-  check 'tests/substrate_test.sh  (install.sh parses, DRY_RUN runs, pins are exact, manifests parse, no :latest, no inline secret, NATS broker + stream + local/substrate drift)' \
+  check 'tests/substrate_test.sh  (install.sh parses, DRY_RUN runs, pins are exact, manifests parse, no :latest, no inline secret, NATS broker + stream + local/substrate drift, remote-URL applies server-side with force-conflicts and local applies client-side)' \
     bash "$ROOT/tests/substrate_test.sh"
 
   # -------------------------------------------------------------------------

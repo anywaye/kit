@@ -17,7 +17,14 @@
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates,
 #   no image floats on `latest`, no secret is a literal in the tree, and the
-#   env-var surface the leak check covers is still the surface the installer
+#   apply mode is assigned by where the manifest comes from — a REMOTE URL is
+#   `--server-side=true --force-conflicts` (client-side apply's
+#   last-applied-configuration annotation overflows Kubernetes's 262144-byte cap
+#   on metadata.annotations for cert-manager's, CNPG's and Argo CD's CRDs, and a
+#   re-run after any mixed-mode apply collides with "field managed by another
+#   client"), while kit's own manifests stay client-side so a re-run keeps the
+#   ability to reclaim its own fields.
+#   the env-var surface the leak check covers is still the surface the installer
 #   reads — so a rename that reaches one file and not the other goes red.
 #
 # EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
@@ -2649,6 +2656,177 @@ case "$refusal_no_human" in
     pass 'control: a refusal event with no human destination goes red'
     ;;
 esac
+
+# ===========================================================================
+# 14. THE APPLY MODE IS ASSIGNED BY WHERE THE MANIFEST COMES FROM
+# ===========================================================================
+#
+# Two installer defects, both measured only on a real k3s/k3d box, and neither
+# of which a compose run can see:
+#
+#   1. `kubectl apply -f <remote-url>` for CNPG's and Argo CD's manifests is
+#      refused by the API server with
+#        `CustomResourceDefinition ... is invalid: metadata.annotations:
+#         Too long: may not be more than 262144 bytes`
+#      Client-side apply stores the whole object in the
+#      last-applied-configuration annotation, and those CRDs are large enough
+#      to overflow Kubernetes's per-object annotation cap.
+#   2. On a RE-RUN after that was hand-repaired, the two halves collided:
+#      `field is managed by another client` — because one object had been
+#      written client-side and the next server-side, so the fix has to be
+#      consistent rather than per step.
+#
+# THE RULE, stated once and checked here: every apply whose target is a REMOTE
+# URL carries BOTH `--server-side=true` and `--force-conflicts`; every apply
+# whose target is a LOCAL file or stdin carries NEITHER. The remote half is
+# measured above; the local half is the reclaim side — these files are kit's
+# own, small, and re-applied on every run, so server-side apply there would take
+# away the re-run's ability to take back a field it previously owned.
+#
+# The assertions are BOTH DIRECTIONS and both spellings, because a one-way check
+# is satisfied by an installer that made the opposite mistake uniformly:
+#   * a remote apply missing either flag is RED (the defect that shipped)
+#   * a local apply carrying either flag is RED (the drift back into mixed mode)
+#   * the flags are required on the DRY_RUN plan string AND on the run, so the
+#     plan `caf box apply` reads cannot describe a mode the installer does not
+#     use
+#   * the rule is over ANY remote URL, not over a remembered list of three: a
+#     new remote apply with no flags is RED, which is the shape a future
+#     fourth component arrives in
+#   * a tree with fewer than three remote applies is RED, so the check cannot
+#     be satisfied by converting all of them away and passing on nothing
+check_apply_modes() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+# Comments stripped first, as everywhere in this file: the rule is about what
+# the installer RUNS, and a comment that spells the flags out is not a run.
+# (And this file's own prose names both flags, so a check that can be
+# satisfied by a comment would be green on the very tree it describes.)
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+# A backslash continuation is ONE command: `kubectl apply -f \` on one line
+# and the URL on the next is a single remote apply, and reading it as two
+# statements would miss the flags entirely.
+code = code.replace("\\\n", " ")
+
+problems = []
+remote = 0
+local = 0
+for ln in code.splitlines():
+    if "kubectl" not in ln or "apply" not in ln:
+        continue
+    m = re.search(r"(?:^|\s)-f\s+\"?([^\s\"]+)\"?", ln)
+    if not m:
+        # An apply with no target is not this check's subject (there is none
+        # here; it is refused rather than waved through).
+        continue
+    target = m.group(1)
+    if target.startswith(("http://", "https://")):
+        remote += 1
+        for flag in ("--server-side=true", "--force-conflicts"):
+            if flag not in ln:
+                problems.append(f"{target}: a remote apply without {flag}")
+    elif target == "-" or target.startswith(("$", "/", ".")):
+        # Local: a file in this repository or a piped stream built here.
+        local += 1
+        for flag in ("--server-side=true", "--force-conflicts"):
+            if flag in ln:
+                problems.append(
+                    f"the LOCAL apply of {target} carries {flag} — server-side"
+                    " mode for kit's own manifests takes a re-run's ability to"
+                    " reclaim its own fields away"
+                )
+    else:
+        problems.append(
+            f"cannot tell whether the apply target {target!r} is remote or"
+            " local — assign the mode explicitly instead of leaving it to a"
+            " reader"
+        )
+
+# Non-vacuity: the three upstream components are what the defect was measured
+# on, and a check whose subject disappeared would pass on the empty case.
+if remote < 3:
+    problems.append(f"expected at least 3 remote applies, found {remote}")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(
+    f"{remote} remote applies carry --server-side=true --force-conflicts,"
+    f" {local} local applies are client-side"
+)
+PY
+}
+
+run 'every remote-URL apply is server-side with force-conflicts, and every local apply is not' \
+  green check_apply_modes "$SUBSTRATE/install.sh"
+
+# The control that matters most: the shape the box actually hit. A copy in
+# which --force-conflicts is gone from every remote apply must be RED, and must
+# be red NAMING the flag — a control that fires for some other reason proves
+# nothing about the assertion it sits under.
+fixture_no_force="$WORK/install-no-force-conflicts.sh"
+sed 's/ --force-conflicts//g' "$SUBSTRATE/install.sh" >"$fixture_no_force"
+mode_out=""; mode_ec=0
+mode_out="$(check_apply_modes "$fixture_no_force" 2>&1)" || mode_ec=$?
+case "$mode_ec:$mode_out" in
+  0:*)
+    fail 'control: a remote apply without --force-conflicts goes red' "exit 0 — the check cannot see a missing flag"
+    ;;
+  *force-conflicts*)
+    pass 'control: a remote apply without --force-conflicts goes red, naming the flag'
+    ;;
+  *)
+    fail 'control: a remote apply without --force-conflicts goes red, naming the flag' "$mode_out"
+    ;;
+esac
+
+# The other half: --server-side is what survives the annotation ceiling, and
+# removing it alone must be RED too. Two flags, two controls — a check that
+# only notices one of them is half a rule.
+fixture_no_ss="$WORK/install-no-server-side.sh"
+sed 's/ --server-side=true//g' "$SUBSTRATE/install.sh" >"$fixture_no_ss"
+mode_out=""; mode_ec=0
+mode_out="$(check_apply_modes "$fixture_no_ss" 2>&1)" || mode_ec=$?
+case "$mode_ec:$mode_out" in
+  0:*)
+    fail 'control: a remote apply without --server-side goes red' "exit 0 — the check cannot see a missing flag"
+    ;;
+  *server-side*)
+    pass 'control: a remote apply without --server-side goes red, naming the flag'
+    ;;
+  *)
+    fail 'control: a remote apply without --server-side goes red, naming the flag' "$mode_out"
+    ;;
+esac
+
+# A THIRD remote component, arriving with no flags. This is the control that
+# stops the check being a list of three remembered lines rather than a rule.
+fixture_new_remote="$WORK/install-new-remote.sh"
+cp "$SUBSTRATE/install.sh" "$fixture_new_remote"
+printf '  kubectl --kubeconfig="$KUBECONFIG" apply -f "https://example.com/some-new-operator.yaml"\n' \
+  >>"$fixture_new_remote"
+run 'control: a fourth remote apply with no flags goes red' red check_apply_modes "$fixture_new_remote"
+
+# The OTHER DIRECTION: a local apply that grew the remote flags. Without this
+# control a check satisfied by "every apply has both flags" would be just as
+# happy with an installer that moved kit's own manifests into server-side mode
+# and lost the re-run's reclaim.
+fixture_local_ss="$WORK/install-local-server-side.sh"
+sed 's|apply -f "$MANIFEST_DIR"|apply --server-side=true --force-conflicts -f "$MANIFEST_DIR"|' \
+  "$SUBSTRATE/install.sh" >"$fixture_local_ss"
+run 'control: a local apply carrying the remote flags goes red' red check_apply_modes "$fixture_local_ss"
+
+# And the plan half: the DRY_RUN string is what `caf box apply` reads and what
+# the receipt describes, so a run that gained the flags while its plan did not
+# is the drift a future reader would notice at the box and not here.
+fixture_plan_drift="$WORK/install-plan-drift.sh"
+awk '/dry_run/ { gsub(/ --server-side=true --force-conflicts/, ""); } { print }' \
+  "$SUBSTRATE/install.sh" >"$fixture_plan_drift"
+run 'control: a plan that lost the flags while the run kept them goes red' red \
+  check_apply_modes "$fixture_plan_drift"
 
 # ===========================================================================
 # Summary
