@@ -3,9 +3,10 @@
 **Branch:** `roll/c5-mint-pair`, cut from master. Commits:
 
 ```
-fix(substrate): the mint writes each credential pair whole, and the done path exits 0
-docs(changelog): the half-pair defect, the global RETURN trap, and what proves each
-docs(report): roll-c5-mint-pair — the pair's four keys, the trap's mechanism, the controls
+cb9c02d docs(report): name the link-template blocker the pair fix exposes, at the code site too
+11f400a docs(report): roll-c5-mint-pair — the pair's four keys, the trap's mechanism, the controls
+a8bdafd docs(changelog): the half-pair defect, the global RETURN trap, and what proves each
+f0d5f91 fix(substrate): the mint writes each credential pair whole, and the done path exits 0
 ```
 
 **Source of the live evidence:** `reports/REPORT-roll-c4-e2e.md:126-136` (the
