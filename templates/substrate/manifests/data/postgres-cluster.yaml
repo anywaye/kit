@@ -27,6 +27,21 @@
 #                                     happens — and that is why `postInitSQL`
 #                                     with CREATE DATABASE is a supported pattern
 #                                     rather than the transaction error above.
+#     AND the roles themselves, created. postInitSQL runs at bootstrap as
+#       the superuser BEFORE the operator reconciles spec.managed.roles —
+#       measured on the live box, which crash-looped postgres-1-initdb with
+#       `role "identity" does not exist` while running exactly the GRANTs
+#       below. So each service block below creates its two roles FIRST and
+#       only then names them in CREATE DATABASE / GRANT / ALTER: the order
+#       is by construction of the list, not by luck of the operator's
+#       timing. managed.roles reconciles the same roles afterwards
+#       (password from the secret, LOGIN, the inRoles membership), adopting
+#       the bootstrap-created roles — declarative management covers
+#       existing roles as well as new ones, so the CREATE here and the
+#       `ensure: present` below are the same role, not two.
+#       The CREATEs carry WITH LOGIN and nothing else: no password (a
+#       literal here would put a secret in the tree; step 8's secrets set
+#       it on reconcile), no membership (inRoles below owns that).
 #   spec.managed.roles (below)        the roles themselves, their LOGIN flags,
 #                                     their passwords (via passwordSecret, made
 #                                     by install.sh step 8), and the membership
@@ -127,12 +142,15 @@ spec:
       database: app
       owner: app
       # One item per statement (see the header: no implicit transaction may
-      # ever wrap a CREATE DATABASE). Each service block is three statements:
-      # database, boundary, limits. The roles the statements name are
-      # reconciled by spec.managed.roles below; bootstrap order inside CNPG
-      # applies managed roles before postInitSQL runs.
+      # ever wrap a CREATE DATABASE). Each service block is FIVE statements:
+      # two role creations, then database, boundary, limits. The roles the
+      # later statements name are created by the block's own first two
+      # statements — postInitSQL runs before managed.roles reconciliation,
+      # so nothing here may name a role it did not create above itself.
       postInitSQL:
         # --- identity ---
+        - CREATE ROLE "identity" WITH LOGIN
+        - CREATE ROLE "identity_app" WITH LOGIN
         - CREATE DATABASE "identity" OWNER "identity"
         - REVOKE ALL ON DATABASE "identity" FROM PUBLIC
         - GRANT CONNECT, TEMPORARY ON DATABASE "identity" TO "identity"
@@ -143,6 +161,8 @@ spec:
         - ALTER ROLE "identity_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "identity_app" SET idle_in_transaction_session_timeout = '30000ms'
         # --- gateway ---
+        - CREATE ROLE "gateway" WITH LOGIN
+        - CREATE ROLE "gateway_app" WITH LOGIN
         - CREATE DATABASE "gateway" OWNER "gateway"
         - REVOKE ALL ON DATABASE "gateway" FROM PUBLIC
         - GRANT CONNECT, TEMPORARY ON DATABASE "gateway" TO "gateway"
@@ -153,6 +173,8 @@ spec:
         - ALTER ROLE "gateway_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "gateway_app" SET idle_in_transaction_session_timeout = '30000ms'
         # --- courier ---
+        - CREATE ROLE "courier" WITH LOGIN
+        - CREATE ROLE "courier_app" WITH LOGIN
         - CREATE DATABASE "courier" OWNER "courier"
         - REVOKE ALL ON DATABASE "courier" FROM PUBLIC
         - GRANT CONNECT, TEMPORARY ON DATABASE "courier" TO "courier"
@@ -163,6 +185,8 @@ spec:
         - ALTER ROLE "courier_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "courier_app" SET idle_in_transaction_session_timeout = '30000ms'
         # --- parlor ---
+        - CREATE ROLE "parlor" WITH LOGIN
+        - CREATE ROLE "parlor_app" WITH LOGIN
         - CREATE DATABASE "parlor" OWNER "parlor"
         - REVOKE ALL ON DATABASE "parlor" FROM PUBLIC
         - GRANT CONNECT, TEMPORARY ON DATABASE "parlor" TO "parlor"
