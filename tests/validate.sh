@@ -4409,6 +4409,17 @@ print(prefix + ("notarealsecret" * 3)[:32])
     bash "$ROOT/tests/chart_publish_check.sh" "$1" "$2"
   }
 
+  check_publish_seam() {
+    # Single source of truth, the same rule: tests/publish_seam_check.sh
+    # holds the publish-path assertions and all four red controls — the
+    # root-relative `uses:` references, the caller/callee agreement in both
+    # directions, the derived appVersion image tag, the surviving sha-<40>,
+    # and every sibling chart beside $ROOT/.. against its Application. The
+    # gate calls it so a PASS here means exactly what the focused proof
+    # (tests/focused_publish.sh) means.
+    bash "$ROOT/tests/publish_seam_check.sh" "$1" "$2" "$3" "$4"
+  }
+
   # -------------------------------------------------------------------------
   # The observability chart sources — every Application resolves to a chart
   # somebody publishes.
@@ -4984,6 +4995,48 @@ PY
   check 'chart publish  (workflow_call, push defaults false, registry == every service Application repoURL, name/version not inputs, pull_request refused)' \
     check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
       "$ROOT/templates/substrate/manifests/applications"
+
+  # -------------------------------------------------------------------------
+  # The PUBLISH path itself — the composer's own seams, and the chart the
+  # box pulls beside the images the publish produces.
+  #
+  # WHY THIS CHECK EXISTS. Two defects measured on the four services'
+  # publish runs, both silent:
+  #   1. `publish.reusable.yml` called its siblings with
+  #      `uses: ./image.reusable.yml` and `uses: ./chart.reusable.yml`.
+  #      GitHub resolves a local reusable workflow from the repository ROOT
+  #      as `./.github/workflows/<file>`, so the run was rejected at
+  #      workflow-resolution time — `referenced_workflows: []`, no jobs, no
+  #      check-runs, no log line — and the services' publish workflows
+  #      failed on every push since they were created.
+  #   2. The image workflow published only sha-<40>/<branch>/latest while
+  #      every chart's values.yaml pins `image.tag` to its appVersion: a
+  #      box pulling the published chart asked the registry for a tag
+  #      nothing created. ImagePullBackOff, with nothing in the symptom
+  #      naming the publish path.
+  #
+  # THE FLEET HALF IS ONE LEVEL UP AND NAMED, NOT SKIPPED. Service charts
+  # beside this repository are asserted when present — chart `version`
+  # against the Application's `targetRevision`, values.yaml's `image.tag`
+  # against the chart's own `appVersion`, and the service's own publish.yml
+  # against the composer's declared inputs — and every chart carrying a
+  # service's name is asserted, never the first one found (measured: the
+  # website repo carried a parlor chart from two worktrees at once, and a
+  # silent first-match is a verdict the check cannot defend). A service
+  # whose sibling checkout is absent is NAMED in a note, which is the kit
+  # discipline for a neighbour nobody checked out: a skip that cannot be
+  # read is a silent pass. On a fresh clone every service is a note and the
+  # four in-repo assertions still run.
+  #
+  # Its four controls (unresolved path, literal tag, values pinning an
+  # unpublished tag, sha tag deleted) must go red under the same assertions
+  # the real tree passes.
+  section 'static: the publish path — the references resolve, and the tag the chart pins is the tag the publish produces'
+  check 'publish seam  (local uses root-relative and resolving; caller/callee inputs agree both ways; appVersion derived into the image tag; sha-<40> kept; sibling charts agree with their Applications)' \
+    check_publish_seam "$ROOT/.github/workflows" \
+      "$ROOT/templates/substrate/manifests/applications" \
+      "$ROOT/.." \
+      "$ROOT/templates/publish/publish.yml"
 
   # -------------------------------------------------------------------------
   # The observability chart sources — every Application resolves to a chart

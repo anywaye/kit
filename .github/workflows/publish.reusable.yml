@@ -172,7 +172,8 @@ jobs:
           # field is missing. The empty check is the real refusal.
           app="$(grep -m1 '^appVersion:' "$chart" | sed 's/^appVersion:[[:space:]]*//' | tr -d "\"'" || true)"
           if [ -z "$app" ]; then
-            echo "publish: $chart exists but carries no appVersion — its values.yaml pins an image tag this workflow could never produce" >&2
+            echo "publish: $chart has no appVersion — its values.yaml pins an image tag this workflow" >&2
+            echo "could never produce: there is no appVersion to read the tag from" >&2
             exit 1
           fi
           echo "publish: chart appVersion $app — the image gets that tag so the chart's values.yaml resolves"

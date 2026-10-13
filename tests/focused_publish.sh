@@ -16,6 +16,12 @@
 #      name/version not inputs, pull_request refused, plus both red controls
 #      (drifted repoURL, flipped push default). Same file, same assertions,
 #      same verdict; no second implementation to drift.
+#   3. tests/publish_seam_check.sh: the gate's EXACT publish-path proof —
+#      the same file tests/validate.sh calls — the local reusable-workflow
+#      references root-relative and resolving, caller/callee inputs agreeing
+#      in both directions, the image tag derived from Chart.yaml's
+#      appVersion, sha-<40> kept, and every sibling chart beside
+#      $ROOT/.. asserted against its Application (or named absent).
 #
 # WHAT IT NEVER DOES. It never invokes tests/validate.sh — not the full gate
 # and not `--only`. The re-entrancy this packet removes lived INSIDE the
@@ -75,6 +81,15 @@ if ! bash "$ROOT/tests/chart_publish_check.sh" \
   exit 1
 fi
 
-printf 'FOCUSED=publish  pass=%d skip=%d + chart publish check passed (same file the gate calls, both red controls red)\n' "$pass" "$skip"
+if ! bash "$ROOT/tests/publish_seam_check.sh" \
+  "$ROOT/.github/workflows" \
+  "$ROOT/templates/substrate/manifests/applications" \
+  "$ROOT/.." \
+  "$ROOT/templates/publish/publish.yml"; then
+  printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + publish seam check FAILED\n' "$pass" "$fail" "$skip"
+  exit 1
+fi
+
+printf 'FOCUSED=publish  pass=%d skip=%d + chart publish and publish seam checks passed (same files the gate calls, all red controls red)\n' "$pass" "$skip"
 printf 'NOT RUN: tier, telemetry, observability, lint, tenancy, substrate, obs chart sources, and every other check — focused publish proof only, not a platform-test pass. Full proof: bash tests/validate.sh\n'
 exit 0

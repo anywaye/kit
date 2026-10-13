@@ -1,5 +1,60 @@
 ## Unreleased
 
+### Publish
+
+- **The publish path had never once run, and the box could not pull what it
+  never published.** Two defects, both silent, both measured on the four
+  services' failed publish runs:
+  - **`publish.reusable.yml` called its siblings with a path that omitted the
+    directory** — `uses: ./image.reusable.yml` and `uses: ./chart.reusable.yml`.
+    GitHub resolves a local reusable workflow from the repository ROOT as
+    `./.github/workflows/<file>`, so the run was refused at
+    workflow-resolution time: `referenced_workflows: []`, no jobs, no
+    check-runs, no log line. Verified against GitHub's own docs, and
+    `actionlint` — which walks the same path — reports `could not read
+    reusable workflow file` on any other spelling. Both references are now
+    root-relative, and `actionlint` is clean across
+    `.github/workflows/*.yml` — which it was not at HEAD.
+  - **The image tag the chart pinned was a tag nothing published.** Every
+    chart's `values.yaml` pins `image.tag` to its own `appVersion`
+    (gateway's `Chart.yaml` states the rule in prose) while the image
+    workflow published only `sha-<40>`, `<branch>` and `latest`: a box that
+    pulled the published chart asked ghcr for a tag nothing ever created and
+    sat in `ImagePullBackOff` with nothing in the symptom naming the publish
+    path. The composer is the only party that knows `chart-dir`, so
+    `publish.reusable.yml` now reads `appVersion` in a small `resolve` job —
+    a job whose whole body is `uses:` cannot carry steps — and passes it to
+    a new `app-version` input that `image.reusable.yml` appends to the
+    metadata tag list. Nothing is copied into a second file: a service with
+    an image and no chart composes exactly as before (empty input, unchanged
+    three tags), and a chart that exists with no `appVersion` fails the read
+    by name — that is the invariant, not a missing-chart note.
+- **The seam is proven, and the proof can go red.**
+  `tests/publish_seam_check.sh` — the same file the gate and
+  `tests/focused_publish.sh` call — asserts the local `uses:` references are
+  root-relative and resolve; that caller and callee agree on inputs in BOTH
+  directions (a caller passing an input the callee does not declare is a
+  refusal at run time); that the image's `app-version` is the derived
+  `needs.…outputs.app-version` and never a literal; that `sha-<40>` is still
+  published; and — where a sibling checkout beside this repository carries a
+  service's chart — that the chart's `version` is the Application's
+  `targetRevision` and its `values.yaml` `image.tag` is the same string as
+  its `appVersion`, never `latest`. EVERY sibling carrying a service's chart
+  name is asserted, never the first one found (measured: the website repo,
+  mid-rename, carried a parlor chart from two worktrees at once, and a
+  silent first-match is a verdict the check cannot defend); a service whose
+  sibling is absent is NAMED in a note rather than skipped. Four red
+  controls: the unresolved path, the literal tag, a values tag the publish
+  never produces, and the sha tag deleted.
+- **`sha-<40>` remains the immutable tag**, and the appVersion tag is added
+  beside it, never instead of it — which is what control (d) of the new
+  proof measures.
+- **Fixed, found by `actionlint` on the way to clean:** the image
+  workflow's `digest` output was read from `steps.meta.outputs.digest` — an
+  output docker/metadata-action has never produced — so it was empty for
+  every caller. The digest is the BUILD action's output; wired to
+  `steps.build.outputs.digest` with the step id the reference needs.
+
 ### Substrate
 
 - **`kubectl apply` is in one of two modes, and the target decides which.** Two
