@@ -81,14 +81,33 @@
     applied synchronously, but its pods are created ASYNCHRONOUSLY by the CNPG
     operator, so `-l cnpg.io/cluster=postgres` could match ZERO pods the instant
     the apply returned. Existence is proved first there too.
-  - **Every other wait in the installer was audited and none of them races.**
-    cert-manager's and Argo CD's `--all` waits, and the four named waits
-    (`cnpg-controller-manager`, `argocd-server`, `redis`, `nats`), all run
+  - **Every other `kubectl wait` in the installer was audited and none of them
+    races.** cert-manager's and Argo CD's `--all` waits, and the four named
+    waits (`cnpg-controller-manager`, `argocd-server`, `redis`, `nats`), all run
     immediately after a synchronous `kubectl apply` of the very objects they
     select — apply is a round trip that created them, so the list cannot be
-    empty. `tests/substrate_test.sh` §17 states that classification as a
-    coupling: a LIST wait is excused only by an apply of what it selects earlier
-    in the same function, or by a matching `kit_substrate_await_list`.
+    empty. `argocd-server` in step 6 is the closest call: the apply above it is
+    the Argo `Application`s, not the deployment, so its safety rests on step 4
+    having waited for it earlier in the same run rather than on the line above
+    it. `tests/substrate_test.sh` §17 states the rest of that classification as
+    a coupling, so a wait added later is covered by construction: a LIST wait is
+    excused only by an apply of what it selects earlier in the same function, or
+    by a matching `kit_substrate_await_list`.
+  - **NOT FIXED, because it is a different mechanism and this packet did not have
+    the budget to prove it: step 11's `kubectl -n identity rollout status
+    deployment/identity`** (`install.sh`, in `mint_courier_identity_token`) is
+    the same *class* of race on a different controller. `identity`'s Deployment
+    is created by ARGO, not by this installer — step 6 applies the Application
+    and the sync is asynchronous — and `rollout status` on a missing named
+    object is a `NotFound` exit 1 rather than a wait, so step 11 can die before
+    the mint instead of waiting for the sync. Steps 7-10 sit between them, so
+    the window is narrow, and the audit above does not reach that line because
+    it reads `kubectl wait` only. Fixing it is one line — the same
+    `kit_substrate_await_list` against `deployment identity -n identity`, whose
+    ground the harness's file-backed mock does not currently model — and it
+    needs §17's pattern widened to `rollout status` in the same commit, or the
+    check stays blind to it. Left for the successor, named here rather than
+    implied by silence.
   - **Two ways to prove it.** §16 runs step 1 for real against a cluster mock
     that behaves like a real one — a GET of an empty list exits 0 and prints
     nothing, and the WAIT on it is the error — with three cases: a cold box that
