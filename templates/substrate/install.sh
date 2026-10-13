@@ -350,7 +350,10 @@ kit_substrate_guard() {
       kubectl --kubeconfig="$KUBECONFIG" get deployment -n cnpg-system cnpg-controller-manager >/dev/null 2>&1
       ;;
     argocd)
-      kubectl --kubeconfig="$KUBECONFIG" get deployment -n argocd argocd-server >/dev/null 2>&1
+      # A Deployment core-install ships, so a re-run finds it and skips. This
+      # probed argocd-server, which core-install does not ship, so the guard
+      # never matched and step 4 re-applied the largest manifest on every run.
+      kubectl --kubeconfig="$KUBECONFIG" get deployment -n argocd argocd-repo-server >/dev/null 2>&1
       ;;
     clusterissuer)
       # Cluster-scoped, so no -n: the guard asks for the production issuer by
@@ -1000,7 +1003,21 @@ install_applications() {
     return 0
   fi
   kubectl --kubeconfig="$KUBECONFIG" apply -f "$MANIFEST_DIR"
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd argocd-server --timeout=120s
+  # No wait here, and the reason is a property of the install variant rather
+  # than of forgetfulness. The wait that used to close this step named
+  # argocd-server, which core-install does not ship — the core variant has no
+  # API server, no UI and no dex — so it answered NotFound on every run and
+  # killed the install at step 6. It is deleted rather than repointed, because
+  # every object it could be repointed at is either already waited on or
+  # unwatchable. Step 4's `wait --for=condition=Available deployment -n argocd
+  # --all` holds until every Deployment core-install ships is Available, and
+  # the only one of those these Applications depend on is argocd-repo-server,
+  # which pulls their charts. The reconciler — argocd-application-controller,
+  # a StatefulSet — publishes no status conditions, so
+  # `kubectl wait --for=condition=Available` has nothing to watch and would
+  # time out and fail the same way. It is level-triggered: Applications
+  # applied before it is up are reconciled when it comes up, and the real
+  # "Argo reconciled" signal is step 11's rollout watch on deployment/identity.
 }
 
 # --- step 7: the Let's Encrypt ClusterIssuers --------------------------------
@@ -1829,7 +1846,12 @@ main() {
   R_STATUS="complete"
   R_NEXT=""
   R_INPUT=""
-  R_HUMAN="open the Argo CD UI: kubectl -n argocd port-forward svc/argocd-server 8443:443"
+  # The core install ships no UI: no argocd-server, no dex, and no
+  # argocd-initial-admin-secret (that secret is minted by the API server at
+  # startup, and there is no API server). The human destination is the
+  # Applications themselves — the state a person reads to watch the fleet
+  # reconcile, and the same command the README gives.
+  R_HUMAN="watch Argo CD reconcile the fleet: kubectl -n argocd get applications"
   R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   kit_substrate_write_receipt
   if [ "$HEADLESS" -eq 1 ]; then
@@ -1837,8 +1859,7 @@ main() {
   else
     kit_substrate_out ""
     kit_substrate_out "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
-    kit_substrate_out "Argo CD UI:  kubectl -n argocd port-forward svc/argocd-server 8443:443"
-    kit_substrate_out "             kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+    kit_substrate_out "Argo CD state:  kubectl -n argocd get applications"
   fi
 }
 

@@ -279,6 +279,68 @@
     the proof is about the path a customer actually types into `curl | sh`
     and not about the path that used to be true.
 
+- **Step 6 waited on an object `core-install` never creates, and it killed the
+  install on the box.** The step closed with `kubectl wait
+  --for=condition=Available deployment -n argocd argocd-server --timeout=120s`,
+  and the box answered `Error from server (NotFound): deployments.apps
+  "argocd-server" not found`. Step 4 installs `manifests/core-install.yaml`
+  (`ARGOCD_VERSION=v3.5.4`), and the core variant ships no API server, no UI
+  and no dex. Checked against the pinned upstream manifest: the entire
+  workload set in `argocd` is three Deployments
+  (`argocd-applicationset-controller`, `argocd-redis`, `argocd-repo-server`) and
+  one StatefulSet (`argocd-application-controller`). The wait could therefore
+  never succeed — not a race, a wait on a different install variant's object.
+  The earlier Substrate entry that named `argocd-server` among the safe named
+  waits was wrong: its "safety rested on step 4 having waited for it", but
+  step 4's `--all` deployments wait can only wait for objects that exist.
+  - **The wait is deleted, not repointed, and the argument is written at the
+    code site.** Every repoint target is either already waited on or
+    unwatchable: step 4's `wait --for=condition=Available deployment -n argocd
+    --all` already holds until every core-install Deployment is Available
+    (including `argocd-repo-server`, the one these Applications depend on — it
+    pulls their charts), and the reconciler `argocd-application-controller` is a
+    StatefulSet, which publishes no status conditions, so
+    `kubectl wait --for=condition=Available` has nothing to watch and would
+    time out and fail the same way. The reconciler is level-triggered —
+    Applications applied before it is up are reconciled when it comes up — and
+    the install's real "Argo reconciled" signal is step 11's rollout watch on
+    `deployment/identity`.
+  - **The guard probed the same non-existent object, in the idempotency path.**
+    `kit_substrate_guard argocd` asked `kubectl get deployment -n argocd
+    argocd-server`, which never matches on a core-install box, so the guard
+    never skipped and step 4 re-downloaded and re-applied the largest manifest
+    on every run. It now probes `argocd-repo-server`, a Deployment core-install
+    ships (and the full install ships too, so the probe stays correct if the
+    variant ever changes).
+  - **The human-facing UI lines named components core-install does not ship.**
+    The receipt sent the operator to `kubectl -n argocd port-forward
+    svc/argocd-server 8443:443` and to read
+    `secret/argocd-initial-admin-secret` — no such Service exists in
+    core-install, and that secret is minted by the API server at startup, so
+    there is no API server to mint it. Both lines are gone; the receipt's human
+    destination is now `kubectl -n argocd get applications`, the state a person
+    reads to watch the fleet reconcile (and the same command the README
+    already gives).
+  - **The rest of the file's Argo CD assumptions, audited per line.** Step 4's
+    apply of `core-install.yaml` and its `--all` deployments wait are correct
+    as they stand; the phase name, the pull-secret namespace list, and the DRY
+    plan strings name no component. Nothing else in the runnable code assumes
+    the full install.
+  - **The proof is the core-install reality, executed.** `tests/substrate_test.sh`
+    §19 runs `install_applications` for real against a mock kubectl whose
+    deployment list in `argocd` is exactly the pinned core-install set: the
+    three Deployments answer, any other name answers the way real kubectl
+    answers a missing named object (NotFound, exit 1). Green case: the step
+    applies the Applications and waits on nothing — the argv is asserted to
+    hold no argocd wait at all, so a reintroduced one is a regression the suite
+    catches. Red control: the pre-fix shape with the `argocd-server` wait
+    restored must abort with NotFound after the apply. Two further cases pin
+    the guard's probe and assert — over the comment-stripped file — that no
+    runnable line names `argocd-server` or `argocd-initial-admin-secret`. §17's
+    non-vacuity bound on named waits moved 4 → 3 with this commit: the
+    population shrank by the wait this packet deleted, and a bound that rotted
+    past the population it counts is how a non-vacuity check becomes a no-op.
+
 ### Licensing
 
 - **kit's grant is MIT, and it now has a manifest (OPS-D2).** The framework

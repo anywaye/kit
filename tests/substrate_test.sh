@@ -18,7 +18,10 @@
 #   Redis image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates,
-#   no image floats on `latest`, no secret is a literal in the tree, and the
+#   no image floats on `latest`, no secret is a literal in the tree, step 6
+#   waits on nothing — the core-install reality, executed against a mock whose
+#   deployment list is the pinned core-install set, with the pre-fix wait
+#   restored as the control — and the
 #   apply mode is assigned by where the manifest comes from — a REMOTE URL is
 #   `--server-side=true --force-conflicts` (client-side apply's
 #   last-applied-configuration annotation overflows Kubernetes's 262144-byte cap
@@ -3740,7 +3743,13 @@ if applied < 2:
     print(f"expected the two --all waits that ride a synchronous apply "
           f"(cert-manager, Argo CD), found {applied}")
     sys.exit(1)
-if named < 4:
+# The bound is the POPULATION, not a threshold to protect: it moved from 4 to
+# 3 when step 6's named wait (argocd-server, which core-install does not ship)
+# was deleted — the three that remain are cnpg-controller-manager, redis and
+# nats. Lowered with that reason, in the commit that deleted the wait; a bound
+# that silently rotted past the population it counts is how a non-vacuity check
+# becomes a no-op.
+if named < 3:
     print(f"expected the named waits to still be there, found {named}")
     sys.exit(1)
 if rollout_awaited < 1:
@@ -4213,6 +4222,228 @@ mint_never_ok() {
   printf 'refused in %ss, naming the missing Deployment, with no watch and no write' "$elapsed"
 }
 run 'step 11 refuses within its bound when Argo never creates the Deployment' green mint_never_ok
+
+# ===========================================================================
+# 19. Step 6 waits on nothing — the core-install reality, executed
+# ===========================================================================
+#
+# Section 17 proves the wait RULE textually; this proves the step against the
+# reality of the install variant step 4 applies. The pinned core-install.yaml
+# (ARGOCD_VERSION, checked against the upstream manifest at the pin) ships
+# exactly four workloads in argocd: the Deployments argocd-applicationset-
+# controller, argocd-redis and argocd-repo-server, and the StatefulSet
+# argocd-application-controller. No argocd-server, no dex, no UI — so the wait
+# that closed this step failed with NotFound on every run and killed the
+# install at step 6. The suite was green over that bug because nothing
+# executed the wait against a cluster that does not have the object.
+#
+# argocd_kubectl models that cluster: the deployment list in argocd is exactly
+# the three core-install Deployments, a named wait for anything else is
+# answered the way real kubectl answers a missing named object — NotFound,
+# exit 1 — and every invocation is recorded, because "waited on nothing" is an
+# order and not a return code.
+#
+# THREE CASES:
+#   1. green — the step applies the Applications and waits on nothing. The
+#      mock would fail it had it waited on a missing object, so success IS the
+#      proof, and the argv is asserted to hold no argocd wait at all: step 4
+#      owns those, and this step has no business re-waiting on them.
+#   2. THE CONTROL — the pre-fix shape, with the argocd-server wait restored
+#      after the apply. It must abort with NotFound. This is the case the
+#      suite lacked: the bug lived in a line nothing executed.
+#   3. the coverage half — step 4's wait must stay the `--all` deployments
+#      wait in argocd, because that wait is what covers the readiness this
+#      step's wait used to (wrongly) reach for.
+ARGOCD_DIR="$WORK/argocd"
+mkdir -p "$ARGOCD_DIR"
+
+argocd_kubectl() {
+  printf '%s\n' "$*" >>"$ARGOCD_DIR/argv"
+  case "$*" in
+    *"wait"*"deployment -n argocd --all"*)
+      # A list wait: the list is non-empty on any box past step 4, so it
+      # succeeds — the assertion that this never runs is the argv below.
+      return 0
+      ;;
+    *"wait"*"deployment -n argocd "*)
+      # A NAMED wait: the name must be in the core-install set. The name is
+      # the last token that is not a flag or a fixed literal of the command.
+      local wname="" tok
+      for tok in "$@"; do
+        case "$tok" in
+          wait | deployment | -n | --kubeconfig=* | --for=* | --timeout=* | --all) ;;
+          *) wname="$tok" ;;
+        esac
+      done
+      case "$wname" in
+        argocd-applicationset-controller | argocd-redis | argocd-repo-server)
+          return 0
+          ;;
+        *)
+          printf 'error: deployments.apps "%s" not found\n' "$wname" >&2
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+# apps_step <sourced-fixture> — run step 6 for real against the core-install
+# mock, and leave the exit status behind in $apps_ec. A child bash, for the
+# reason mint_step's comment records: a guarded subshell would march past a
+# failing wait and exit 0 — the opposite of the box, where the same failure
+# aborts the install.
+apps_step() {
+  rm -f "$ARGOCD_DIR/argv" "$ARGOCD_DIR/run.log"
+  local script="$ARGOCD_DIR/apps-run.sh"
+  {
+    printf 'set -euo pipefail\n'
+    printf 'ARGOCD_DIR=%q\n' "$ARGOCD_DIR"
+    printf 'FIXTURE=%q\n' "$1"
+    declare -f argocd_kubectl
+    printf '%s\n' \
+      'export DRY_RUN=0 HEADLESS=0' \
+      '# shellcheck source=/dev/null' \
+      '. "$FIXTURE"' \
+      'kubectl() { argocd_kubectl "$@"; }' \
+      'install_applications'
+  } >"$script"
+  apps_ec=0
+  bash "$script" >"$ARGOCD_DIR/run.log" 2>&1 || apps_ec=$?
+}
+
+apps_fixed="$WORK/install-apps-fixed.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$apps_fixed"
+
+# CASE 1, green: the step applies the Applications and waits on nothing. The
+# apply must be in the argv, and NO wait targeting the argocd namespace may
+# be — neither named nor --all: step 4's `--all` deployments wait already
+# holds until every core-install Deployment is Available before step 5 runs,
+# so this step has no wait to re-do, and a reintroduced one is a regression
+# the argv below must catch.
+apps_step "$apps_fixed"
+apps_apply_ok() {
+  if [ "$apps_ec" -ne 0 ]; then
+    printf 'the step exited %s against a cluster that has every core-install workload\n%s\n' \
+      "$apps_ec" "$(cat "$ARGOCD_DIR/run.log")"
+    return 1
+  fi
+  if ! grep -q 'apply -f' "$ARGOCD_DIR/argv"; then
+    printf 'the Applications were never applied\n'
+    return 1
+  fi
+  if grep -q 'wait.*deployment -n argocd' "$ARGOCD_DIR/argv"; then
+    printf 'the step waited on an argocd Deployment — step 4 already did, and the wait this step used to carry named one core-install does not ship\n'
+    return 1
+  fi
+  printf 'applied the Applications and waited on nothing — the core-install reality'
+}
+run 'step 6 applies the Applications and waits on nothing' green apps_apply_ok
+
+# CASE 2, THE CONTROL: the pre-fix shape — the argocd-server wait restored
+# after the apply — against the same mock. It must abort with NotFound, and
+# the argv must show both the apply and the wait: the pre-fix step applied
+# the Applications and THEN died on the wait, which is the shape the box
+# showed.
+apps_prefix="$WORK/install-apps-prefix.sh"
+apps_wait_line='  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd argocd-server --timeout=120s'
+awk -v wait_line="$apps_wait_line" '
+  /^main "\$@"/ { next }
+  # Strip any NAMED argocd deployment wait (the --all wait belongs to step 4
+  # and the pattern excludes it), so the control is the pre-fix shape on BOTH
+  # trees: on the fixed tree nothing is stripped and the wait is inserted
+  # once; on the broken tree the live wait is stripped and re-inserted, still
+  # exactly once.
+  /wait --for=condition=Available deployment -n argocd / && !/--all/ { next }
+  /^  kubectl --kubeconfig="\$KUBECONFIG" apply -f "\$MANIFEST_DIR"$/ {
+    print
+    print wait_line
+    next
+  }
+  { print }
+' "$SUBSTRATE/install.sh" >"$apps_prefix"
+
+# The control fixture is only a control if it really is the pre-fix shape: the
+# restored wait must be there, exactly once. A mutation that broke nothing
+# would pass case 2 for the wrong reason.
+if [ "$(grep -c 'wait --for=condition=Available deployment -n argocd argocd-server' "$apps_prefix")" -ne 1 ]; then
+  fail 'control fixture: the pre-fix wait did not apply' \
+    "the restored wait is missing or duplicated, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  apps_step "$apps_prefix"
+  case "$apps_ec:$(cat "$ARGOCD_DIR/run.log" 2>/dev/null):$(cat "$ARGOCD_DIR/argv" 2>/dev/null)" in
+    0:*)
+      fail 'control: the argocd-server wait restored aborts the install' \
+        "exit 0 — the control did not reproduce the defect it is named for"
+      ;;
+    *"not found"*:*)
+      if grep -q 'apply -f' "$ARGOCD_DIR/argv" \
+        && grep -q 'wait --for=condition=Available deployment -n argocd argocd-server' "$ARGOCD_DIR/argv"; then
+        pass 'control: the argocd-server wait restored aborts the install, after the apply'
+      else
+        fail 'control: the argocd-server wait restored aborts the install' \
+          "the apply or the wait is missing from the argv, so the control failed for some other reason"
+      fi
+      ;;
+    *)
+      fail 'control: the argocd-server wait restored aborts the install' \
+        "exit $apps_ec: $(cat "$ARGOCD_DIR/run.log" 2>/dev/null)"
+      ;;
+  esac
+fi
+
+# CASE 3, the coverage half: step 4's wait must stay the `--all` deployments
+# wait in argocd. Narrowing it to a named Deployment would leave the rest of
+# the core-install set uncovered, and step 6 — having no wait — would have
+# nothing to catch the gap.
+case "$(sed -n '/^install_argocd()/,/^}/p' "$SUBSTRATE/install.sh")" in
+  *'wait --for=condition=Available deployment -n argocd --all'*)
+    pass 'step 4 waits for every argocd Deployment, the coverage step 6 deleted'
+    ;;
+  *)
+    fail 'step 4 waits for every argocd Deployment, the coverage step 6 deleted' \
+      'the --all deployments wait is gone from install_argocd — step 6 has no wait to cover the gap'
+    ;;
+esac
+
+# The guard must probe a core-install workload. It probed argocd-server, which
+# core-install does not ship, so the guard never matched and step 4 re-applied
+# the largest manifest on every run — the same defect as the wait, in the
+# idempotency path.
+case "$(sed -n '/^    argocd)/,/^      ;;/p' "$SUBSTRATE/install.sh")" in
+  *'get deployment -n argocd argocd-repo-server'*)
+    pass 'the argocd guard probes a Deployment core-install ships'
+    ;;
+  *)
+    fail 'the argocd guard probes a Deployment core-install ships' \
+      'the guard probe is not argocd-repo-server — a probe of a component core-install does not ship never matches'
+    ;;
+esac
+
+# And nothing in the RUNNABLE code may name a component core-install does not
+# ship. Comments are stripped first, as everywhere in this file: the step 6
+# comment explains the deletion BY NAMING argocd-server, and a check that
+# could be falsified by a comment is not a check.
+run 'the runnable code names no component core-install does not ship' green \
+  "$PY" - "$SUBSTRATE/install.sh" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+bad = []
+for name in ("argocd-server", "argocd-initial-admin-secret"):
+    if name in code:
+        bad.append(name)
+if bad:
+    print("the runnable code names component(s) core-install does not ship: " + ", ".join(bad))
+    sys.exit(1)
+print("the runnable code names no component core-install does not ship")
+PY
 
 # ===========================================================================
 # Summary
