@@ -1953,6 +1953,13 @@ curl_call_ok() {
       printf 'the request names a box that is not this box\n%s\n' "$call"; return 1 ;;
     *) ;;
   esac
+  # The account rides INSIDE the capability, not in the request: a body naming
+  # an account is a caller trying to choose whose pull to buy.
+  case "$call" in
+    *"$CAP_ACCOUNT_UUID"*)
+      printf 'the request names the account — it travels in the capability\n%s\n' "$call"; return 1 ;;
+    *) ;;
+  esac
   printf 'a POST to the exchange route, the capability as a bearer, a body naming the box'
 }
 run 'the exchange speaks the registry-credentials route, bearer + box' green curl_call_ok
@@ -2010,7 +2017,6 @@ case "$(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null || true)" in
     fail 'the dockerconfigjson never enters argv' "the credential appears in a kubectl invocation" ;;
   *) pass 'the dockerconfigjson never enters argv' ;;
 esac
-control_argv="$WORK/argv-control"
 if kubectl() { mock_kubectl "$@"; }; then
   :
 fi
@@ -2029,13 +2035,22 @@ esac
 # there is no temp file holding it, only the store the mock keeps as the
 # cluster would. The store holds the applied Secret, nothing else carries the
 # value.
-case "$(ls "$MOCK_ROOT" 2>/dev/null | grep -v -e '^curl-' -e '^kubectl-argv' -e '^applied' \
-  -e '^argocd$' -e '^identity$' -e '^gateway$' -e '^courier$' -e '^parlor$' -e '^observability$' || true)" in
-  "")
-    pass 'no stray file on the box holds the credential' ;;
-  *)
-    fail 'no stray file on the box holds the credential' "$(ls "$MOCK_ROOT" | grep -v -e '^curl-' -e '^kubectl-argv' -e '^applied.yaml' | tr '\n' ' ')" ;;
-esac
+stray_files_ok() {
+  # A glob and a for loop rather than `ls | grep`, so a filename with a space
+  # or a newline is a name this test can actually count.
+  local f
+  for f in "$MOCK_ROOT"/*; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in
+      curl-calls|curl-response|kubectl-argv|applied|applied.yaml) continue ;;
+      argocd|identity|gateway|courier|parlor|observability) continue ;;
+    esac
+    printf 'unexpected file in the store: %s\n' "${f##*/}"
+    return 1
+  done
+  printf 'nothing but the applied Secret and the records of the call hold the credential'
+}
+run 'no stray file on the box holds the credential' green stray_files_ok
 
 # 7. Every way the exchange can answer no is refused, BY NAME, and the fix
 # named. A green case here would mean the installer wrote a Secret from an
