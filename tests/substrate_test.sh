@@ -4233,6 +4233,7 @@ VALUE_PRODUCERS = {"database_url_for", "owner_database_url_for", "migration_env_
 SECRET_VARS = {
     "OIDC_SIGNING_KEY",             # generated on the box, step 9
     "OIDC_SIGNING_KEY_ID",
+    "ASSERTION_SIGNING_KEY",        # generated on the box, step 9 (gateway mounts it)
     "KIT_SUBSTRATE_REGISTRY_CAPABILITY",
     "KIT_SUBSTRATE_SMTP_PASSWORD",
     "KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET",
@@ -4507,6 +4508,7 @@ headless_secrets=(
   "$(mock_get courier courier-secrets COURIER_ERROR_RELAY_TOKEN)"
   "$(mock_get data redis-password password)"
   "$(mock_get data postgres-role-identity-app password)"
+  "$(mock_get gateway gateway-secrets ASSERTION_SIGNING_KEY)"
 )
 run 'headless: no secret value the run holds reaches stdout' green \
   headless_absent "$WORK/headless.jsonl" "${headless_secrets[@]}"

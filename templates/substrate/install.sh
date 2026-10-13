@@ -1629,6 +1629,65 @@ resolve_oidc_signing_key() {
   OIDC_SIGNING_KEY_ID="$(oidc_key_id_for "$OIDC_SIGNING_KEY")"
 }
 
+# --- gateway's assertion signing key, born on this box ----------------------
+# The chart MOUNTS this key as a file: `volumes.secret.secretName` is
+# gateway-secrets and `items` pins `ASSERTION_SIGNING_KEY` to `signing.pem`,
+# the path `ASSERTION_SIGNING_KEY_FILE` names. A required volume item is a hard
+# reference — a secret that lacks the key leaves the pod in ContainerCreating
+# forever (`FailedMount … references non-existent secret key`), a failure
+# nobody attributes to a missing generator.
+#
+# It is GENERATED ON THE BOX and never an input, like identity's OIDC key: it is
+# the customer's assertion key, the private half of what its verifier holds. It
+# is a PKCS#8 RSA-2048 PEM because that is what gateway parses —
+# `x509.ParsePKCS8PrivateKey` (internal/httpapi/assertion.go) — so
+# `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` is the spelling
+# and `openssl genrsa` (PKCS#1) would be refused at startup. The public half
+# goes to the verifier out of band.
+#
+# resolve_gateway_assertion_key sets ASSERTION_SIGNING_KEY to the stored value
+# or a freshly generated one. Never prints.
+resolve_gateway_assertion_key() {
+  ASSERTION_SIGNING_KEY="$(read_secret_key gateway gateway-secrets ASSERTION_SIGNING_KEY)"
+  if [ -n "$ASSERTION_SIGNING_KEY" ]; then
+    return 0
+  fi
+  ASSERTION_SIGNING_KEY="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 2>/dev/null)" || {
+    echo "error: openssl could not generate gateway's assertion signing key on this box" >&2
+    exit 1
+  }
+}
+
+# reconcile_gateway_assertion_key — add ASSERTION_SIGNING_KEY to a
+# gateway-secrets that predates it.
+#
+# WHY IT RUNS ABOVE THE `secrets` GUARD: on the box this repair exists for, all
+# four service secrets are present, so the guard skips install_service_secrets
+# whole — and the gateway-secrets that is present is exactly the one missing the
+# key the chart mounts. A repair behind the guard never runs on the only box
+# that needs it. Unlike MFA_ENCRYPTION_KEY, an absent assertion key has no
+# ciphertext to fork (gateway never booted, because the mount never resolved),
+# so generating one heals the box; a stored key is read back, never rotated.
+reconcile_gateway_assertion_key() {
+  local stored
+  stored="$(read_secret_key gateway gateway-secrets ASSERTION_SIGNING_KEY)"
+  if [ -n "$stored" ]; then
+    return 0
+  fi
+  # No secret yet means the create path below writes the key; only a PRESENT
+  # secret without the key is this repair's business.
+  if ! kubectl --kubeconfig="$KUBECONFIG" get secret gateway-secrets -n gateway >/dev/null 2>&1; then
+    return 0
+  fi
+  resolve_gateway_assertion_key
+  # A merge patch, built by jq so a PEM's newlines survive: a whole-Secret apply
+  # would drop REDIS_URL. `read_secret_key` would return the same bytes on a
+  # later run, so the patch is idempotent.
+  printf '%s' "$(jq -nc --arg k "$ASSERTION_SIGNING_KEY" '{"stringData":{"ASSERTION_SIGNING_KEY":$k}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n gateway patch secret gateway-secrets --type=merge --patch-file=- >/dev/null
+  kit_substrate_out "      secret gateway-secrets existed without ASSERTION_SIGNING_KEY — patched it in (gateway's pod mounts this key; without it the mount never resolves)"
+}
+
 # validate_mfa_override — the operator-supplied MFA key, when set, must be
 # exactly what identity's config parser accepts: base64url without padding
 # decoding to 32 bytes (43 characters from A-Z a-z 0-9 - _). A refused value
@@ -1673,7 +1732,7 @@ validate_mfa_override() {
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
 #   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL
-#   RECORD gateway-secrets: REDIS_URL
+#   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN
 #   RECORD parlor-secrets: DATABASE_URL
 #
@@ -1687,7 +1746,9 @@ validate_mfa_override() {
 #     SECRET_KEY_BASE, COURIER_SECRET_BOX_KEY, COURIER_ERROR_RELAY_TOKEN
 #     (a self-contained shared value, generated like the raise text
 #     suggests), the Redis password (redis half above), each Postgres role's
-#     password (step 8).
+#     password (step 8), and gateway's ASSERTION_SIGNING_KEY (a PKCS#8 RSA-2048
+#     PEM the chart MOUNTS as a file — generated here, never supplied, read
+#     back on a re-run; see resolve_gateway_assertion_key).
 #   minted on the box in step 12, never printed, never an input —
 #     COURIER_IDENTITY_TOKEN. It is an API key identity itself mints, so the
 #     old two-terminal loop (install → boot → mint by hand → paste into a
@@ -1711,6 +1772,16 @@ validate_mfa_override() {
 # host is CNPG's read-write service, the database and role are the service's
 # own, and the password is read back from step 8's secret.
 install_service_secrets() {
+  # THE ASSERTION-KEY REPAIR RUNS ABOVE THE GUARD, on purpose: a box installed
+  # before ASSERTION_SIGNING_KEY existed holds all four secrets, so the guard
+  # would skip the step whole and leave gateway's pod stuck on the mount this
+  # function is here to resolve. The plan form takes the dry-run path so a plan
+  # neither generates a key nor patches a secret.
+  if dry_run "ensure gateway-secrets carries ASSERTION_SIGNING_KEY (gateway's chart mounts it; generated on the box, read back on a re-run)"; then
+    :
+  else
+    reconcile_gateway_assertion_key
+  fi
   if kit_substrate_guard secrets; then
     kit_substrate_out "      already installed, skipping"
     return 0
@@ -1820,23 +1891,35 @@ install_service_secrets() {
     kit_substrate_out "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
   fi
 
-  # gateway-secrets. Exactly one key: REDIS_URL, the required secretKeyRef the
-  # chart names (`secrets.redisUrlSecretName` / `redisUrlSecretKey`). The
-  # password is read back from step 9's secret; the host is this file's Redis
-  # Service. No IDENTITY_URL here: that is clear env in the chart's ConfigMap,
-  # not a secret.
+  # gateway-secrets. Two keys, and both are REQUIRED references the chart names:
+  #
+  #   * REDIS_URL — the `secretKeyRef` the chart names
+  #     (`secrets.redisUrlSecretName` / `redisUrlSecretKey`). The password is
+  #     read back from step 9's secret; the host is this file's Redis Service.
+  #     No IDENTITY_URL here: that is clear env in the chart's ConfigMap, not a
+  #     secret.
+  #   * ASSERTION_SIGNING_KEY — the `volumes.secret` ITEM the chart mounts as
+  #     `/etc/gateway/assertion/signing.pem`, the path
+  #     `ASSERTION_SIGNING_KEY_FILE` names. A missing item is the whole defect
+  #     this key exists to end: the pod waits in ContainerCreating on a mount
+  #     that never resolves. Generated on this box (see
+  #     resolve_gateway_assertion_key) and read back on a re-run.
   local redis_pw
   redis_pw="$(read_secret_key data redis-password password)"
   if [ -z "$redis_pw" ]; then
     echo "error: secret redis-password is missing in namespace data — run step 9 first" >&2
     exit 1
   fi
+  # Read-or-generate. On the create path the repair above found no secret, so
+  # this is where a first install's key is minted.
+  resolve_gateway_assertion_key
   if kubectl --kubeconfig="$KUBECONFIG" get secret gateway-secrets -n gateway >/dev/null 2>&1; then
     kit_substrate_out "      secret gateway-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic gateway-secrets -n gateway \
-      --from-literal=REDIS_URL="redis://:$redis_pw@redis.data.svc.cluster.local:6379" >/dev/null
-    kit_substrate_out "      secret gateway-secrets created (REDIS_URL only — the chart's one required secretKeyRef)"
+      --from-literal=REDIS_URL="redis://:$redis_pw@redis.data.svc.cluster.local:6379" \
+      --from-literal=ASSERTION_SIGNING_KEY="$ASSERTION_SIGNING_KEY" >/dev/null
+    kit_substrate_out "      secret gateway-secrets created (REDIS_URL and a generated ASSERTION_SIGNING_KEY — the chart's two required references)"
   fi
 
   # courier-secrets. The keys chart/values.yaml documents that this install

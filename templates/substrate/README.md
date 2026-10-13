@@ -500,13 +500,18 @@ environment variable and the key list IS the service's env list:
 | `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 12; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 12 minted; the rest from the environment |
 | `gateway-secrets` | `REDIS_URL` | built from step 9's password |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 12; the rest from the environment |
+| `identity-secrets` | `DATABASE_URL`, `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`, `NATS_URL` (+ `COURIER_TOKEN` written by step 11; `OIDC_ISSUER`, `OIDC_SIGNING_KEY`, `OIDC_SIGNING_KEY_ID`, `OAUTH_ENCRYPTION_KEY` only when the operator sets those surfaces) | first three generated, as is the OIDC signing key when an issuer is set; `COURIER_TOKEN` is the value step 11 minted; the rest from the environment |
+| `gateway-secrets` | `REDIS_URL`, `ASSERTION_SIGNING_KEY` | `REDIS_URL` built from step 9's password; `ASSERTION_SIGNING_KEY` generated on the box (a PKCS#8 RSA-2048 PEM the chart mounts as `signing.pem`) |
+| `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys) |
 
 The key lists were enumerated from the code, not guesswork: identity's
 `internal/config` + README variable table (`SIGNUP_SIGNING_KEY` is base64url
 exactly 32 bytes, an unconditional startup failure when absent);
-gateway's `charts/gateway/values.yaml` (`REDIS_URL` as the one required
-`secretKeyRef`) + `internal/httpapi` (no `REDIS_URL`, no browser surface);
+gateway's `charts/gateway/values.yaml` (`REDIS_URL` as the required
+`secretKeyRef`, `ASSERTION_SIGNING_KEY` as the required `volumes.secret` item the
+Deployment mounts as `/etc/gateway/assertion/signing.pem`) + `internal/httpapi`
+(no `REDIS_URL`, no browser surface);
 courier's `chart/values.yaml` (the eight documented keys) +
 `config/runtime.exs` (the three mail-adapter settings it refuses to boot
 without); parlor's `process.env.*` reads (no secret keys — the secret exists
@@ -527,7 +532,9 @@ value must not fork it. **Minted on this box** — courier's
 `COURIER_TOKEN` beside it, both by step 12. **Generated on this box** — the
 OIDC signing key and its key id, when an issuer is set (the key is the
 customer's own; it is born here, and the id is a thumbprint of the key so a
-verifier's cached `kid` keeps matching). What is left comes **from the
+verifier's cached `kid` keeps matching), and gateway's `ASSERTION_SIGNING_KEY`
+(the PKCS#8 RSA-2048 PEM the chart mounts as a file; see below for why a
+re-run patches a legacy secret with it). What is left comes **from the
 environment, shape-validated and never echoed**: courier's SMTP settings,
 the provider's signing secret, and the optional OAuth surface. **`NATS_URL`
 is in neither bucket** — it is configuration, not a secret: the broker's
@@ -542,6 +549,19 @@ login role the local compose files use (`postgres://` for identity and
 parlor, `ecto://` for courier — each service's own spelling), and the
 password read back from step 8's role secret. `gateway-tls` is NOT created
 here — cert-manager fills it from the ClusterIssuer.
+
+**`ASSERTION_SIGNING_KEY` is a mount, and a mount with no key is a pod that
+never starts.** gateway's chart points a `volumes.secret` item at
+`gateway-secrets`/`ASSERTION_SIGNING_KEY`; a secret without that key leaves the
+pod in `ContainerCreating` forever (`FailedMount … references non-existent
+secret key`) while every other step reports success. It is generated on the box
+and read back on a re-run. A box installed before the key existed holds a
+`gateway-secrets` with only `REDIS_URL`, and the `secrets` guard would skip the
+whole step on a re-run — so the key is reconciled **above** that guard, by a
+merge patch that adds only the missing key (the assertion key is a signing key,
+not a persistent encryption key: nothing is sealed under it, so generating one
+heals the box rather than forking it). The public half goes to the verifier out
+of band.
 
 **Each `postgres-role-<role>` secret carries the ROLE's name in `username`,
 not the secret's.** CNPG's managed-role reconciler sets a role's password from
