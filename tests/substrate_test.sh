@@ -2986,6 +2986,206 @@ run 'control: a plan that lost the flags while the run kept them goes red' red \
   check_apply_modes "$fixture_plan_drift"
 
 # ===========================================================================
+# 16. The waits survive an empty list — the cold-box defect, executed
+# ===========================================================================
+#
+# `kubectl wait --for=condition=Ready node --all` is NOT a wait when the list
+# is empty: it fails within a second with `error: no matching resources found`,
+# and `set -e` makes that the end of the install. k3s is STARTED by the line
+# above it and the kubelet registers the Node object a few seconds LATER, so a
+# wiped box lost that race and died at step 1 (exit 1) while a warm box never
+# noticed.
+#
+# The harness above sources the installer and runs single steps against a
+# file-backed mock, which is exactly what this needs: step 1 is three lines
+# (start k3s, prove the node exists, wait for Ready), so the step can RUN and
+# be watched. THE MOCK IS THE CLUSTER, and it is a faithful one — a GET of an
+# empty list answers nothing and exits 0, which is what real kubectl does, and
+# the WAIT answers the way real kubectl does on an empty list, by failing.
+#
+# THREE CASES, and the third is the one that earns the first two:
+#   1. a cold box — the list is empty twice, then the kubelet registers. The
+#      step must reach Ready and return 0. The pre-fix installer aborts here.
+#   2. a broken box — the node never registers. The step must REFUSE inside its
+#      bound, naming the empty list, and must never claim to have waited.
+#   3. THE CONTROL — the same fixture with kit_substrate_await_list removed,
+#      which is the shape the box actually ran. Case 1 against it must ABORT,
+#      because a check that cannot see the defect it is named for is a comment.
+#
+# Each case records every kubectl invocation, so "reached Ready" is an order in
+# an argv log rather than a return code the loop could have produced by giving
+# up.
+K3S_DIR="$WORK/k3s"
+mkdir -p "$K3S_DIR"
+
+# node_kubectl — the cluster on a box where the kubelet has not registered its
+# Node object yet. NODE_APPEARS_AT is the poll after which it does.
+node_kubectl() {
+  printf '%s\n' "$*" >>"$K3S_DIR/argv"
+  case "$*" in
+    *"wait --for=condition=Ready node"*)
+      # What real kubectl does on an empty list, and the whole defect: an
+      # error, not a wait. It only succeeds once the object exists.
+      if [ ! -f "$K3S_DIR/node-registered" ]; then
+        printf 'error: no matching resources found\n' >&2
+        return 1
+      fi
+      printf 'node/box condition met\n'
+      ;;
+    *"get node --no-headers"*)
+      # A GET of an empty list is not an error: kubectl exits 0 and prints
+      # nothing. The registration is a few seconds away, which is the race.
+      local polls
+      polls=$(( $(cat "$K3S_DIR/polls" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$polls" >"$K3S_DIR/polls"
+      if [ "$polls" -ge "${NODE_APPEARS_AT:-2}" ]; then
+        : >"$K3S_DIR/node-registered"
+        printf 'box   Ready   <none>   10d   v1.31.5+k3s1\n'
+      fi
+      return 0
+      ;;
+    *)
+      printf 'node_kubectl: unhandled %s\n' "$*" >&2
+      return 1
+      ;;
+  esac
+}
+
+# k3s_step <fixture> <appears-at> <register-timeout> — run step 1 for real
+# against that fixture, and leave the exit status behind in $k3s_ec. The
+# install script, curl and the pipe into `sh -` are stubbed: none of them is
+# the subject, and the step's own two waits are.
+k3s_step() {
+  rm -f "$K3S_DIR/argv" "$K3S_DIR/polls" "$K3S_DIR/node-registered"
+  k3s_ec=0
+  (
+    # BEFORE the source, because the installer reads each of these at source
+    # time and a value exported after it is a value it never saw.
+    export DRY_RUN=0
+    export HEADLESS=0
+    export KIT_SUBSTRATE_RECEIPT="$K3S_DIR/receipt.json"
+    export NODE_APPEARS_AT="$2"
+    export NODE_REGISTER_TIMEOUT="$3"
+    export NODE_READY_TIMEOUT=5
+    # shellcheck source=/dev/null
+    . "$1"
+    kubectl() { node_kubectl "$@"; }
+    curl() { :; }
+    install_k3s >"$K3S_DIR/run.log" 2>&1
+  ) || k3s_ec=$?
+}
+
+k3s_cold="$WORK/install-cold.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$k3s_cold"
+k3s_no_await="$WORK/install-no-await.sh"
+sed -e '/^main "$@"/d' -e '/kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node/d' \
+  "$SUBSTRATE/install.sh" >"$k3s_no_await"
+
+# The control fixture is only a control if it really is the pre-fix shape: the
+# await must be gone from it, and the Ready wait must still be there. A
+# mutation that broke nothing would pass case 1 for the wrong reason.
+if grep -q 'kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node' "$k3s_no_await" \
+  || ! grep -q 'wait --for=condition=Ready node' "$k3s_no_await"; then
+  fail 'control fixture: the pre-fix k3s step is the shape the box ran' \
+    "the await-line deletion did not apply, so case 3 would prove nothing"
+  failures=$((failures + 1))
+else
+  # CASE 1, green: the cold box installs. The node registers on the second
+  # poll, so the loop has to tolerate an empty list once and keep going, and
+  # the Ready wait must come AFTER the registration rather than racing it.
+  k3s_step "$k3s_cold" 2 5
+  k3s_cold_ok() {
+    if [ "$k3s_ec" -ne 0 ]; then
+      printf 'step 1 exited %s — an empty list still kills the install\n%s\n' \
+        "$k3s_ec" "$(cat "$K3S_DIR/run.log")"
+      return 1
+    fi
+    # The argv log is the ORDER, and the order is the whole fix: two GETs that
+    # found nothing, then the GET that found the node, then the Ready wait.
+    if ! grep -q 'wait --for=condition=Ready node' "$K3S_DIR/argv"; then
+      printf 'the Ready wait never ran — the step gave up before waiting\n%s\n' \
+        "$(cat "$K3S_DIR/run.log")"
+      return 1
+    fi
+    # The empty polls really were empty: NODE_APPEARS_AT is 2, so the first
+    # poll must have seen nothing and the registration must be the SECOND
+    # one. A fixture that never ran the race would pass on a step that races.
+    if [ "$(cat "$K3S_DIR/polls" 2>/dev/null || echo 0)" -ne 2 ]; then
+      printf 'the fake registered the node on the first poll, so the empty-list case never happened\n'
+      return 1
+    fi
+    printf 'the step survived an empty list and reached Ready'
+  }
+  run 'step 1 reaches Ready when the node registers a few seconds after k3s starts' \
+    green k3s_cold_ok
+
+  # CASE 3, THE CONTROL: the pre-fix shape against the same cold box. It must
+  # abort with the empty-list error, and the signature that proves it is the
+  # ARGV: the pre-fix step never asked whether the node existed, so it went
+  # straight to a Ready wait that could not be satisfied. A control that
+  # merely exits non-zero would also be satisfied by a step that failed for
+  # some other reason, so the argv carries the assertion.
+  k3s_step "$k3s_no_await" 2 5
+  case "$k3s_ec:$(cat "$K3S_DIR/run.log" 2>/dev/null):$(cat "$K3S_DIR/argv" 2>/dev/null)" in
+    0:*:*:*)
+      fail 'control: a single wait on an empty list aborts the install' \
+        "exit 0 — the control did not reproduce the defect it is named for"
+      ;;
+    *"no matching resources found"*:*"get node --no-headers"*)
+      fail 'control: a single wait on an empty list aborts the install' \
+        "the pre-fix fixture still checked for existence, so it is not the shape the box ran"
+      ;;
+    *"no matching resources found"*:*)
+      if grep -q 'condition=Ready node --all' "$K3S_DIR/argv"; then
+        pass 'control: a single wait on an empty list aborts the install, with no existence check before it'
+      else
+        fail 'control: a single wait on an empty list aborts the install' \
+          "the wait did not run, so the control failed for some other reason"
+      fi
+      ;;
+    *)
+      fail 'control: a single wait on an empty list aborts the install' \
+        "exit $k3s_ec: $(cat "$K3S_DIR/run.log" 2>/dev/null)"
+      ;;
+  esac
+fi
+
+# CASE 2: a node that never registers. The step must REFUSE inside its bound,
+# not hang and not lie. The bound is shortened to 2s here, and the elapsed time
+# is measured rather than asserted by exit status alone — a wait that exceeded
+# its own budget would pass a glance at the message.
+k3s_broken_ok() {
+  local started elapsed
+  started="$(date +%s)"
+  k3s_step "$k3s_cold" 999 2
+  elapsed=$(( $(date +%s) - started ))
+  if [ "$k3s_ec" -eq 0 ]; then
+    printf 'a node that never appeared was answered with success\n%s\n' \
+      "$(cat "$K3S_DIR/run.log")"
+    return 1
+  fi
+  if [ "$elapsed" -gt 15 ]; then
+    printf 'the refusal took %ss — the bound is 2s, so this is a hang\n' "$elapsed"
+    return 1
+  fi
+  case "$(cat "$K3S_DIR/run.log")" in
+    *"kubectl get node"*"empty"*)
+      : ;;
+    *)
+      printf 'the refusal does not name the empty list\n%s\n' "$(cat "$K3S_DIR/run.log")"
+      return 1
+      ;;
+  esac
+  if grep -q 'get node --no-headers' "$K3S_DIR/argv" \
+    && [ "$(grep -c 'wait --for=condition=Ready node' "$K3S_DIR/argv" || true)" -gt 0 ]; then
+    printf 'the step waited for Ready on a node that never registered\n'
+    return 1
+  fi
+  printf 'refused in %ss, naming the empty list, with no Ready wait' "$elapsed"
+}
+run 'step 1 refuses within its bound when the node never registers' green k3s_broken_ok
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"
