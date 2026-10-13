@@ -130,12 +130,58 @@ All four new assertions and their three new red controls appear in the log and
 pass. `bash -n` clean on `install.sh` and `substrate_test.sh`; `shellcheck -S
 warning` clean on both.
 
+## THE BLOCKER THIS PACKET'S GOAL ALSO NEEDS — identity still needs link templates
+
+The packet's goal is three claims; two are proved here (the pair, exit 0). The
+third — **"a restarted identity boots"** — needs one more thing, and it is
+recorded rather than guessed.
+
+Wiring the courier block makes `loadCourier` continue past the pair check into
+`resolveLinkTemplates` and `resolveInvitationLinkTemplate`, which **require**
+at least one link template plus `INVITATION_LINK_TEMPLATE` whenever the block
+is wired. identity's own config test says it in the name:
+
+```
+internal/config/courier_test.go:62
+    name: "a base URL and a token with no link template",
+    env:  {"COURIER_BASE_URL": …, "COURIER_TOKEN": …},
+    wantErr: ErrInvalidCourier,
+```
+
+The substrate sets no `*_LINK_TEMPLATE` at all — identity's chart `env:` has
+only `PORT`, and the substrate's `identity-secrets` is built from
+`DATABASE_URL`/`SIGNUP_SIGNING_KEY`/`MFA_ENCRYPTION_KEY`/`NATS_URL` — so after
+this pair fix a restarted identity refuses on the **next** check. That is not a
+regression this packet introduces; it is the second half of the same
+incompleteness, and it was invisible until the first half was fixed.
+
+The launch stack sets all four (`launch/docker-compose.launch.yml:326-375`:
+`PASSWORD_RESET_LINK_TEMPLATE`, `EMAIL_VERIFICATION_LINK_TEMPLATE`,
+`EMAIL_CHANGE_LINK_TEMPLATE`, `RECOVERY_LINK_TEMPLATE`,
+`INVITATION_LINK_TEMPLATE`), built from `${APP_BASE_URL}`. The substrate has no
+`APP_BASE_URL` equivalent, and its public host is a gateway-ingress value the
+installer never sees, so the right values are a **deployment decision**, not a
+chart read. I did not invent them.
+
+**The successor's first move:** decide whether the substrate's identity is
+meant to have a mail path. If yes, add `KIT_SUBSTRATE_APP_BASE_URL` (the same
+pattern as the required SMTP settings) and write the four/five link templates
+into `identity-secrets` in the same patch as the pair — the values are
+one-fact-one-render with `launch/docker-compose.launch.yml`. If no, do not
+write `COURIER_TOKEN` into `identity-secrets` at all, and say so: an identity
+with half a courier block is worse than one with no mail path. Either way, the
+record tripwire and the pair test here already cover the keys that exist today.
+
 ## What I deliberately did NOT do
 
 - **No chart edits.** The substrate does not own the two service charts (they
   are OCI, built and published elsewhere), so `COURIER_BASE_URL` and
   `COURIER_IDENTITY_URL` ride the secrets the charts already mount with
   `envFrom`. Moving them to a chart `env:` block is a chart packet.
+- **No link-template values invented.** See the blocker section above — the
+  public app URL is a deployment decision and the installer has no input for
+  it. Inventing one would trade "identity refuses to boot loudly" for "identity
+  boots and mails links that 404", which is strictly worse.
 - **No second writer.** The URLs are constants in `install.sh` beside
   `NATS_URL`; the README and the code site both name the chart the value came
   from, rather than restating it in the charts.

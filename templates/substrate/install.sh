@@ -2491,6 +2491,19 @@ mint_courier_identity_token() {
   # compose spelling `http://identity:8080`, which does not cross the
   # namespace boundary. Both halves go in ONE patch so no path can write one
   # without the other.
+  #
+  # IDENTITY'S MAIL PATH IS NOT COMPLETE WITH THIS PAIR ALONE, and that is
+  # recorded here rather than silently left for the next live run. Wiring the
+  # courier block makes `loadCourier` call `resolveLinkTemplates` and
+  # `resolveInvitationLinkTemplate`, and identity requires at least one link
+  # template plus `INVITATION_LINK_TEMPLATE` whenever the block is wired
+  # (identity's own `internal/config/courier_test.go` has the case named "a
+  # base URL and a token with no link template" → `ErrInvalidCourier`). The
+  # substrate sets none of them, so a restarted identity refuses on the NEXT
+  # check after this pair unless the deployment supplies them. Their values are
+  # the PUBLIC app URL (the launch stack's `APP_BASE_URL`), which this
+  # installer has no input for, so they are deliberately NOT guessed here —
+  # see REPORT-roll-c5-mint-pair.md.
   printf '%s' "$(jq -nc --arg url "$COURIER_URL" --arg t "$token" \
     '{"stringData":{"COURIER_BASE_URL":$url,"COURIER_TOKEN":$t}}')" |
     kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
