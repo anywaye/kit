@@ -1346,6 +1346,27 @@ mock_kubectl() {
       return 0
       ;;
     get)
+      if [ "${1:-}" = "deployment" ]; then
+        # Existence by name in the file store, like `get secret` below: a GET
+        # of a missing object exits 0 and prints nothing (real kubectl), and
+        # --no-headers prints one line per object that exists. Step 11's await
+        # polls this until Argo creates the Deployment, so the mint's fixture
+        # seeds `deploy-<name>` the way a box past step 6 holds it.
+        shift || true
+        local dep_name="${1:-}"
+        shift || true
+        local dep_ns=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -n) dep_ns="$2"; shift 2 ;;
+            *) shift ;;
+          esac
+        done
+        if [ -d "$MOCK_ROOT/$dep_ns/deploy-$dep_name" ]; then
+          printf '%s   1/1   1   1   10d\n' "$dep_name"
+        fi
+        return 0
+      fi
       if [ "${1:-}" != "secret" ]; then
         echo "mock_kubectl: unhandled get ${1:-}" >&2
         return 1
@@ -1965,8 +1986,11 @@ curl_call_ok() {
 run 'the exchange speaks the registry-credentials route, bearer + box' green curl_call_ok
 
 # 3. The credential is WRITTEN as a docker-registry Secret in every namespace
-# that pulls the fleet's images, and the bytes stored are the base64 the
-# exchange returned — read back exactly as kubectl would read them.
+# that pulls the fleet's images — and the bytes the Secret carries are the
+# DECODED JSON, not the exchange's base64. --from-file encodes the file's
+# bytes into data, so the decoded bytes are what kubectl must receive; the
+# kubelet-shaped read in 3b proves it, and the control re-introduces the
+# double-encode to prove the read can fail.
 APPLIED_NAMESPACES=(argocd identity gateway courier parlor observability)
 applied_pull_secrets_ok() {
   local ns found
@@ -1985,6 +2009,75 @@ applied_pull_secrets_ok() {
   printf 'a dockerconfigjson Secret applied in %d namespaces' "${#APPLIED_NAMESPACES[@]}"
 }
 run 'the dockerconfigjson is written as a pull Secret in every pulling namespace' green applied_pull_secrets_ok
+
+# 3b. THE KUBELET'S READ, not kubectl's write. --from-file base64-encodes the
+# file's bytes into data[.dockerconfigjson], so the applied value decodes ONCE
+# — exactly what the kubelet does with it — to JSON carrying
+# auths["ghcr.io"].username. Writing the exchange's base64 through undecoded
+# stores base64(base64(json)): the API server decodes once and the kubelet
+# JSON-parses base64 text (measured: `invalid character 'e'`, the first
+# character of eyJhdXRocyI6). The mock above is faithful to the real kubectl
+# (it base64s the file content into data), which is what makes this read mean
+# anything — and what let the old assertion stay green over the broken
+# installer, since it pinned the destination without ever decoding it.
+pull_secret_kubelet_ok() {
+  "$PY" - "$MOCK_ROOT/applied.yaml" <<'PY'
+import base64
+import json
+import sys
+vals = []
+for ln in open(sys.argv[1], encoding="utf-8"):
+    if ".dockerconfigjson:" in ln:
+        vals.append(ln.split(":", 1)[1].strip())
+if not vals:
+    print("no .dockerconfigjson data in the applied Secret")
+    sys.exit(1)
+for v in vals:
+    try:
+        raw = base64.b64decode(v)
+    except Exception:
+        print("the applied data is not base64 — kubectl always base64s the file content")
+        sys.exit(1)
+    try:
+        doc = json.loads(raw)
+    except Exception as e:
+        print("the applied data decodes once to bytes the kubelet cannot parse as JSON (%s) — the file held the exchange's base64 rather than the decoded JSON" % (e,))
+        sys.exit(1)
+    if not ((doc.get("auths") or {}).get("ghcr.io") or {}).get("username"):
+        print('the decoded JSON carries no auths["ghcr.io"].username')
+        sys.exit(1)
+print("%d Secret(s), each decoding once to JSON with auths[ghcr.io].username" % (len(vals),))
+PY
+}
+run 'the applied Secret decodes once, as the kubelet does, to a ghcr.io credential' green pull_secret_kubelet_ok
+
+# The control: the pre-fix shape — the exchange's base64 written through
+# without decoding — must go RED under the same read. A check that stays green
+# on base64(base64(json)) is the defect this packet fixes, asserted over.
+fixture_double="$WORK/install-double-encode.sh"
+sed '/REGISTRY_DOCKERCONFIGJSON" | base64 -d |/s/ | base64 -d |/ |/' \
+  "$SUBSTRATE/install.sh" | sed '/^main "$@"/d' >"$fixture_double"
+if grep -q 'REGISTRY_DOCKERCONFIGJSON" | base64 -d' "$fixture_double" \
+  || ! grep -q -- '--from-file=.dockerconfigjson=/dev/stdin' "$fixture_double"; then
+  fail 'control fixture: the double-encode edit failed to apply' \
+    "the sed did not restore the pre-fix write, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  MOCK_ROOT_DOUBLE="$WORK/pull-secret-double"
+  mkdir -p "$MOCK_ROOT_DOUBLE"
+  (
+    # shellcheck source=/dev/null
+    . "$fixture_double"
+    kubectl() { mock_kubectl "$@"; }
+    export MOCK_ROOT="$MOCK_ROOT_DOUBLE"
+    export REGISTRY_DOCKERCONFIGJSON="$EXCHANGE_B64"
+    apply_pull_secret >/dev/null 2>&1
+  ) || true
+  MOCK_ROOT_SAVED="$MOCK_ROOT"
+  MOCK_ROOT="$MOCK_ROOT_DOUBLE"
+  run 'control: writing the encoded value fails the kubelet-shaped read' red pull_secret_kubelet_ok
+  MOCK_ROOT="$MOCK_ROOT_SAVED"
+fi
 
 # 4. THE CREDENTIAL IS NEVER ECHOED. Three assertions, each with a control
 # below that plants the value and must go red: the log, the argv, and the
@@ -2301,6 +2394,11 @@ mint_loop_ec=0
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
   mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"
+  # The Deployment Argo synced from step 6's Applications — step 11's await
+  # polls for it before watching its rollout, so the fixture carries it the
+  # way a box past step 6 does. Without this the await polls to its bound and
+  # refuses, which is the next section's control rather than this test.
+  mock_seed identity deploy-identity ready yes
   # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }

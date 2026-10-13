@@ -950,6 +950,16 @@ exchange_registry_credential() {
 # box in `ps`, to a crash reporter, and to a shell history; a value in a pipe
 # is visible to neither. The Secret is then applied, so a re-run is an
 # idempotent replace rather than a create that fails on the second run.
+#
+# THE PIPE DECODES FIRST, because the exchange returns the credential BASE64
+# (its contract: the field's value is the base64 of the JSON) while
+# --from-file base64-encodes the file's bytes into data[.dockerconfigjson] —
+# so the DECODED bytes are what belongs in the file. Writing the encoded value
+# through stores base64(base64(json)): the API server decodes once and the
+# kubelet JSON-parses base64 text. Measured on the box:
+#   `data[.dockerconfigjson]: Invalid value: "…": invalid character 'e'
+#   looking for beginning of value`
+# where 'e' is the first character of `eyJhdXRocyI6…`, the base64 of `{"auths":`.
 apply_pull_secret() {
   local ns
   for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
@@ -958,8 +968,8 @@ apply_pull_secret() {
     else
       kit_substrate_out "      secret ${REGISTRY_PULL_SECRET_NAME} to be created in ${ns}"
     fi
-    # Never printed, never in argv, never on disk.
-    printf '%s' "$REGISTRY_DOCKERCONFIGJSON" |
+    # Never printed, never in argv, never on disk — and decoded, per above.
+    printf '%s' "$REGISTRY_DOCKERCONFIGJSON" | base64 -d |
       kubectl --kubeconfig="$KUBECONFIG" create secret docker-registry "$REGISTRY_PULL_SECRET_NAME" -n "$ns"       --from-file=.dockerconfigjson=/dev/stdin --dry-run=client -o yaml |
       kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
   done
@@ -1615,6 +1625,11 @@ install_nats() {
 }
 
 # --- step 11: courier's identity credential, minted on this box -------------
+# The two bounds below are this step's own 300s, split the way steps 1 and 8
+# are: 120s for Argo to create the Deployment, then rollout inside what is
+# left. Overridable so the suite can shorten the first half.
+: "${IDENTITY_DEPLOY_TIMEOUT:=120}"
+: "${IDENTITY_ROLLOUT_TIMEOUT:=180}"
 # install → boot → MINT → patch → restart, in ONE run on ONE box.
 #
 # This loop used to cross a boundary: identity booted, the operator minted an
@@ -1641,7 +1656,19 @@ mint_courier_identity_token() {
     return 0
   fi
 
-  kubectl --kubeconfig="$KUBECONFIG" -n identity rollout status deployment/identity --timeout=300s
+  # The Deployment is created ASYNCHRONOUSLY by Argo, from the Applications
+  # step 6 applied — steps 7 through 10 sit between that apply and this watch,
+  # and step 8 alone lasts long enough that the race usually wins itself, but
+  # "usually" is not a wait. `rollout status` on a missing named object is
+  # `NotFound`, exit 1, not a wait (the empty-list no-op branch is the path a
+  # named object never takes) — the same class as step 1's node wait and step
+  # 8's CNPG pod wait, so the same shape: the Deployment must EXIST first
+  # (bounded, above), then its rollout is watched with the part of this step's
+  # 300s that is left. A genuinely unsynced Application still fails — exactly
+  # as it did before — and now names the Deployment that never appeared
+  # instead of a rollout that never started.
+  kit_substrate_await_list "$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity
+  kubectl --kubeconfig="$KUBECONFIG" -n identity rollout status deployment/identity --timeout="$((IDENTITY_ROLLOUT_TIMEOUT))s"
 
   # Identity is reachable at its cluster-local Service only from inside the
   # cluster, so the box forwards a port to it — the same mechanism the launch
