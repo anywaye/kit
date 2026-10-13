@@ -1540,12 +1540,39 @@ mock_get() {
   cat "$MOCK_ROOT/$1/$2/$3" 2>/dev/null || true
 }
 
+# mock_namespace_exists <namespace> — has anything in this store created it?
+#
+# The boundary the packet's defect crosses, and the reason the mock needs a
+# namespace registry at all: `create secret` in a namespace NOBODY made is
+# refused by the API server with `Error from server (NotFound): namespaces "x"
+# not found`, exit 1. That is the exact error the live box produced on a wiped
+# machine, where step 4 had made argocd and step 6's Applications had yet to
+# make the other five. A mock that let a Secret be created in any namespace
+# would have been green on that failure for the whole life of this suite,
+# which is the same shape as the defect: an assertion that pins the destination
+# without modelling the destination's existence.
+#
+# GET and PATCH are deliberately NOT bound by this: `get secret -n x` on a
+# namespace that does not exist is NotFound too, but the fixture's own store is
+# the only thing those verbs read, and binding them would make a seeded secret
+# unreadable rather than wrong. The boundary is modelled where the defect
+# measured it — a WRITE into the namespace.
+mock_namespace_exists() {
+  [ -n "${MOCK_ROOT:-}" ] || return 0
+  [ -f "$MOCK_ROOT/namespaces" ] || return 1
+  grep -qx -- "$1" "$MOCK_ROOT/namespaces" 2>/dev/null
+}
+
 # mock_kubectl — the file-backed kubectl. Emulates only what
-# install_service_secrets uses: `create namespace` (prints a stub down the
-# pipe to `apply`), `create secret generic … --from-literal=K=V …`,
+# install_service_secrets and the pull-secret step use: `create namespace`
+# (REGISTERS the namespace and prints a stub down the pipe to `apply`),
+# `create secret generic … --from-literal=K=V …`,
+# `create secret docker-registry … --from-file=…`,
 # `get secret …` (existence), and `get secret … -o jsonpath={.data.KEY}`
 # (base64 of the stored value, the shape read_secret_key decodes).
-# Anything else is a loud failure, not a silent success.
+# Two of those verbs — `create secret` and `apply` — refuse a namespace nobody
+# made, with the API server's own NotFound. Anything else is a loud failure,
+# not a silent success.
 mock_kubectl() {
   # EVERY invocation is recorded in full and in order, because the pull-secret
   # contract is that the credential never appears in argv at all — and the
@@ -1569,6 +1596,22 @@ mock_kubectl() {
       local resource="${1:-}"
       shift || true
       if [ "$resource" = "namespace" ]; then
+        # THE REGISTRY. Real kubectl keeps the namespace set in etcd; the mock
+        # keeps it in one name per line of $MOCK_ROOT/namespaces, and that file
+        # is what the two namespace-bound verbs below consult. Written before
+        # anything else, so the same `create | apply` pipeline that asks for the
+        # namespace is the one that makes it observable to the Secret beside it.
+        local ns_name="${1:-}"
+        shift || true
+        # THE RED CONTROL'S HOOK: a box whose admission policy, or a
+        # kubeconfig pointing at a cluster it cannot reach, refuses the
+        # namespace the step is about to write into. Answered the way the API
+        # server answers it — loudly, on stderr, exit 1.
+        if [ -n "${MOCK_NAMESPACE_REFUSE:-}" ] && [ "$MOCK_NAMESPACE_REFUSE" = "$ns_name" ]; then
+          printf 'Error from server (Forbidden): namespaces "%s" is forbidden: the mock refuses to create it\n' "$ns_name" >&2
+          return 1
+        fi
+        printf '%s\n' "$ns_name" >>"$MOCK_ROOT/namespaces"
         printf 'namespace-stub\n'
         return 0
       fi
@@ -1596,6 +1639,15 @@ mock_kubectl() {
           echo "mock_kubectl: create secret docker-registry without a --from-file path" >&2
           return 1
         fi
+        # The namespace must EXIST. On a wiped box the pull-secret step runs
+        # before the Applications create them, and this is where that failure
+        # lives — `Error from server (NotFound): error when creating "STDIN":
+        # namespaces "identity" not found`, which `set -e` turns into the end
+        # of the install.
+        if ! mock_namespace_exists "$ns"; then
+          printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+          return 1
+        fi
         local d="$MOCK_ROOT/$ns/$name"
         mkdir -p "$d"
         cat "$src" >"$d/.dockerconfigjson"
@@ -1621,6 +1673,13 @@ mock_kubectl() {
           *) shift ;;
         esac
       done
+      # The namespace must EXIST, exactly as for the docker-registry Secret
+      # above. Step 9 makes its own four before it writes into them, which is
+      # why this is a boundary and not an obstruction.
+      if ! mock_namespace_exists "$ns"; then
+        printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
+        return 1
+      fi
       local d="$MOCK_ROOT/$ns/$name"
       mkdir -p "$d"
       local e k v
@@ -1687,8 +1746,19 @@ mock_kubectl() {
       # rather than a literal in the tree. APPENDED, not numbered: every
       # pipeline element is a fork, so a counter kept in the parent never
       # advances and the sixth apply would overwrite the first.
+      #
+      # Buffered into a variable rather than streamed, so the manifest's own
+      # namespace can be read before it is stored — the same NotFound boundary
+      # `create secret` models, asked of the second half of the pipeline.
+      local apply_stdin apply_ns
+      apply_stdin="$(cat)"
+      apply_ns="$(printf '%s\n' "$apply_stdin" | sed -n 's/^  namespace: //p' | head -1)"
+      if [ -n "$apply_ns" ] && ! mock_namespace_exists "$apply_ns"; then
+        printf 'Error from server (NotFound): namespaces "%s" not found\n' "$apply_ns" >&2
+        return 1
+      fi
       mkdir -p "$MOCK_ROOT/applied"
-      cat >>"$MOCK_ROOT/applied.yaml"
+      printf '%s\n' "$apply_stdin" >>"$MOCK_ROOT/applied.yaml"
       return 0
       ;;
     rollout)
@@ -2365,6 +2435,310 @@ else
   MOCK_ROOT="$MOCK_ROOT_SAVED"
 fi
 
+# ===========================================================================
+# 3c. THE NAMESPACE IS MADE BEFORE THE SECRET IS WRITTEN INTO IT
+# ===========================================================================
+# The defect this packet fixes, and the reason the mock above now has a
+# namespace registry. Measured live on a wiped box:
+#
+#       secret ghcr-pull-secret to be created in argocd
+#       secret ghcr-pull-secret to be created in identity
+#   Error from server (NotFound): error when creating "STDIN":
+#   namespaces "identity" not found
+#
+# Five of the six namespaces the pull secret is written into do not exist at
+# step 5 — the Argo CD Applications at step 6 create them, with
+# `CreateNamespace=true` — and `set -e` ended the install at its second
+# namespace. Only a box with nothing in it could show that, which is why the
+# store below starts EMPTY: no namespace exists, and the mock refuses a Secret
+# written into one that was never made, exactly as the API server does.
+#
+# The green case is therefore the whole claim in one run: six namespaces made
+# BY THE STEP, and the secret written into each of them. The order is read off
+# the recorded argv rather than asserted from the source, so "created first" is
+# a measurement and not a reading of the code.
+MOCK_ROOT_NS="$WORK/pull-secret-ns"
+mkdir -p "$MOCK_ROOT_NS"
+rm -f "$MOCK_ROOT_NS/curl-calls" "$MOCK_ROOT_NS/curl-response" "$MOCK_ROOT_NS/kubectl-argv" \
+  "$MOCK_ROOT_NS/applied.yaml" "$MOCK_ROOT_NS/namespaces" "$WORK/pull-secret-ns.log" "$WORK/ns-runner.sh"
+exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_NS/curl-response"
+# A SEPARATE PROCESS, for the reason the control below states in full: a `|| ec`
+# guard suspends `set -e` for the whole guarded body, so a subshell run cannot
+# tell "the install finished" from "the install survived a failure it should
+# have died of". This one is the run that must answer the way a box does.
+cat >"$WORK/ns-runner.sh" <<RUNNER
+set -euo pipefail
+export MOCK_ROOT="$MOCK_ROOT_NS"
+export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+# shellcheck source=/dev/null
+. "$fixture_sourced"
+kubectl() { mock_kubectl "\$@"; }
+curl() {
+  printf '%s\n' "\$*" >>"\$MOCK_ROOT/curl-calls"
+  cat "\$MOCK_ROOT/curl-response"
+  case "\$*" in
+    *"-w"*) printf '\n%s\n' 200 ;;
+  esac
+  return 0
+}
+install_pull_secret
+RUNNER
+export -f mock_kubectl mock_namespace_exists
+pull_ns_ec=0
+bash "$WORK/ns-runner.sh" >"$WORK/pull-secret-ns.log" 2>&1 || pull_ns_ec=$?
+if [ "$pull_ns_ec" -ne 0 ]; then
+  fail 'step 5 creates each namespace and then writes the pull secret into it' \
+    "exit $pull_ns_ec: $(cat "$WORK/pull-secret-ns.log")"
+else
+  pass 'step 5 creates each namespace and then writes the pull secret into it'
+fi
+
+# The namespace the step MADE, in the step's own words. Read from the registry
+# the mock writes, because that is the record of what the cluster would now
+# hold — the state the manager produced by hand on the affected box, which is
+# the state a fixed installer has to produce itself.
+pull_secret_namespaces_ok() {
+  local ns
+  for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
+    if ! grep -qx -- "$ns" "$MOCK_ROOT_NS/namespaces" 2>/dev/null; then
+      printf 'the step did not create namespace %s\n' "$ns"
+      return 1
+    fi
+  done
+  printf 'the step itself created all %d namespaces it writes into' "${#REGISTRY_PULL_NAMESPACES[@]}"
+}
+run 'every pulling namespace is created by the step, not by hand' green pull_secret_namespaces_ok
+
+# THE ORDER, off the recorded argv: one `create namespace <ns>` line must sit
+# BEFORE the `secret <name> -n <ns>` line for the same namespace. A check that
+# only asked whether both happened would be satisfied by a step that wrote the
+# secret first and made the namespace afterwards, which is the wiped-box
+# failure with a happy ending nobody would see until a re-run.
+pull_secret_order_ok() {
+  local ns made wrote
+  for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
+    made="$(grep -n -m1 -- "create namespace $ns " "$MOCK_ROOT_NS/kubectl-argv" 2>/dev/null | cut -d: -f1 || true)"
+    # The recorded argv, in full: `create secret docker-registry <name> -n <ns>
+    # --from-file=… --dry-run=client -o yaml`. The `-n <ns>` after the name is
+    # what makes this the write for THIS namespace and not a neighbour's.
+    wrote="$(grep -n -m1 -- "docker-registry $REGISTRY_PULL_SECRET_NAME -n $ns " "$MOCK_ROOT_NS/kubectl-argv" 2>/dev/null | cut -d: -f1 || true)"
+    if [ -z "$made" ]; then
+      printf 'no namespace creation was recorded for %s\n' "$ns"
+      return 1
+    fi
+    if [ -z "$wrote" ]; then
+      printf 'no pull-secret write was recorded for %s\n' "$ns"
+      return 1
+    fi
+    if [ "$made" -gt "$wrote" ]; then
+      printf 'the secret was written into %s (call %s) before its namespace was created (call %s)\n' "$ns" "$wrote" "$made"
+      return 1
+    fi
+  done
+  printf 'in every namespace the create precedes the secret write'
+}
+run 'the namespace is created BEFORE the secret is written into it' green pull_secret_order_ok
+
+# THE RED CONTROL. The namespace itself is refused — an admission policy, a
+# kubeconfig aimed at a cluster that will not answer, a box with the k3s
+# service down. The step must REFUSE BY NAME and stop, never skip the
+# namespace and carry on: a run that continued would report success while that
+# namespace pulled nothing, and the CrashLoopBackOff it produced would name
+# neither this line nor the namespace that was never made.
+MOCK_ROOT_REFUSE="$WORK/pull-secret-refuse"
+mkdir -p "$MOCK_ROOT_REFUSE"
+rm -f "$MOCK_ROOT_REFUSE/curl-calls" "$MOCK_ROOT_REFUSE/curl-response" "$MOCK_ROOT_REFUSE/kubectl-argv" \
+  "$MOCK_ROOT_REFUSE/applied.yaml" "$MOCK_ROOT_REFUSE/namespaces" "$WORK/pull-secret-refuse.log"
+refuse_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() {
+    printf '%s\n' "$*" >>"$MOCK_ROOT_REFUSE/curl-calls"
+    cat "$MOCK_ROOT_REFUSE/curl-response"
+    case "$*" in
+      *"-w"*) printf '\n%s\n' 200 ;;
+    esac
+    return 0
+  }
+  export MOCK_ROOT="$MOCK_ROOT_REFUSE"
+  export MOCK_NAMESPACE_REFUSE="identity"
+  export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_REFUSE/curl-response"
+  install_pull_secret >"$WORK/pull-secret-refuse.log" 2>&1
+) || refuse_ec=$?
+refuse_ok() {
+  if [ "$refuse_ec" -eq 0 ]; then
+    printf 'the step succeeded with a namespace it could not create — a silent skip\n'
+    return 1
+  fi
+  case "$(cat "$WORK/pull-secret-refuse.log")" in
+    *"identity could not be created"*) ;;
+    *) printf 'the refusal does not name the namespace\n%s\n' "$(cat "$WORK/pull-secret-refuse.log")"; return 1 ;;
+  esac
+  # And nothing was written into it. A refusal that leaves half a credential
+  # behind is the half-installed substrate the preflight's header forbids.
+  local ns
+  for ns in identity gateway courier parlor; do
+    if grep -q "namespace: $ns" "$MOCK_ROOT_REFUSE/applied.yaml" 2>/dev/null; then
+      printf 'the pull secret was written into %s after the namespace that could not be created\n' "$ns"
+      return 1
+    fi
+  done
+  printf 'refused loudly, by name, and no secret was written past the hole'
+}
+run 'a namespace that cannot be created refuses the step, by name, with nothing written past it' green refuse_ok
+
+# THE BOUNDARY IS REAL, AND THE CREATION IS LOAD-BEARING. The same mock, with
+# the namespace creation DELETED from the installer, must now fail at the first
+# namespace with the API server's own NotFound — proving the mock is not merely
+# permissive and that nothing else in the step makes the namespaces. Without
+# this control a green run above could be a mock that always says yes.
+fixture_no_ns="$WORK/install-no-namespace.sh"
+rm -f "$fixture_no_ns"
+# Guarded by an `if`, not run bare: under this script's `set -e` a python exit
+# would take the whole suite down before the failure is reported as a failure
+# of the control rather than as an unexplained stop.
+if "$PY" - "$SUBSTRATE/install.sh" "$fixture_no_ns" <<'PY'
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+lines = src.split("\n")
+start = None
+for i, ln in enumerate(lines):
+    if ln.startswith('apply_pull_secret() {'):
+        start = i
+        break
+if start is None:
+    sys.exit("control fixture: apply_pull_secret was not found")
+end = None
+for i in range(start, len(lines)):
+    if lines[i] == '}':
+        end = i
+        break
+if end is None:
+    sys.exit("control fixture: apply_pull_secret has no closing brace")
+head = "if ! kubectl --kubeconfig="
+close = 'could not be created, so the image pull secret cannot be written'
+block_start = block_end = None
+for i in range(start, end):
+    if block_start is None and lines[i].strip().startswith(head):
+        block_start = i
+    if close in lines[i]:
+        block_end = i
+        break
+if block_start is None or block_end is None:
+    sys.exit("control fixture: the namespace-creation statement was not found")
+# The statement is an `if ! … ; then … fi`, so the closing `fi` is part of it:
+# deleting the body and leaving the `fi` behind would produce a fixture that
+# does not parse, which fails loudly rather than proving something by accident.
+while block_end + 1 < len(lines) and lines[block_end + 1].strip() == "fi":
+    block_end += 1
+del lines[block_start:block_end + 1]
+out_lines = [ln for ln in lines if ln != 'main "$@"']
+out = "\n".join(out_lines)
+# The fixture must assert its own premise before it is used: the secret write
+# is still there (otherwise the control proves a different, dumber failure),
+# and the namespace creation is gone from apply_pull_secret while the other
+# call site, install_service_secrets' own loop, is untouched. A control whose
+# mutation silently stopped breaking the thing it names is a proof of nothing.
+body = out[out.index("apply_pull_secret() {"):out.index("install_pull_secret() {")]
+if 'create namespace "$ns"' in body:
+    sys.exit("control fixture: the creation is still inside apply_pull_secret")
+if '--from-file=.dockerconfigjson=/dev/stdin' not in body:
+    sys.exit("control fixture: the secret write is no longer inside apply_pull_secret")
+if 'create namespace "$ns"' not in out:
+    sys.exit("control fixture: the edit removed more than the one call site")
+# The trailing `main "$@"` is stripped the way every fixture in this file
+# strips it, so sourcing the fixture DEFINES the step rather than running it.
+if 'main "$@"' in out:
+    sys.exit("control fixture: the main call is still there, so sourcing runs the install")
+open(sys.argv[2], "w", encoding="utf-8").write(out)
+PY
+then
+  :
+else
+  echo "control fixture: the namespace-creation delete did not apply, so the control proves nothing" >&2
+fi
+if [ -s "$fixture_no_ns" ] && bash -n "$fixture_no_ns" \
+  && diff -q "$SUBSTRATE/install.sh" "$fixture_no_ns" >/dev/null 2>&1; then
+  fail 'control fixture: the namespace-creation delete failed to apply' \
+    "the fixture is byte-identical to the installer, so the control would prove nothing"
+elif [ -s "$fixture_no_ns" ] && bash -n "$fixture_no_ns"; then
+  MOCK_ROOT_NONS="$WORK/pull-secret-no-ns"
+  mkdir -p "$MOCK_ROOT_NONS"
+  rm -f "$MOCK_ROOT_NONS/curl-calls" "$MOCK_ROOT_NONS/kubectl-argv" "$MOCK_ROOT_NONS/applied.yaml" \
+    "$MOCK_ROOT_NONS/namespaces" "$WORK/pull-secret-no-ns.log" "$WORK/no-ns-runner.sh"
+  exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_NONS/curl-response"
+  # The runner is a SEPARATE bash process, and that is the whole reason it
+  # exists. Every live case above runs as `( … ) || ec=$?`, and a command in a
+  # `||` list runs with `set -e` SUSPENDED for its whole body — MEASURED: with
+  # the creation deleted, the guarded run walked all six namespaces, applied
+  # nothing, and exited 0. A box does not do that; `set -e` ends the install at
+  # the first failure. So the case that must reproduce the box's behaviour runs
+  # in a process with no such context, where `set -e` is live, and its status
+  # is read off the child rather than inferred.
+  cat >"$WORK/no-ns-runner.sh" <<RUNNER
+set -euo pipefail
+export MOCK_ROOT="$MOCK_ROOT_NONS"
+export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+# The state the box was ACTUALLY in: step 4 has made argocd, and nothing has
+# made the other five. With that seed the failure this control reproduces lands
+# on the same namespace the live run stopped on, so the evidence is the same
+# evidence rather than a nearby shape of it.
+printf 'argocd\n' >"\$MOCK_ROOT/namespaces"
+# shellcheck source=/dev/null
+. "$fixture_no_ns"
+kubectl() { mock_kubectl "\$@"; }
+curl() {
+  printf '%s\n' "\$*" >>"\$MOCK_ROOT/curl-calls"
+  cat "\$MOCK_ROOT/curl-response"
+  case "\$*" in
+    *"-w"*) printf '\n%s\n' 200 ;;
+  esac
+  return 0
+}
+install_pull_secret
+RUNNER
+  export -f mock_kubectl mock_namespace_exists
+  no_ns_ec=0
+  bash "$WORK/no-ns-runner.sh" >"$WORK/pull-secret-no-ns.log" 2>&1 || no_ns_ec=$?
+  no_ns_ok() {
+    if [ "$no_ns_ec" -eq 0 ]; then
+      printf 'the step exited 0 on a box where every namespace it writes into was refused\n'
+      return 1
+    fi
+    case "$(cat "$WORK/pull-secret-no-ns.log")" in
+      *'namespaces "identity" not found'*) ;;
+      *) printf 'the stop is not the API server NotFound for identity\n%s\n' "$(cat "$WORK/pull-secret-no-ns.log")"; return 1 ;;
+    esac
+    # It stopped AT identity, so argocd — the namespace that existed — was
+    # written and the rest were not. That is the live evidence line for line,
+    # and it is what a silent skip would be missing.
+    if ! grep -q "namespace: argocd" "$MOCK_ROOT_NONS/applied.yaml" 2>/dev/null; then
+      printf 'argocd was not written, which is not the state the box was measured in\n'
+      return 1
+    fi
+    local ns
+    for ns in identity gateway courier parlor observability; do
+      if grep -q "namespace: $ns" "$MOCK_ROOT_NONS/applied.yaml" 2>/dev/null; then
+        printf 'the secret was written into %s after the refusal — the loop carried on\n' "$ns"
+        return 1
+      fi
+    done
+    printf 'stopped at %s with namespaces "identity" not found, argocd written and nothing after it' "$no_ns_ec"
+  }
+  run 'control: without the creation the step stops at identity, exactly as the box did' green no_ns_ok
+else
+  fail 'control fixture: the namespace-creation delete failed to apply' \
+    "the edit did not remove the creation, so the control would prove nothing"
+fi
+
 # 4. THE CREDENTIAL IS NEVER ECHOED. Three assertions, each with a control
 # below that plants the value and must go red: the log, the argv, and the
 # variable that held it (dropped after use).
@@ -2422,6 +2796,10 @@ stray_files_ok() {
     [ -e "$f" ] || continue
     case "${f##*/}" in
       curl-calls|curl-response|kubectl-argv|applied|applied.yaml) continue ;;
+      # The namespace registry the mock keeps: one name per line, held to prove
+      # the step MADE the namespaces it wrote into. It carries no credential —
+      # it holds names — which is why it is allowed to sit in the store.
+      namespaces) continue ;;
       argocd|identity|gateway|courier|parlor|observability) continue ;;
     esac
     printf 'unexpected file in the store: %s\n' "${f##*/}"

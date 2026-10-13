@@ -35,7 +35,11 @@ this file only describes what is here and what is proven.
    dockerconfigjson, held in a shell variable and applied through a pipe. No
    long-lived registry credential is handed over, and nothing reaches disk,
    argv or stdout. Re-running re-redeems, because a credential with minutes of
-   life is supposed to be replaced.
+   life is supposed to be replaced. **The six namespaces that pull are created
+   by this step, idempotently, before the secret is written into each of
+   them** — the credential has to exist before the first pod that pulls with
+   it is scheduled, and five of those six namespaces do not exist until step
+   6's Applications create them.
 6. **The first Applications** — applied from `manifests/applications/`, so Argo
    starts syncing.
 7. **The Let's Encrypt ClusterIssuers** — `letsencrypt-staging` and
@@ -580,7 +584,8 @@ is an operator action, and the URL works only when observed.
   variable); the capability is validated by shape before any network call, so
   a pasted dockerconfigjson is refused rather than sent as a bearer; the
   redeemed dockerconfigjson reaches the cluster as a dockerconfigjson Secret
-  in all six namespaces and the capability and the credential are both absent
+  in all six namespaces — each namespace made by the step, and made BEFORE the
+  secret that goes into it — and the capability and the credential are both absent
   from the output; identity's OIDC signing key is a 2048-bit RSA PEM with a
   `box-`-plus-16-hex key id, generated on the box, distinct on a second box,
   never regenerated on a re-run, and absent from the output; and step 11's

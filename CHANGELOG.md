@@ -22,6 +22,35 @@
   without re-deriving the model. A service tree is not involved, and the gate
   stays offline.
 
+### Substrate
+
+- **Step 5 wrote the pull secret into namespaces that did not exist yet, and
+  only a wiped box could have shown it.** Measured live on a Contabo box:
+  the secret was applied into `argocd` (step 4's namespace) and the run then
+  stopped at `Error from server (NotFound): namespaces "identity" not found`,
+  because the other five are created later — by the Argo CD Applications at
+  step 6, with `CreateNamespace=true`. `set -e` ended the install at its
+  second namespace, and the manager created the namespaces by hand to get
+  past it, which is the state a fixed installer has to produce itself.
+  **The secret stays early on purpose** — the first pod that pulls a fleet
+  image is Argo CD's own, so a credential applied after the pods that need it
+  is a `CrashLoopBackOff` nobody can attribute to an ordering choice three
+  steps earlier — and the namespace is therefore **made by the step,
+  idempotently, before the Secret is written into it**, with the repository's
+  own `create --dry-run=client -o yaml | apply -f -` idiom. Moving it into
+  step 6 was rejected: Argo creates the namespace when it syncs, which is not
+  a moment this file controls, and nothing at step 6 creates `argocd`'s own
+  namespace. A namespace the step makes and the `CreateNamespace=true` Argo
+  later meets are the same instruction asked twice, so meeting is a no-op by
+  construction. A namespace that cannot be created is **refused by name** —
+  no sleep, no wait-until-it-appears, no `|| true`, because each of those
+  turns a hole the operator can see into one they discover at image-pull time.
+  The mock kubectl now models the boundary that produced the failure (a
+  Secret created in a namespace nobody made is `NotFound`, exit 1) and the
+  suite watches the step make the namespaces and succeed, refuses loudly when
+  one cannot be created, and stops at identity with nothing written past it
+  when the creation is deleted.
+
 ### Publish
 
 - **The publish path had never once run, and the box could not pull what it
