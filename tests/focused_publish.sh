@@ -22,6 +22,11 @@
 #      in both directions, the image tag derived from Chart.yaml's
 #      appVersion, sha-<40> kept, and every sibling chart beside
 #      $ROOT/.. asserted against its Application (or named absent).
+#   4. tests/workflow_timeouts_check.sh: the billing guard — every `runs-on`
+#      job in .github/workflows/*.yml declares `timeout-minutes` in 1..360,
+#      and no `uses:` job carries the key GitHub refuses. Its three red
+#      controls (a deleted bound; the key on a uses job; a bound above 360)
+#      must go red under the same checker the real tree passes.
 #
 # WHAT IT NEVER DOES. It never invokes tests/validate.sh — not the full gate
 # and not `--only`. The re-entrancy this packet removes lived INSIDE the
@@ -90,6 +95,15 @@ if ! bash "$ROOT/tests/publish_seam_check.sh" \
   exit 1
 fi
 
-printf 'FOCUSED=publish  pass=%d skip=%d + chart publish and publish seam checks passed (same files the gate calls, all red controls red)\n' "$pass" "$skip"
+# 4. The billing guard: every job that can hang carries a bound, and no
+# `uses:` job carries the key GitHub rejects. This file is the narrow gate for
+# the workflow-timeouts packet, so its own proof (green here, three red
+# controls inside) runs beside the publish seams it lives with.
+if ! bash "$ROOT/tests/workflow_timeouts_check.sh" "$ROOT/.github/workflows"; then
+  printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + workflow timeouts check FAILED\n' "$pass" "$fail" "$skip"
+  exit 1
+fi
+
+printf 'FOCUSED=publish  pass=%d skip=%d + chart publish, publish seam and workflow timeouts checks passed (same files the gate calls, all red controls red)\n' "$pass" "$skip"
 printf 'NOT RUN: tier, telemetry, observability, lint, tenancy, substrate, obs chart sources, and every other check — focused publish proof only, not a platform-test pass. Full proof: bash tests/validate.sh\n'
 exit 0

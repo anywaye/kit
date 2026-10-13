@@ -2786,6 +2786,33 @@ PY
     run_body_env_check
 
   # -------------------------------------------------------------------------
+  # A JOB WITH NO `timeout-minutes` INHERITS 360 MINUTES AND BILLS SIX HOURS
+  # WHEN IT HANGS. GitHub's default job timeout is six hours, and a caller of a
+  # reusable workflow CANNOT lower it: a job whose body is `uses:` may carry
+  # only name/uses/with/secrets/needs/if/permissions, so `timeout-minutes` on
+  # the calling job is refused at workflow-parse time (measured against
+  # actionlint, which names the key as unavailable). The bound therefore
+  # belongs in THESE files, which every service calls, and one packet here
+  # bounds the whole fleet.
+  #
+  # It asserts BOTH directions, because the wrong fix is as dangerous as the
+  # gap: every `runs-on` job declares an integer bound in 1..360, and no
+  # `uses:` job carries the key GitHub would reject — the latter would take the
+  # run to zero jobs and a green check, the silent failure class this
+  # repository keeps writing checks against.
+  #
+  # Single source of truth: tests/workflow_timeouts_check.sh holds the
+  # assertion and its three red controls (a deleted bound; the key on a `uses:`
+  # job; a bound above 360). The gate calls it so PASS here means exactly what
+  # the focused proof means; tests/focused_publish.sh calls the same file.
+  section 'static: every workflow job that runs on a runner is bounded'
+  check_workflow_timeouts() {
+    bash "$ROOT/tests/workflow_timeouts_check.sh" "$1"
+  }
+  check 'workflow timeouts  (every runs-on job declares timeout-minutes in 1..360; no uses job carries the illegal key)' \
+    check_workflow_timeouts "$ROOT/.github/workflows"
+
+  # -------------------------------------------------------------------------
   section 'static: compose — the observability chokepoint'
 
   compose_check() {
