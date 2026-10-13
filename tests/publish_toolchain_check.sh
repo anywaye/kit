@@ -258,6 +258,45 @@ if helm_install_steps == 0:
 # Provenance: the stamper comes from kit's own commit, not the caller's tree.
 # ---------------------------------------------------------------------
 image_path = os.path.join(workflows, "image.reusable.yml")
+
+# P1: no INVOCATION of the stamper through the caller-relative path, in ANY
+# workflow — provenance.sh is a file in kit, so a run body that reaches it as
+# `docker/provenance.sh` reads the caller's checkout and has never worked.
+# Read the COMMAND, not every line: the fetch computes
+# `script="…/docker/provenance.sh"` and the guard echoes that path, and
+# neither is an invocation.
+for path in files:
+    for jid, i, step in steps_of(path):
+        body = run_body(step)
+        if not body:
+            continue
+        for line in body.splitlines():
+            tokens = line.split()
+            # Drop leading VAR=value env assignments to find the command word.
+            j = 0
+            while j < len(tokens) and re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[j]
+            ):
+                j += 1
+            cmd = [t.strip("'\"") for t in tokens[j:]]
+            relative = r"(?:\./)?docker/provenance\.sh"
+            invoked = bool(cmd) and (
+                re.fullmatch(relative, cmd[0])
+                or (
+                    cmd[0] in ("sh", "bash", "source", ".")
+                    and len(cmd) > 1
+                    and re.fullmatch(relative, cmd[1])
+                )
+            )
+            if invoked:
+                problems.append(
+                    f"{os.path.basename(path)} job {jid!r} step {i} invokes "
+                    f"`{line.strip()}` — docker/provenance.sh is a file in kit, "
+                    f"not in the caller's checkout (identity, gateway, courier "
+                    f"and parlor have no docker/ directory), so this reads a "
+                    f"path that has never existed and the stamp never ran"
+                )
+
 if not os.path.isfile(image_path):
     problems.append("image.reusable.yml is missing — the stamp has no home")
 else:
@@ -268,29 +307,6 @@ else:
         body = run_body(step)
         if not body:
             continue
-        # P1: no INVOCATION through the caller-relative path. Read the command,
-        # not every line: the fetch computes `script="…/docker/provenance.sh"`
-        # and the guard echoes that path, and neither is an invocation.
-        for line in body.splitlines():
-            tokens = line.split()
-            # Drop leading VAR=value env assignments to find the command word.
-            j = 0
-            while j < len(tokens) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[j]):
-                j += 1
-            cmd = [t.strip("'\"") for t in tokens[j:]]
-            relative = r"(?:\./)?docker/provenance\.sh"
-            invoked = bool(cmd) and (
-                re.fullmatch(relative, cmd[0])
-                or (cmd[0] in ("sh", "bash", "source", ".") and len(cmd) > 1 and re.fullmatch(relative, cmd[1]))
-            )
-            if invoked:
-                problems.append(
-                    f"image.reusable.yml job {jid!r} step {i} invokes "
-                    f"`{line.strip()}` — docker/provenance.sh is a file in kit, "
-                    f"not in the caller's checkout (identity, gateway, courier "
-                    f"and parlor have no docker/ directory), so this reads a "
-                    f"path that has never existed and the stamp never ran"
-                )
         if "--validate" in body:
             stamp_seen += 1
             if "$KIT_PROVENANCE_SCRIPT" not in body and "${KIT_PROVENANCE_SCRIPT}" not in body:

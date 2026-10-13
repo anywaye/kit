@@ -185,10 +185,12 @@ jobs:
           HELM_PIN: v4.3.0
         run: |
           set -euo pipefail
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -s -- --version "$HELM_PIN"
+          curl -fsSL \
+            https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+            | bash -s -- --version "$HELM_PIN"
           helm_version="$(helm version --template '{{.Version}}')"
           if [ "$helm_version" != "$HELM_PIN" ]; then
-            echo "chart: helm $helm_version is not the pinned $HELM_PIN — the pin moved, or the installer resolved a different release" >&2
+            echo "chart: helm $helm_version is not the pinned $HELM_PIN — a different release resolved" >&2
             exit 1
           fi
           echo "chart: helm $helm_version (the pin)"

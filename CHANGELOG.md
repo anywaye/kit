@@ -54,6 +54,51 @@
   output docker/metadata-action has never produced — so it was empty for
   every caller. The digest is the BUILD action's output; wired to
   `steps.build.outputs.digest` with the step id the reference needs.
+- **The publish path now runs, and two more seams failed the first time it ever
+  did.** With the references resolved, identity's `publish` run reached two
+  steps that had never once succeeded anywhere in the fleet:
+  - **The helm pin's verification used a flag Helm 4 removed.**
+    `chart.reusable.yml` pins helm v4 through the upstream installer and then
+    ran `helm version --client` to print the pin. Helm 4 removed `--client`
+    (the client/server split died with Tiller), so the step printed
+    `Error: unknown flag: --client`, exited 1, and killed the chart job before
+    it packaged anything. A developer's local helm is typically v3, where
+    `--client` is valid — which is why nothing local saw it. The verification
+    is now `helm version --template '{{.Version}}'` (a Helm 4.3.0 option, per
+    its own documentation), compared against a single `HELM_PIN` that also
+    drives the install, and the step exits non-zero naming both versions when
+    they disagree — a version check that cannot fail is a log line.
+  - **The provenance stamper was read from the caller's checkout, but the
+    script lives in kit.** `image.reusable.yml` ran
+    `sh docker/provenance.sh --validate` in the service's tree; identity,
+    gateway, courier and parlor carry no `docker/` directory, so the step died
+    with `cannot open docker/provenance.sh: No such file` and no image in the
+    fleet has ever been published. A new step fetches kit's `docker/` tree at
+    `job.workflow_sha` — the documented commit of the reusable workflow file
+    ITSELF, not the caller's, not `master`, and not a new input a service must
+    remember — into `$RUNNER_TEMP` with a sparse `git fetch` (the same shape
+    `ci.reusable.yml`'s conformance fallback uses, because `actions/checkout`
+    refuses an out-of-workspace path and an in-workspace kit repo would be
+    swept into the build context). It refuses by name if
+    `docker/provenance.sh` is absent, and the stamp step runs the exported
+    `$KIT_PROVENANCE_SCRIPT`.
+- **The two seams are proven, with five red controls.**
+  `tests/publish_toolchain_check.sh` — called by `tests/focused_publish.sh`
+  and by `tests/validate.sh` — asserts no `helm version` invocation carries a
+  flag the pinned major lacks (`--client` being the regression), that the pin
+  is verified against one value, that no run body invokes the stamper through
+  the caller-relative path, that kit is fetched at `${{ job.workflow_sha }}`
+  into `$RUNNER_TEMP`, and that the fetch guards the file by name. Five
+  controls, each a one-token edit: `--client` restored; the comparison
+  disabled; the caller-relative path restored; the ref rewritten to `master`;
+  the guard inverted. Each verified red for its own reason.
+- **`.github/actionlint.yaml` carries one reasoned, narrow entry.**
+  `job.workflow_sha` is a real, documented GitHub context
+  (`job.workflow_ref`, `job.workflow_repository` its siblings), but
+  actionlint 1.7.12's `job` schema predates it, so it reports a false positive
+  on the valid expression. The ignore is scoped to `image.reusable.yml` and
+  that one message, with the reason in the file; a second real finding in the
+  same file still fails the run.
 
 ### Substrate
 

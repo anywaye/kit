@@ -399,9 +399,9 @@ jobs:
           git -C "$kit_dir" checkout --quiet FETCH_HEAD
           script="$kit_dir/docker/provenance.sh"
           if [ ! -f "$script" ]; then
-            echo "image: kit's provenance stamper was not found at $script" >&2
-            echo "image: fetched cafaye/kit@$KIT_REF with sparse path '$KIT_SPARSE' and it carried no docker/provenance.sh" >&2
-            echo "image: the stamp cannot run without it, and an image that ships unstamped is worse than one that refuses" >&2
+            echo "image: kit's provenance stamper is not at $script" >&2
+            echo "image: fetched cafaye/kit@$KIT_REF (sparse '$KIT_SPARSE') with no docker/provenance.sh" >&2
+            echo "image: the stamp cannot run without it; an unstamped image is worse than a refusal" >&2
             exit 1
           fi
           echo "KIT_PROVENANCE_SCRIPT=$script" >>"$GITHUB_ENV"
