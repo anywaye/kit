@@ -2056,6 +2056,18 @@ mock_apply_plant() {
     return 1
   fi
   printf '%s\n' "$manifest" >>"$MOCK_ROOT/applied.yaml"
+  # An object the installer applied EXISTS afterwards — apply is a synchronous
+  # round trip, so a later GET of the same object answers instead of 404ing.
+  # Modelled for the CNPG Cluster install_postgres_cluster applies: without
+  # the marker the step's own phase query (on the refusal path) would read a
+  # 404 for an object the step just created, and the refusal would name
+  # 'unknown' for a cluster that is really 'Setting up primary'.
+  local apply_kind apply_name
+  apply_kind="$(printf '%s\n' "$manifest" | sed -n 's/^kind: //p' | head -1)"
+  apply_name="$(printf '%s\n' "$manifest" | sed -n 's/^  name: //p' | head -1)"
+  if [ "$apply_kind" = "Cluster" ] && [ -n "$apply_name" ] && [ -n "$apply_ns" ]; then
+    [ -f "$MOCK_ROOT/$apply_ns/cluster-$apply_name" ] || : >"$MOCK_ROOT/$apply_ns/cluster-$apply_name"
+  fi
 }
 # mock_kubectl — the file-backed kubectl. Emulates only what
 # install_service_secrets and the pull-secret step use: `create namespace`
@@ -2248,18 +2260,28 @@ mock_kubectl() {
         # fixture plants `data/cluster-postgres` to say it does, which is how a
         # re-run is modelled — and the only way a test can reach the guard
         # branch of install_postgres_cluster that skips the re-provision.
+        # With `-o jsonpath={.status.phase}` it answers the Cluster's phase
+        # instead: the fixture plants `data/cluster-postgres-phase` beside the
+        # marker (absent means Unknown), which is what the step 8/10 refusals
+        # name. Anything else about the Cluster is unhandled, loudly.
         shift || true
         local cl_name="${1:-}"
         shift || true
-        local cl_ns="$fallback_ns"
+        local cl_ns="$fallback_ns" cl_tmpl=""
         while [ $# -gt 0 ]; do
           case "$1" in
             -n) cl_ns="$2"; shift 2 ;;
+            -o) cl_tmpl="$2"; shift 2 ;;
             *) shift ;;
           esac
         done
-        [ -f "$MOCK_ROOT/$cl_ns/cluster-$cl_name" ] && return 0
-        return 1
+        [ -f "$MOCK_ROOT/$cl_ns/cluster-$cl_name" ] || return 1
+        case "$cl_tmpl" in
+          *status.phase*)
+            cat "$MOCK_ROOT/$cl_ns/cluster-$cl_name-phase" 2>/dev/null || printf 'Unknown'
+            ;;
+        esac
+        return 0
       fi
       if [ "${1:-}" != "secret" ]; then
         echo "mock_kubectl: unhandled get ${1:-}" >&2
@@ -2521,6 +2543,41 @@ mock_kubectl() {
       # background job is already gone when its RETURN trap kills it. The
       # exchange it guards is mocked at the curl boundary, not here.
       return 0
+      ;;
+    wait)
+      # `wait --for=condition=Ready cluster.postgresql.cnpg.io/<name> -n <ns>
+      # --timeout=Ns` — the readiness waits steps 8 and 10 run against the
+      # Cluster object. The fixture says the object EXISTS by planting
+      # `<ns>/cluster-<name>` (the same marker the guard reads) and says its
+      # Ready condition is True by planting `<ns>/cluster-<name>-ready`
+      # beside it. Without the ready file the wait answers the way real
+      # kubectl answers a condition that never becomes True: the timeout
+      # error, exit 1. The bound itself is not slept out — the argv log
+      # carries the `--timeout` the installer passed, and the static audit
+      # pins its default — because a mock that slept 600s would prove nothing
+      # a faster mock does not. Any other wait shape is unhandled, loudly.
+      local wait_args="$*"
+      case "$wait_args" in
+        *--for=condition=Ready\ cluster.postgresql.cnpg.io/*)
+          local wname wns="$fallback_ns"
+          wname="$(printf '%s' "$wait_args" | sed -E 's|.*cluster\.postgresql\.cnpg\.io/([^ ]+).*|\1|')"
+          case "$wait_args" in
+            *-n\ *)
+              wns="$(printf '%s' "$wait_args" | sed -E 's|.*-n ([^ ]+).*|\1|')"
+              ;;
+          esac
+          if [ -f "$MOCK_ROOT/$wns/cluster-$wname-ready" ]; then
+            printf 'cluster.postgresql.cnpg.io/%s condition met\n' "$wname"
+            return 0
+          fi
+          printf 'error: timed out waiting for the condition on clusters/%s\n' "$wname" >&2
+          return 1
+          ;;
+        *)
+          echo "mock_kubectl: unhandled wait $wait_args" >&2
+          return 1
+          ;;
+      esac
       ;;
     *)
       echo "mock_kubectl: unhandled verb $verb" >&2
@@ -5039,6 +5096,14 @@ migrate_seed_fixture() {
   # so there is no second pin to keep in step.
   mock_seed identity deploy-identity image "ghcr.io/cafaye/identity:0.1.0"
   mock_seed courier deploy-courier image "ghcr.io/cafaye/courier:0.1.0"
+  # The Cluster step 8 left behind: the object EXISTS (the guard marker) and
+  # its Ready condition is True (the *-ready file the wait reads), at the
+  # settled phase the failure message names. Step 10 waits on this before
+  # launching a single migrate pod; a fixture without the ready file is the
+  # half-ready re-run the wait exists for.
+  : >"$MOCK_ROOT/data/cluster-postgres"
+  : >"$MOCK_ROOT/data/cluster-postgres-ready"
+  printf 'Cluster in healthy state' >"$MOCK_ROOT/data/cluster-postgres-phase"
 }
 
 MOCK_ROOT="$WORK/migrate-run"
@@ -5155,6 +5220,58 @@ if grep -q 'permission denied for schema public' "$WORK/migrate-fail.log"; then
 else
   fail 'control: the failed migration prints the pod logs' "the logs were not printed"
 fi
+# The failure names the Cluster and its phase beside the DSN — a `connection
+# refused` that is really "the primary is not up yet" must read as one.
+if grep -q "cluster: postgres in namespace data (phase: 'Cluster in healthy state')" "$WORK/migrate-fail.log"; then
+  pass 'control: the failed migration names the Cluster and its phase'
+else
+  fail 'control: the failed migration names the Cluster and its phase' \
+    "no cluster phase in the failure: $(cat "$WORK/migrate-fail.log")"
+fi
+# The Cluster wait: step 10 waits for the Cluster's Ready condition before
+# launching a single migrate pod — the re-run path, where step 8's guard
+# skips its own wait because the object exists. Proven on the argv the green
+# run above recorded: a run that launched pods without first asking the
+# Cluster is the race step 8 just stopped losing on fresh installs.
+if grep -q -- 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout=600s' "$migrate_argv" 2>/dev/null; then
+  pass 'step 10 waits for the Cluster to be Ready before launching any migrate pod, under the 600s bound'
+else
+  fail 'step 10 waits for the Cluster to be Ready before launching any migrate pod, under the 600s bound' \
+    "no bounded Cluster wait in the recorded argv"
+fi
+
+# --- the red control: a half-ready Cluster refuses the migrations, naming its phase ---
+MOCK_ROOT="$WORK/migrate-halfready"
+mkdir -p "$MOCK_ROOT"
+migrate_halfready_ec=0
+(
+  migrate_seed_fixture
+  # The re-run shape: the object EXISTS (step 8's guard would skip) but its
+  # Ready condition never becomes True — the primary is still setting up.
+  # Remove the ready file the green fixture plants; the phase stays planted.
+  rm -f "$MOCK_ROOT/data/cluster-postgres-ready"
+  printf 'Setting up primary' >"$MOCK_ROOT/data/cluster-postgres-phase"
+  export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-halfready-receipt.json"
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  install_migrations >"$WORK/migrate-halfready.log" 2>&1
+) || migrate_halfready_ec=$?
+if [ "$migrate_halfready_ec" -eq 0 ]; then
+  fail 'control: a half-ready Cluster refuses the migrations (no race into connection refused)' \
+    "install_migrations exited 0 with the Cluster never Ready"
+elif ! grep -q 'Setting up primary' "$WORK/migrate-halfready.log"; then
+  fail 'control: a half-ready Cluster refuses the migrations (no race into connection refused)' \
+    "the refusal did not name the Cluster phase: $(cat "$WORK/migrate-halfready.log")"
+elif grep -q '^run kit-migrate' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+  fail 'control: a half-ready Cluster refuses the migrations (no race into connection refused)' \
+    "a migrate pod launched against a Cluster that never reported Ready"
+else
+  pass 'control: a half-ready Cluster refuses the migrations, naming its phase, launching nothing'
+fi
+# The next checks read $MOCK_ROOT's argv for the FAILED run above them — put
+# it back, the way the pre-existing order expects.
+MOCK_ROOT="$WORK/migrate-fail"
 
 # The static shape: install_migrations is a step main calls, its guard exists,
 # and the inventory lists the two schema-owning services. A comment can satisfy
@@ -6367,8 +6484,12 @@ run 'step 1 refuses within its bound when the node never registers' green k3s_br
 #      `--all` waits are this, and they are safe.
 #   2. a kit_substrate_await_list of the same kind, selector and namespace.
 #      This is the one for objects a CONTROLLER creates asynchronously — the
-#      Node object behind the kubelet, the Cluster's pods behind the CNPG
-#      operator.
+#      Node object behind the kubelet. (The CNPG pods were the second member
+#      of this population until roll-c5-cnpg-ready: the pod selector also
+#      matches the bootstrap Job's initdb pod, so the wait answered a question
+#      about the wrong object. Step 8 waits on the NAMED Cluster instead —
+#      applied synchronously above it — and step 10 pre-waits on the same
+#      object for re-runs that skip step 8 at its guard.)
 #
 # A NAMED wait needs neither: it runs after a synchronous apply of that same
 # object, and a GET of a missing named object fails loudly by name rather than
@@ -6386,8 +6507,11 @@ run 'step 1 refuses within its bound when the node never registers' green k3s_br
 # where the wait path reads separate kind and name tokens.
 #
 # And the bound is part of the rule. Splitting one wait into two is the easiest
-# way to double a step's patience, so the four numbers must still add up to the
-# totals the steps always had: 120s for the node, 600s for the CNPG pods.
+# way to double a step's patience, so the paired numbers must still add up to
+# the totals the steps always had: 120s for the node. Step 8's wait is a
+# SINGLE wait on the NAMED Cluster under one 600s bound — the same total the
+# pod wait it replaced always had, asserted as a single rather than a pair —
+# and step 10's pre-wait reuses that same bound rather than adding its own.
 wait_lists_audit() {
   "$PY" - "$1" <<'PY'
 import re
@@ -6507,8 +6631,13 @@ if unexcused:
 
 # Non-vacuity, in all three populations. A file that deleted every wait would
 # find nothing to audit and would pass on the empty case.
-if awaited < 2:
-    print(f"expected at least 2 awaited list waits (the node, the CNPG pods), "
+# The awaited bound is the POPULATION, not a threshold to protect: it was 2
+# (the node, the CNPG pods) and is 1 (the node) since roll-c5-cnpg-ready,
+# because the CNPG pod list wait was the defect — its selector is satisfied
+# by the initdb Job pod — and the Cluster wait that replaced it is NAMED.
+# Lowered with that reason, in the commit that deleted the wait.
+if awaited < 1:
+    print(f"expected at least 1 awaited list wait (the node), "
           f"found {awaited}")
     sys.exit(1)
 if applied < 2:
@@ -6539,7 +6668,6 @@ if rollout_awaited < 1:
 defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
 for a, b, total, what in (
     ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
-    ("CNPG_POD_TIMEOUT", "CNPG_POD_READY_TIMEOUT", 600, "step 8"),
     ("IDENTITY_DEPLOY_TIMEOUT", "IDENTITY_ROLLOUT_TIMEOUT", 360, "step 11"),
     ("OPERATOR_IMAGE_PULL_TIMEOUT", "CNPG_READY_TIMEOUT", 480, "step 4 cnpg (pull+ready)"),
     ("OPERATOR_IMAGE_PULL_TIMEOUT", "CERT_MANAGER_READY_TIMEOUT", 480, "step 4 cert-manager (pull+ready)"),
@@ -6550,6 +6678,19 @@ for a, b, total, what in (
         print(
             f"{what}'s bound grew: {a}+{b} = {sum(pair)}s, want {total}s "
             "— splitting a wait into two must not make the step more patient"
+        )
+        sys.exit(1)
+# Step 8's Cluster wait is a SINGLE wait under one bound — the same 600s
+# total the pod wait it replaced always had. Asserted as a single rather than
+# a pair, so neither growing it nor re-splitting it passes quietly; step 10's
+# pre-wait reuses this same bound rather than adding its own.
+for v, total, what in (
+    ("CNPG_CLUSTER_READY_TIMEOUT", 600, "step 8 (fresh install) and step 10 (re-run pre-wait)"),
+):
+    if int(defaults.get(v, -1)) != total:
+        print(
+            f"{what}'s bound {v} is {defaults.get(v, 'absent')}, want {total}s "
+            "— the Cluster wait must not grow more patient than the pod wait it replaced"
         )
         sys.exit(1)
 print(
@@ -6583,26 +6724,31 @@ case "$mode_ec:$mode_out" in
     ;;
 esac
 
-# And the second list wait, proved separately: one fixture that only drops the
-# CNPG one. Two waits, two controls — a check that only notices the first is
-# half a rule, and the CNPG half is the one that was quietly racy in the other
-# direction (the pods are created by the OPERATOR, not by this installer).
-fixture_drop_pod_await="$WORK/install-drop-pod-await.sh"
-sed '/kit_substrate_await_list "\$CNPG_POD_TIMEOUT" pod/d' \
-  "$SUBSTRATE/install.sh" >"$fixture_drop_pod_await"
-mode_out=""; mode_ec=0
-mode_out="$(wait_lists_audit "$fixture_drop_pod_await" 2>&1)" || mode_ec=$?
-case "$mode_ec:$mode_out" in
-  0:*)
-    fail 'control: the CNPG pod wait with no existence check goes red' "exit 0 — the check cannot see a missing await"
-    ;;
-  *"pod"*)
-    pass 'control: the CNPG pod wait with no existence check goes red, naming the resource'
-    ;;
-  *)
-    fail 'control: the CNPG pod wait with no existence check goes red, naming the resource' "$mode_out"
-    ;;
-esac
+# Step 8's Cluster bound, proved separately: a fixture that grows it must go
+# red NAMING the bound. Growing the Cluster wait is the easiest way to make a
+# slow box pass, and it is not a fix — it is the same race with more room.
+fixture_grown_cluster_bound="$WORK/install-grown-cluster-bound.sh"
+sed 's/: "${CNPG_CLUSTER_READY_TIMEOUT:=600}"/: "${CNPG_CLUSTER_READY_TIMEOUT:=900}"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_grown_cluster_bound"
+if ! grep -q 'CNPG_CLUSTER_READY_TIMEOUT:=900' "$fixture_grown_cluster_bound"; then
+  fail 'control fixture: the Cluster bound-growing edit failed to apply' \
+    "the sed did not change the number, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  mode_out=""; mode_ec=0
+  mode_out="$(wait_lists_audit "$fixture_grown_cluster_bound" 2>&1)" || mode_ec=$?
+  case "$mode_ec:$mode_out" in
+    0:*)
+      fail 'control: growing the Cluster bound goes red' "exit 0 — a step that waits longer passes the audit"
+      ;;
+    *CNPG_CLUSTER_READY_TIMEOUT*)
+      pass 'control: growing the Cluster bound goes red, naming the bound'
+      ;;
+    *)
+      fail 'control: growing the Cluster bound goes red, naming the bound' "$mode_out"
+      ;;
+  esac
+fi
 
 # A THIRD list wait, arriving with no await and no apply above it — the control
 # that stops this being a list of two remembered lines rather than a rule.
@@ -6693,6 +6839,199 @@ else
       ;;
   esac
 fi
+
+# ===========================================================================
+# 17b. The Postgres wait reads the Cluster, not its pods — the initdb race, executed
+# ===========================================================================
+#
+# THE DEFECT. Step 8 waited on `pod -l cnpg.io/cluster=postgres`, a selector
+# that also matches CloudNativePG's bootstrap Job pod. On a fresh box the run
+# logged `pod/postgres-1-initdb-s5lq8 condition met` while no instance pod
+# existed yet, step 10 launched, and the first migration to reach postgres-rw
+# died with `connection refused` — while the second one connected, the primary
+# having come up between the two, which is the ordering proof that the cluster
+# was healthy and the signal was wrong rather than Postgres being broken.
+#
+# THE FIX. Step 8 waits on the NAMED Cluster object — applied synchronously
+# above the wait, so no existence probe is needed — for its `Ready` condition
+# (`ConditionClusterReady`, api/v1/cluster_types.go in the pinned v1.30.1,
+# set by the operator from the instances' reported state), which no initdb
+# Job can satisfy, under the same 600s total the pod wait always had. Step 10
+# pre-waits on the same condition for re-runs that skip step 8 at its guard,
+# and every failure names the Cluster's phase beside the DSN.
+#
+# FOUR CASES:
+#   1. THE STATIC SHAPE, green on the real tree: the Cluster wait is present
+#      (both steps), the pod-selector wait is gone, and the old bound names
+#      are retired with it.
+#   2. THE CONTROLS, red on fixtures: the master pod wait restored goes red,
+#      and the Cluster wait deleted goes red — a wait that forgives a cluster
+#      that never comes up is worse than the race.
+#   3. THE STEP, executed: on a cold cluster (no instance pod, only the
+#      initdb Job's world) step 8 does not return until the Cluster reports
+#      Ready — proven on the argv, which must hold the Cluster wait and no
+#      pod query at all — and then succeeds with no retry.
+#   4. THE BOUND, executed: a Cluster that never reports Ready still fails,
+#      naming the Cluster and its phase.
+check_cnpg_cluster_wait() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+# Comments stripped first, as everywhere in this file: the rule is about what
+# the installer RUNS, and this file's own prose names both shapes.
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+problems = []
+
+CLUSTER_WAIT = "wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data"
+if code.count(CLUSTER_WAIT) < 2:
+    problems.append(
+        "expected the Cluster Ready wait in BOTH step 8 and step 10's pre-wait, "
+        f"found {code.count(CLUSTER_WAIT)}"
+    )
+if '--timeout="${CNPG_CLUSTER_READY_TIMEOUT}s"' not in code:
+    problems.append("the Cluster wait is not bounded by CNPG_CLUSTER_READY_TIMEOUT")
+if "wait --for=condition=Ready pod -l cnpg.io/cluster=postgres" in code:
+    problems.append("the pod-selector wait is still there — the initdb Job pod satisfies it")
+if "CNPG_POD_TIMEOUT" in code or "CNPG_POD_READY_TIMEOUT" in code:
+    problems.append("the old pod-wait bound names survive — retire them with the wait")
+if not re.search(r"(?m)^cnpg_cluster_phase\(\)", code):
+    problems.append("no cnpg_cluster_phase helper for the failure messages")
+for step in ("install_postgres_cluster", "install_migrations"):
+    body = re.search(r"(?m)^" + step + r"\(\)\s*\{(.*?)\n\}", code, re.S)
+    if not body or "cnpg_cluster_phase" not in body.group(1):
+        problems.append(f"{step} never reads the Cluster phase for its failures")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("the Cluster Ready wait (x2, bounded), no pod-selector wait, phase named in both steps")
+PY
+}
+
+run 'step 8 and step 10 wait on the Cluster Ready condition, never on its pods' green \
+  check_cnpg_cluster_wait "$SUBSTRATE/install.sh"
+
+# Control 1: the master shape — the pod-selector wait restored — goes red.
+fixture_pod_wait="$WORK/install-pod-wait.sh"
+"$PY" - "$SUBSTRATE/install.sh" "$fixture_pod_wait" <<'PY'
+import sys
+src = open(sys.argv[1], encoding="utf-8").read()
+pod_wait = ("  kit_substrate_await_list \"$CNPG_POD_TIMEOUT\" pod -l cnpg.io/cluster=postgres -n data\n"
+            "  kubectl --kubeconfig=\"$KUBECONFIG\" wait --for=condition=Ready pod -l cnpg.io/cluster=postgres -n data --timeout=\"$((CNPG_POD_READY_TIMEOUT))s\"\n")
+cluster_wait = "wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data"
+assert src.count(cluster_wait) >= 1, "premise: the real tree has no Cluster wait to replace"
+first = src.index(cluster_wait)
+line_start = src.rindex("\n", 0, first) + 1
+line_end = src.index("\n", first) + 1
+fixture = src[:line_start] + pod_wait + src[line_end:]
+open(sys.argv[2], "w", encoding="utf-8").write(fixture)
+PY
+if grep -q 'wait --for=condition=Ready pod -l cnpg.io/cluster=postgres' "$fixture_pod_wait"; then
+  run 'control: the master pod-selector wait goes red' red \
+    check_cnpg_cluster_wait "$fixture_pod_wait"
+else
+  fail 'control fixture: the pod-wait restoration failed to apply' \
+    "the fixture carries no pod wait, so the control would prove nothing"
+  failures=$((failures + 1))
+fi
+
+# Control 2: the Cluster wait deleted — a wait that forgives a cluster that
+# never comes up — goes red.
+fixture_no_cluster_wait="$WORK/install-no-cluster-wait.sh"
+grep -v 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres' \
+  "$SUBSTRATE/install.sh" >"$fixture_no_cluster_wait"
+if grep -q 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres' "$fixture_no_cluster_wait"; then
+  fail 'control fixture: the Cluster-wait deletion failed to apply' \
+    "the fixture still carries the wait, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  run 'control: a deleted Cluster wait goes red (it would forgive a stuck cluster)' red \
+    check_cnpg_cluster_wait "$fixture_no_cluster_wait"
+fi
+
+# pg8_seed <root> <ready: yes|no> — the cold cluster behind step 8: the
+# namespace the step creates is NOT pre-made (the step makes it), the Cluster
+# object is NOT planted (this is a fresh install — the guard must see it
+# absent and proceed), and only the wait's answer differs: the ready file
+# says the operator has reported Ready at the settled phase, its absence says
+# the primary is still setting up.
+pg8_seed() {
+  mkdir -p "$1" "$1/data"
+  if [ "$2" = "yes" ]; then
+    : >"$1/data/cluster-postgres-ready"
+    printf 'Cluster in healthy state' >"$1/data/cluster-postgres-phase"
+  else
+    printf 'Setting up primary' >"$1/data/cluster-postgres-phase"
+  fi
+}
+
+# pg8_step <fixture> <root> — run install_postgres_cluster for real against
+# the file-backed mock, leaving the exit status in $pg8_ec. The bound is
+# shortened only in the sense that the mock answers instantly: the argv log
+# carries the --timeout the installer passed, and the static audit pins its
+# default, so "bounded" is proven by the number on the order rather than by
+# sleeping it out.
+pg8_step() {
+  pg8_ec=0
+  (
+    export DRY_RUN=0
+    export HEADLESS=0
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor"
+    export KIT_SUBSTRATE_RECEIPT="$2/receipt.json"
+    MOCK_ROOT="$2"
+    # shellcheck source=/dev/null
+    . "$1"
+    kubectl() { mock_kubectl "$@"; }
+    # The fixture is a COPY of the installer, so its SCRIPT_DIR is $WORK and
+    # its manifests are not beside it. Point DATA_DIR at the real tree: the
+    # subject is the wait, not manifest discovery (proven elsewhere), and a
+    # step that reads the wrong directory would refuse on the manifest
+    # agreement before ever reaching the wait.
+    DATA_DIR="$SUBSTRATE/manifests/data"
+    install_postgres_cluster >"$2/run.log" 2>&1
+  ) || pg8_ec=$?
+}
+
+pg8_cold="$WORK/install-pg8-cold.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$pg8_cold"
+
+# CASE 3, green: the cold cluster installs once the Cluster reports Ready. The
+# argv is the order: the Cluster wait ran under the 600s bound, and NO pod
+# query ran at all — a fixture whose pod list holds only the initdb pod
+# cannot satisfy a wait that never lists pods.
+MOCK_ROOT="$WORK/pg8-cold"
+pg8_seed "$MOCK_ROOT" yes
+pg8_step "$pg8_cold" "$MOCK_ROOT"
+if [ "$pg8_ec" -ne 0 ]; then
+  fail 'step 8 succeeds once the Cluster reports Ready' "$(cat "$MOCK_ROOT/run.log")"
+elif ! grep -q -- 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout=600s' "$MOCK_ROOT/kubectl-argv"; then
+  fail 'step 8 succeeds once the Cluster reports Ready' "the bounded Cluster wait never ran: $(cat "$MOCK_ROOT/run.log")"
+elif grep -q 'cnpg.io/cluster' "$MOCK_ROOT/kubectl-argv"; then
+  fail 'step 8 succeeds once the Cluster reports Ready' "the step still queries the pod selector the initdb Job satisfies"
+else
+  pass 'step 8 succeeds once the Cluster reports Ready, waiting on the Cluster and never listing pods'
+fi
+
+# CASE 4, red: a Cluster that never reports Ready still fails — with the
+# bound, naming the Cluster and its phase.
+MOCK_ROOT="$WORK/pg8-stuck"
+pg8_seed "$MOCK_ROOT" no
+pg8_step "$pg8_cold" "$MOCK_ROOT"
+case "$pg8_ec:$(cat "$MOCK_ROOT/run.log" 2>/dev/null)" in
+  0:*)
+    fail 'control: a stuck Cluster fails step 8, naming the Cluster and its phase' \
+      "exit 0 — the wait forgave a cluster that never came up"
+    ;;
+  *did\ not\ become\ Ready*Setting\ up\ primary*)
+    pass 'control: a stuck Cluster fails step 8, naming the Cluster and its phase'
+    ;;
+  *)
+    fail 'control: a stuck Cluster fails step 8, naming the Cluster and its phase' \
+      "exit $pg8_ec: $(cat "$MOCK_ROOT/run.log" 2>/dev/null)"
+    ;;
+esac
 
 # ===========================================================================
 # 18. Step 11 watches the Deployment only after it exists — the Argo race, executed

@@ -623,6 +623,32 @@
   refused, a nested retired spelling (`storageClassName`), and a pin bump
   without re-deriving the model. A service tree is not involved, and the gate
   stays offline.
+- **The Postgres readiness wait was satisfied by the initdb Job pod, so the
+  migrations raced the primary.** Step 8 waited on
+  `pod -l cnpg.io/cluster=postgres`, a selector that also matches CNPG's
+  bootstrap Job pod: the first cycle on a fresh box logged
+  `pod/postgres-1-initdb-s5lq8 condition met` with no instance pod yet, step
+  10 launched, and the first migration to reach postgres-rw died with
+  `connection refused` — while the second one connected, the primary having
+  come up between the two, which is the ordering proof that the cluster was
+  healthy and the signal was wrong rather than Postgres being broken. Step 8
+  now waits on the NAMED Cluster object for its `Ready` condition
+  (`ConditionClusterReady`, api/v1/cluster_types.go in the pinned v1.30.1,
+  set by the operator from the instances' reported state), which no initdb
+  Job can satisfy, under the same 600s total in one bound
+  (`CNPG_CLUSTER_READY_TIMEOUT`; the `CNPG_POD_*` pair is retired with the
+  wait). Step 10 pre-waits on the same condition for re-runs that skip step
+  8 at its guard, and every migration failure names the Cluster's phase
+  beside the DSN — a `connection refused` that is really "the primary is not
+  up yet" must read as one. No retry loop around the migrations: the wait is
+  the fix. `tests/substrate_test.sh` §17b proves it: the Cluster wait in both
+  steps with the pod-selector wait gone (red controls: the master pod wait
+  restored, the Cluster wait deleted), step 8 executed against the
+  file-backed kubectl on a cold cluster (green: succeeds with no pod query
+  in the argv; red: a stuck cluster fails naming `Setting up primary`), and
+  step 10 executed (green: pre-waits under the bound; red: a half-ready
+  Cluster refuses, launching nothing). See
+  `REPORT-roll-c5-cnpg-ready.md`.
 
 ### Substrate
 
