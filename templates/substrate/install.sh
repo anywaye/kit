@@ -3581,7 +3581,7 @@ mint_courier_identity_token() {
     --type=merge --patch-file=/dev/stdin
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
   if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
-    kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (four link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}, legacy RECOVERY_LINK_TEMPLATE default deleted) and courier holds the same credential, both deployments restarted"
+    kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (four link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}, legacy shared default deleted) and courier holds the same credential, both deployments restarted"
   elif [ -n "${IDENTITY_MAIL_PATH_KEPT:-}" ]; then
     kit_substrate_out "      credential minted on this box; courier holds it, identity KEEPS its working mail path (this run had no KIT_SUBSTRATE_APP_BASE_URL to rewrite it with, so nothing was rewritten) — every recovery route keeps answering; courier restarted"
   else
