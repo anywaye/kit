@@ -1035,7 +1035,7 @@ kit_substrate_url_host() {
 # resolve? In-cluster names (anything under .svc, .local, bare localhost, the
 # whole 127. loopback block or a single label) are answered by the cluster or
 # the box itself, so resolving them here would prove nothing about ACME — and
-# a name nothing points anywhere is a condition that does not exist. The
+# a name nothing points anywhere would be a condition that does not exist. The
 # loopback rule arrived with the Ingress-host derivation: a chart's `host:`
 # value may carry 127.0.0.1, and it resolves on the box by construction.
 kit_substrate_is_checkable_host() {
