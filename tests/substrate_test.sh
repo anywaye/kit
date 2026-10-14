@@ -129,7 +129,7 @@ run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 # prove an unset or empty value is refused with the fix named. (SMTP and the
 # paired courier values are validated on the live path only — a plan does not
 # need credentials to print.)
-DBS="identity,gateway,courier,parlor,pantry"
+DBS="identity,gateway,courier,parlor,pantry,box"
 dry_run_out="$(KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
 if [ "$dry_run_ec" -ne 0 ]; then
@@ -3063,7 +3063,7 @@ check_rerun_repairs_username() {
     # shellcheck source=/dev/null
     . "$root/install-no-main.sh"
     kubectl() { mock_kubectl "$@"; }
-    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry"
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box"
     export DRY_RUN=0
     install_postgres_cluster >"$root/rerun.log" 2>&1
   ) || ec=$?
@@ -5499,7 +5499,7 @@ run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$
 refusal_hint_ok() {
   local log mode="$2"
   case "$1" in
-    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry'"*)
+    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry,box'"*)
       printf 'the refusal names the variable and the fix that clears it (%s)\n' "$mode"
       ;;
     *)
@@ -10645,7 +10645,7 @@ PY
     fi
     # Present and valid — also require install.sh to report loki
     local out
-    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
     case "$out" in
       *"logs: centralized Loki installed"*) ;;
       *) printf 'loki present but install.sh does not report "centralized Loki installed"\n'; return 1 ;;
@@ -10654,7 +10654,7 @@ PY
   fi
   # 2. Not present — require the honest report (human + headless JSON)
   local out
-  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
   case "$out" in
     *"centralized Loki not installed"* ) ;;
     *) printf 'install.sh does not report "centralized Loki not installed"\n%s\n' "$out"; return 1 ;;
@@ -10669,7 +10669,7 @@ PY
   esac
   # 3. Headless JSON carries log_store journald beside the existing readiness fields
   local jsonl="$WORK/loki-headless.jsonl"
-  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
+  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
   if ! grep -q '"event":"readiness"' "$jsonl"; then
     printf 'headless stream has no readiness event\n'; return 1
   fi
@@ -10842,7 +10842,7 @@ apps_dir, proj_path = sys.argv[1:3]
 
 files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
 if len(files) < 8:
-    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 8 — an empty or partial directory proves nothing")
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 10 — an empty or partial directory proves nothing")
     sys.exit(1)
 
 try:
@@ -10963,11 +10963,20 @@ EXPECTED = {
     "identity.yaml": set(),
     "parlor.yaml": set(),
     "pantry.yaml": set(),
+    # box and keyholder render Deployment, Ingress and Service and NOTHING
+    # cluster-scoped — verified by rendering both charts with their pinned
+    # targetRevision and --include-crds (roll-c5-any-box added the Applications
+    # and this record is what the check asks for). An empty set is a RECORD, not
+    # an omission: it says the chart was rendered and answered "none", which is
+    # the difference between a chart that creates no cluster-scoped kinds and a
+    # chart nobody looked at.
+    "box.yaml": set(),
+    "keyholder.yaml": set(),
 }
 
 files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
 if len(files) < 8:
-    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 8 — an empty or partial directory proves nothing")
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 10 — an empty or partial directory proves nothing")
     sys.exit(1)
 
 problems = []
