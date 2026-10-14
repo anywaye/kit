@@ -2410,8 +2410,33 @@ mock_kubectl() {
       while IFS= read -r patch_key; do
         [ -n "$patch_key" ] && patch_keys+=("$patch_key")
       done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
+      # A `"key":null` entry DELETES the stored key, exactly as a real merge
+      # patch does — the orphan sweep relies on it, and a mock that stored an
+      # empty file (or the string "null") would be green on a sweep that wrote
+      # the wrong patch. `data` is the persisted map, so a null there deletes
+      # the entry; a value there is base64, decoded the way read_secret_key
+      # decodes it.
       for patch_key in ${patch_keys[@]+"${patch_keys[@]}"}; do
-        printf '%s' "$body" | jq -jr --arg k "$patch_key" '.stringData[$k] // empty' >"$d/$patch_key"
+        # A null under stringData is a NO-OP, exactly as on the API server:
+        # stringData is write-only and is never persisted, so the stored
+        # object carries no such field for the null to delete. (The sweep
+        # deletes under `data` for this reason.) A mock that deleted here
+        # would be green on a patch the box silently ignores.
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$patch_key" '.stringData[$k] | type')" != "null" ]; then
+          printf '%s' "$body" | jq -jr --arg k "$patch_key" '.stringData[$k] // empty' >"$d/$patch_key"
+        fi
+      done
+      local -a data_keys=()
+      local data_key
+      while IFS= read -r data_key; do
+        [ -n "$data_key" ] && data_keys+=("$data_key")
+      done < <(printf '%s' "$body" | jq -r '.data // {} | keys[]')
+      for data_key in ${data_keys[@]+"${data_keys[@]}"}; do
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$data_key" '.data[$k] | type')" = "null" ]; then
+          rm -f "$d/$data_key"
+        else
+          printf '%s' "$body" | jq -jr --arg k "$data_key" '.data[$k] // empty' | base64 -d >"$d/$data_key"
+        fi
       done
       return 0
       ;;
@@ -3152,8 +3177,32 @@ check_patch_convention() {
     printf '%s' '{"stringData":{"username":"never"}}' |
       "$mock" -n data patch secret probe --type=merge --patch-file=- 2>"$root/dash.err" &&
       { echo "$mock accepted --patch-file=-, which real kubectl refuses"; exit 4; }
+    # (3) a null under `data` deletes the key — the orphan sweep's own
+    # spelling — while a null under `stringData` is a no-op, exactly as on
+    # the API server (stringData is write-only and never persisted, so the
+    # stored object carries no such field for the null to delete).
+    mock_seed data probe doomed old
+    printf '%s' '{"data":{"doomed":null}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
+      { echo "$mock refused the data-null patch"; exit 5; }
+    printf '%s' '{"stringData":{"username":null}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
+      { echo "$mock refused the stringData-null patch"; exit 6; }
     exit 0
   ) || ec=$?
+  MOCK_ROOT="$root"
+  if [ "$ec" -ne 0 ]; then
+    echo "the mock-convention check failed (exit $ec)"
+    return 1
+  fi
+  if [ -f "$root/data/probe/doomed" ]; then
+    echo "the data-null patch did not delete the key"
+    return 1
+  fi
+  if [ "$(mock_get data probe username)" != "new" ]; then
+    echo "the stringData-null patch touched the key (stored '$(mock_get data probe username)') — the box would ignore it"
+    return 1
+  fi
   MOCK_ROOT="$root"
   if [ "$ec" -ne 0 ]; then
     echo "the mock-convention check failed (exit $ec)"
@@ -5859,10 +5908,35 @@ rollout_kubectl() {
       esac
       local pdir="$MOCK_ROOT/$patch_ns/$patch_name"
       mkdir -p "$pdir"
-      printf '%s' "$body" | jq -r '.stringData // {} | to_entries[] | "\(.key)=\(.value)"' |
-        while IFS= read -r pair; do
-          printf '%s' "${pair#*=}" >"$pdir/${pair%%=*}"
-        done
+      # A `"key":null` entry DELETES the stored key, exactly as a real merge
+      # patch does — the orphan sweep relies on it (see mock_kubectl's patch
+      # branch for the same contract). `data` is the persisted map: a null
+      # there deletes the entry, a value there is base64 and is decoded the
+      # way the jsonpath read decodes it.
+      local -a rollout_patch_keys=()
+      local rollout_patch_key
+      while IFS= read -r rollout_patch_key; do
+        [ -n "$rollout_patch_key" ] && rollout_patch_keys+=("$rollout_patch_key")
+      done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
+      for rollout_patch_key in ${rollout_patch_keys[@]+"${rollout_patch_keys[@]}"}; do
+        # A null under stringData is a NO-OP here too — see mock_kubectl's
+        # patch branch for why the box ignores it.
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_patch_key" '.stringData[$k] | type')" != "null" ]; then
+          printf '%s' "$body" | jq -jr --arg k "$rollout_patch_key" '.stringData[$k]' >"$pdir/$rollout_patch_key"
+        fi
+      done
+      local -a rollout_data_keys=()
+      local rollout_data_key
+      while IFS= read -r rollout_data_key; do
+        [ -n "$rollout_data_key" ] && rollout_data_keys+=("$rollout_data_key")
+      done < <(printf '%s' "$body" | jq -r '.data // {} | keys[]')
+      for rollout_data_key in ${rollout_data_keys[@]+"${rollout_data_keys[@]}"}; do
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_data_key" '.data[$k] | type')" = "null" ]; then
+          rm -f "$pdir/$rollout_data_key"
+        else
+          printf '%s' "$body" | jq -jr --arg k "$rollout_data_key" '.data[$k]' | base64 -d >"$pdir/$rollout_data_key"
+        fi
+      done
       return 0
       ;;
     *)
@@ -5928,6 +6002,19 @@ mint_step() {
       'mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"' \
       'mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"' \
       'mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"'
+    # MINT_SEED_ORPHAN=1 plants the warm-box state: an orphaned COURIER_TOKEN
+    # with no base URL (the old installer wrote the token alone) plus a stray
+    # template pointing at a base this box no longer declares — beside the
+    # keys a converging sweep must NOT touch (NATS_URL and the OIDC triple).
+    if [ "${MINT_SEED_ORPHAN:-}" = "1" ]; then
+      printf '%s\n' \
+        'mock_seed identity identity-secrets COURIER_TOKEN "orphan-token-from-old-installer"' \
+        'mock_seed identity identity-secrets EMAIL_CHANGE_LINK_TEMPLATE "https://old.example.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets NATS_URL "nats://nats.data.svc.cluster.local:4222"' \
+        'mock_seed identity identity-secrets OIDC_ISSUER "https://issuer.example.com"' \
+        'mock_seed identity identity-secrets OIDC_SIGNING_KEY "old-oidc-key"' \
+        'mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "old-oidc-kid"'
+    fi
     # The 4th argument is `wrap` to call the mint from inside a FUNCTION, the
     # way `main` calls it. The distinction is the whole defect B control: a
     # `RETURN` trap is global, so it fires at the CALLER's return too, where
@@ -6347,6 +6434,94 @@ check_mint_mail_path_unset() {
 }
 run 'step 11 writes NO identity courier key when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
   check_mint_mail_path_unset "$mint_fixed"
+
+# ===========================================================================
+# 18d. the unset branch CONVERGES: an orphaned courier block is removed, the
+#      rest of the secret is untouched, and the pre-fix shape fails the check
+# ===========================================================================
+#
+# THE LIVE DEFECT. One box runs identity in CrashLoopBackOff: an older
+# installer wrote COURIER_TOKEN without COURIER_BASE_URL, the current step's
+# happy path writes nothing when KIT_SUBSTRATE_APP_BASE_URL is unset, so the
+# orphan survives every re-run and identity's fail-closed loadCourier refuses
+# to boot on the half-pair. The fix is converge_identity_courier_block: read
+# the seven keys, delete whichever are present in one `"key":null` merge
+# patch, re-read to prove the block is empty, restart identity so the change
+# reaches the pod. The sweep runs above the mint guard too, so a warm box that
+# already minted still heals.
+check_mint_converges_orphan() {
+  local saved_base="${MINT_APP_BASE_URL:-}" saved_orphan="${MINT_SEED_ORPHAN:-}"
+  MINT_APP_BASE_URL=__UNSET__ MINT_SEED_ORPHAN=1 mint_step "$1" 2 5
+  MINT_APP_BASE_URL="$saved_base" MINT_SEED_ORPHAN="$saved_orphan"
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s with an orphaned block and no base URL\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  local store="$ROLLOUT_DIR/store" k leftover=""
+  for k in COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+    if [ -n "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
+      leftover="${leftover:+$leftover }$k"
+    fi
+  done
+  if [ -n "$leftover" ]; then
+    printf 'the orphan survived the re-run:%s — identity would still refuse (ErrInvalidCourier)\n' "$leftover"
+    return 1
+  fi
+  local kept
+  for kept in DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL OIDC_ISSUER OIDC_SIGNING_KEY OIDC_SIGNING_KEY_ID; do
+    if [ -z "$(cat "$store/identity/identity-secrets/$kept" 2>/dev/null || true)" ]; then
+      printf 'the sweep dropped %s, which is not a courier key\n' "$kept"
+      return 1
+    fi
+  done
+  if [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ] \
+    || [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_URL" 2>/dev/null || true)" != "$IDENTITY_BASE_URL_EXPECTED" ]; then
+    printf 'courier-secrets lost its required pair while identity converged\n'
+    return 1
+  fi
+  # The operator must SEE the edit: the log names the removed keys and why.
+  if ! grep -q 'orphaned courier key' "$ROLLOUT_DIR/run.log" \
+    || ! grep -q 'COURIER_TOKEN' "$ROLLOUT_DIR/run.log"; then
+    printf 'the sweep did not report which keys it removed\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  # And the change must REACH the pod: identity is restarted.
+  if ! grep -q 'rollout restart deployment/identity' "$ROLLOUT_DIR/argv"; then
+    printf 'identity was not restarted after its secret changed\n'
+    return 1
+  fi
+  printf 'orphaned COURIER_TOKEN and stray template removed, seven-key block verified empty, unrelated keys kept, courier pair written, identity restarted'
+}
+run 'step 11 converges an orphaned identity courier block when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
+  check_mint_converges_orphan "$mint_fixed"
+
+# THE RED CONTROL is the write-forward shape: the sweep scans nothing, so it
+# removes nothing and the orphan survives. The fixture is the real tree with
+# the key list emptied — functionally the step as it stands on master, which
+# knows no key to delete — rather than a hand-edited approximation, so the
+# control tracks future edits to the sweep body. Its premise is asserted
+# first: the list is really empty. If the orphan-removal check passed against
+# it, the check would be worthless.
+mint_prefix_converge="$WORK/install-mint-prefix-converge.sh"
+sed -e '/^main "$@"/d' -e 's/^IDENTITY_COURIER_KEYS=(.*$/IDENTITY_COURIER_KEYS=()/' \
+  "$SUBSTRATE/install.sh" >"$mint_prefix_converge"
+if ! grep -q '^IDENTITY_COURIER_KEYS=()$' "$mint_prefix_converge" \
+  || grep -q '^IDENTITY_COURIER_KEYS=(COURIER_BASE_URL' "$mint_prefix_converge"; then
+  fail 'control fixture: the sweep scans nothing' \
+    "the key-list emptying did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  cco_out=""; cco_ec=0
+  cco_out="$(check_mint_converges_orphan "$mint_prefix_converge" 2>&1)" || cco_ec=$?
+  if [ "$cco_ec" -eq 0 ]; then
+    fail 'control: the write-forward step leaves the orphan, failing the check' \
+      "exit 0 — the check passed against a step with no sweep, so it discriminates nothing"
+  elif case "$cco_out" in *COURIER_TOKEN*) true ;; *) false ;; esac; then
+    pass 'control: the write-forward step leaves the orphan, failing the check'
+  else
+    fail 'control: the write-forward step leaves the orphan, failing the check' "$cco_out"
+  fi
+fi
 
 # ===========================================================================
 # 19. Step 6 waits on nothing — the core-install reality, executed

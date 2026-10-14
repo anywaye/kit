@@ -21,8 +21,21 @@
   that has Argo CD and the stale project and asserts the result permits every
   Application's `repoURL` under §21's glob-aware algorithm, with the pre-fix
   installer as the red control, plus a DRY_RUN plan half that fires with every
-  guard forced present.
-
+  guard forced present.- **A warm box kept the orphaned half of identity's courier pair, and no
+  re-run cleared it.** An older installer wrote `COURIER_TOKEN` without
+  `COURIER_BASE_URL`; the live box crashloops identity on it
+  (`loadCourier`: "must both be set, or neither of them"), and the step's
+  unset branch wrote nothing, so every re-run preserved the orphan. Step 12
+  now converges the block via `converge_identity_courier_block`: with
+  `KIT_SUBSTRATE_APP_BASE_URL` unset it deletes whichever of the seven block
+  keys are present in one `"key":null` merge patch under `data` (nulls go
+  under `data`, not `stringData`, which is write-only and would delete
+  nothing), re-reads to verify the block is empty, fails naming leftovers
+  otherwise, and restarts identity. The sweep runs above the mint guard so a
+  box that already minted still heals. `tests/substrate_test.sh` §18d proves
+  green removal (unrelated keys kept, courier pair written, restart issued)
+  with a neutered-list red control, and the patch-convention check pins the
+  data/stringData distinction for both mocks.
 - **The AppProject permitted the registry ROOT while every Application named
   its own chart's PATH, so the controller refused all eight Applications.**
   A sibling packet moved each Application's OCI `source.repoURL` from
