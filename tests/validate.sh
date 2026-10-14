@@ -1641,6 +1641,7 @@ PY
     "$ROOT"/templates/bin/* "$ROOT"/templates/tier/*/* "$ROOT"/tests/*.sh \
     "$ROOT"/tests/*.mjs \
     "$ROOT"/templates/substrate/install.sh \
+    "$ROOT"/templates/substrate/local-cycle.sh \
     "$ROOT"/templates/substrate/kit-install.mjs \
     "$ROOT"/templates/substrate/wrangler.jsonc \
     "$ROOT"/templates/substrate/manifests/applications/* \
@@ -1974,7 +1975,7 @@ json.loads("".join(out))
     section 'static: shellcheck -S warning'
     par_begin
     for f in "$ROOT"/templates/bin-prime/* "$ROOT"/templates/bin/* \
-      "$ROOT"/templates/kamal/*.sh "$ROOT"/templates/substrate/install.sh \
+      "$ROOT"/templates/kamal/*.sh "$ROOT"/templates/substrate/*.sh \
       "$ROOT"/docker/*.sh "$ROOT"/tests/*.sh; do
       [ -f "$f" ] || continue
       path="${f#"$ROOT"/}"

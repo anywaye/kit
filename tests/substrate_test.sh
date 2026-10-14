@@ -11125,6 +11125,390 @@ run 'control: empty apps directory goes red (vacuity guard)' red \
   check_appproject_cluster_scope "$empty_apps" "$APP_PROJECT"
 
 # ===========================================================================
+# 16. THE CLUSTER THAT IS ALREADY THERE — KIT_SUBSTRATE_KUBECONFIG
+# ===========================================================================
+#
+# THE PACKET. A cycle against a VPS is a wipe, a setup and an install, over
+# SSH, against a machine on another continent — and every defect costs another
+# full pass. `KIT_SUBSTRATE_KUBECONFIG` is the installer's entry for a cluster
+# that is already reachable: no k3s is installed on the host the script runs on,
+# and steps 1-3 ask the CLUSTER whether the component is there instead of asking
+# the host whether /usr/local/bin/k3s is. It is the same capability a customer
+# with their own Kubernetes needs, which is why it is written as that and not as
+# a test backdoor.
+#
+# THE THREE CLAIMS, EACH WITH A CONTROL THAT MUST ANSWER DIFFERENTLY:
+#   1. a supplied cluster is provisioned into, not provisioned (steps 1-3 read
+#      the cluster's evidence);
+#   2. UNSET IS THE PRODUCT — on this workstation, with the input unset, the run
+#      still refuses the way it does today, and the host probe is still what
+#      decides step 1. If a later edit made the local cycle possible WITHOUT the
+#      input, this pair goes red, which is the whole point of asserting it;
+#   3. headless stdout is ONE OBJECT PER LINE, and the way that is true is a
+#      file descriptor rather than a policy — because the lines that broke it
+#      were printed by a command this file spawns (`kubectl apply`), and no audit
+#      of this file's own statements can see those.
+lc_kubeconfig="$WORK/lc-kubeconfig.yaml"
+cat >"$lc_kubeconfig" <<'EOF'
+apiVersion: v1
+kind: Config
+clusters:
+- name: local
+  cluster:
+    server: https://127.0.0.1:6443
+contexts:
+- name: local
+  context:
+    cluster: local
+    user: local
+current-context: local
+users:
+- name: local
+  user:
+    token: fixture
+EOF
+
+# A mock kubectl that answers the cluster the way a real one does, and — the
+# load-bearing half — that PRINTS THE WAY A REAL ONE PRINTS. `kubectl apply`
+# writes one line per object it applies, and those lines went to stdout in
+# headless mode and broke the JSONL stream a consumer reads.
+lc_mock_kubectl() {
+  if [ -n "${MOCK_ROOT:-}" ]; then
+    printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
+  fi
+  local rest="$*"
+  case "$rest" in
+    *"get namespaces"*)
+      printf 'NAME              STATUS   AGE\ndefault           Active   1m\n'
+      return 0
+      ;;
+    *"get nodes --no-headers"*)
+      if [ -n "${LC_NO_NODE:-}" ]; then
+        return 0
+      fi
+      printf 'node-0   Ready   control-plane   1m   v1.35.5+k3s1\n'
+      return 0
+      ;;
+    *apply*)
+      printf 'namespace/cnpg-system serverside-applied\n'
+      printf 'customresourcedefinition.apiextensions.k8s.io/clusters.postgresql.cnpg.io serverside-applied\n'
+      return 0
+      ;;
+    *"get deployment"*)
+      # Absent by default, so the operator steps take their apply path — which
+      # is where the pollution above is reached.
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# lc_cycle <name> <want: green|red> <installer> <kubeconfig-or-empty> [NO_NODE]
+#
+# One cycle: a mock curl (so the ghcr reachability probe answers and the k3s
+# install would be RECORDED if it were attempted), a mock kubectl, the installer
+# sourced with its `main` stripped, and the preflight plus step 1 run against it.
+# The assertions read the argv logs, so "the cluster was asked" and "the host's
+# k3s was never fetched" are measurements of what the run did.
+lc_cycle() {
+  local name="$1" want="$2" installer="$3" kubeconfig="$4" no_node="${5:-}"
+  local dir="$WORK/lc-$name"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  local out ec=0
+  out="$(
+    set +e
+    (
+      export MOCK_ROOT="$dir"
+      export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export HEADLESS=1
+      export DRY_RUN=0
+      export LC_NO_NODE="$no_node"
+      if [ -z "$kubeconfig" ]; then
+        unset KIT_SUBSTRATE_KUBECONFIG
+      else
+        export KIT_SUBSTRATE_KUBECONFIG="$kubeconfig"
+      fi
+      # shellcheck source=/dev/null
+      . "$installer"
+      kubectl() { lc_mock_kubectl "$@"; }
+      curl() {
+        printf '%s\n' "$*" >>"$MOCK_ROOT/curl-argv"
+        printf '{}'
+      }
+      preflight
+      install_k3s
+    ) 2>"$dir/human" >"$dir/jsonl"
+    echo "exit=$?"
+  )"
+  ec="${out##*exit=}"
+  ec="${ec%%$'\n'*}"
+  local argv curl_argv human
+  argv="$(cat "$dir/kubectl-argv" 2>/dev/null || true)"
+  curl_argv="$(cat "$dir/curl-argv" 2>/dev/null || true)"
+  human="$(cat "$dir/human" 2>/dev/null || true)"
+
+  if [ "$want" = green ]; then
+    if [ "$ec" != 0 ]; then
+      printf 'the cycle exited %s, want 0 — stdout: %s\n' "$ec" "$(head -3 "$dir/jsonl" 2>/dev/null | tr '\n' ' ')"
+      return 1
+    fi
+    case "$argv" in
+      *"get namespaces"*)
+        ;;
+      *)
+        printf 'the cluster was never asked for its namespaces — the preflight answered on the host\n'
+        return 1
+        ;;
+    esac
+    case "$argv" in
+      *"get nodes --no-headers"*)
+        ;;
+      *)
+        printf 'step 1 never asked the cluster for a Node\n'
+        return 1
+        ;;
+    esac
+    case "$curl_argv" in
+      *"get.k3s.io"*)
+        printf 'the host k3s install was attempted against a supplied cluster: %s\n' "$curl_argv"
+        return 1
+        ;;
+    esac
+    case "$human" in
+      *"already has a Node"*)
+        ;;
+      *)
+        printf 'step 1 did not say the cluster already has a Node; human channel: %s\n' "$human"
+        return 1
+        ;;
+    esac
+    printf 'the supplied cycle asked the cluster, skipped step 1 on the cluster evidence, and fetched no host k3s'
+    return 0
+  fi
+  case "$curl_argv" in
+    *"get.k3s.io"*)
+      printf 'a supplied cluster with no Node INSTALLED the host k3s instead of refusing\n'
+      return 1
+      ;;
+  esac
+  case "$argv" in
+    *"get nodes --no-headers"*)
+      ;;
+    *)
+      printf 'a supplied cluster with no Node was never asked — it cannot refuse on the cluster evidence it never read\n'
+      return 1
+      ;;
+  esac
+  printf 'the cluster with no Node was asked, and nothing installed the host k3s'
+  return 0
+}
+
+# 1. GREEN: the supplied cluster is provisioned INTO, not provisioned. The four
+#    host refusals (root, Linux, arch, memory) are the facts that make a
+#    developer machine fail today, and none of them decides this run.
+run 'a supplied cluster: the preflight answers on the cluster and step 1 skips on the cluster evidence' green \
+  lc_cycle supplied green "$fixture_sourced" "$lc_kubeconfig"
+
+# 2. RED CONTROL: a supplied cluster with NO node refuses, naming the input. It
+#    does not fall through to the host's k3s install, because that is the one
+#    thing a supplied cluster must never do — the operator is typing at a
+#    workstation, not at the box.
+run 'a supplied cluster with no Node refuses naming the input, and installs no host k3s' green \
+  lc_cycle no-node red "$fixture_sourced" "$lc_kubeconfig" NO_NODE
+
+# 3. THE PACKET'S OWN RED CONTROL: with the input UNSET, this workstation still
+#    refuses the way it does today. macOS is not root, is not Linux and reports
+#    0 kB of memory from a /proc that is not there, so the host probe is what
+#    stops the run — and that is exactly the behaviour a fresh Linux box keeps.
+#    If the local cycle ever became possible WITHOUT the input, this goes red.
+lc_unsets_the_input() {
+  local dir="$WORK/lc-unset"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  local out ec=0
+  out="$(
+    set +e
+    (
+      export MOCK_ROOT="$dir"
+      export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export HEADLESS=1
+      unset KIT_SUBSTRATE_KUBECONFIG
+      # shellcheck source=/dev/null
+      . "$fixture_sourced"
+      kubectl() { lc_mock_kubectl "$@"; }
+      preflight
+    ) 2>"$dir/human" >"$dir/jsonl"
+    echo "exit=$?"
+  )"
+  ec="${out##*exit=}"
+  ec="${ec%%$'\n'*}"
+  local human
+  human="$(cat "$dir/human" 2>/dev/null || true)"
+  if [ "$ec" = 0 ]; then
+    printf 'the run did NOT refuse — the host preflight stopped deciding on this workstation\n'
+    return 1
+  fi
+  case "$human" in
+    *"must run as root"*)
+      printf 'unset, the preflight still refuses on the host probe (exit %s): %s\n' "$ec" "$(printf '%s' "$human" | head -1)"
+      return 0
+      ;;
+  esac
+  printf 'it refused, but not on the host probe — the fresh-box path changed: %s\n' "$human"
+  return 1
+}
+run 'RED control: with the input unset, this workstation still refuses on the host probe' green \
+  lc_unsets_the_input
+
+# 4. THE DEFECT THE LOCAL CYCLE FOUND, AND ITS CONTROL. `kubectl apply` prints
+#    one line per object it writes; in headless mode those lines went to the
+#    process stdout, which is the JSONL stream, and the first consumer to read
+#    the stream died on line 7. The fix is a file descriptor, so the control is
+#    the same run against an installer with the descriptor removed.
+lc_stdout_is_jsonl() {
+  local installer="$1" dir="$2"
+  local out
+  out="$(
+    set +e
+    (
+      export MOCK_ROOT="$dir"
+      export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export KIT_SUBSTRATE_KUBECONFIG="$3"
+      export HEADLESS=1
+      export DRY_RUN=0
+      # shellcheck source=/dev/null
+      . "$installer"
+      kubectl() { lc_mock_kubectl "$@"; }
+      curl() { printf '{}'; }
+      install_cert_manager
+      install_cnpg
+    ) 2>/dev/null
+  )"
+  printf '%s\n' "$out" >"$dir/jsonl"
+  if [ ! -s "$dir/jsonl" ]; then
+    printf 'stdout was empty — no events at all\n'
+    return 1
+  fi
+  headless_jsonl_ok "$dir/jsonl"
+}
+lc_pollution_dir="$WORK/lc-pollution"
+rm -rf "$lc_pollution_dir"
+mkdir -p "$lc_pollution_dir"
+run 'a headless run whose kubectl apply prints its own progress still emits one JSON object per line' green \
+  lc_stdout_is_jsonl "$fixture_sourced" "$lc_pollution_dir" "$lc_kubeconfig"
+
+# The control: the same install with the saved descriptor removed. That is
+# byte-for-byte the shape that shipped, so the pair proves the descriptor is what
+# keeps `kubectl apply`'s output off the channel rather than luck. The fixture is
+# built by a python that STRIPS COMMENTS as it goes, because the installer's own
+# prose now explains the descriptor in eleven comment lines and a fixture built
+# by deleting matching lines would delete the explanation and keep the code.
+lc_fixture_no_fd3="$WORK/lc-install-no-fd3.sh"
+"$PY" - "$fixture_sourced" "$lc_fixture_no_fd3" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+out = []
+drop_function = False
+for ln in src.split("\n"):
+    # The opener is defined and called, so both the definition and the call go.
+    if ln.startswith("kit_substrate_open_jsonl_channel() {"):
+        drop_function = True
+    if drop_function:
+        if ln == "}":
+            drop_function = False
+        continue
+    stripped = re.sub(r"(?m)^\s*#.*$", "", ln)
+    if "exec 3>&1" in stripped or "kit_substrate_open_jsonl_channel" in stripped:
+        continue
+    stripped = re.sub(r"\s*>&3\s*$", "", stripped)
+    out.append(stripped)
+open(sys.argv[2], "w", encoding="utf-8").write("\n".join(out))
+PY
+if grep -q '3>&1' "$lc_fixture_no_fd3" || grep -q '>&3' "$lc_fixture_no_fd3"; then
+  fail 'control fixture: the saved descriptor is still there' \
+    'the fixture still redirects through the saved descriptor, so the control would prove nothing'
+else
+  run 'control: without the saved descriptor, kubectl apply output reaches the JSONL stream' red \
+    lc_stdout_is_jsonl "$lc_fixture_no_fd3" "$WORK/lc-pollution-control" "$lc_kubeconfig"
+fi
+
+# 5. AND THE DEVELOPER'S ENTRY IS NOT A SECOND IMPLEMENTATION, AND NOT A WAY
+#    BACK TO THE LIVE BOX. k3d lives in the developer's script and nowhere
+#    else: the installer has no k3d dependency, because a customer with their
+#    own Kubernetes has a kubeconfig and no k3d. The script also carries no IP
+#    literal and no ssh, so a later edit that reaches for a box's address is a
+#    red gate rather than a surprise.
+#
+#    AND BOTH CHECKS STRIP COMMENTS FIRST, which is not caution: the installer's
+#    own prose now names k3d six times while explaining why it has no k3d
+#    dependency, and the first version of the check below went red on a tree
+#    whose only k3d was in an explanation. A check that a comment can falsify is
+#    the same defect as one a comment can satisfy, in the more expensive
+#    direction.
+check_no_remote_box() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^\s*#.*$", "", src)
+problems = []
+for i, line in enumerate(code.splitlines(), 1):
+    if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", line):
+        problems.append(f"line {i} carries an IP literal")
+    if re.search(r"(?:^|[\s|&;])ssh\s", line):
+        problems.append(f"line {i} reaches for ssh")
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("no IP literal and no ssh — the local cycle only ever names the local cluster")
+PY
+}
+run "the local cycle names no box address and dials no ssh" green \
+  check_no_remote_box "$SUBSTRATE/local-cycle.sh"
+lc_fixture_with_box="$WORK/local-cycle-with-box.sh"
+sed 's|k3d cluster create|ssh root@203.0.113.9 k3d cluster create|' \
+  "$SUBSTRATE/local-cycle.sh" >"$lc_fixture_with_box"
+if grep -q 'ssh root@203.0.113.9' "$lc_fixture_with_box"; then
+  run 'control: a local cycle that reaches for a remote box goes red' red \
+    check_no_remote_box "$lc_fixture_with_box"
+else
+  fail 'control fixture: the ssh reach did not land' \
+    'the fixture carries no ssh line, so the control would prove nothing'
+fi
+
+# The installer itself took no k3d dependency, and that is a direction worth
+# asserting rather than a paragraph: the developer's script is the only file in
+# this directory that may name k3d.
+installer_has_no_k3d() {
+  local code
+  code="$("$PY" - "$1" <<'PY'
+import re
+import sys
+
+print(re.sub(r"(?m)^\s*#.*$", "", open(sys.argv[1], encoding="utf-8").read()))
+PY
+)"
+  case "$code" in
+    *k3d*)
+      printf 'the installer names k3d — a customer with their own Kubernetes has a kubeconfig and no k3d\n'
+      return 1
+      ;;
+  esac
+  printf 'the installer names no k3d; the developer entry does'
+}
+run 'the installer has no k3d dependency' green installer_has_no_k3d "$SUBSTRATE/install.sh"
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"
