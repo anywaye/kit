@@ -974,15 +974,13 @@ kit_substrate_await_pods_running() {
   start="$(date +%s)"
   deadline=$(( start + budget ))
   while :; do
-    local pods_json pod_count running pulling
+    local pods_json pod_count pulling
     pods_json="$(kubectl --kubeconfig="$KUBECONFIG" get pods -n "$ns" -o json 2>/dev/null || echo '{"items":[]}')"
     if [ -n "$prefix" ]; then
       pod_count="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p))] | length' 2>/dev/null || echo 0)"
-      running="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p)) | .status.containerStatuses[]? | select(.state.running != null)] | length' 2>/dev/null || echo 0)"
       pulling="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p)) | .status.containerStatuses[]? | select(.state.waiting.reason == "ContainerCreating" or .state.waiting.reason == "ErrImagePull" or .state.waiting.reason == "ImagePullBackOff")] | length' 2>/dev/null || echo 0)"
     else
       pod_count="$(printf '%s' "$pods_json" | jq -r '.items | length' 2>/dev/null || echo 0)"
-      running="$(printf '%s' "$pods_json" | jq -r '[.items[] | .status.containerStatuses[]? | select(.state.running != null)] | length' 2>/dev/null || echo 0)"
       pulling="$(printf '%s' "$pods_json" | jq -r '[.items[] | .status.containerStatuses[]? | select(.state.waiting.reason == "ContainerCreating" or .state.waiting.reason == "ErrImagePull" or .state.waiting.reason == "ImagePullBackOff")] | length' 2>/dev/null || echo 0)"
     fi
     # Success: image pull is done — at least one pod exists and none is still
