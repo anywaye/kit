@@ -104,8 +104,32 @@ printf 'local-cycle: kubeconfig %s -> %s\n' "$KUBECONFIG_FILE" "$SERVER"
 # own environment wins, so a cycle can be pointed at a different database list,
 # a different ACME address or a different issuer without editing this file.
 export KIT_SUBSTRATE_KUBECONFIG="$KUBECONFIG_FILE"
-export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-identity,gateway,courier,parlor}"
+# THE MANIFEST'S SET, not a shorter one the operator has to fix. It was
+# `identity,gateway,courier,parlor` while the Cluster provisions
+# `box,courier,gateway,identity,pantry,parlor`, so the installer's own refusal —
+# `KIT_SUBSTRATE_DATABASES does not match the Cluster manifest` — was the first
+# thing a developer met. A local cycle's list must be the list the tree ships;
+# a caller with a real box overrides it, which the `:-` still allows.
+export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-box,courier,gateway,identity,pantry,parlor}"
 export KIT_SUBSTRATE_ACME_EMAIL="${KIT_SUBSTRATE_ACME_EMAIL:-dev@cafaye.test}"
+# THE OPERATOR-SOURCED VALUES AS PLACEHOLDERS, and the reason is the step that
+# would otherwise refuse before reaching anything interesting. Step 9 refuses
+# without `KIT_SUBSTRATE_SMTP_*` and `KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET`,
+# correctly — a real box must be given the provider's own credentials — and a
+# local cycle has no relay to send through and no webhook to receive. These are
+# INERT: courier's adapter points at a host that does not resolve, so nothing is
+# ever delivered, and the point of the local cycle is everything except
+# delivery. `bin/launch` and its mailpit are how a developer reads mail locally;
+# this script's job is the substrate.
+#
+# A caller who has real values exports them and wins — every line is `:-`, so
+# the environment overrides.
+export KIT_SUBSTRATE_SMTP_ADAPTER="${KIT_SUBSTRATE_SMTP_ADAPTER:-smtp}"
+export KIT_SUBSTRATE_SMTP_HOST="${KIT_SUBSTRATE_SMTP_HOST:-smtp.invalid}"
+export KIT_SUBSTRATE_SMTP_PORT="${KIT_SUBSTRATE_SMTP_PORT:-587}"
+export KIT_SUBSTRATE_SMTP_USERNAME="${KIT_SUBSTRATE_SMTP_USERNAME:-local-cycle-placeholder}"
+export KIT_SUBSTRATE_SMTP_PASSWORD="${KIT_SUBSTRATE_SMTP_PASSWORD:-local-cycle-placeholder}"
+export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="${KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET:-local-cycle-placeholder}"
 export KIT_SUBSTRATE_RECEIPT="$WORK/substrate-receipt.json"
 export HEADLESS=1
 JSONL="$WORK/local.jsonl"
