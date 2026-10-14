@@ -754,8 +754,14 @@ kit_substrate_out() {
 kit_substrate_emit() {
   local event="$1" message="$2" extra="${3:-}"
   if [ "$HEADLESS" -eq 1 ]; then
+    # FD 3, not stdout: main saved the real stdout on fd 3 and pointed the
+    # process's own stdout at the human channel, so THIS is the one writer the
+    # JSONL stream has. A command this file spawns — `kubectl apply` prints
+    # `namespace/cnpg-system serverside-applied` for every object it writes —
+    # cannot be argued with and cannot be audited line by line; it can only be
+    # kept off the channel. See the note in main.
     printf '{"event":"%s","step":%s,"phase":%s,"message":%s%s}\n' \
-      "$event" "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$message")" "$extra"
+      "$event" "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$message")" "$extra" >&3
   else
     case "$event" in
       step.start) echo "[${STEP}/${TOTAL}] $message" ;;
@@ -1035,7 +1041,7 @@ kit_substrate_refuse() {
   [ -n "$human" ] && printf '  %s\n' "$human" >&2
   if [ "$HEADLESS" -eq 1 ]; then
     printf '{"event":"refusal","step":%s,"phase":%s,"input_needed":%s,"human":%s,"message":%s}\n' \
-      "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$input")" "$(json_str "$human")" "$(json_str "$message")"
+      "$STEP" "$(json_str "$CURRENT_PHASE")" "$(json_str "$input")" "$(json_str "$human")" "$(json_str "$message")" >&3
   fi
   R_PHASE="$CURRENT_PHASE"
   R_INPUT="$input"
@@ -4041,6 +4047,40 @@ main() {
         ;;
     esac
   done
+
+  # HEADLESS STDOUT IS A CHANNEL SOMETHING ELSE OWNS, AND THE WAY THAT IS TRUE
+  # IS A FILE DESCRIPTOR RATHER THAN A POLICY.
+  #
+  # MEASURED ON THE LOCAL CYCLE (2026-10-14, cluster `cafaye-local`): a headless
+  # run's stdout carried 26 lines of `kubectl apply`'s OWN output between step
+  # 3's start event and its done event —
+  #     namespace/cnpg-system serverside-applied
+  #     customresourcedefinition.apiextensions.k8s.io/clusters.postgresql.cnpg.io serverside-applied
+  #     …
+  # — and the first consumer to read the stream, `jq` over the file, died with
+  # `parse error: Invalid numeric literal at line 7, column 22`. The install had
+  # reported step 3 complete and step 4 started, so the events around the
+  # garbage were correct; the stream itself was unreadable. A JSONL stream no
+  # parser can read is an install nobody can drive headlessly, and it dies the
+  # same way wherever the installer runs — the box's own `caf box apply` reads
+  # this channel.
+  #
+  # The static check in tests/substrate_test.sh already refuses an `echo` or a
+  # `printf` outside the two writers, so the only way to break the channel is a
+  # COMMAND this file spawns, and no audit of this file's own statements can see
+  # those. So the redirection is done once, here: the real stdout is saved on
+  # fd 3, the process's stdout becomes the human channel (stderr, where
+  # kit_substrate_out already writes in this mode), and the two stdout writers
+  # above target fd 3. Every future `echo`, every tool's progress line and every
+  # accidental write lands beside the operator's other output instead of inside
+  # the event stream.
+  #
+  # Nothing reads the process's stdin here and nothing pipes INTO this script,
+  # so the order (`3>&1` first, then `1>&2`) is the whole change: fd 3 keeps
+  # the caller's stream and fd 1 joins the human channel.
+  if [ "$HEADLESS" -eq 1 ]; then
+    exec 3>&1 1>&2
+  fi
 
   # The clock starts before preflight, so the total is the install's
   # start-to-done and not just the steps'.
