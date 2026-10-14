@@ -4149,10 +4149,13 @@ run 'oidc four: login UI alone is refused, naming the missing issuer' green oidc
 # RED control: the installer as it stands on master (three keys, no refusal)
 # passes the issuer-alone shape through without complaint — i.e. the refusal
 # check actually discriminates. Revert the new code and the check must go red;
-# if it does not, the check is worthless. The fixture is the committed
-# install.sh on HEAD (master), which is the three-key installer.
+# if it does not, the check is worthless. The fixture is the PARENT commit's
+# install.sh — the pre-fix, three-key installer. It must NOT be HEAD: this
+# branch's own commit IS the four-key installer, so a fixture taken from HEAD
+# carries the new variable reference, and `set -u` then trips it as an
+# "unbound variable" instead of showing the pass-through this control is about.
 fixture_oidc_three_orig="$WORK/install-oidc-three-orig.sh"
-if ! git -C "$ROOT" show HEAD:templates/substrate/install.sh >"$fixture_oidc_three_orig" 2>/dev/null; then
+if ! git -C "$ROOT" show HEAD~1:templates/substrate/install.sh >"$fixture_oidc_three_orig" 2>/dev/null; then
   fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "git show HEAD:templates/substrate/install.sh failed"
 else
   sed '/^main "$@"/d' "$fixture_oidc_three_orig" >"$WORK/install-oidc-three-sourced.sh"
