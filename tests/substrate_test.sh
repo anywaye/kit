@@ -11101,6 +11101,354 @@ run 'control: empty apps directory goes red (vacuity guard)' red \
   check_appproject_cluster_scope "$empty_apps" "$APP_PROJECT"
 
 # ===========================================================================
+# 29. The readiness preflight resolves through the cluster's DNS as well as
+#     the node's — and the provider's stale NXDOMAIN is fixed by a public
+#     resolver
+# ===========================================================================
+#
+# THE EVIDENCE, MEASURED ON THE LIVE BOX. Three A records (api, app, auth →
+# 169.58.108.209, proxied off) existed and 1.1.1.1 answered, the box answered
+# on port 80, but cert-manager's self check failed:
+#
+#   Waiting for HTTP-01 challenge propagation: failed to perform self check
+#     GET request 'http://api.cafaye.com/.well-known/acme-challenge/...':
+#     Get "http://api.cafaye.com/...": dial tcp: lookup api.cafaye.com on
+#     10.43.0.10:53: no such host
+#
+# 10.43.0.10 is k3s's CoreDNS. The box's own resolver could not either:
+#
+#   $ getent hosts api.cafaye.com   (no output)
+#   $ dig +short @1.1.1.1 api.cafaye.com
+#   169.58.108.209
+#   $ resolvectl status | grep 'Current DNS'
+#   Current DNS Server: 209.126.15.53   (Contabo)
+#
+# Contabo's resolver held a stale NXDOMAIN for minutes after 1.1.1.1 answered.
+# The fix: /etc/systemd/resolved.conf.d/99-cafaye.conf with DNS=1.1.1.1 8.8.8.8,
+# then a CoreDNS restart, then recreating the challenges — both Certificates
+# went True.
+#
+# THE PACKET. The preflight resolved on the node (getent) while ACME resolves
+# through CoreDNS, which forwards to the node's /etc/resolv.conf. When the
+# provider holds a stale negative answer, the preflight reported resolving and
+# the certificate failed anyway. The packet requires:
+#   * resolve through the cluster's DNS as well as the node's, reporting as
+#     resolving only when BOTH answer; a split is a pending condition with its
+#     own sentence (node-resolves/cluster-does-not is the live-box shape);
+#   * either write a public resolver (99-cafaye.conf) when the box serves
+#     public names, or detect and name the stale answer — shape 1 chosen here
+#     because it fixes the provider dependency at the substrate rather than
+#     reporting it for the operator to fix;
+#   * name the CoreDNS path in the readiness report; and
+#   * the opposite split (cluster yes, node no) is also pending — the check is
+#     about agreement, not which side wins.
+#
+# WHY SHAPE 1. The box serves public names that are most likely to have been
+# created minutes earlier; every provider runs its own negative cache, so the
+# substrate should not leave resolution to luck. Writing DNS=1.1.1.1 8.8.8.8 is
+# the fix measured on the box, and it is the only shape that prevents the
+# 170 minutes of pending rather than reporting it. It is written only when the
+# box serves public names, is idempotent, and is visible in the output so a
+# customer's own DNS policy is not overridden silently.
+DNS_SPLIT_HOST="dns-split-never-resolves.invalid"
+DNS_BOTH_HOST="localhost"
+# For the resolver-config tests the intended host must be checkable, so a
+# public name is used; for the DNS split the fixture host is *.invalid (RFC
+# 2606) which never resolves, and localhost which always does — but the split
+# itself is mocked, so no network is needed.
+
+check_dns_split_pending() {
+  local script="$1" src="$WORK/dns-split-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(bash -c '
+    . "$1"
+    kit_substrate_host_resolves() { case "$1" in dns-split-never-resolves.invalid) return 0;; *) return 1;; esac; }
+    kit_substrate_cluster_host_resolves() { case "$1" in dns-split-never-resolves.invalid) return 1;; *) return 0;; esac; }
+    export KIT_SUBSTRATE_APP_BASE_URL="https://dns-split-never-resolves.invalid"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export MANIFEST_DIR="/tmp/dns-split-manifests"
+    mkdir -p "$MANIFEST_DIR"
+    cat > "$MANIFEST_DIR/test.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: test}
+spec:
+  source:
+    helm: {values: | env: {}}
+  destination: {server: https://kubernetes.default.svc, namespace: test}
+YAML
+    kit_substrate_compute_readiness
+    # Must be pending and split
+    case "$READINESS_TLS_PENDING" in *dns-split-never-resolves.invalid*) ;; *) printf "pending does not contain split host\n"; exit 1;; esac
+    case "$READINESS_DNS_SPLIT" in *dns-split-never-resolves.invalid*) ;; *) printf "split does not contain host\n"; exit 1;; esac
+    out=$(kit_substrate_readiness_preflight 2>&1)
+    case "$out" in *"RESOLVES ON NODE BUT NOT THROUGH CLUSTER DNS"*) ;; *) printf "missing split sentence\n%s\n" "$out"; exit 1;; esac
+    case "$out" in *"CoreDNS at 10.43.0.10:53"*) ;; *) printf "missing CoreDNS path\n%s\n" "$out"; exit 1;; esac
+    case "$out" in *"dns-split-never-resolves.invalid"*) ;; *) printf "missing host\n"; exit 1;; esac
+    printf "split pending with own sentence and CoreDNS path\n"
+  ' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf '%s\n' "$out"; return 1; }
+  case "$out" in *split\ pending*) ;; *) printf '%s\n' "$out"; return 1;; esac
+  printf 'host that resolves on node but not through cluster DNS is reported as pending with its own sentence\n'
+}
+
+check_dns_both_resolve() {
+  local script="$1" src="$WORK/dns-both-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(bash -c '
+    . "$1"
+    kit_substrate_host_resolves() { return 0; }
+    kit_substrate_cluster_host_resolves() { return 0; }
+    export KIT_SUBSTRATE_APP_BASE_URL="https://both-resolve.example.com"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export MANIFEST_DIR="/tmp/dns-both-manifests"
+    mkdir -p "$MANIFEST_DIR"
+    cat > "$MANIFEST_DIR/test.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: test}
+spec:
+  source:
+    helm: {values: | env: {}}
+  destination: {server: https://kubernetes.default.svc, namespace: test}
+YAML
+    kit_substrate_compute_readiness
+    [ -z "$READINESS_TLS_PENDING" ] || { printf "pending not empty\n"; exit 1; }
+    [ -z "$READINESS_DNS_SPLIT" ] || { printf "split not empty\n"; exit 1; }
+    out=$(kit_substrate_readiness_preflight 2>&1)
+    case "$out" in *"every intended host resolves"*) ;; *) printf "missing every-host-resolves\n%s\n" "$out"; exit 1;; esac
+    case "$out" in *"cluster DNS"*"agrees"*) ;; *) printf "missing cluster agrees\n%s\n" "$out"; exit 1;; esac
+    printf "both paths resolve => reported as resolving\n"
+  ' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf '%s\n' "$out"; return 1; }
+  printf 'host that resolves on both paths is reported as resolving\n'
+}
+
+check_dns_opposite_split() {
+  local script="$1" src="$WORK/dns-opp-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(bash -c '
+    . "$1"
+    kit_substrate_host_resolves() { case "$1" in opp-split.example.com) return 1;; *) return 1;; esac; }
+    kit_substrate_cluster_host_resolves() { case "$1" in opp-split.example.com) return 0;; *) return 1;; esac; }
+    export KIT_SUBSTRATE_APP_BASE_URL="https://opp-split.example.com"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export MANIFEST_DIR="/tmp/dns-opp-manifests"
+    mkdir -p "$MANIFEST_DIR"
+    cat > "$MANIFEST_DIR/test.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: test}
+spec:
+  source:
+    helm: {values: | env: {}}
+  destination: {server: https://kubernetes.default.svc, namespace: test}
+YAML
+    kit_substrate_compute_readiness
+    case "$READINESS_TLS_PENDING" in *opp-split.example.com*) ;; *) printf "pending missing\n"; exit 1;; esac
+    out=$(kit_substrate_readiness_preflight 2>&1)
+    case "$out" in *"RESOLVES THROUGH CLUSTER DNS BUT NOT ON NODE"*) ;; *) printf "missing opposite split sentence\n%s\n" "$out"; exit 1;; esac
+    printf "opposite split pending\n"
+  ' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf '%s\n' "$out"; return 1; }
+  printf 'host that resolves through cluster DNS but not on node is reported as pending\n'
+}
+
+check_resolver_config() {
+  local script="$1" src="$WORK/resolver-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  # No public host => no write
+  local conf_no="$WORK/resolver-no-public.conf"
+  rm -f "$conf_no"
+  bash -c '
+    . "$1"
+    export KIT_SUBSTRATE_APP_BASE_URL=""
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export KIT_SUBSTRATE_RESOLVED_CONF="$2"
+    export MANIFEST_DIR="/tmp/resolver-empty"
+    mkdir -p "$MANIFEST_DIR"
+    kit_substrate_ensure_public_resolver
+  ' bash "$src" "$conf_no" 2>&1
+  if [ -f "$conf_no" ]; then printf 'resolver written when no public host\n'; return 1; fi
+  # With public host => writes correct content (DRY_RUN first, then real)
+  local conf_yes="$WORK/resolver-yes.conf"
+  rm -f "$conf_yes"
+  bash -c '
+    . "$1"
+    export KIT_SUBSTRATE_APP_BASE_URL="https://public.example.com"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export KIT_SUBSTRATE_RESOLVED_CONF="$2"
+    export MANIFEST_DIR="/tmp/resolver-public"
+    mkdir -p "$MANIFEST_DIR"
+    cat > "$MANIFEST_DIR/test.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: test}
+spec:
+  source: {helm: {values: | env: {}}}
+  destination: {server: https://kubernetes.default.svc, namespace: test}
+YAML
+    export DRY_RUN=0
+    kit_substrate_ensure_public_resolver >"$3" 2>&1
+  ' bash "$src" "$conf_yes" "$WORK/resolver-out.txt" 2>&1
+  if [ ! -f "$conf_yes" ]; then printf 'resolver not written when serving public names\n'; cat "$WORK/resolver-out.txt"; return 1; fi
+  if ! grep -q "DNS=1.1.1.1 8.8.8.8" "$conf_yes"; then printf 'resolver content wrong\n'; cat "$conf_yes"; return 1; fi
+  if ! grep -q "FallbackDNS=1.0.0.1 8.8.4.4" "$conf_yes"; then printf 'resolver fallback wrong\n'; cat "$conf_yes"; return 1; fi
+  if ! grep -q "wrote public resolver" "$WORK/resolver-out.txt"; then printf 'resolver write not reported\n'; cat "$WORK/resolver-out.txt"; return 1; fi
+  # Second run is idempotent
+  bash -c '
+    . "$1"
+    export KIT_SUBSTRATE_APP_BASE_URL="https://public.example.com"
+    export KIT_SUBSTRATE_RESOLVED_CONF="$2"
+    export MANIFEST_DIR="/tmp/resolver-public"
+    export DRY_RUN=0
+    kit_substrate_ensure_public_resolver >"$3" 2>&1
+  ' bash "$src" "$conf_yes" "$WORK/resolver-out2.txt" 2>&1
+  if ! grep -q "already configured" "$WORK/resolver-out2.txt"; then printf 'resolver second run not idempotent\n'; cat "$WORK/resolver-out2.txt"; return 1; fi
+  printf 'resolver written only when serving public names, content correct, visible and idempotent\n'
+}
+
+# The RED control: the node-only preflight (the master shape) reports the split
+# case as RESOLVING — i.e. it would have been green on the live box while the
+# certificate sat pending. This proves the check discriminates.
+check_node_only_red() {
+  local script="$1" src="$WORK/node-only-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  # Build a fixture that is the current script with compute_readiness replaced
+  # by the node-only version (pre-packet). The fixture must still parse and
+  # DRY_RUN, but its readiness must be empty for the split case.
+  local fixture="$WORK/install-node-only.sh"
+  "$PY" - "$src" "$fixture" <<'PY'
+import re, sys
+src, dst = sys.argv[1:3]
+text = open(src, encoding="utf-8").read()
+old = '''kit_substrate_compute_readiness() {
+  READINESS_TLS_PENDING=""
+  READINESS_DNS_SPLIT=""
+  READINESS_DNS_STATUS=""
+  local h all pending="" split="" status=""
+  all="$(kit_substrate_intended_hosts)"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    local node_ok=0 cluster_ok=0
+    if kit_substrate_host_resolves "$h"; then node_ok=1; fi
+    if kit_substrate_cluster_host_resolves "$h"; then cluster_ok=1; fi
+    status="${status}${h}	${node_ok}	${cluster_ok}
+"
+    if [ "$node_ok" -eq 1 ] && [ "$cluster_ok" -eq 1 ]; then
+      continue
+    fi
+    pending="${pending}${h}
+"
+    if [ "$node_ok" -ne "$cluster_ok" ]; then
+      split="${split}${h}
+"
+    fi
+  done <<EOF
+$all
+EOF
+  READINESS_TLS_PENDING="$pending"
+  READINESS_DNS_SPLIT="$split"
+  READINESS_DNS_STATUS="$status"
+}'''
+new = '''kit_substrate_compute_readiness() {
+  READINESS_TLS_PENDING=""
+  local h all pending=""
+  all="$(kit_substrate_intended_hosts)"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if ! kit_substrate_host_resolves "$h"; then
+      pending="${pending}${h}
+"
+    fi
+  done <<EOF
+$all
+EOF
+  READINESS_TLS_PENDING="$pending"
+}'''
+if old not in text:
+    sys.exit(f"could not find compute_readiness to replace")
+text = text.replace(old, new)
+open(dst, "w", encoding="utf-8").write(text)
+PY
+  if [ $? -ne 0 ]; then printf 'fixture build failed\n'; return 1; fi
+  bash -n "$fixture" || { printf 'node-only fixture does not parse\n'; return 1; }
+  local out ec=0
+  out="$(bash -c '
+    . "$1"
+    kit_substrate_host_resolves() { case "$1" in dns-split-never-resolves.invalid) return 0;; *) return 1;; esac; }
+    kit_substrate_cluster_host_resolves() { case "$1" in dns-split-never-resolves.invalid) return 1;; *) return 0;; esac; }
+    export KIT_SUBSTRATE_APP_BASE_URL="https://dns-split-never-resolves.invalid"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export MANIFEST_DIR="/tmp/dns-split-manifests"
+    kit_substrate_compute_readiness
+    if [ -n "$READINESS_TLS_PENDING" ]; then printf "node-only pending not empty: [%s]\n" "$READINESS_TLS_PENDING"; exit 1; fi
+    out=$(kit_substrate_readiness_preflight 2>&1)
+    case "$out" in *"RESOLVES ON NODE BUT NOT THROUGH CLUSTER DNS"*) printf "node-only still prints split\n"; exit 1;; esac
+    case "$out" in *"every intended host resolves"*) ;; *) printf "missing resolves\n%s\n" "$out"; exit 1;; esac
+    printf "node-only reports resolving for split\n"
+  ' bash "$fixture" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf '%s\n' "$out"; return 1; }
+  printf 'node-only preflight reports split as resolving (proves discrimination)\n'
+}
+
+run 'a host that resolves on node but not through cluster DNS is reported as pending with its own sentence' green check_dns_split_pending "$SUBSTRATE/install.sh"
+run 'a host that resolves on both paths is reported as resolving' green check_dns_both_resolve "$SUBSTRATE/install.sh"
+run 'a host that resolves through cluster DNS but not on node is reported as pending' green check_dns_opposite_split "$SUBSTRATE/install.sh"
+run 'the public resolver is written only when serving public names, content correct and visible' green check_resolver_config "$SUBSTRATE/install.sh"
+run 'control: node-only preflight reports split as resolving' green check_node_only_red "$SUBSTRATE/install.sh"
+
+# The second RED control from the packet: CoreDNS answers, node does not, must
+# not be reported as resolving either — the check is about agreement.
+# Reuse the opposite-split check as its green, and the node-only fixture
+# above already proves discrimination; this is the agreement proof.
+# Explicitly: a fixture where the mock is inverted must still be pending, not
+# resolving — already proven by check_dns_opposite_split, but also assert that
+# a fixture that mocked the wrong side would be wrong.
+check_dns_agreement() {
+  local script="$1" src="$WORK/dns-agree-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  # The same as opposite split, but assert that the pending list is NOT empty
+  # and that the preflight does NOT say "every host resolves"
+  local out ec=0
+  out="$(bash -c '
+    . "$1"
+    kit_substrate_host_resolves() { return 1; }
+    kit_substrate_cluster_host_resolves() { return 0; }
+    export KIT_SUBSTRATE_APP_BASE_URL="https://agree.invalid"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    export MANIFEST_DIR="/tmp/dns-agree-manifests"
+    mkdir -p "$MANIFEST_DIR"
+    cat > "$MANIFEST_DIR/test.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: test}
+spec:
+  source:
+    helm: {values: | env: {}}
+  destination: {server: https://kubernetes.default.svc, namespace: test}
+YAML
+    kit_substrate_compute_readiness
+    [ -n "$READINESS_TLS_PENDING" ] || { printf "should be pending\n"; exit 1; }
+    out=$(kit_substrate_readiness_preflight 2>&1)
+    case "$out" in *"every intended host resolves"*) printf "should not say every resolves\n%s\n" "$out"; exit 1;; esac
+    printf "agreement check holds\n"
+  ' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf '%s\n' "$out"; return 1; }
+  printf 'agreement: a host that resolves only on one path is not reported as resolving\n'
+}
+run 'control: a fixture where CoreDNS answers and node does not is not reported as resolving' green check_dns_agreement "$SUBSTRATE/install.sh"
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"
