@@ -119,8 +119,9 @@
 #                                  compiled default without them).
 #   KIT_SUBSTRATE_APP_BASE_URL     optional: the public origin a browser reaches
 #                                  (e.g. https://app.example.com). Step 12
-#                                  derives identity's five link templates from
-#                                  it and writes them in the SAME patch as the
+#                                  derives identity's four link templates from
+#                                  it and deletes the legacy shared default
+#                                  in the SAME patch as the
 #                                  courier pair, because identity's courier block
 #                                  is all-or-nothing: a base URL and a token with
 #                                  no link template is `ErrInvalidCourier`
@@ -271,11 +272,14 @@ NATS_URL="nats://nats.data.svc.cluster.local:4222"
 COURIER_URL="http://courier.courier.svc.cluster.local:4000"
 IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
 # IDENTITY_COURIER_KEYS — the seven keys of identity's courier block: the pair
-# plus the five link templates. ONE list for the set-branch write and the
-# unset-branch sweep-and-verify, so the two can never disagree about the
-# block's extent. The set-branch patch below still spells every key literally
-# (the record tripwire reads them out of the stringData block); this list is
-# what the sweep scans, deletes and re-verifies.
+# plus the four link templates the installer writes (three per-purpose links
+# plus the invitation link) AND the legacy shared default it deletes. ONE list
+# for the set-branch patch and the unset-branch sweep-and-verify, so the two
+# can never disagree about the block's extent. The set-branch patch below still
+# spells every key literally (the record tripwire reads the written keys out
+# of the stringData block, and the deleted default out of nothing — it is a
+# `data`-null, which is why the RECORD names only what an install creates);
+# this list is what the sweep scans, deletes and re-verifies.
 IDENTITY_COURIER_KEYS=(COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE)
 
 # --- the services' telemetry on a box: DELIBERATELY OFF ---------------------
@@ -2554,7 +2558,7 @@ validate_mfa_override() {
 # SECRET RECORD (the drift tripwire — tests/substrate_test.sh parses these:
 # every name here must be created below, and every key must appear as a
 # --from-literal below; a fixture with one removed must fail):
-#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE OTEL_SDK_DISABLED
+#   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE INVITATION_LINK_TEMPLATE OTEL_SDK_DISABLED
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN OTEL_SDK_DISABLED
 #   RECORD parlor-secrets: DATABASE_URL OTEL_SDK_DISABLED
@@ -2605,7 +2609,8 @@ validate_mfa_override() {
 #     (`internal/config/config.go` loadCourier → resolveLinkTemplates; the case
 #     is named "a base URL and a token with no link template" → ErrInvalidCourier).
 #     So when the operator sets the box's public origin, step 12 writes the pair
-#     AND the five templates in one patch; when it is unset, step 12 writes NO
+#     AND the four templates in one patch and deletes the legacy shared default
+#     in the same patch; when it is unset, step 12 writes NO
 #     identity courier key at all — the no-mail state identity supports
 #     (`present == 0`) — and courier's own pair is still written, because
 #     COURIER_IDENTITY_TOKEN is required by courier's runtime regardless.
@@ -3476,10 +3481,14 @@ mint_courier_identity_token() {
   # to a screen that is not theirs. So the identity patch is gated on the one
   # operator input that makes it true:
   #
-  #   * KIT_SUBSTRATE_APP_BASE_URL SET — the pair AND the five templates land in
-  #     ONE merge patch. One patch because a base URL and a token with no
-  #     template is a refusal at boot, and deriving all five from the one origin
-  #     is what keeps two of them from drifting.
+  #   * KIT_SUBSTRATE_APP_BASE_URL SET — the pair AND the four templates land in
+  #     ONE merge patch, and the legacy RECOVERY_LINK_TEMPLATE an older
+  #     installer wrote is deleted in the SAME patch (a `data`-null). One patch
+  #     because a base URL and a token with no template is a refusal at boot,
+  #     and deriving all four from the one origin is what keeps them from
+  #     drifting — while the deleted default is what keeps identity's
+  #     shared-default warning from firing on values that are equal on
+  #     purpose (see the derivation below).
   #   * KIT_SUBSTRATE_APP_BASE_URL UNSET — identity's courier block is CONVERGED
   #     (converge_identity_courier_block, one `"key":null` merge patch for a
   #     half-pair or stray template, verified by re-read): a COMPLETE pair the
@@ -3500,28 +3509,61 @@ mint_courier_identity_token() {
   # source would truncate that block after the first template. Keeping the
   # placeholders in shell values keeps every key visible to the check.
   if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
-    local base reset verify change recovery invite identity_patch
+    local base reset verify change invite identity_patch
     base="${KIT_SUBSTRATE_APP_BASE_URL%/}"
     reset="${base}/reset-password?token={token}"
     verify="${base}/verify-email/confirm?token={token}"
-    # EMAIL_CHANGE has no screen of its own on parlor; `verify-email/confirm` is
-    # the served address-confirmation screen and the closest honest target,
-    # exactly as the launch stack spells it (`EMAIL_CHANGE_LINK_TEMPLATE`).
+    # PARLOR SERVES THREE OF THESE SCREENS, and the fourth has none. Read off
+    # parlor's route table — src/app and src/routes agree, and routeTree.gen.ts
+    # with them: /login, /register, /forgot-password, /reset-password,
+    # /verify-email, /verify-email/confirm, /invitations/[token], /accounts,
+    # /settings, /admin (/healthz, /readyz) — and no email-change route in
+    # either tree, nor in parlor's client (which never calls
+    # POST /v1/email-changes/*):
+    #   PASSWORD_RESET_LINK_TEMPLATE → /reset-password, the screen that spends
+    #     a password-reset token (POST /v1/password-resets/confirm answers 404
+    #     for any other purpose's token).
+    #   EMAIL_VERIFICATION_LINK_TEMPLATE → /verify-email/confirm, the screen
+    #     that spends an address-confirmation token.
+    #   EMAIL_CHANGE_LINK_TEMPLATE → /verify-email/confirm as well. Parlor
+    #     carries no email-change screen, so there is no honest distinct value
+    #     to write, and the installer must not invent one: a path parlor does
+    #     not serve is a browser 404. This is a SUBSTITUTION and it is
+    #     documented as one — an email-change token spent there answers
+    #     identity's single ErrTokenNotFound, and the screen renders its one
+    #     generic "this link cannot be used" sentence: a wrong-flow dead end on
+    #     a served page, which is a materially better failure than a 404 and is
+    #     not dressed up here as more than it is. Same spelling as the launch
+    #     stack (`launch/docker-compose.launch.yml`), which argues it at length.
+    #   RECOVERY_LINK_TEMPLATE is NOT written. It is the fallback for every
+    #     purpose with no variable of its own, and every purpose identity
+    #     delivers has one here — the end-state identity's own wiring test
+    #     blesses ("all three per-purpose variables set, the legacy one
+    #     deleted", cmd/identity/link_template_wiring_test.go). Identity's
+    #     warning compares VALUES, so writing the legacy default alongside the
+    #     per-purpose templates re-fires it even when every purpose is
+    #     configured — that three-identical-string shape is the live-box
+    #     warning this closes. The patch deletes a legacy default an older
+    #     installer wrote instead: a null under `data`, because a null under
+    #     `stringData` merges into a field the stored object does not carry and
+    #     deletes nothing (see converge_identity_courier_block). A future
+    #     purpose identity adds then refuses at boot naming its variable,
+    #     instead of silently inheriting a screen that cannot redeem it.
     change="$verify"
-    recovery="$verify"
     invite="${base}/invitations/{token}"
     identity_patch="$(jq -nc \
       --arg url "$COURIER_URL" --arg t "$token" \
       --arg reset "$reset" --arg verify "$verify" --arg change "$change" \
-      --arg recovery "$recovery" --arg invite "$invite" \
+      --arg invite "$invite" \
       '{"stringData":{
         "COURIER_BASE_URL":$url,
         "COURIER_TOKEN":$t,
         "PASSWORD_RESET_LINK_TEMPLATE":$reset,
         "EMAIL_VERIFICATION_LINK_TEMPLATE":$verify,
         "EMAIL_CHANGE_LINK_TEMPLATE":$change,
-        "RECOVERY_LINK_TEMPLATE":$recovery,
         "INVITATION_LINK_TEMPLATE":$invite
+      },"data":{
+        "RECOVERY_LINK_TEMPLATE":null
       }}')"
     printf '%s' "$identity_patch" |
       kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
@@ -3539,7 +3581,7 @@ mint_courier_identity_token() {
     --type=merge --patch-file=/dev/stdin
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
   if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
-    kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (five link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}) and courier holds the same credential, both deployments restarted"
+    kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (four link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}, legacy RECOVERY_LINK_TEMPLATE default deleted) and courier holds the same credential, both deployments restarted"
   elif [ -n "${IDENTITY_MAIL_PATH_KEPT:-}" ]; then
     kit_substrate_out "      credential minted on this box; courier holds it, identity KEEPS its working mail path (this run had no KIT_SUBSTRATE_APP_BASE_URL to rewrite it with, so nothing was rewritten) — every recovery route keeps answering; courier restarted"
   else
