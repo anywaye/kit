@@ -694,6 +694,19 @@ jobs:
       - name: lint
         uses: golangci/golangci-lint-action@v9
         with:
+          # `version:` is load-bearing, and its absence was measured on
+          # 2026-10-14. With no pin the action installs whatever it considers
+          # current; the worktree pinned 2.6.2 by a different route and CI ran
+          # 2.14.0, and the two disagree by 37 findings — a service whose local
+          # gate is green and whose CI is red on files nobody touched. The gap
+          # is `noctx`, which flags `httptest.NewRequest` from Go 1.23's
+          # deprecation onward in a context the older version does not reach.
+          #
+          # ONE more place holds the same number: each service's `mise.toml`
+          # pins `golangci-lint` to it so `bin/prime-go` and CI agree, and a
+          # bump touches both in the same commit. Two homes and one command to
+          # change them — unlike the version itself, which has one home each.
+          version: v2.14.0
           working-directory: ${{ inputs.working-dir }}
           # `--config` and not `GOLANGCI_LINT_CONFIG`: measured on
           # golangci-lint v2.6.2, the environment variable is read by NOTHING —
