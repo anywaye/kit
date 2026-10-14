@@ -4076,10 +4076,11 @@ main() {
   # the event stream.
   #
   # Nothing reads the process's stdin here and nothing pipes INTO this script,
-  # so the order (`3>&1` first, then `1>&2`) is the whole change: fd 3 keeps
-  # the caller's stream and fd 1 joins the human channel.
+  # so the order (save the caller's descriptor first, redirect second) is the
+  # whole change: the saved descriptor keeps the caller's stream and the
+  # process's own stdout joins the human channel.
   if [ "$HEADLESS" -eq 1 ]; then
-    exec 3>&1 1>&2
+    kit_substrate_open_jsonl_channel
   fi
 
   # The clock starts before preflight, so the total is the install's
@@ -4187,5 +4188,30 @@ main() {
     kit_substrate_readiness_final # honest-done
   fi
 }
+
+# kit_substrate_open_jsonl_channel — put headless stdout where it belongs.
+#
+# THE SAVED DESCRIPTOR IS OPENED HERE AND NOT IN `main`, because this file's code
+# runs two ways: through `main` (where `--headless` is parsed a few lines
+# in) and SOURCED by tests/substrate_test.sh, which strips the trailing `main`
+# and sets HEADLESS in the environment before it does. An `exec` inside main
+# alone left every emit writing to a descriptor nobody had opened — the suite
+# measured that as "stdout was empty", which is the check that catches a channel
+# that lost its writer. Idempotent, so the second call site is a no-op.
+kit_substrate_open_jsonl_channel() {
+  if [ "${KIT_JSONL_CHANNEL:-0}" -eq 1 ]; then
+    return 0
+  fi
+  KIT_JSONL_CHANNEL=1
+  exec 3>&1 1>&2
+}
+
+# Headless at SOURCE time (the environment already said so, which is the test
+# path and the env-var form): open the channel before anything can write to
+# stdout. `main` opens it again below for the flag, and the guard above makes
+# that the same statement rather than a second one.
+if [ "$HEADLESS" -eq 1 ]; then
+  kit_substrate_open_jsonl_channel
+fi
 
 main "$@"

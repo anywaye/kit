@@ -4,8 +4,9 @@
 local cluster.
 **Branch:** `roll-c5-local-cycle` (cut from master). **Worktree:**
 `moon/wt/roll-c5-local-cycle`.
-**Status:** three commits; the local cycle runs, is measured, and found two real
+**Status:** four commits; the local cycle runs, is measured, and found two real
 defects (one fixed, one measured and left as the next packet's decision).
+`bash tests/substrate_test.sh` is green at 354 checks.
 **Cluster used:** `k3d-cafaye-local` (`kubectl config current-context` =
 `k3d-cafaye-local`, node `k3d-cafaye-local-server-0`, API server
 `https://0.0.0.0:16443`). **No command in this run addressed the Contabo box** —
@@ -245,9 +246,32 @@ instead of in another ten-minute VPS pass.
 | `42079d7` | `KIT_SUBSTRATE_KUBECONFIG`: the installer installs into a cluster that is already there. Preflight split by what each check is a fact about; step 1's guard and its refusal; the receipt's `next` and the final message stop claiming a pin for a cluster this script did not provision. |
 | `ce4dd8c` | The JSONL channel is a file descriptor, not a policy (defect 3.1). Plus `templates/substrate/local-cycle.sh`. |
 | `73edeae` | The presence probe reads a variable, not a pipe (defect 3.3). |
-| (this report's commit) | `tests/substrate_test.sh` §16, `README.md`, this report. |
+| (final) | `tests/substrate_test.sh` §16, `README.md`, this report, and the comment-falsifiable checks found while proving §16. |
 
-**Gate:** `bash tests/substrate_test.sh` — see the log; five failures appeared on
-the first run after the fd-3 change (one real: §3.1's `exec` in the wrong place,
-fixed; four in the AppProject warm-box tests, under diagnosis when this report was
-written — do not merge until they are accounted for).
+**Gate:** `bash tests/substrate_test.sh` → **`PASS: 354 passed, 0 failed, 0
+skipped`**. The five new §16 checks and their three controls are in that count:
+the supplied cycle, the no-Node refusal, the workstation's unchanged refusal with
+the input unset, the headless stdout of a run whose `kubectl apply` prints its own
+progress, the local cycle's absence of any box address, the installer's absence of
+any k3d, and the two control fixtures that must go red.
+
+**What writing those controls found in the controls themselves, which is worth
+more than the checks:**
+
+1. **A comment falsified a control.** The fd-3 fixture was built by
+   `sed '/exec 3>&1 1>&2/d'`, which deleted the explanation and kept the code —
+   the installer's own prose had by then named the descriptor in eleven comment
+   lines. The same shape broke `installer_has_no_k3d` (six mentions of k3d, all
+   of them explaining why there is no k3d dependency) and the existing
+   no-namespace control fixture, whose guard is `if 'main "$@"' in out` and which
+   a comment spelling the invocation out satisfied. All three now strip comments
+   before reading, which is the `check_apply_modes` rule seen from the other
+   direction: a check a comment can *satisfy* is not a check, and a check a
+   comment can *falsify* is more expensive, because it goes red on correct work.
+2. **The descriptor was opened in one place and used in two.** The suite caught it
+   in one run (§3.1): the sourced-installer cases got `stdout was empty`. The fix
+   is one idempotent function called from both entry points.
+3. **And one of my own assertions was inverted** — a `case` whose body reported
+   "was never asked" on the branch where the cluster HAD been asked. The red
+   branch's polarity is the easiest thing to get backwards, and it reads as a
+   failure of the installer rather than of the test.

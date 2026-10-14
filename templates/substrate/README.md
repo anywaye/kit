@@ -357,6 +357,95 @@ rather than planned — the refusal is the contract, and
 validated on the live path only: a plan does not need credentials to print.
 The full plan needs only the database list.
 
+### A cluster that is already there — `KIT_SUBSTRATE_KUBECONFIG`
+
+The installer's default is that the host it runs on IS the cluster: it installs
+k3s, writes `/etc/rancher/k3s/k3s.yaml`, and every preflight refusal (root,
+Linux, arch, memory) is a fact about that host. That is a fresh box, and a fresh
+box is the product — nothing below changes it.
+
+**One environment variable says the cluster is already there.**
+
+```sh
+export KIT_SUBSTRATE_KUBECONFIG=/path/to/kubeconfig
+bash templates/substrate/install.sh
+```
+
+Set it and the substrate installs into **that** cluster: no k3s is installed on
+the machine you are typing at, and steps 1-3 ask the **cluster** whether the
+component is there rather than asking the host whether `/usr/local/bin/k3s` is.
+Everything else — the other ten steps, every guard, every refusal, the per-step
+timing events, the receipt, the JSONL — is the same code path. A local run's
+JSONL is a box run's JSONL.
+
+**Env var, not a flag,** and that follows the two precedents already in this
+script: `KIT_SUBSTRATE_RECEIPT` is a path-valued input with no flag and
+`DRY_RUN` is a runtime switch with no flag. A flag is for a boolean a human
+types (`--headless`); a path is copied out of another tool's output —
+`k3d kubeconfig get`, `kind get kubeconfig`, `export KUBECONFIG=…` — and an
+argument a flag would carry is one the shell would also have to expand. It is
+deliberately **not** the ambient `KUBECONFIG`: a variable that decides whether
+k3s gets installed on the host off some other tool's export is a trap.
+
+What the preflight checks changes with it, because the subject changes. Root,
+Linux, arch and memory are the **host's** business and are refusals only when
+this script installs k3s on that host; curl, jq, openssl and ghcr.io are the
+**run's** business and hold in both shapes. A supplied cluster adds two
+refusals of its own: the kubeconfig is readable, and the cluster behind it
+answers a namespace listing. A supplied cluster with no Node refuses naming the
+input — a supplied cluster is never provisioned by this script.
+
+This is not a test-only backdoor. It is the same capability a customer with
+their own Kubernetes needs: theirs is not a fresh box either, and the substrate
+has to run on any box.
+
+### The local cycle — one command, measured
+
+```sh
+bash templates/substrate/local-cycle.sh          # k3d cluster cafaye-local, created if absent
+KIT_LOCAL_CLUSTER=other bash templates/substrate/local-cycle.sh
+```
+
+It reuses the cluster by default (a warm cycle is the one you run twenty times a
+day), writes that cluster's kubeconfig to a scratch file and prints the API
+server it points at, runs the installer `--headless` against it, and prints the
+per-step table **read back out of the JSONL**, the wall clock, the receipt, and
+`kubectl -n argocd get applications` on that cluster:
+
+```
+local-cycle: reusing cluster cafaye-local (delete it with: k3d cluster delete cafaye-local)
+local-cycle: kubeconfig /var/folders/…/kit-local-cycle-roll-c5-local-cycle/kubeconfig.yaml -> https://0.0.0.0:16443
+local-cycle: running the substrate (headless) — /var/folders/…/kit-local-cycle-roll-c5-local-cycle/local.jsonl
+
+local-cycle: 2 seconds, exit 1
+local-cycle: the substrate did NOT reach install.done
+  refused at step 5 (pull-secret): KIT_SUBSTRATE_BOX_ID is not set
+```
+
+**Measured on this machine** (see `REPORT-roll-c5-local-cycle.md` for the run
+logs): a cold cycle — cluster created, CNPG and Argo CD installed into it, the
+CNPG controller's rollout waited on — took **3m22s** end to end. A warm cycle,
+where the operators are already in the cluster, takes **2s** and stops at step 5.
+The VPS cycle it replaces is a wipe (2 min), a `cafe box setup` (2-4 min) and the
+substrate (3-6 min): **~10 minutes per iteration, over SSH, against a machine on
+another continent**. The local cycle is one command, and every defect it finds
+costs the same one command instead of another full pass.
+
+**k3d lives in that script and nowhere else.** The installer needs a kubeconfig,
+because a customer with their own Kubernetes has a kubeconfig and no k3d; a
+developer is the one who needs a cluster to point at. `tests/substrate_test.sh`
+asserts both directions — the installer names no k3d, and the developer's script
+names no box address and dials no ssh.
+
+**What a local cycle does not do, and it is not a detail:** it stops at step 5.
+The registry credential is redeemed per run from a capability that is
+single-use, minutes-lived and **bound to an enrolled box**, so a developer
+without that box cannot pass the pull secret, and steps 6-13 then wait on the
+fleet's images with no credential to pull them. That is the substrate's own
+invariant 2 working as designed, and it is where the next packet starts: the
+local cycle needs a local exchange, and the decision belongs in one place rather
+than in a flag nobody can find.
+
 ### `--headless` — the mode an agent drives
 
 ```sh
