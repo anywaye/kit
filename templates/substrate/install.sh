@@ -26,7 +26,7 @@
 #      each exactly the keys its chart reads (see the SECRET RECORD on
 #      install_service_secrets)
 #   10. the services' database schemas — one migrate Job per schema-owning
-#      service (identity, courier), in that service's own running image and as
+#      service (identity, courier, pantry), in that service's own running image and as
 #      its OWNER role, waited to completion; gateway and parlor own no schema
 #      and are named-and-skipped. Without this the fleet boots against an empty
 #      database: identity's outbox loop retries forever on a missing
@@ -81,7 +81,7 @@
 #   KIT_SUBSTRATE_DATABASES        required, no default. The comma-separated
 #                                  service names; must equal the service set the
 #                                  Cluster manifest provisions
-#                                  (identity,gateway,courier,parlor). Refused
+#                                  (identity,gateway,courier,parlor,pantry). Refused
 #                                  empty, naming the fix.
 #   KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER optional: the URL identity publishes as
 #                                  its OIDC issuer. NOT a secret — and when it
@@ -562,10 +562,10 @@ kit_substrate_present() {
       kubectl --kubeconfig="$KUBECONFIG" get deployment nats -n data >/dev/null 2>&1
       ;;
     secrets)
-      # All four service secrets exist. One missing re-runs the whole step,
+      # All five service secrets exist. One missing re-runs the whole step,
       # which reads every existing value back rather than regenerating —
       # so a half-finished first run resumes without rotating live keys.
-      for s in identity/identity-secrets gateway/gateway-secrets courier/courier-secrets parlor/parlor-secrets; do
+      for s in identity/identity-secrets gateway/gateway-secrets courier/courier-secrets parlor/parlor-secrets pantry/pantry-secrets; do
         kubectl --kubeconfig="$KUBECONFIG" get secret "${s#*/}" -n "${s%/*}" >/dev/null 2>&1 || return 1
       done
       ;;
@@ -1683,7 +1683,7 @@ install_argocd() {
   # small to guard; what it needs is to be re-applied.
   #
   # AND RE-APPLYING IS ALREADY THIS INSTALLER'S OWN CONVERGENCE MECHANISM. Step
-  # 6 carries no guard either: it applies the seven Applications on every run,
+  # 6 carries no guard either: it applies the eight Applications on every run,
   # because `kubectl apply` of an unchanged object is one no-op API round trip
   # and the convergence is worth more than the round trip. The AppProject is
   # smaller than any one of those and the argument holds with more force. So
@@ -1753,7 +1753,7 @@ install_argocd() {
 # The namespaces that pull the fleet's own images. Five, and the list is
 # asserted by the suite: a namespace added here without a pull secret is a
 # CrashLoopBackOff in a voice nobody can attribute.
-REGISTRY_PULL_NAMESPACES=(argocd identity gateway courier parlor observability)
+REGISTRY_PULL_NAMESPACES=(argocd identity gateway courier parlor pantry observability)
 REGISTRY_PULL_SECRET_NAME="ghcr-pull-secret"
 
 # The floor the exchange reports for the credential's remaining life. It is
@@ -2055,7 +2055,7 @@ kit_substrate_manifest_files() {
 # convergence mechanism, and owned outright by the installer — so a re-run must
 # keep its ability to reclaim the fields it set.
 install_applications() {
-  log_step "the first Applications (identity, gateway, courier, parlor, observability)"
+  log_step "the first Applications (identity, gateway, courier, parlor, pantry, observability)"
   if dry_run "kubectl apply -f ${MANIFEST_DIR}"; then
     return 0
   fi
@@ -2190,7 +2190,7 @@ install_cluster_issuers() {
 # and the reconcile is not part of the re-provision.
 create_postgres_role_secrets() {
   local svc role secret_name pw
-  for svc in identity gateway courier parlor; do
+  for svc in identity gateway courier parlor pantry; do
     for role in "$svc" "${svc}_app"; do
       # The secret name wears the service's spelling (`-app`); the username
       # key must wear the ROLE's (`_app`). The mapping is explicit so the two
@@ -2244,7 +2244,7 @@ install_postgres_cluster() {
   log_step "the Postgres Cluster (from KIT_SUBSTRATE_DATABASES, in the data namespace)"
   if [ -z "$KIT_SUBSTRATE_DATABASES" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES is not set"
   fi
   # The manifest is the contract and the variable is the operator confirming
@@ -2256,12 +2256,12 @@ install_postgres_cluster() {
   have="$(printf '%s' "$KIT_SUBSTRATE_DATABASES" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u | tr '\n' ',')"
   if [ -z "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES names no services (empty after trimming)"
   fi
   if [ "$want" != "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
       "KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})"
   fi
   # The extension list is declared (default: vector, mirroring compose) and
@@ -2279,7 +2279,7 @@ install_postgres_cluster() {
         "'$ext' in KIT_SUBSTRATE_POSTGRES_EXTENSIONS is not a bare identifier ([a-z_][a-z0-9_]*)"
     fi
   done
-  if dry_run "create namespace data, create 8 postgres-role-* password secrets (generated once), apply ${DATA_DIR}/postgres-cluster.yaml"; then
+  if dry_run "create namespace data, create 10 postgres-role-* password secrets (generated once), apply ${DATA_DIR}/postgres-cluster.yaml"; then
     return 0
   fi
   # The namespace first, because the role secrets below live in it. Idempotent
@@ -2336,7 +2336,7 @@ install_postgres_cluster() {
 # from the `redis-password` secret — and the secrets half has its own guard,
 # so a half-finished step 9 resumes the secrets without touching Redis.
 install_redis_and_secrets() {
-  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor)"
+  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor, pantry)"
   if kit_substrate_guard redis; then
     kit_substrate_out "      already installed, skipping"
   elif dry_run "create secret redis-password (generated once) and apply ${DATA_DIR}/redis.yaml"; then
@@ -2705,6 +2705,7 @@ validate_mfa_override() {
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN OTEL_SDK_DISABLED
 #   RECORD parlor-secrets: DATABASE_URL OTEL_SDK_DISABLED
+#   RECORD pantry-secrets: PANTRY_DATABASE_URL OTEL_SDK_DISABLED
 #
 # OTEL_SDK_DISABLED is the telemetry kill switch (see the constant's comment at
 # the top of the file): the box deploys no OTLP endpoint, so every service is
@@ -2797,7 +2798,7 @@ install_service_secrets() {
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets (generated values once-only, sourced values validated on the live path)"; then
+  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets, pantry-secrets (generated values once-only, sourced values validated on the live path)"; then
     return 0
   fi
   # Externally sourced values are validated on the LIVE path only — a dry run
@@ -2834,7 +2835,7 @@ install_service_secrets() {
   validate_oidc_all_or_nothing
 
   local ns
-  for ns in identity gateway courier parlor; do
+  for ns in identity gateway courier parlor pantry; do
     kubectl --kubeconfig="$KUBECONFIG" create namespace "$ns" --dry-run=client -o yaml |
       kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
   done
@@ -3019,6 +3020,32 @@ install_service_secrets() {
       "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
     kit_substrate_out "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
   fi
+
+  # pantry-secrets. Pantry's chart reads this secret with envFrom (secretName:
+  # pantry-secrets), so every key IS an environment variable, and the binary
+  # reads its configuration from PANTRY_-prefixed names — not DATABASE_URL.
+  # The secret must EXIST or the pod never starts, and its one required key
+  # is PANTRY_DATABASE_URL, the app-role DSN that agrees with the Cluster by
+  # construction (database_url_for's postgres:// spelling: only courier uses
+  # ecto://). OTEL_SDK_DISABLED rides along for the same reason it rides the
+  # other generated charts: the box deploys no OTLP endpoint.
+  #
+  # WHAT IS DELIBERATELY ABSENT. PANTRY_ASSERTION_KEY_FILE names a FILE
+  # (/run/secrets/…), and the chart mounts no volume: the write path
+  # (gateway-minted principal assertions) stays unmounted and the three POST
+  # routes answer the binary's honest 503 until a chart with a volume exists.
+  # PANTRY_IDENTITY_URL/PANTRY_BOX_URL are unset on purpose too — tier 2 is
+  # not an MVP surface, and an unset tier 2 is a 503 with a sentence rather
+  # than a misconfigured verifier. Each absence here is the binary's shipped
+  # state, not a forgotten key.
+  if kubectl --kubeconfig="$KUBECONFIG" get secret pantry-secrets -n pantry >/dev/null 2>&1; then
+    kit_substrate_out "      secret pantry-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+  else
+    kubectl --kubeconfig="$KUBECONFIG" create secret generic pantry-secrets -n pantry \
+      --from-literal=PANTRY_DATABASE_URL="$(database_url_for pantry)" \
+      "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
+    kit_substrate_out "      secret pantry-secrets created (PANTRY_DATABASE_URL only — the write path and tier 2 stay unmounted by design)"
+  fi
 }
 
 # --- step 10: the services' database schemas ---------------------------------
@@ -3083,7 +3110,7 @@ KIT_SUBSTRATE_MIGRATE_MARKER="${KIT_SUBSTRATE_MIGRATE_MARKER:-substrate-migratio
 # matching `migration_command_for` is a red plan, not a silently skipped step.
 migration_service_has_schema() {
   case "$1" in
-    identity | courier) return 0 ;;
+    identity | courier | pantry) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -3101,6 +3128,13 @@ migration_command_for() {
     # courier's release overlays a `bin/migrate` -> `courier eval
     # Courier.Release.migrate`, which runs as Courier.OwnerRepo.
     courier) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_courier:-/app/bin/migrate}" ;;
+    # pantry's distroless image carries no shell, no psql and no script, so
+    # the entrypoint is the binary itself: `service migrate` embeds the
+    # migrations and applies them as the connected (OWNER) role. The command
+    # is TWO words, and the call site passes it unquoted (`-- $cmd`) so the
+    # words split — a quoted single string would look for a binary literally
+    # named `/app/service migrate`.
+    pantry) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_pantry:-/app/service migrate}" ;;
     *) return 1 ;;
   esac
 }
@@ -3109,7 +3143,9 @@ migration_command_for() {
 # one array element each. courier's release eval loads runtime.exs, which raises
 # without DATABASE_URL AND configures Courier.OwnerRepo only from
 # COURIER_OWNER_DATABASE_URL, so it needs both; identity's `bin/migrate` reads
-# DATABASE_URL and only DATABASE_URL.
+# DATABASE_URL and only DATABASE_URL; pantry's `service migrate` reads
+# PANTRY_DATABASE_URL and only that (an unset PANTRY_DATABASE_URL on `serve`
+# is a supported mode, but on `migrate` it is a refusal — the binary says so).
 migration_env_args_for() {
   case "$1" in
     identity)
@@ -3118,6 +3154,9 @@ migration_env_args_for() {
     courier)
       printf '%s\n' "--env=COURIER_OWNER_DATABASE_URL=$(owner_database_url_for courier)"
       printf '%s\n' "--env=DATABASE_URL=$(database_url_for courier)"
+      ;;
+    pantry)
+      printf '%s\n' "--env=PANTRY_DATABASE_URL=$(owner_database_url_for pantry)"
       ;;
     *) return 1 ;;
   esac
@@ -3130,7 +3169,7 @@ migration_guard_applied() {
     return 1
   fi
   local svc image marked
-  for svc in identity courier; do
+  for svc in identity courier pantry; do
     migration_service_has_schema "$svc" || continue
     image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
       -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
@@ -3142,30 +3181,31 @@ migration_guard_applied() {
 }
 
 install_migrations() {
-  log_step "the database schemas of the services that own one (identity, courier)"
+  log_step "the database schemas of the services that own one (identity, courier, pantry)"
   if migration_guard_applied; then
     kit_substrate_out "      every schema already applied at the running image, skipping (a new image re-enters this step)"
     return 0
   fi
-  if dry_run "run one migrate Job per schema-owning service, in that service's own running image, connected as its OWNER role (identity/identity, courier/courier), and wait for completion; gateway and parlor own no schema and are skipped"; then
+  if dry_run "run one migrate Job per schema-owning service, in that service's own running image, connected as its OWNER role (identity/identity, courier/courier, pantry/pantry), and wait for completion; gateway and parlor own no schema and are skipped"; then
     return 0
   fi
 
-  # INDEPENDENCE: identity and courier each own a separate database
-  # (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier")
+  # INDEPENDENCE: identity, courier and pantry each own a separate database
+  # (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier"
+  # vs "pantry" OWNER "pantry")
   # and a separate OWNER role, provisioned in
   # templates/substrate/manifests/data/postgres-cluster.yaml (and the local
   # equivalent templates/compose/postgres/initdb/10-cluster.sh). The REVOKE
-  # boundary is per-database, so the two migrators touch disjoint catalogues
-  # and cannot see each other's rows. No migration reads the other service's
-  # schema. Both Jobs are therefore launched together and waited as a set —
+  # boundary is per-database, so the three migrators touch disjoint catalogues
+  # and cannot see each other's rows. No migration reads another service's
+  # schema. All Jobs are therefore launched together and waited as a set —
   # the 25 s sequential cost is the image-pull/scheduling wait per Job, not
   # DDL time. If a future service's migration depends on another's schema it
   # must be placed in a later wave, not in this launch set.
   local svc image cmd
   local -a marker_args=() failed=() launched=()
   # Phase 1: launch every independent Job, wait for none.
-  for svc in identity courier; do
+  for svc in identity courier pantry; do
     migration_service_has_schema "$svc" || continue
     # The image the Running Deployment runs — the same build as the service.
     image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
@@ -3248,7 +3288,7 @@ install_migrations() {
   kubectl --kubeconfig="$KUBECONFIG" delete secret "$KIT_SUBSTRATE_MIGRATE_MARKER" -n data --ignore-not-found >/dev/null 2>&1 || true
   kubectl --kubeconfig="$KUBECONFIG" create secret generic "$KIT_SUBSTRATE_MIGRATE_MARKER" -n data \
     "${marker_args[@]}" >/dev/null
-  kit_substrate_out "      schemas applied for: identity, courier (marker secret ${KIT_SUBSTRATE_MIGRATE_MARKER} in data)"
+  kit_substrate_out "      schemas applied for: identity, courier, pantry (marker secret ${KIT_SUBSTRATE_MIGRATE_MARKER} in data)"
 }
 
 # --- step 11: NATS with JetStream and the fleet's stream -----------------------
@@ -3775,7 +3815,7 @@ mint_courier_identity_token() {
 # objects), not the ReplicaSets a previous Deployment revision left behind.
 #
 # WHAT A RESIDUAL RS IS. One rule, read three ways: an RS owned by one of the
-# four service Deployments is residual when it is LIVE (its spec.replicas is
+# five service Deployments is residual when it is LIVE (its spec.replicas is
 # above 0 — it names pods it wants) and its pod template is NOT the
 # Deployment's current one. The CURRENT RS is the owned RS whose pod spec
 # matches the Deployment's; its pod-template-hash is read off it for the
@@ -3813,12 +3853,12 @@ mint_courier_identity_token() {
 # TIMED, never `skipped`: like the AppProject reapply in step 4, real work
 # clears STEP_SKIPPED rather than claiming it.
 converge_residual_replicasets() {
-  log_step "the residual ReplicaSets of the four service Deployments (identity, gateway, courier, parlor)"
+  log_step "the residual ReplicaSets of the five service Deployments (identity, gateway, courier, parlor, pantry)"
   if dry_run "list the ReplicaSets of identity, gateway, courier and parlor, report each one holding a pod under an old pod template, and scale it to 0"; then
     return 0
   fi
   local pair
-  for pair in identity/identity gateway/gateway courier/courier parlor/parlor; do
+  for pair in identity/identity gateway/gateway courier/courier parlor/parlor pantry/pantry; do
     converge_one_deployment_rs "${pair%%/*}" "${pair#*/}" || return 1
   done
   # Real work by construction — the reads above ran on every box — so the

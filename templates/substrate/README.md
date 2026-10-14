@@ -16,7 +16,7 @@ this file only describes what is here and what is proven.
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
 | `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
-| `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Grafana, Prometheus). |
+| `manifests/applications/` | The Argo CD `Application` manifests: the five launch services (identity, gateway, courier, parlor, pantry) and the observability set (Alloy, Grafana, Prometheus). |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 | `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
@@ -46,7 +46,7 @@ this file only describes what is here and what is proven.
    "present" on the box holding the *wrong* project. So the operator stays
    guarded and the project is re-applied on every run — one local `kubectl
    apply`, which is a no-op round trip when it is unchanged, and the same
-   convergence mechanism step 6 uses for the seven Applications.
+   convergence mechanism step 6 uses for the eight Applications.
 5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
    its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
    minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived
@@ -166,7 +166,7 @@ annotation pointing at nothing, and every chart's TLS breaks at once.
 The deploy loop this substrate serves is **pull-based**: a commit changes a
 chart, Argo makes the box agree. The consume end is the seven `Application`
 manifests in `manifests/applications/`, in two halves with different owners:
-the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
+the five service charts (`identity`, `gateway`, `courier`, `parlor`, `pantry`) pull
 their own chart's path in `oci://ghcr.io/cafaye/charts` — e.g.
 `oci://ghcr.io/cafaye/charts/identity` — at `targetRevision: 0.1.0`, and the
 three observability charts (`alloy`, `grafana`, `prometheus`) pull their
@@ -237,7 +237,7 @@ unmodified**:
 Each pin was verified to exist in its upstream repository's `index.yaml`
 before it was written. No vendoring, no publish pipeline for charts we do not
 own, and the pin keeps "the stack you get on Tuesday is the stack you
-reviewed on Monday". Kit's gate states the whole rule over all seven
+reviewed on Monday". Kit's gate states the whole rule over all eight
 manifests — every `Application` resolves to either a fleet publication or its
 pinned upstream, and anything else fails closed.
 
@@ -253,7 +253,7 @@ or, from a kit checkout:
 export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
-export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry'
 export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
 export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
 export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
@@ -485,7 +485,7 @@ execute in the single initdb database — `postInitSQL` as the superuser
 an untrusted extension, failing the whole bootstrap) — so neither hook can
 create extensions per database, and the manifest carries neither. The list
 is still declared and validated (`KIT_SUBSTRATE_POSTGRES_EXTENSIONS`,
-default `vector`, step 8 refuses a non-identifier), none of the four launch
+default `vector`, step 8 refuses a non-identifier), none of the five launch
 services reads vector, and a service that needs an extension is a named
 follow-up with a box to prove it on. An earlier revision of this manifest
 shipped the `postInitApplicationSQL` hook claiming per-database creation;
@@ -994,7 +994,7 @@ The first real run, on a Linux box with 8GB or more:
 
 1. `curl https://cafaye.com/box/install | sh` completes all ten steps.
 2. `kubectl get nodes` shows the node Ready.
-3. `kubectl get applications -n argocd` shows all seven Applications synced.
+3. `kubectl get applications -n argocd` shows all eight Applications synced.
 4. The observability stack is reachable and retaining.
 
 Until those four are observed on real hardware, the substrate is a checked
