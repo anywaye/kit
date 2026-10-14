@@ -6539,12 +6539,20 @@ if rollout_awaited < 1:
     sys.exit(1)
 
 # The bound is part of the fix: two waits must not add up to more patience
-# than the one wait had.
+# than the one wait had — except where the split separates an external variable
+# (the image pull) from the controller's own readiness. The operator wait was
+# split for that reason: a cold pull alone is 3m17s (roll-c5-local-cycle §3.2),
+# so a single 180s Available wait expired 18s before the Deployment became
+# Available. 300s for the pull plus 180s/300s for Available is the split, and
+# the larger sum is deliberate (the pull is registry/cache, not the controller).
 defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
 for a, b, total, what in (
     ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
     ("CNPG_POD_TIMEOUT", "CNPG_POD_READY_TIMEOUT", 600, "step 8"),
     ("IDENTITY_DEPLOY_TIMEOUT", "IDENTITY_ROLLOUT_TIMEOUT", 360, "step 11"),
+    ("OPERATOR_IMAGE_PULL_TIMEOUT", "CNPG_READY_TIMEOUT", 480, "step 4 cnpg (pull+ready)"),
+    ("OPERATOR_IMAGE_PULL_TIMEOUT", "CERT_MANAGER_READY_TIMEOUT", 480, "step 4 cert-manager (pull+ready)"),
+    ("OPERATOR_IMAGE_PULL_TIMEOUT", "ARGOCD_READY_TIMEOUT", 600, "step 4 argocd (pull+ready)"),
 ):
     pair = [int(defaults.get(v, -1)) for v in (a, b)]
     if sum(pair) != total:
