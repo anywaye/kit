@@ -213,6 +213,19 @@
 #   create: a secret VALUE never reaches an `echo`, in DRY_RUN or live.
 #   Refusals name the VARIABLE (`export KIT_SUBSTRATE_SMTP_HOST=…`), never its
 #   value.
+#
+# KIT_SUBSTRATE_KUBECONFIG (no flag; see the declaration below)
+#   The path to a kubeconfig for a cluster that ALREADY EXISTS. Set it and the
+#   installer runs the substrate against that cluster instead of provisioning a
+#   host: no k3s is installed on the machine the script runs on, and steps 1-3
+#   ask the CLUSTER whether the component is there rather than asking the host
+#   whether /usr/local/bin/k3s is. Everything else — every other step, every
+#   guard, every refusal, the JSONL and the per-step table — is the same code
+#   path. This is the entry a developer's k3d/k3s/kind cluster needs, and it is
+#   the same entry a customer with their own Kubernetes needs: theirs is not a
+#   fresh box either, and the substrate has to run on any box.
+#   UNSET IS THE PRODUCT: a fresh Linux host is provisioned exactly as before,
+#   host probes included.
 
 set -euo pipefail
 
@@ -526,7 +539,19 @@ kit_substrate_present() {
   local component="$1"
   case "$component" in
     k3s)
-      [ -x /usr/local/bin/k3s ] && systemctl is-active --quiet k3s 2>/dev/null
+      # TWO EVIDENCES, AND THE INPUT PICKS WHICH ONE IS A FACT. A fresh box
+      # proves k3s on the HOST — the binary and the unit, because this script
+      # is the one that installs them. A supplied cluster proves it on the
+      # CLUSTER — a Node object, because that is what a running k3s (or any
+      # Kubernetes) leaves behind. The host's /usr/local/bin/k3s says nothing
+      # about a k3d cluster on a developer's machine, which is exactly why the
+      # host probe made a local run impossible: it answered "absent" and the
+      # step went off to install a Linux host's k3s on a Mac.
+      if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+        [ -n "$(kubectl --kubeconfig="$KUBECONFIG" get nodes --no-headers 2>/dev/null || true)" ]
+      else
+        [ -x /usr/local/bin/k3s ] && systemctl is-active --quiet k3s 2>/dev/null
+      fi
       ;;
     cert-manager)
       kubectl --kubeconfig="$KUBECONFIG" get deployment -n cert-manager cert-manager >/dev/null 2>&1
@@ -605,8 +630,45 @@ kit_substrate_pending() {
   PENDING_WAITS="${PENDING_WAITS} $1"
 }
 
+# --- the cluster this install runs against -----------------------------------
+# TWO SHAPES, AND THE INPUT DECIDES WHICH ONE, EXACTLY ONCE.
+#
+#   unset  — a fresh box. The host IS the cluster: this script installs k3s on
+#            it, writes /etc/rancher/k3s/k3s.yaml, and every host probe in the
+#            preflight (root, Linux, arch, memory) is a real refusal.
+#
+#   a path — a cluster that is already reachable at that kubeconfig. The host
+#            the script runs on is only a workstation: it is not root, it is
+#            not Linux, it does not carry the cluster's memory, and none of
+#            those facts are this install's business any more. What IS its
+#            business is that the kubeconfig is readable and the cluster
+#            answers, so those two are refusals.
+#
+# ENV VAR, NOT A FLAG, and that follows the two precedents already in this
+# file: `KIT_SUBSTRATE_RECEIPT` is a path-valued input with no flag, and
+# `DRY_RUN` is a runtime switch with no flag. A flag is for a boolean a human
+# types (`--headless`); a path is copied out of another tool's output —
+# `k3d kubeconfig write`, `kind get kubeconfig`, `export KUBECONFIG=…` — and an
+# argument a flag would carry is one the shell would also have to expand.
+# It is also the one spelling kubectl itself speaks, so the value is handed
+# over in the dialect the operator already has it in.
+#
+# It is NOT the ambient `KUBECONFIG`, deliberately. A developer's shell has a
+# current context for reasons that have nothing to do with this install, and a
+# variable that changes whether k3s is installed on the host from some other
+# tool's export is a trap. This one is named, kit-scoped, and stated here.
+: "${KIT_SUBSTRATE_KUBECONFIG:=}"
+
+# CLUSTER_SUPPLIED is the ONE place the two shapes are told apart. It is
+# derived at startup and never re-derived, so a later assignment cannot leave
+# the guard asking the host while the preflight asked the cluster.
+CLUSTER_SUPPLIED=0
+if [ -n "$KIT_SUBSTRATE_KUBECONFIG" ]; then
+  CLUSTER_SUPPLIED=1
+fi
+
 # --- helpers ----------------------------------------------------------------
-KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+KUBECONFIG="${KIT_SUBSTRATE_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
 STEP=0
 TOTAL=13
@@ -1401,15 +1463,74 @@ kit_substrate_readiness_json() {
 # --- preflight --------------------------------------------------------------
 # Every check here is a refusal, not a warning: a half-installed substrate is
 # worse than no substrate, because it looks like it works.
+#
+# THE PREFLIGHT IS SPLIT BY WHAT IT IS A FACT ABOUT, and the split is the whole
+# of the supplied-cluster mode. Root, Linux, arch and memory are facts about
+# the HOST, and they are refusals only when this script installs k3s on that
+# host — a workstation pointed at a k3d cluster is not root, is not Linux and
+# does not carry the cluster's RAM, and refusing it for any of those would be
+# a preflight that grades the machine the developer is typing at instead of the
+# cluster being installed into.
+#
+# curl, jq and openssl are facts about the RUN, and they hold in both shapes:
+# every chart and operator manifest is still fetched over HTTPS, jq still reads
+# step 12's minted credential, and identity's OIDC signing key is still
+# generated here.
 preflight() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
+    if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+      kit_substrate_emit progress "DRY_RUN: would check curl, openssl, jq, the kubeconfig's readability, cluster reachability, registry reachability"
+    else
+      kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
+    fi
     kit_substrate_readiness_preflight # honest-done
     return 0
   fi
 
-  if [ "$(id -u)" -ne 0 ]; then
-    kit_substrate_refuse "" "run as root — k3s installs to /usr/local and writes the kubeconfig" "must run as root — k3s installs to /usr/local and writes the kubeconfig"
+  if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+    # THE TWO REFUSALS THAT REPLACE THE FOUR ABOVE: the kubeconfig is readable,
+    # and the cluster behind it answers. A path that is not there is a typo the
+    # operator can fix in one line; a cluster that does not answer is the
+    # failure that would otherwise surface at step 1 as `The connection to the
+    # server ... was refused`, forty seconds later and with no name on it.
+    if [ ! -r "$KIT_SUBSTRATE_KUBECONFIG" ]; then
+      kit_substrate_refuse "KIT_SUBSTRATE_KUBECONFIG" \
+        "export KIT_SUBSTRATE_KUBECONFIG='</path/to/kubeconfig>' — the file must be readable by this process" \
+        "KIT_SUBSTRATE_KUBECONFIG names a file that is not readable: ${KIT_SUBSTRATE_KUBECONFIG}"
+    fi
+    if ! kubectl --kubeconfig="$KUBECONFIG" get namespaces >/dev/null 2>&1; then
+      kit_substrate_refuse "KIT_SUBSTRATE_KUBECONFIG" \
+        "check the cluster behind that kubeconfig is up and reachable, then re-run" \
+        "the cluster at KIT_SUBSTRATE_KUBECONFIG does not answer a namespace listing — the substrate cannot be installed into it"
+    fi
+  else
+    if [ "$(id -u)" -ne 0 ]; then
+      kit_substrate_refuse "" "run as root — k3s installs to /usr/local and writes the kubeconfig" "must run as root — k3s installs to /usr/local and writes the kubeconfig"
+    fi
+
+    if [ "$(uname -s)" != "Linux" ]; then
+      kit_substrate_refuse "" "this script installs k3s, which needs Linux" "this script installs k3s, which needs Linux (found $(uname -s))"
+    fi
+
+    local arch
+    arch="$(uname -m)"
+    case "$arch" in
+      x86_64 | aarch64) ;;
+      *)
+        kit_substrate_refuse "" "k3s supports x86_64 and aarch64" "unsupported architecture '$arch' — k3s supports x86_64 and aarch64"
+        ;;
+    esac
+
+    # Memory. DEPLOYMENT.md sizes the box: 8GB comfortable, 4GB no longer
+    # qualifies once the Grafana stack lands. Measured from /proc/meminfo.
+    local mem_kb
+    mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+    if [ "$mem_kb" -lt 4194304 ]; then
+      kit_substrate_refuse "" "DEPLOYMENT.md sizes the box: 8GB comfortable, 4GB no longer qualifies once the Grafana stack lands" "${mem_kb} kB RAM — 4GB no longer qualifies once the Grafana stack lands (DEPLOYMENT.md)"
+    fi
+    if [ "$mem_kb" -lt 8388608 ]; then
+      echo "warning: ${mem_kb} kB RAM — 8GB is comfortable for the full stack" >&2
+    fi
   fi
 
   if ! command -v curl >/dev/null 2>&1; then
@@ -1427,30 +1548,6 @@ preflight() {
 
   if ! command -v jq >/dev/null 2>&1; then
     kit_substrate_refuse "" "install jq — step 12 reads the minted credential out of identity's response" "jq is required — step 12 reads the minted credential out of identity's response"
-  fi
-
-  if [ "$(uname -s)" != "Linux" ]; then
-    kit_substrate_refuse "" "this script installs k3s, which needs Linux" "this script installs k3s, which needs Linux (found $(uname -s))"
-  fi
-
-  local arch
-  arch="$(uname -m)"
-  case "$arch" in
-    x86_64 | aarch64) ;;
-    *)
-      kit_substrate_refuse "" "k3s supports x86_64 and aarch64" "unsupported architecture '$arch' — k3s supports x86_64 and aarch64"
-      ;;
-  esac
-
-  # Memory. DEPLOYMENT.md sizes the box: 8GB comfortable, 4GB no longer
-  # qualifies once the Grafana stack lands. Measured from /proc/meminfo.
-  local mem_kb
-  mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-  if [ "$mem_kb" -lt 4194304 ]; then
-    kit_substrate_refuse "" "DEPLOYMENT.md sizes the box: 8GB comfortable, 4GB no longer qualifies once the Grafana stack lands" "${mem_kb} kB RAM — 4GB no longer qualifies once the Grafana stack lands (DEPLOYMENT.md)"
-  fi
-  if [ "$mem_kb" -lt 8388608 ]; then
-    echo "warning: ${mem_kb} kB RAM — 8GB is comfortable for the full stack" >&2
   fi
 
   # The registry is where the pull secret and every chart come from. An
@@ -1475,11 +1572,28 @@ preflight() {
 install_k3s() {
   log_step "k3s ${K3S_VERSION} — single node, sqlite datastore"
   if kit_substrate_guard k3s; then
-    kit_substrate_out "      already installed, skipping"
+    if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+      kit_substrate_out "      the cluster at KIT_SUBSTRATE_KUBECONFIG already has a Node; the host's k3s is not installed and nothing here installs it"
+    else
+      kit_substrate_out "      already installed, skipping"
+    fi
     return 0
   fi
   if dry_run "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=${K3S_VERSION} sh -"; then
     return 0
+  fi
+  # A SUPPLIED CLUSTER WITH NO NODE IS A REFUSAL, NOT A HOST INSTALL. The
+  # guard above asked the cluster and the cluster is empty, so the only way
+  # this step could continue is by installing k3s on the machine the operator
+  # is typing at — which is not what the input said and, on a macOS
+  # workstation, cannot work. Refuse and name the input: the fix is a cluster
+  # that has a node, not a sudo prompt. It sits BELOW the dry-run return so a
+  # plan (`caf box apply --phase 1`) still prints this step instead of
+  # refusing to print a plan.
+  if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_KUBECONFIG" \
+      "point it at a cluster with at least one Node — a supplied cluster is never provisioned by this script" \
+      "the cluster at KIT_SUBSTRATE_KUBECONFIG has no Node — the substrate installs into a running cluster, it does not create one"
   fi
   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -
   # TWO WAITS, because the Node object is created ASYNCHRONOUSLY: the line
@@ -3917,6 +4031,12 @@ main() {
       *)
         printf 'error: unknown argument "%s"\n' "$1" >&2
         printf '  usage: install.sh [--headless]\n' >&2
+        # There is no `--kubeconfig` flag, and saying so here is the fix rather
+        # than a second line of the same refusal: the input that names a
+        # cluster is an environment variable (see the declaration above), and a
+        # caller who typed a flag for it has the right idea and one wrong
+        # spelling.
+        printf '  note: the cluster this installs into is chosen by the KIT_SUBSTRATE_KUBECONFIG environment variable\n' >&2
         exit 1
         ;;
     esac
@@ -3930,7 +4050,16 @@ main() {
   # (empty) input needed, so a reader — human or agent — knows what this run
   # is and where it starts before the first step emits.
   R_PHASE="install"
-  R_NEXT="k3s ${K3S_VERSION} — single node, sqlite datastore"
+  # The next step is the phase this run ACTUALLY starts with. A fresh box
+  # starts by provisioning its host; a supplied cluster starts at the
+  # operators, because the cluster is already there — a receipt that promised
+  # `k3s v…` on a run that will never touch a k3s binary is a receipt nobody
+  # should trust.
+  if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+    R_NEXT="the operators (cert-manager, CloudNativePG, Argo CD) into the cluster at KIT_SUBSTRATE_KUBECONFIG"
+  else
+    R_NEXT="k3s ${K3S_VERSION} — single node, sqlite datastore"
+  fi
   R_STATUS="running"
   kit_substrate_write_receipt
   if [ "$HEADLESS" -eq 1 ]; then
@@ -3992,7 +4121,18 @@ main() {
   # Applications themselves — the state a person reads to watch the fleet
   # reconcile, and the same command the README gives.
   R_HUMAN="watch Argo CD reconcile the fleet: kubectl -n argocd get applications"
-  R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+  if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
+    # THE VERSION CLAIM IS ABOUT THE CLUSTER, NOT ABOUT A PIN. A supplied
+    # cluster runs whatever it runs — k3d, kind, a customer's own k3s, a
+    # managed Kubernetes — and printing `k3s ${K3S_VERSION}` for it would be
+    # this script claiming it provisioned something it did not touch. The
+    # pin is named for the three operators this script DOES apply; the
+    # cluster's own version is one `kubectl version` away and is not a fact
+    # this script holds.
+    R_MESSAGE="substrate is up on the cluster at ${KIT_SUBSTRATE_KUBECONFIG}: cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+  else
+    R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+  fi
   kit_substrate_write_receipt
   if [ "$HEADLESS" -eq 1 ]; then
     kit_substrate_emit readiness "$(kit_substrate_readiness_summary)" "$(kit_substrate_readiness_json)" # honest-done
@@ -4000,7 +4140,7 @@ main() {
       ",\"seconds\":${total_seconds},\"steps\":$(kit_substrate_steps_json)"
   else
     kit_substrate_out ""
-    kit_substrate_out "substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
+    kit_substrate_out "$R_MESSAGE"
     kit_substrate_out "Argo CD state:  kubectl -n argocd get applications"
     kit_substrate_out ""
     kit_substrate_print_table "$total_seconds"
