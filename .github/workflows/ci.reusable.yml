@@ -193,6 +193,23 @@ on:
         required: false
         type: string
         default: 'bundle exec rake coverage'
+      ruby-prepare-command:
+        description: >-
+          Command the Ruby job runs BEFORE its test step, to put the database
+          in the state the suite expects. Empty ('') by default, so a repository
+          whose suite needs no preparation is unaffected.
+          MEASURED, on cafaye/box — the first Rails caller of this job: the job
+          provisions a Postgres service (the service block below) and the suite
+          then failed with 'Database not found: box_test', because a fresh
+          Postgres has no database in it. box's own gate runs
+          'bin/setup --skip-server' (bundle + 'db:prepare') before 'bin/ci', and
+          this input is where a caller names that step for THIS job. A caller
+          with a per-run database name — box passes a URL whose database is
+          suffixed with the run id — has the database created by whatever
+          command it names here.
+        required: false
+        type: string
+        default: ''
       test-packages:
         description: >-
           Extra apt packages the Go tests EXEC rather than dial. Space-separated
@@ -1077,6 +1094,17 @@ jobs:
       - name: lint
         working-directory: ${{ inputs.working-dir }}
         run: bundle exec rubocop --parallel --config "$KIT_LINT_DIR/lint/rubocop.yml" ${{ env.KIT_LINT_ARGS }}
+      - name: prepare
+        # THE STEP A FRESH POSTGRES NEEDS, and it is a caller-named command
+        # rather than a `db:prepare` kit runs blind: the shared job cannot know
+        # whether a repository's suite wants a schema loaded, a seed replayed or
+        # nothing at all, and running `db:prepare` against a repository with no
+        # Rake task by that name would fail every caller that does not want it.
+        # Empty by default; `ruby-prepare-command`'s own description carries the
+        # measurement that put it here (`Database not found: box_test`).
+        if: ${{ inputs.ruby-prepare-command != '' }}
+        working-directory: ${{ inputs.working-dir }}
+        run: ${{ inputs.ruby-prepare-command }}
       - name: test
         working-directory: ${{ inputs.working-dir }}
         run: |
