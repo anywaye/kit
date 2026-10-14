@@ -1083,6 +1083,51 @@ kit_substrate_refuse() {
 # an issuer: every host below is read out of what the installer is about to
 # write (the operator's two URLs, plus any public host in the Applications'
 # helm.values), never out of a second hard-coded list.
+# --- dns-split BEGIN
+READINESS_DNS_SPLIT=""
+READINESS_DNS_STATUS=""
+: "${KIT_SUBSTRATE_RESOLVED_CONF:=/etc/systemd/resolved.conf.d/99-cafaye.conf}"
+kit_substrate_ensure_public_resolver() {
+  local hosts
+  hosts="$(kit_substrate_intended_hosts)"
+  if [ -z "$hosts" ]; then
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    kit_substrate_out "      DRY_RUN: would write $KIT_SUBSTRATE_RESOLVED_CONF with DNS=1.1.1.1 8.8.8.8 (public resolver for boxes serving public names; provider's resolver held stale NXDOMAIN on live box: getent empty, dig @1.1.1.1 169.58.108.209, resolvectl 209.126.15.53)"
+    return 0
+  fi
+  local want="[Resolve]
+DNS=1.1.1.1 8.8.8.8
+FallbackDNS=1.0.0.1 8.8.4.4"
+  local dir
+  dir="$(dirname "$KIT_SUBSTRATE_RESOLVED_CONF")"
+  mkdir -p "$dir" 2>/dev/null || true
+  if [ -f "$KIT_SUBSTRATE_RESOLVED_CONF" ] && [ "$(cat "$KIT_SUBSTRATE_RESOLVED_CONF" 2>/dev/null)" = "$want" ]; then
+    kit_substrate_out "      public resolver already configured at $KIT_SUBSTRATE_RESOLVED_CONF (DNS=1.1.1.1 8.8.8.8)"
+    return 0
+  fi
+  if [ "$(id -u)" -ne 0 ] && [ "$KIT_SUBSTRATE_RESOLVED_CONF" = "/etc/systemd/resolved.conf.d/99-cafaye.conf" ]; then
+    kit_substrate_out "      note: would write public resolver to $KIT_SUBSTRATE_RESOLVED_CONF but not running as root (test mode)"
+    return 0
+  fi
+  cat >"$KIT_SUBSTRATE_RESOLVED_CONF" <<EOF
+$want
+EOF
+  kit_substrate_out "      wrote public resolver $KIT_SUBSTRATE_RESOLVED_CONF with DNS=1.1.1.1 8.8.8.8 — the provider's resolver held a stale NXDOMAIN on the live box (getent hosts empty, dig @1.1.1.1 answered 169.58.108.209, resolvectl Current DNS Server: 209.126.15.53)"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart systemd-resolved 2>/dev/null || true
+    if command -v resolvectl >/dev/null 2>&1; then
+      resolvectl flush-caches 2>/dev/null || true
+    fi
+  fi
+  if command -v kubectl >/dev/null 2>&1 && [ -r "$KUBECONFIG" ]; then
+    kubectl --kubeconfig="$KUBECONFIG" -n kube-system rollout restart deployment coredns 2>/dev/null || true
+    kubectl --kubeconfig="$KUBECONFIG" -n kube-system rollout restart deployment k3s-coredns 2>/dev/null || true
+  fi
+}
+# --- dns-split END
+
 # --- honest-done BEGIN
 READINESS_TLS_PENDING=""
 
@@ -1125,6 +1170,59 @@ kit_substrate_is_checkable_host() {
 kit_substrate_host_resolves() {
   local host="$1"
   [ -n "$host" ] || return 1
+  if command -v getent >/dev/null 2>&1; then
+    getent hosts "$host" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v dscacheutil >/dev/null 2>&1; then
+    dscacheutil -q host -a name "$host" 2>/dev/null | grep -q 'ip_address:'
+    return $?
+  fi
+  python3 -c 'import socket,sys; socket.getaddrinfo(sys.argv[1], None)' "$host" >/dev/null 2>&1
+  return $?
+}
+
+# kit_substrate_cluster_host_resolves <host> — does the cluster's DNS resolve the name?
+# The ACME HTTP-01 self check resolves through CoreDNS at 10.43.0.10:53, which
+# forwards to the node's /etc/resolv.conf. The preflight must ask the same
+# question ACME asks. Measured on the live box: the three A records existed
+# and 1.1.1.1 answered, but CoreDNS answered NXDOMAIN because the provider's
+# resolver (209.126.15.53, Contabo) held a stale negative answer:
+#
+#   Waiting for HTTP-01 challenge propagation: failed to perform self check
+#     GET request 'http://api.cafaye.com/.well-known/acme-challenge/...':
+#     Get "http://api.cafaye.com/...": dial tcp: lookup api.cafaye.com on
+#     10.43.0.10:53: no such host
+#   $ getent hosts api.cafaye.com   (on the box)
+#   (no output)
+#   $ dig +short @1.1.1.1 api.cafaye.com
+#   169.58.108.209
+#   $ resolvectl status | grep 'Current DNS'
+#   Current DNS Server: 209.126.15.53
+#
+# The fix applied was /etc/systemd/resolved.conf.d/99-cafaye.conf with
+# DNS=1.1.1.1 8.8.8.8, then a CoreDNS restart. This function queries CoreDNS
+# directly at its ClusterIP (10.43.0.10 on k3s, or the IP from kube-dns Service)
+# with dig/nslookup, falling back to the node resolver when neither is available
+# (e.g., DRY_RUN on macOS). Tests can override by redefining this function.
+kit_substrate_cluster_host_resolves() {
+  local host="$1"
+  [ -n "$host" ] || return 1
+  local dns_ip=""
+  if command -v kubectl >/dev/null 2>&1 && [ -r "$KUBECONFIG" ]; then
+    dns_ip="$(kubectl --kubeconfig="$KUBECONFIG" get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  fi
+  if [ -z "$dns_ip" ]; then
+    dns_ip="10.43.0.10"
+  fi
+  if command -v dig >/dev/null 2>&1; then
+    dig +short +time=2 +tries=1 "@$dns_ip" "$host" 2>/dev/null | grep -q .
+    return $?
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "$host" "$dns_ip" >/dev/null 2>&1
+    return $?
+  fi
   if command -v getent >/dev/null 2>&1; then
     getent hosts "$host" >/dev/null 2>&1
     return $?
@@ -1306,20 +1404,42 @@ kit_substrate_host_source() {
 # the ones that do not. Run once, in preflight (before anything is created);
 # the final report and the JSONL event read READINESS_TLS_PENDING back. The
 # OIDC half needs no probe: unset issuer means no JWKS route by construction.
+# A host is reported as resolving only when BOTH the node and the cluster's
+# DNS answer. The node path is getent/systemd-resolved (provider's resolver);
+# the cluster path is CoreDNS at 10.43.0.10:53 (where ACME's self check
+# resolves). When the provider holds a stale NXDOMAIN, the node may answer
+# differently from the cluster, or from a public resolver — either disagreement
+# is a pending condition with its own sentence, not a pass. The split list
+# and the per-host status are stored alongside the pending list so the report
+# can name which path failed.
 kit_substrate_compute_readiness() {
   READINESS_TLS_PENDING=""
-  local h all pending=""
+  READINESS_DNS_SPLIT=""
+  READINESS_DNS_STATUS=""
+  local h all pending="" split="" status=""
   all="$(kit_substrate_intended_hosts)"
   while IFS= read -r h; do
     [ -n "$h" ] || continue
-    if ! kit_substrate_host_resolves "$h"; then
-      pending="${pending}${h}
+    local node_ok=0 cluster_ok=0
+    if kit_substrate_host_resolves "$h"; then node_ok=1; fi
+    if kit_substrate_cluster_host_resolves "$h"; then cluster_ok=1; fi
+    status="${status}${h}	${node_ok}	${cluster_ok}
+"
+    if [ "$node_ok" -eq 1 ] && [ "$cluster_ok" -eq 1 ]; then
+      continue
+    fi
+    pending="${pending}${h}
+"
+    if [ "$node_ok" -ne "$cluster_ok" ]; then
+      split="${split}${h}
 "
     fi
   done <<EOF
 $all
 EOF
   READINESS_TLS_PENDING="$pending"
+  READINESS_DNS_SPLIT="$split"
+  READINESS_DNS_STATUS="$status"
 }
 
 # kit_substrate_readiness_pending_count — conditions keeping the box from
@@ -1342,6 +1462,10 @@ EOF
 # kit_substrate_readiness_preflight — the preflight half of the report: which
 # intended hosts do not resolve and what that means, and the OIDC consequence
 # with the one export that turns it on. A report, not a refusal.
+# The TLS sentence is unchanged; the cluster-DNS verdict is added so the
+# operator sees which path failed. A split (node vs CoreDNS) gets its own
+# sentence: that is exactly the state the live box produced (getent empty
+# while 1.1.1.1 answered and CoreDNS 10.43.0.10 NXDOMAIN).
 kit_substrate_readiness_preflight() {
   kit_substrate_compute_readiness
   local h src tab table
@@ -1362,15 +1486,30 @@ kit_substrate_readiness_preflight() {
 $table
 EOF
     if [ -z "$READINESS_TLS_PENDING" ]; then
-      kit_substrate_out "    every intended host resolves"
+      kit_substrate_out "    every intended host resolves (node and cluster DNS agree)"
+      kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS for every host"
     else
       while IFS= read -r h; do
         [ -n "$h" ] || continue
         src="$(kit_substrate_host_source "$h")"
-        kit_substrate_out "    ${h}: DOES NOT RESOLVE (${src}) — the ACME HTTP-01 self check will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+        line="$(printf '%s' "$READINESS_DNS_STATUS" | awk -F '\t' -v h="$h" '$1==h {print $2" "$3}')"
+        node_ok="$(printf '%s' "$line" | cut -d' ' -f1)"
+        cluster_ok="$(printf '%s' "$line" | cut -d' ' -f2)"
+        if [ "$node_ok" = "1" ] && [ "$cluster_ok" = "0" ]; then
+          kit_substrate_out "    ${h}: RESOLVES ON NODE BUT NOT THROUGH CLUSTER DNS (CoreDNS 10.43.0.10:53: no such host; from ${src}) — the ACME HTTP-01 self check (which resolves through CoreDNS) will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+        elif [ "$node_ok" = "0" ] && [ "$cluster_ok" = "1" ]; then
+          kit_substrate_out "    ${h}: RESOLVES THROUGH CLUSTER DNS BUT NOT ON NODE (from ${src}) — the two DNS paths disagree; the Certificate may still fail until both agree"
+        else
+          kit_substrate_out "    ${h}: DOES NOT RESOLVE (node and cluster DNS: no such host; from ${src}) — the ACME HTTP-01 self check will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+        fi
       done <<EOF
 $READINESS_TLS_PENDING
 EOF
+      if [ -n "$READINESS_DNS_SPLIT" ]; then
+        kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) disagrees with node DNS for: $(printf '%s' "$READINESS_DNS_SPLIT" | tr '\n' ' ' | sed 's/ *$//')"
+      else
+        kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS: both report no such host for the pending host(s)"
+      fi
     fi
   fi
   if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
@@ -1407,6 +1546,7 @@ kit_substrate_log_store() {
 # not just the step times. Each unready condition with its exact remedy; the
 # header is unconditional so a run with nothing pending still names the
 # verdict rather than going quiet (quiet is the defect this ends).
+# The cluster-DNS verdict is included so the operator sees which path failed.
 kit_substrate_readiness_final() {
   local h src
   kit_substrate_out "  THIS BOX WILL NOT FULLY SERVE UNTIL:"
@@ -1414,16 +1554,31 @@ kit_substrate_readiness_final() {
     while IFS= read -r h; do
       [ -n "$h" ] || continue
       src="$(kit_substrate_host_source "$h")"
-      kit_substrate_out "    - ${h} resolves (point ${h} at this box; from ${src}) — until then the ACME HTTP-01 self check fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
+      line="$(printf '%s' "$READINESS_DNS_STATUS" | awk -F '\t' -v h="$h" '$1==h {print $2" "$3}')"
+      node_ok="$(printf '%s' "$line" | cut -d' ' -f1)"
+      cluster_ok="$(printf '%s' "$line" | cut -d' ' -f2)"
+      if [ "$node_ok" = "1" ] && [ "$cluster_ok" = "0" ]; then
+        kit_substrate_out "    - ${h} resolves on node and through cluster DNS (CoreDNS 10.43.0.10:53) (point ${h} at this box; from ${src}) — until then the ACME HTTP-01 self check (which resolves through CoreDNS) fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
+      elif [ "$node_ok" = "0" ] && [ "$cluster_ok" = "1" ]; then
+        kit_substrate_out "    - ${h} resolves on node and through cluster DNS (from ${src}) — the two DNS paths disagree; until both agree the Certificate may sit pending"
+      else
+        kit_substrate_out "    - ${h} resolves (point ${h} at this box; from ${src}) — until then the ACME HTTP-01 self check fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
+      fi
     done <<EOF
 $READINESS_TLS_PENDING
 EOF
+    if [ -n "$READINESS_DNS_SPLIT" ]; then
+      kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) disagrees with node DNS for: $(printf '%s' "$READINESS_DNS_SPLIT" | tr '\n' ' ' | sed 's/ *$//') — the ACME self check uses the cluster path"
+    else
+      kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS: both report no such host for the pending host(s)"
+    fi
   fi
   if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    - KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set (export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://<your-issuer>') — until then identity serves no JWKS route, so gateway's /readyz fails and its Deployment never becomes Ready"
   fi
   if [ -z "$READINESS_TLS_PENDING" ] && [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    (none — every intended host resolves and the OIDC issuer is set)"
+    kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS for every host"
   fi
   # Log store is not a readiness condition but a shape statement: what the
   # installer DID NOT install, and where to find the logs it does not centralize.
@@ -1453,16 +1608,21 @@ kit_substrate_readiness_summary() {
 
 # kit_substrate_readiness_json — the machine half of the same verdict: the
 # field is `tls_pending_hosts` (every intended host that does not resolve)
-# beside `oidc_configured` and `log_store`. Leading comma included, for
-# kit_substrate_emit's <extra-json> slot; the existing events are untouched.
+# beside `oidc_configured` and `log_store`, plus `dns_split_hosts` and
+# `dns_cluster_pending_hosts` so the headless caller can see which path failed.
+# Leading comma included, for kit_substrate_emit's <extra-json> slot; the
+# existing events are untouched.
 kit_substrate_readiness_json() {
-  local hosts_json oidc="false" store
+  local hosts_json oidc="false" store split_json cluster_json
   hosts_json="$(printf '%s' "$READINESS_TLS_PENDING" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+  split_json="$(printf '%s' "$READINESS_DNS_SPLIT" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+  # cluster_pending: hosts where cluster DNS does not resolve (subset of pending)
+  cluster_json="$(printf '%s' "$READINESS_DNS_STATUS" | awk -F '\t' '$3==0 && $1!="" {print $1}' | jq -R -s -c 'split("\n") | map(select(length > 0))')"
   if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     oidc="true"
   fi
   store="$(kit_substrate_log_store)"
-  printf ',"tls_pending_hosts":%s,"oidc_configured":%s,"log_store":"%s"' "$hosts_json" "$oidc" "$store"
+  printf ',"tls_pending_hosts":%s,"oidc_configured":%s,"log_store":"%s","dns_split_hosts":%s,"dns_cluster_pending_hosts":%s' "$hosts_json" "$oidc" "$store" "$split_json" "$cluster_json"
 }
 # --- honest-done END
 
@@ -1490,6 +1650,7 @@ preflight() {
       kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
     fi
     kit_substrate_readiness_preflight # honest-done
+    kit_substrate_ensure_public_resolver # honest-done
     return 0
   fi
 
@@ -1561,6 +1722,10 @@ preflight() {
   if ! curl -s --max-time 10 -o /dev/null https://ghcr.io/v2/; then
     kit_substrate_refuse "" "check network access to ghcr.io — the pull secret and charts come from there" "ghcr.io is unreachable — the pull secret and charts come from there"
   fi
+  # Ensure the box uses a public resolver before checking, so a provider's
+  # stale NXDOMAIN does not make the preflight agree with the wrong answer.
+  # Only for boxes that serve public names; visible in the output.
+  kit_substrate_ensure_public_resolver # honest-done
   # The readiness verdict is a REPORT, not a refusal: a box with no public DNS
   # is a legitimate target behind a firewall, and an unset OIDC issuer is a
   # supported reduced surface. Both run here — before anything is created — so
