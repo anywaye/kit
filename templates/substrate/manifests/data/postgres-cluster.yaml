@@ -50,10 +50,19 @@
 #                                     every operator pass, so a hand-edited
 #                                     membership heals rather than persists.
 #
-# THE SERVICE SET IS THE CONTRACT. The six launch services below are the same
-# five `install.sh` step 8 requires `KIT_SUBSTRATE_DATABASES` to name, in the
-# same spelling, and the gate refuses a mismatch: a database the manifest does
-# not provision is a DATABASE_URL pointing at nothing. Adding a seventh service
+# THE SERVICE SET IS THE CONTRACT. The four launch services below
+# (identity, gateway, courier, parlor) are the same four `install.sh`
+# step 8 requires `KIT_SUBSTRATE_DATABASES` to name, in the same spelling,
+# and the gate refuses a mismatch: a database the manifest does not
+# provision is a DATABASE_URL pointing at nothing. pantry, box and
+# keyholder are deliberately NOT among them: all three are
+# Cafaye-operated services the box reaches over HTTPS (pantry at
+# https://pantry.cafaye.com, the registry exchange at
+# KIT_SUBSTRATE_REGISTRY_URL, the control plane at KIT_SUBSTRATE_BOX_URL),
+# and each carries the reason in its own licence — pantry "runs on Cafaye
+# infrastructure" and may never run "as a second, forked catalog", box is
+# "never part of … the Kit deployment substrate", and keyholder requires
+# the operated control plane it exchanges against. Adding a fifth service
 # means extending this file, the step-8 check, and the recorded list in
 # `tests/substrate_test.sh` in the same commit.
 #
@@ -80,7 +89,7 @@
 # a `CREATE EXTENSION vector` in either hook is either useless or fatal, and
 # neither is in this file. The extension LIST is still declared and validated
 # (KIT_SUBSTRATE_POSTGRES_EXTENSIONS, default `vector`, in install.sh step 8),
-# none of the six launch services reads vector, and a service that needs an
+# none of the four launch services reads vector, and a service that needs an
 # extension is a named follow-up with the box to prove it on — see README.
 # Claiming per-database extensions here would be the green suite hiding a red
 # box.
@@ -100,7 +109,7 @@ spec:
 
   # Explicit, and the numbers are the BOX's, not Postgres's. DEPLOYMENT.md
   # sizes the box at 8GB comfortable / 4GB no longer qualifying; this request
-  # is a share of that box on a node that also holds six services, Redis and
+  # is a share of that box on a node that also holds four services, Redis and
   # the observability stack — a starting point, not a measurement.
   resources:
     requests:
@@ -196,67 +205,6 @@ spec:
         - ALTER ROLE "parlor" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "parlor_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "parlor_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # --- pantry ---
-        # The owner carries NOINHERIT, unlike the four above, and the
-        # difference is load-bearing rather than stylistic: pantry's 00001
-        # re-asserts NOINHERIT on every role it names, and on the box 00001
-        # runs as the owner (the migrate Job connects as the owner, without
-        # CREATEROLE), so an INHERIT owner would make the migration attempt
-        # an ALTER ROLE its role may not run. NOINHERIT at creation means the
-        # migration's guard finds nothing to correct. The NOINHERIT is also
-        # what pantry's own RLS posture wants (a grant into pantry_admin must
-        # not silently hand the owner the admin policy).
-        - CREATE ROLE "pantry" WITH LOGIN NOINHERIT
-        - CREATE ROLE "pantry_app" WITH LOGIN
-        - CREATE DATABASE "pantry" OWNER "pantry"
-        - REVOKE ALL ON DATABASE "pantry" FROM PUBLIC
-        - GRANT CONNECT, TEMPORARY ON DATABASE "pantry" TO "pantry"
-        - GRANT CONNECT, TEMPORARY ON DATABASE "pantry" TO "pantry_app"
-        - ALTER ROLE "pantry" CONNECTION LIMIT 10
-        - ALTER ROLE "pantry" SET statement_timeout = '15000ms'
-        - ALTER ROLE "pantry" SET idle_in_transaction_session_timeout = '30000ms'
-        - ALTER ROLE "pantry_app" SET statement_timeout = '15000ms'
-        - ALTER ROLE "pantry_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # pantry's RLS roles, NOLOGIN and never reconciled below. They are
-        # created HERE, at bootstrap as the superuser, because the migrate
-        # Job runs as the owner without CREATEROLE: a CREATE ROLE attempted
-        # there is `permission denied`, and 00001's `if not exists` guards
-        # converge precisely because these statements ran first. No
-        # managed.roles entries: there is no password to reconcile for a
-        # NOLOGIN role, and a managed entry is a second writer over roles
-        # whose only writer is this list.
-        - CREATE ROLE "pantry_public" WITH NOLOGIN NOINHERIT
-        - CREATE ROLE "pantry_publisher" WITH NOLOGIN NOINHERIT
-        - CREATE ROLE "pantry_admin" WITH NOLOGIN NOINHERIT
-        - CREATE ROLE "pantry_range_check" WITH NOLOGIN NOINHERIT
-        - CREATE ROLE "pantry_slug_read" WITH NOLOGIN NOINHERIT
-        # The memberships pantry's migrations assume. 00007 wants the owner a
-        # member of pantry_public; 00009/00012 move a definer function onto
-        # their helper role, which needs the migrator to hold the role — the
-        # grant to self, the move, and the revoke all require the ADMIN
-        # option (even the redundant self-grant: measured, PostgreSQL 18).
-        # The option hands the owner nothing its ownership does not already
-        # give it: the helpers are NOLOGIN and own only the functions the
-        # owner created.
-        - GRANT "pantry_public" TO "pantry"
-        - GRANT "pantry_range_check" TO "pantry" WITH ADMIN OPTION
-        - GRANT "pantry_slug_read" TO "pantry" WITH ADMIN OPTION
-        # --- box ---
-        # The control plane's own database: same shape as the five above,
-        # no RLS roles. Rails owns the schema; db:prepare creates the
-        # database when absent and loads schema.rb when empty.
-        - CREATE ROLE "box" WITH LOGIN
-        - CREATE ROLE "box_app" WITH LOGIN
-        - CREATE DATABASE "box" OWNER "box"
-        - REVOKE ALL ON DATABASE "box" FROM PUBLIC
-        - GRANT CONNECT, TEMPORARY ON DATABASE "box" TO "box"
-        - GRANT CONNECT, TEMPORARY ON DATABASE "box" TO "box_app"
-        - ALTER ROLE "box" CONNECTION LIMIT 10
-        - ALTER ROLE "box" SET statement_timeout = '15000ms'
-        - ALTER ROLE "box" SET idle_in_transaction_session_timeout = '30000ms'
-        - ALTER ROLE "box_app" SET statement_timeout = '15000ms'
-        - ALTER ROLE "box_app" SET idle_in_transaction_session_timeout = '30000ms'
-
   # The declarative half: every role, its login flag, its password secret, and
   # the one membership. `inRoles: [<svc>_app]` on role `<svc>` IS the
   # `GRANT <svc>_app TO <svc>` the local contract carries — the owner may
@@ -313,27 +261,3 @@ spec:
         login: true
         passwordSecret:
           name: postgres-role-parlor-app
-      - name: pantry
-        ensure: present
-        login: true
-        inRoles:
-          - pantry_app
-        passwordSecret:
-          name: postgres-role-pantry
-      - name: pantry_app
-        ensure: present
-        login: true
-        passwordSecret:
-          name: postgres-role-pantry-app
-      - name: box
-        ensure: present
-        login: true
-        inRoles:
-          - box_app
-        passwordSecret:
-          name: postgres-role-box
-      - name: box_app
-        ensure: present
-        login: true
-        passwordSecret:
-          name: postgres-role-box-app

@@ -16,7 +16,7 @@ this file only describes what is here and what is proven.
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
 | `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
-| `manifests/applications/` | The Argo CD `Application` manifests: the five launch services (identity, gateway, courier, parlor, pantry) and the observability set (Alloy, Grafana, Prometheus). |
+| `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Grafana, Prometheus). Pantry, box and keyholder are Cafaye-operated and reached over HTTPS, never deployed here — see the boundary note under `manifests/argocd/appproject.yaml`. |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 | `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
@@ -46,7 +46,7 @@ this file only describes what is here and what is proven.
    "present" on the box holding the *wrong* project. So the operator stays
    guarded and the project is re-applied on every run — one local `kubectl
    apply`, which is a no-op round trip when it is unchanged, and the same
-   convergence mechanism step 6 uses for the eight Applications.
+   convergence mechanism step 6 uses for the seven Applications.
 5. **The GHCR image pull secret** — **measured, not demanded.** The step derives
    every GHCR chart and image the Applications name and asks GHCR for an
    anonymous fetch of each. Where **all answer**, no credential is needed and
@@ -172,7 +172,7 @@ annotation pointing at nothing, and every chart's TLS breaks at once.
 The deploy loop this substrate serves is **pull-based**: a commit changes a
 chart, Argo makes the box agree. The consume end is the seven `Application`
 manifests in `manifests/applications/`, in two halves with different owners:
-the five service charts (`identity`, `gateway`, `courier`, `parlor`, `pantry`) pull
+the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
 their own chart's path in `oci://ghcr.io/cafaye/charts` — e.g.
 `oci://ghcr.io/cafaye/charts/identity` — at `targetRevision: 0.1.0`, and the
 three observability charts (`alloy`, `grafana`, `prometheus`) pull their
@@ -243,7 +243,7 @@ unmodified**:
 Each pin was verified to exist in its upstream repository's `index.yaml`
 before it was written. No vendoring, no publish pipeline for charts we do not
 own, and the pin keeps "the stack you get on Tuesday is the stack you
-reviewed on Monday". Kit's gate states the whole rule over all eight
+reviewed on Monday". Kit's gate states the whole rule over all seven
 manifests — every `Application` resolves to either a fleet publication or its
 pinned upstream, and anything else fails closed.
 
@@ -259,7 +259,7 @@ or, from a kit checkout:
 export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
-export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry'
+export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
 export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
 export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
 export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
@@ -446,15 +446,14 @@ names no box address and dials no ssh.
 **What a local cycle does not do, and it is not a detail:** it stops at step 5
 whenever an artifact the Applications name is not anonymously fetchable. Step
 5 probes first: with every artifact public the install proceeds with no box
-id, no capability and no exchange. Measured on this machine (2026-10-14):
-11 of 14 artifacts answer anonymously, and 3 refuse —
-`cafaye/charts/box:0.1.0`, `cafaye/box:0.1.0`, `cafaye/charts/pantry:0.1.0` —
-so the step takes the capability path and refuses, naming those three,
-because a developer has no box-bound capability to exchange. That is the
-substrate's own invariant 2 working as designed, and the unblock is a registry
-fact rather than an installer edit: publish (or make public) those three
-packages and the same command proceeds. See `REPORT-roll-c5-public-artifacts.md`
-for the run logs and the per-artifact measurements.
+id, no capability and no exchange. The three private artifacts the old
+measurement named (`cafaye/charts/box:0.1.0`, `cafaye/box:0.1.0`,
+`cafaye/charts/pantry:0.1.0` — 11 of 14 anonymous on 2026-10-14, see
+`REPORT-roll-c5-public-artifacts.md`) left with their Applications: all
+three are Cafaye-operated, and a customer's box reaches them over HTTPS
+rather than pulling their images. What remains is eight artifacts (four
+charts + four images); their anonymous-fetchability is re-probed on every
+run by step 5 itself, so no count is restated here to go stale.
 
 ### `--headless` — the mode an agent drives
 
@@ -584,7 +583,7 @@ execute in the single initdb database — `postInitSQL` as the superuser
 an untrusted extension, failing the whole bootstrap) — so neither hook can
 create extensions per database, and the manifest carries neither. The list
 is still declared and validated (`KIT_SUBSTRATE_POSTGRES_EXTENSIONS`,
-default `vector`, step 8 refuses a non-identifier), none of the five launch
+default `vector`, step 8 refuses a non-identifier), none of the four launch
 services reads vector, and a service that needs an extension is a named
 follow-up with a box to prove it on. An earlier revision of this manifest
 shipped the `postInitApplicationSQL` hook claiming per-database creation;
@@ -864,7 +863,7 @@ go red.
 cross-service name a service dials must be qualified.** The substrate puts
 `identity`, `gateway`, `courier` and `parlor` each in a namespace of its own and
 postgres/redis/nats in `data`. Kubernetes limits a DNS query that names no
-namespace to the CALLER's, so the compose spelling — `identity`, `pantry`,
+namespace to the CALLER's, so the compose spelling — `identity`,
 `redis`, `postgres-rw` as bare single labels — resolves only inside a namespace
 of that exact name. From gateway's pod, `http://identity:8080` reaches nothing,
 gateway boots, and `/readyz` answers `identity: unavailable` forever; the same
@@ -913,13 +912,17 @@ spelled in two places and are set together. `IDENTITY_ISSUER` is deliberately
 which a static manifest cannot hold. See `REPORT-roll-c5-crossns.md` for the
 measured pair and the exact commands.
 
-**`BILLING_URL` and gateway's `ROUTE_TABLE` are deliberately out of scope.**
-parlor treats an unset `BILLING_URL` as the supported "no billing deployed"
-state, and gateway's `ROUTE_TABLE` points at `pantry` — a service the substrate
-does not ship. The substrate may only name Services its own manifests create
-(that is what `tests/substrate_test.sh` §24 asserts), so a box that deploys
-pantry or billing writes those addresses in its **values commit**, the
-pull-based loop's documented write path, not here.
+**`BILLING_URL` is deliberately out of scope; gateway's `ROUTE_TABLE` points
+at the operated registry.** parlor treats an unset `BILLING_URL` as the
+supported "no billing deployed" state, so a box that deploys billing writes
+that address in its **values commit**, the pull-based loop's documented write
+path, not here. gateway's `ROUTE_TABLE` is the other shape: both pantry
+entries name the operated origin `https://pantry.cafaye.com` — the name the
+fleet's own code documents (`cafaye/cafe`, `CAF_PANTRY_URL`) — shipped by
+gateway's own chart, so there is nothing for the substrate to override. A
+503 naming that unreachable *external* origin is the truthful answer until
+Cafaye hosts pantry; the substrate still deploys no pantry, and §24's rule
+stands (the substrate names only Services its own manifests create).
 
 `tests/substrate_test.sh` §24 is the check: every cross-service address the
 Applications set, and every `.svc.cluster.local` name `install.sh` writes, must
@@ -1093,7 +1096,7 @@ The first real run, on a Linux box with 8GB or more:
 
 1. `curl https://cafaye.com/box/install | sh` completes all ten steps.
 2. `kubectl get nodes` shows the node Ready.
-3. `kubectl get applications -n argocd` shows all eight Applications synced.
+3. `kubectl get applications -n argocd` shows all seven Applications synced.
 4. The observability stack is reachable and retaining.
 
 Until those four are observed on real hardware, the substrate is a checked

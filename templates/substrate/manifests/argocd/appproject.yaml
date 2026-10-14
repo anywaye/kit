@@ -4,7 +4,7 @@ metadata:
   name: default
   namespace: argocd
 spec:
-  # The default project for the cafaye substrate — the only project the eight
+  # The default project for the cafaye substrate — the only project the seven
   # Applications name. core-install.yaml ships the AppProject CRD but no
   # AppProject object (neither does the full install.yaml — both are CRD-only;
   # the controller auto-creates a maximal default in some installs, but the
@@ -19,13 +19,13 @@ spec:
   # complaining on without thinking about what the Applications actually need.
   # That shape is the controller's own auto-created default, and it is the
   # right default for a cluster that has to run unknown Applications. This
-  # substrate is not that cluster: it runs eight known Applications whose
+  # substrate is not that cluster: it runs seven known Applications whose
   # charts and namespaces are enumerated in this repository, so the project
   # can be scoped to exactly those.
   #
-  #   sourceRepos        what the ten Applications name and no other: the
+  #   sourceRepos        what the seven Applications name and no other: the
   #                      two upstream Helm repos for the observability three,
-  #                      and a chart-path GLOB for the five service charts
+  #                      and a chart-path GLOB for the four service charts
   #                      (oci://ghcr.io/cafaye/charts/*) — because each
   #                      Application names its own chart's PATH
   #                      (oci://ghcr.io/cafaye/charts/gateway, …/courier, …),
@@ -66,9 +66,18 @@ spec:
   #   permitted by these patterns, with the pre-fix bare-root spelling as a red
   #   control.
   #
-  #   destinations       the eight namespaces the Applications deploy into
-  #                      (observability, identity, gateway, courier, parlor,
-  #                      pantry)
+  #   destinations       the five namespaces the Applications deploy into
+  #                      (observability, identity, gateway, courier, parlor)
+  #                      — pantry, box and keyholder are deliberately NOT
+  #                      among them. All three are Cafaye-operated services
+  #                      the box reaches over HTTPS (pantry at
+  #                      https://pantry.cafaye.com, the registry exchange at
+  #                      KIT_SUBSTRATE_REGISTRY_URL, the control plane at
+  #                      KIT_SUBSTRATE_BOX_URL); a customer's box runs the
+  #                      four services above and talks to the three below.
+  #                      pantry's own licence says it best: "it runs on
+  #                      Cafaye infrastructure. Nothing here may be run as a
+  #                      second, forked catalog."
   #                      on the one cluster this substrate runs
   #                      (https://kubernetes.default.svc). A project that
   #                      allows */* lets an Application deploy into kube-system
@@ -112,7 +121,7 @@ spec:
   # If the maximal shape is ever needed again, the reason must be written
   # beside it — a project that allows * is a project that has stopped being
   # a boundary.
-  description: "The default project for the cafaye substrate — the ten Applications' project"
+  description: "The default project for the cafaye substrate — the seven Applications' project"
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts
@@ -130,12 +139,6 @@ spec:
     - namespace: courier
       server: https://kubernetes.default.svc
     - namespace: parlor
-      server: https://kubernetes.default.svc
-    - namespace: pantry
-      server: https://kubernetes.default.svc
-    - namespace: box
-      server: https://kubernetes.default.svc
-    - namespace: keyholder
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     # alloy 1.13.0 renders CustomResourceDefinition

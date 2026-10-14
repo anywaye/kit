@@ -129,7 +129,7 @@ run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 # prove an unset or empty value is refused with the fix named. (SMTP and the
 # paired courier values are validated on the live path only — a plan does not
 # need credentials to print.)
-DBS="identity,gateway,courier,parlor,pantry,box"
+DBS="identity,gateway,courier,parlor"
 dry_run_out="$(KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
 if [ "$dry_run_ec" -ne 0 ]; then
@@ -645,7 +645,7 @@ if store.get("storageClass") != "local-path":
         f"storageClass is {store.get('storageClass')!r}, not 'local-path'"
         " (k3s's default provisioner)"
     )
-svcs = ("identity", "gateway", "courier", "parlor", "pantry")
+svcs = ("identity", "gateway", "courier", "parlor")
 sql = "\n".join(initdb.get("postInitSQL", []))
 for svc in svcs:
     for needle in (
@@ -1093,8 +1093,8 @@ import sys
 src = open(sys.argv[1], encoding="utf-8").read()
 code = re.sub(r"(?m)^\s*#.*$", "", src)
 records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
-if len(records) != 5:
-    print(f"expected 5 RECORD lines, found {len(records)}")
+if len(records) != 4:
+    print(f"expected 4 RECORD lines, found {len(records)}")
     sys.exit(1)
 # A key is WRITTEN in one of two spellings: `--from-literal=KEY=` (the secrets
 # step 9 creates) or the merge patch step 11 sends, whose body is built as a
@@ -1142,7 +1142,7 @@ for secret, keys in records:
             problems.append(f"{secret} records {key} but no --from-literal sets it")
 created = set(re.findall(r"create secret generic (\S+)", code))
 for secret in created:
-    if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor", "pantry")):
+    if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor")):
         problems.append(f"{secret} is created but not recorded")
 for key in set(re.findall(r"--from-literal=([A-Z_]+)=", code)) | patch_keys:
     if key in conditional:
@@ -1223,7 +1223,7 @@ import yaml
 
 install_path, fleet = sys.argv[1], sys.argv[2]
 
-SERVICES = ("identity", "gateway", "courier", "parlor", "pantry")
+SERVICES = ("identity", "gateway", "courier", "parlor")
 
 # install.sh's inventory: the SECRET RECORD maps a secret to the keys it writes,
 # and the two writers are the `--from-literal=KEY=` sites plus step 11's merge
@@ -2559,7 +2559,7 @@ PY
 # 8, which is a different contract from the one proven here.
 mfa_seed_roles() {
   local svc
-  for svc in identity gateway courier parlor pantry; do
+  for svc in identity gateway courier parlor; do
     mock_seed data "postgres-role-$svc-app" password "pw-$svc-app"
   done
   mock_seed data redis-password password "redis-pw"
@@ -2917,7 +2917,7 @@ check_role_secret_wiring() {
     kubectl() { mock_kubectl "$@"; }
     create_postgres_role_secrets >"$root/step8.log" 2>&1
     local svc
-    for svc in identity gateway courier parlor pantry; do
+    for svc in identity gateway courier parlor; do
       database_url_for "$svc" >"$root/url-$svc.txt"
     done
   ) || ec=$?
@@ -2978,7 +2978,7 @@ for secret in sorted(store):
 
 # The DATABASE_URL half: step 9's naming function must read the APP role's
 # secret and password, and the DSN must name the app role and the database.
-for svc in ("identity", "gateway", "courier", "parlor", "pantry"):
+for svc in ("identity", "gateway", "courier", "parlor"):
     try:
         url = open(os.path.join(root, f"url-{svc}.txt"), encoding="utf-8").read()
     except OSError:
@@ -3051,7 +3051,7 @@ check_rerun_repairs_username() {
   # fixture carries the real manifests beside the stripped installer.
   cp -R "$SUBSTRATE/manifests" "$root/manifests"
   MOCK_ROOT="$root"
-  for svc in identity gateway courier parlor pantry; do
+  for svc in identity gateway courier parlor; do
     mock_seed data "postgres-role-$svc" username "$svc"
     mock_seed data "postgres-role-$svc" password "pw-$svc"
     mock_seed data "postgres-role-$svc-app" username "$svc-app" # the live defect's spelling
@@ -3063,7 +3063,7 @@ check_rerun_repairs_username() {
     # shellcheck source=/dev/null
     . "$root/install-no-main.sh"
     kubectl() { mock_kubectl "$@"; }
-    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box"
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor"
     export DRY_RUN=0
     install_postgres_cluster >"$root/rerun.log" 2>&1
   ) || ec=$?
@@ -3076,7 +3076,7 @@ check_rerun_repairs_username() {
     *"already installed, skipping"*) : ;;
     *) problems="$problems; the guard branch was not taken — this was not the re-run path" ;;
   esac
-  for svc in identity gateway courier parlor pantry; do
+  for svc in identity gateway courier parlor; do
     [ "$(mock_get data "postgres-role-$svc-app" username)" = "${svc}_app" ] ||
       problems="$problems; $svc-app username was not repaired to ${svc}_app"
     [ "$(mock_get data "postgres-role-$svc-app" password)" = "pw-$svc-app" ] ||
@@ -3444,7 +3444,7 @@ run 'the exchange speaks the registry-credentials route, bearer + box' green cur
 # bytes into data, so the decoded bytes are what kubectl must receive; the
 # kubelet-shaped read in 3b proves it, and the control re-introduces the
 # double-encode to prove the read can fail.
-APPLIED_NAMESPACES=(argocd identity gateway courier parlor pantry observability)
+APPLIED_NAMESPACES=(argocd identity gateway courier parlor observability)
 applied_pull_secrets_ok() {
   local ns found
   for ns in "${APPLIED_NAMESPACES[@]}"; do
@@ -3683,7 +3683,7 @@ refuse_ok() {
   # And nothing was written into it. A refusal that leaves half a credential
   # behind is the half-installed substrate the preflight's header forbids.
   local ns
-  for ns in identity gateway courier parlor pantry; do
+  for ns in identity gateway courier parlor; do
     if grep -q "namespace: $ns" "$MOCK_ROOT_REFUSE/applied.yaml" 2>/dev/null; then
       printf 'the pull secret was written into %s after the namespace that could not be created\n' "$ns"
       return 1
@@ -3830,7 +3830,7 @@ RUNNER
       return 1
     fi
     local ns
-    for ns in identity gateway courier parlor pantry observability; do
+    for ns in identity gateway courier parlor observability; do
       if grep -q "namespace: $ns" "$MOCK_ROOT_NONS/applied.yaml" 2>/dev/null; then
         printf 'the secret was written into %s after the refusal — the loop carried on\n' "$ns"
         return 1
@@ -3905,7 +3905,7 @@ stray_files_ok() {
       # the step MADE the namespaces it wrote into. It carries no credential —
       # it holds names — which is why it is allowed to sit in the store.
       namespaces) continue ;;
-      argocd|identity|gateway|courier|parlor|pantry|observability) continue ;;
+      argocd|identity|gateway|courier|parlor|observability) continue ;;
     esac
     printf 'unexpected file in the store: %s\n' "${f##*/}"
     return 1
@@ -4088,19 +4088,18 @@ mock_probe_curl() {
   return 1
 }
 
-# 1. The derivation, off the real tree: 7 charts + 7 images, and no
+# 1. The derivation, off the real tree: 4 charts + 4 images (the four
+# services a customer runs — pantry, box and keyholder left with their
+# Applications, so their charts and images are derived nowhere), and no
 # plain-HTTPS chart among them.
 derived_ok() {
   local rows n want
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
   n="$(printf '%s\n' "$rows" | grep -c .)"
-  [ "$n" -eq 14 ] || { printf 'derived %s artifact rows, expected 14\n%s\n' "$n" "$rows"; return 1; }
-  for want in "cafaye/charts/box 0.1.0" "cafaye/box 0.1.0" \
-    "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
+  [ "$n" -eq 8 ] || { printf 'derived %s artifact rows, expected 8\n%s\n' "$n" "$rows"; return 1; }
+  for want in "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
     "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
     "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \
-    "cafaye/charts/keyholder 0.1.0" "cafaye/keyholder 0.1.0" \
-    "cafaye/charts/pantry 0.1.0" "cafaye/pantry 0.1.0" \
     "cafaye/charts/parlor 0.1.0" "cafaye/parlor 0.1.0"; do
     case "$rows" in
       *"$want"*) ;;
@@ -4111,7 +4110,7 @@ derived_ok() {
     *grafana* | *alloy* | *prometheus*)
       printf 'a plain-HTTPS chart was probed:\n%s\n' "$rows"; return 1 ;;
   esac
-  printf '14 rows: 7 charts + 7 images, no plain-HTTPS chart'
+  printf '8 rows: 4 charts + 4 images, no plain-HTTPS chart'
 }
 run 'the probe derives every GHCR chart and image off the real manifests' green derived_ok
 
@@ -5029,19 +5028,17 @@ fi
 # pod is deleted on success exactly as a real box deletes it — so the assertions
 # read the recorded argv, which survives the delete.
 migrate_seed_fixture() {
-  mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier" "$MOCK_ROOT/pantry"
-  printf 'data\nidentity\ncourier\npantry\n' >"$MOCK_ROOT/namespaces"
+  mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier"
+  printf 'data\nidentity\ncourier\n' >"$MOCK_ROOT/namespaces"
   # The OWNER role passwords step 8 makes (the migrate Job's credential) and the
   # app passwords step 8 makes beside them (courier's DATABASE_URL).
   mock_seed data postgres-role-identity password "owner-identity-pw"
   mock_seed data postgres-role-courier password "owner-courier-pw"
   mock_seed data postgres-role-courier-app password "app-courier-pw"
-  mock_seed data postgres-role-pantry password "owner-pantry-pw"
   # The Deployments Argo synced from step 6 — step 10 reads the image off them,
   # so there is no second pin to keep in step.
   mock_seed identity deploy-identity image "ghcr.io/cafaye/identity:0.1.0"
   mock_seed courier deploy-courier image "ghcr.io/cafaye/courier:0.1.0"
-  mock_seed pantry deploy-pantry image "ghcr.io/cafaye/pantry:0.1.0"
 }
 
 MOCK_ROOT="$WORK/migrate-run"
@@ -5057,9 +5054,9 @@ migrate_run_ec=0
 ) || migrate_run_ec=$?
 migrate_argv="$MOCK_ROOT/kubectl-argv"
 if [ "$migrate_run_ec" -ne 0 ]; then
-  fail 'step 10 runs and completes when all three migrations succeed' "$(cat "$WORK/migrate-run.log")"
+  fail 'step 10 runs and completes when both migrations succeed' "$(cat "$WORK/migrate-run.log")"
 else
-  pass 'step 10 runs and completes when all three migrations succeed'
+  pass 'step 10 runs and completes when both migrations succeed'
 fi
 # The OWNER DSN, proven by the role name in the recorded argv. `identity_app`
 # would be the application role, which owns nothing and cannot run DDL.
@@ -5073,12 +5070,6 @@ if grep -q -- '--env=COURIER_OWNER_DATABASE_URL=ecto://courier:owner-courier-pw@
   pass "step 10 migrates courier as its OWNER role via COURIER_OWNER_DATABASE_URL"
 else
   fail "step 10 migrates courier as its OWNER role via COURIER_OWNER_DATABASE_URL" \
-    "argv did not carry the owner DSN"
-fi
-if grep -q -- '--env=PANTRY_DATABASE_URL=postgres://pantry:owner-pantry-pw@' "$migrate_argv" 2>/dev/null; then
-  pass "step 10 migrates pantry as its OWNER role via PANTRY_DATABASE_URL"
-else
-  fail "step 10 migrates pantry as its OWNER role via PANTRY_DATABASE_URL" \
     "argv did not carry the owner DSN"
 fi
 if grep -q -- '--env=DATABASE_URL=ecto://courier_app:app-courier-pw@' "$migrate_argv" 2>/dev/null; then
@@ -5096,12 +5087,11 @@ else
     "argv images: $(grep -o -- '--image=[^ ]*' "$migrate_argv" 2>/dev/null | sort -u | tr '\n' ' ')"
 fi
 if [ "$(mock_get data substrate-migrations identity)" = "ghcr.io/cafaye/identity:0.1.0" ] &&
-   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ] &&
-   [ "$(mock_get data substrate-migrations pantry)" = "ghcr.io/cafaye/pantry:0.1.0" ]; then
+   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ]; then
   pass 'step 10 records the applied image per service (the re-run marker)'
 else
   fail 'step 10 records the applied image per service (the re-run marker)' \
-    "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)' pantry='$(mock_get data substrate-migrations pantry)'"
+    "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)'"
 fi
 # A service with no schema is named in the plan and skipped, not run.
 if grep -q -- '--image=.*parlor' "$migrate_argv" 2>/dev/null; then
@@ -5203,7 +5193,7 @@ m = re.search(r"migration_service_has_schema\(\)\s*\{(.*?)\n\}", code, re.S)
 if not m:
     problems.append("no migration_service_has_schema inventory")
 else:
-    for svc in ("identity", "courier", "pantry"):
+    for svc in ("identity", "courier"):
         if svc not in m.group(1):
             problems.append(f"{svc} is not in the migration inventory")
 # The failure path names the service and prints the logs.
@@ -5223,10 +5213,12 @@ PY
 
 run 'step 10 has a step, a guard and an OWNER-role inventory' green check_migration_step "$SUBSTRATE/install.sh"
 
-# The control: an inventory with pantry removed must go red under the same
-# check — an inventory the check cannot see shrink is documentation.
+# The control: an inventory with courier removed must go red under the same
+# check — an inventory the check cannot see shrink is documentation. (This
+# control used to remove pantry; pantry left with its Application by
+# decision, so the control removes a service the substrate still ships.)
 fixture_mig_inventory="$WORK/install-mig-inventory.sh"
-sed 's/    identity | courier | pantry) return 0 ;;/    identity | courier) return 0 ;;/' \
+sed 's/    identity | courier) return 0 ;;/    identity) return 0 ;;/' \
   "$SUBSTRATE/install.sh" >"$fixture_mig_inventory"
 run 'control: an inventory missing a service goes red' red check_migration_step "$fixture_mig_inventory"
 
@@ -5241,9 +5233,8 @@ run 'control: an inventory missing a service goes red' red check_migration_step 
 # and each paid a fresh image pull/scheduling wait. The structural fix is to
 # launch the independent Jobs together and wait for the set.
 #
-# INDEPENDENCE: identity, courier and pantry each own a separate database and OWNER role
-# (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier" vs
-# "pantry" OWNER "pantry" in
+# INDEPENDENCE: identity and courier each own a separate database and OWNER role
+# (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier" in
 # templates/substrate/manifests/data/postgres-cluster.yaml and the local
 # equivalent templates/compose/postgres/initdb/10-cluster.sh). The REVOKE
 # boundary is per-database, so the three migrators touch disjoint catalogues and
@@ -5921,7 +5912,7 @@ run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$
 refusal_hint_ok() {
   local log mode="$2"
   case "$1" in
-    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry,box'"*)
+    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'"*)
       printf 'the refusal names the variable and the fix that clears it (%s)\n' "$mode"
       ;;
     *)
@@ -8508,22 +8499,25 @@ fixture_fifth_chart="$WORK/apps-fifth-chart"
 mkdir -p "$fixture_fifth_chart"
 cp "$MANIFESTS"/*.yaml "$fixture_fifth_chart/"
 # A new Application, assembled rather than sed'ed from an existing one so its
-# name and chart agree.
-cat >"$fixture_fifth_chart/pantry.yaml" <<'YAML'
+# name and chart agree. The example is a hypothetical `ledger`, never pantry:
+# pantry is Cafaye-operated and the §28b boundary refuses it — a "fifth
+# chart" control naming pantry would prove the glob by re-adding the one
+# service the packet removes.
+cat >"$fixture_fifth_chart/ledger.yaml" <<'YAML'
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: pantry
+  name: ledger
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/pantry
-    chart: pantry
+    repoURL: oci://ghcr.io/cafaye/charts/ledger
+    chart: ledger
     targetRevision: 0.1.0
   destination:
     server: https://kubernetes.default.svc
-    namespace: pantry
+    namespace: ledger
 YAML
 run 'the project permits a FIFTH chart with no edit (the glob, not four names)' green \
   check_appproject_permits "$fixture_fifth_chart" "$APP_PROJECT"
@@ -8658,7 +8652,7 @@ elif tuple(defs[0]) != (SWITCH_KEY, SWITCH_VALUE):
 # 2. Every generated-chart service's secret carries it BY REFERENCE. A window
 #    after the create line is long enough for the multi-line invocations and
 #    short enough not to reach the next secret.
-for secret in ("identity-secrets", "courier-secrets", "parlor-secrets", "pantry-secrets"):
+for secret in ("identity-secrets", "courier-secrets", "parlor-secrets"):
     m = re.search(r"create secret generic " + re.escape(secret) + r"\b", code)
     if not m:
         problems.append(f"{secret} is never created")
@@ -8694,7 +8688,7 @@ else:
 #    secret to carry the switch or an Application that does. A service dropped
 #    from the secret step is a service nothing configures.
 services = set(re.findall(r"create secret generic (\S+-secrets)", code))
-for svc in ("identity", "gateway", "courier", "parlor", "pantry"):
+for svc in ("identity", "gateway", "courier", "parlor"):
     if f"{svc}-secrets" not in services:
         problems.append(f"{svc} has no secret in install.sh")
 
@@ -8781,7 +8775,9 @@ run 'control: gateway losing the switch value goes red' red \
 # from the `Service` documents in `manifests/data/`; and CNPG's read-write
 # Service (`<cluster>-rw`) from the `Cluster` document. So an address to a name
 # no manifest creates — `billing` is the standing example (pantry was, until
-# it shipped) — goes RED, which is the property
+# it shipped, and is again since the operated-boundary packet removed it;
+# billing stays the example because pantry's re-addition is §28b's red
+# control, not §24's) — goes RED, which is the property
 # that keeps the check honest: the substrate may only name what it ships.
 #
 # THE CONTROLS answer differently: a bare name, a name in the wrong namespace, a
@@ -11075,7 +11071,7 @@ PY
     fi
     # Present and valid — also require install.sh to report loki
     local out
-    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
     case "$out" in
       *"logs: centralized Loki installed"*) ;;
       *) printf 'loki present but install.sh does not report "centralized Loki installed"\n'; return 1 ;;
@@ -11084,7 +11080,7 @@ PY
   fi
   # 2. Not present — require the honest report (human + headless JSON)
   local out
-  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
   case "$out" in
     *"centralized Loki not installed"* ) ;;
     *) printf 'install.sh does not report "centralized Loki not installed"\n%s\n' "$out"; return 1 ;;
@@ -11099,7 +11095,7 @@ PY
   esac
   # 3. Headless JSON carries log_store journald beside the existing readiness fields
   local jsonl="$WORK/loki-headless.jsonl"
-  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,pantry,box" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
+  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
   if ! grep -q '"event":"readiness"' "$jsonl"; then
     printf 'headless stream has no readiness event\n'; return 1
   fi
@@ -11271,8 +11267,8 @@ import yaml
 apps_dir, proj_path = sys.argv[1:3]
 
 files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
-if len(files) < 8:
-    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 10 — an empty or partial directory proves nothing")
+if len(files) < 7:
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 7 — an empty or partial directory proves nothing")
     sys.exit(1)
 
 try:
@@ -11371,7 +11367,7 @@ apps_dir = sys.argv[1]
 #                                        grafana-clusterrole[grafana-clusterrolebinding]
 #   prometheus.yaml  prometheus 29.36.0:  ClusterRole + ClusterRoleBinding x2
 #                                        (kube-state-metrics, server)
-#   identity/courier/gateway/parlor/pantry: namespaced-only (Deployments, Services,
+#   identity/courier/gateway/parlor: namespaced-only (Deployments, Services,
 #                                        ConfigMaps, Secrets in their own
 #                                        namespace; nothing cluster-scoped).
 EXPECTED = {
@@ -11392,21 +11388,16 @@ EXPECTED = {
     "gateway.yaml": set(),
     "identity.yaml": set(),
     "parlor.yaml": set(),
-    "pantry.yaml": set(),
-    # box and keyholder render Deployment, Ingress and Service and NOTHING
-    # cluster-scoped — verified by rendering both charts with their pinned
-    # targetRevision and --include-crds (roll-c5-any-box added the Applications
-    # and this record is what the check asks for). An empty set is a RECORD, not
-    # an omission: it says the chart was rendered and answered "none", which is
-    # the difference between a chart that creates no cluster-scoped kinds and a
-    # chart nobody looked at.
-    "box.yaml": set(),
-    "keyholder.yaml": set(),
+    # pantry, box and keyholder carry NO record: the §28b boundary refuses
+    # their Applications outright, so a record here would be a second list
+    # claiming a chart the substrate must not render. An Application naming
+    # one of them fails the "no cluster-scope record" branch the way any
+    # unrecorded chart does — and then fails §28b by name.
 }
 
 files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
-if len(files) < 8:
-    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 10 — an empty or partial directory proves nothing")
+if len(files) < 7:
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 7 — an empty or partial directory proves nothing")
     sys.exit(1)
 
 problems = []
@@ -11553,6 +11544,579 @@ fi
 # is not a check.
 run 'control: empty apps directory goes red (vacuity guard)' red \
   check_appproject_cluster_scope "$empty_apps" "$APP_PROJECT"
+
+# ===========================================================================
+# 28b. The substrate carries only what a customer runs
+# ===========================================================================
+#
+# THE BOUNDARY. Cafaye Box is the place a customer sets up their box to run
+# cafaye services from the pantry; Box Pro is the paid layer on top. The
+# substrate therefore carries the services a customer RUNS on their own
+# machine — identity, gateway, courier, parlor, plus the observability
+# three — and never the services Cafaye OPERATES, which the box reaches over
+# HTTPS: pantry at https://pantry.cafaye.com, the registry exchange at
+# KIT_SUBSTRATE_REGISTRY_URL (default https://registry.svc.cafaye.com), the
+# control plane at KIT_SUBSTRATE_BOX_URL.
+#
+# THREE SERVICES, THREE REASONS, each in its own repository:
+#   pantry    proprietary by decision (OPS-D10): "the operated registry … it
+#             runs on Cafaye infrastructure. Nothing here may be run as a
+#             second, forked catalog."
+#   box       proprietary by decision (OPS-D2): "never part of … the Kit
+#             deployment substrate" — the operated control plane.
+#   keyholder BSL-1.1, so a licence check PASSES it — and it is excluded by
+#             the flow argument instead: the installer's step 5 exchanges a
+#             capability at KIT_SUBSTRATE_REGISTRY_URL, and keyholder IS that
+#             exchange (its chart serves host registry.svc.cafaye.com; its
+#             manifest requires box). A box running keyholder would exchange
+#             against itself, and would need its own GitHub App — exactly
+#             what the capability design exists to avoid.
+#
+# THE CHECKS, and why there are three. A licence check alone cannot see
+# keyholder (BSL passes it); an absence list alone is a list to drift. So:
+#   (1) absence — no Application, database, role, secret or migration names
+#       pantry, box or keyholder, with the reason beside it;
+#   (2) licence — every fleet Application's licence permits a customer's box
+#       to run it (BSL-1.1 runnable; either proprietary operated sentence
+#       refused; anything else failed closed);
+#   (3) deployment role — a fleet Application whose service manifest declares
+#       a load-bearing dependency on a licence-refused (operated) service is
+#       itself operated-side. Keyed on the service's own cafaye.yml, not on
+#       a list in kit: the anchor set is derived from the licences, so no
+#       service name is typed here.
+# Plus (4): gateway's ROUTE_TABLE names the operated pantry origin for both
+# pantry routes — the route is the published contract's surface, and "the
+# operated registry is not up yet" (an honest 503) is a different fact from
+# "there is no such route".
+check_substrate_operated_absent() {
+  "$PY" - "$1" <<'PY'
+import os
+import re
+import sys
+
+import yaml
+
+apps_dir = sys.argv[1]
+OPERATED = ("pantry", "box", "keyholder")
+
+problems = []
+# (a) No Application file, and no Application document, names an operated
+# service. The filename and the metadata.name are checked separately: a
+# renamed file carrying the old name would satisfy either half alone.
+for f in sorted(os.listdir(apps_dir)):
+    if not f.endswith((".yaml", ".yml")):
+        continue
+    stem = f.rsplit(".", 1)[0]
+    if stem in OPERATED:
+        problems.append(
+            f"{f}: names an operated service — pantry, box and keyholder are "
+            "Cafaye-operated and reached over HTTPS, never deployed to the box"
+        )
+        continue
+    try:
+        doc = yaml.safe_load(open(os.path.join(apps_dir, f), encoding="utf-8"))
+    except yaml.YAMLError as e:
+        problems.append(f"{f}: does not parse ({e})")
+        continue
+    name = (doc.get("metadata") or {}).get("name") if isinstance(doc, dict) else None
+    if name in OPERATED:
+        problems.append(
+            f"{f}: metadata.name {name!r} is an operated service — see above"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{apps_dir}: no Application names pantry, box or keyholder — the box runs four services, and talks to the other three")
+PY
+}
+
+run 'the substrate ships no pantry, box or keyholder Application' green \
+  check_substrate_operated_absent "$MANIFESTS"
+
+# The Cluster manifest and the installer agree: comments stripped first, so
+# the reason written beside the removal cannot satisfy the check.
+check_substrate_operated_wiring() {
+  "$PY" - "$1" "$2" <<'PY'
+import re
+import sys
+
+cluster_path, install_path = sys.argv[1:3]
+
+def code_without_comments(path):
+    out = []
+    for line in open(path, encoding="utf-8"):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        out.append(line.split("#", 1)[0])
+    return "\n".join(out)
+
+problems = []
+cluster = code_without_comments(cluster_path)
+for svc in ("pantry", "box", "keyholder"):
+    for pat in (f'"{svc}"', f'"{svc}_app"', f"postgres-role-{svc}"):
+        if pat in cluster:
+            problems.append(
+                f"postgres-cluster.yaml still provisions {pat} — the {svc} database and roles left with its Application"
+            )
+install = code_without_comments(install_path)
+for svc in ("pantry", "keyholder"):
+    if re.search(rf"(?m)^\s*(?:for\s+\S+\s+in\s+.*|.*\b){svc}\b.*(?:;|\bdo\b)|\b{svc}/", install):
+        problems.append(
+            f"install.sh still wires {svc} (a service loop, secret or namespace) — see above"
+        )
+if re.search(r"(?m)\bfor svc in .*\bbox\b", install):
+    problems.append("install.sh still loops over the box service — see above")
+if re.search(r"(?m)database_url_for box\b|MIGRATE_CMD_box\b|secret generic box-secrets", install):
+    problems.append("install.sh still names a box-service secret or migrator — see above")
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("the Cluster provisions four services and install.sh wires four services — pantry, box and keyholder appear only in comments")
+PY
+}
+
+run 'the Cluster and the installer wire no operated service' green \
+  check_substrate_operated_wiring "$SUBSTRATE/manifests/data/postgres-cluster.yaml" "$SUBSTRATE/install.sh"
+
+# RED CONTROL — the tree as it stands on master, with pantry and keyholder
+# (and box) Applications present, fails the absence check. Assembled from a
+# shipped Application by name-swap, the way the any-box packet added box —
+# and the premise is asserted, not assumed.
+fixture_apps_operated="$WORK/apps-operated"
+rm -rf "$fixture_apps_operated"
+mkdir -p "$fixture_apps_operated"
+cp "$MANIFESTS"/*.yaml "$fixture_apps_operated/"
+for svc in pantry keyholder box; do
+  sed "s/courier/$svc/g" "$MANIFESTS/courier.yaml" >"$fixture_apps_operated/$svc.yaml"
+done
+if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/pantry' "$fixture_apps_operated/pantry.yaml" && \
+   grep -q 'repoURL: oci://ghcr.io/cafaye/charts/keyholder' "$fixture_apps_operated/keyholder.yaml" && \
+   grep -q 'repoURL: oci://ghcr.io/cafaye/charts/box' "$fixture_apps_operated/box.yaml"; then
+  run 'control: the master shape (operated Applications present) fails the absence check' red \
+    check_substrate_operated_absent "$fixture_apps_operated"
+else
+  fail 'control fixture: the operated Applications did not land' \
+    'a fixture Application names no fleet chart, so the control would prove nothing'
+fi
+
+# The licence half: BSL-1.1 with its Change Date and Change License is the
+# runnable shape; EITHER proprietary operated sentence is refused — box's
+# "never part of … the Kit deployment substrate" and pantry's "runs on
+# Cafaye infrastructure … never … a second, forked catalog", each matched on
+# its wording rather than on the service's name. Anything else — or an
+# unreadable licence — fails closed. Only Applications pulling the fleet's
+# own registry are classified; the observability three are counted and
+# skipped, never failed. An absent sibling checkout is NAMED in a note (the
+# §11b precedent): on a fresh clone every service is a note, and a note is
+# an environment gap, not a verdict.
+check_substrate_licences() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import sys
+
+import yaml
+
+apps_dir, fleet_dir = sys.argv[1:3]
+FLEET_ROOT = "oci://ghcr.io/cafaye/charts/"
+
+def classify(text):
+    stripped = text.lstrip()
+    if stripped.startswith("Business Source License 1.1") and \
+            "Change Date:" in text and "Change License:" in text:
+        return "runnable"
+    lowered = text.lower()
+    if "never part of" in lowered and "deployment substrate" in lowered:
+        return "refused"
+    if "runs on cafaye infrastructure" in lowered and \
+            ("forked catalog" in lowered or "operated registry" in lowered):
+        return "refused"
+    return "unclassifiable"
+
+files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
+fleet_apps = []
+upstream = 0
+for f in files:
+    path = os.path.join(apps_dir, f)
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        print(f"{f}: does not parse ({e})")
+        sys.exit(1)
+    if not isinstance(doc, dict):
+        print(f"{f}: not a mapping")
+        sys.exit(1)
+    repo = ((doc.get("spec") or {}).get("source") or {}).get("repoURL", "")
+    if isinstance(repo, str) and repo.startswith(FLEET_ROOT):
+        chart = repo[len(FLEET_ROOT):]
+        if not chart or "/" in chart:
+            print(f"{f}: fleet repoURL {repo!r} names no single chart — the licence cannot be found")
+            sys.exit(1)
+        fleet_apps.append((f, chart))
+    else:
+        upstream += 1
+
+if not fleet_apps:
+    print(f"{apps_dir} names no fleet Application — a check that graded nothing proves nothing")
+    sys.exit(1)
+
+problems = []
+notes = []
+runnable = []
+for f, svc in fleet_apps:
+    checkout = os.path.join(fleet_dir, svc)
+    lic = os.path.join(checkout, "LICENSE")
+    if not os.path.isdir(checkout):
+        notes.append(f"{svc}: no sibling checkout under {fleet_dir} — not asserted")
+        continue
+    if not os.path.isfile(lic):
+        problems.append(
+            f"{f}: the {svc} checkout carries no LICENSE — an unreadable licence is not a permission"
+        )
+        continue
+    try:
+        with open(lic, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        problems.append(f"{f}: the {svc} LICENSE cannot be read ({exc}) — an unreadable licence is not a permission")
+        continue
+    verdict = classify(text)
+    if verdict == "runnable":
+        runnable.append(svc)
+    elif verdict == "refused":
+        problems.append(
+            f"{f}: the {svc} licence names it Cafaye-operated — a customer's box has no licence to run it"
+        )
+    else:
+        problems.append(
+            f"{f}: the {svc} LICENSE is neither BSL-1.1 nor a proprietary operated sentence — an unclassifiable licence is not a permission"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+for note in notes:
+    print(f"note: {note}")
+print(f"licences: {len(runnable)} runnable under BSL-1.1 ({', '.join(sorted(runnable)) or 'none graded'}), "
+      f"{upstream} upstream (out of scope), {len(notes)} absent checkout(s) noted")
+PY
+}
+
+run 'every fleet Application carries a licence permitting a customer box to run it' green \
+  check_substrate_licences "$MANIFESTS" "$ROOT/.."
+
+# The fixture fleet: the four shipped services under BSL-1.1 (the runnable
+# shape), pantry under its proprietary operated-registry sentence, box
+# under its proprietary substrate sentence, keyholder under BSL-1.1 — the
+# shape that proves the licence check alone cannot see keyholder.
+fixture_fleet="$WORK/operated-fleet"
+rm -rf "$fixture_fleet"
+mkdir -p "$fixture_fleet/identity" "$fixture_fleet/gateway" "$fixture_fleet/courier" "$fixture_fleet/parlor" \
+  "$fixture_fleet/pantry" "$fixture_fleet/box" "$fixture_fleet/keyholder" "$fixture_fleet/ledger"
+for svc in identity gateway courier parlor keyholder ledger; do
+  cat >"$fixture_fleet/$svc/LICENSE" <<'LICENSE'
+Business Source License 1.1
+
+Parameters
+
+Licensor:             Cafaye
+Additional Use Grant: None
+Change Date:          2030-10-10
+Change License:       Apache-2.0
+LICENSE
+done
+cat >"$fixture_fleet/box/LICENSE" <<'LICENSE'
+Copyright (c) 2026 Cafaye. All rights reserved.
+
+Box is Cafaye-proprietary, and it is closed by decision rather than by
+omission. It is the operated control plane. It runs on Cafaye
+infrastructure, is never part of a customer source bundle, a customer
+install or the Kit deployment substrate, and no Box code may assume
+otherwise.
+
+There is no Business Source Licence in this file and no Change Date.
+LICENSE
+cat >"$fixture_fleet/pantry/LICENSE" <<'LICENSE'
+Copyright (c) 2026 Cafaye. All rights reserved.
+
+Pantry is Cafaye-proprietary, and it is closed by decision rather than by
+omission. It is the operated registry. It runs on Cafaye infrastructure.
+Nothing here may be run as a second, forked catalog.
+
+There is no Business Source Licence in this file and no Change Date.
+LICENSE
+if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
+   grep -q 'forked catalog' "$fixture_fleet/pantry/LICENSE" && \
+   grep -q 'Business Source License 1.1' "$fixture_fleet/keyholder/LICENSE"; then
+  # GREEN: the shipped four grade runnable where checkouts exist.
+  run 'licences: the shipped services classify runnable (BSL)' green \
+    check_substrate_licences "$MANIFESTS" "$fixture_fleet"
+  # RED CONTROL 1 — pantry's proprietary operated sentence is refused.
+  fixture_apps_pantry="$WORK/apps-pantry-licence"
+  rm -rf "$fixture_apps_pantry"
+  mkdir -p "$fixture_apps_pantry"
+  sed 's/courier/pantry/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_pantry/pantry.yaml"
+  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/pantry' "$fixture_apps_pantry/pantry.yaml"; then
+    run 'control: pantry under its proprietary operated licence fails the licence check' red \
+      check_substrate_licences "$fixture_apps_pantry" "$fixture_fleet"
+  else
+    fail 'control fixture: the pantry Application did not land' \
+      'the fixture carries no pantry chart reference, so the control would prove nothing'
+  fi
+  # RED CONTROL 2 — box's proprietary substrate sentence is refused.
+  fixture_apps_box="$WORK/apps-box-licence"
+  rm -rf "$fixture_apps_box"
+  mkdir -p "$fixture_apps_box"
+  sed 's/courier/box/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_box/box.yaml"
+  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/box' "$fixture_apps_box/box.yaml"; then
+    run 'control: box under its proprietary substrate licence fails the licence check' red \
+      check_substrate_licences "$fixture_apps_box" "$fixture_fleet"
+  else
+    fail 'control fixture: the box Application did not land' \
+      'the fixture carries no box chart reference, so the control would prove nothing'
+  fi
+  # RED CONTROL 3 — an unclassifiable licence fails closed.
+  mkdir -p "$fixture_fleet/stranger"
+  printf 'Copyright (c) 2026 Cafaye. All rights reserved. Ask nicely.\n' >"$fixture_fleet/stranger/LICENSE"
+  fixture_apps_stranger="$WORK/apps-stranger-licence"
+  rm -rf "$fixture_apps_stranger"
+  mkdir -p "$fixture_apps_stranger"
+  sed 's/courier/stranger/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_stranger/stranger.yaml"
+  sed -i.bak 's|repoURL: oci://ghcr.io/cafaye/charts/stranger|repoURL: oci://ghcr.io/cafaye/charts/stranger|' "$fixture_apps_stranger/stranger.yaml"
+  rm -f "$fixture_apps_stranger/stranger.yaml.bak"
+  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/stranger' "$fixture_apps_stranger/stranger.yaml"; then
+    run 'control: an unclassifiable licence fails the licence check' red \
+      check_substrate_licences "$fixture_apps_stranger" "$fixture_fleet"
+  else
+    fail 'control fixture: the stranger Application did not land' \
+      'the fixture carries no stranger chart reference, so the control would prove nothing'
+  fi
+else
+  fail 'control fixture: the licence fleet did not land' \
+    'a fixture LICENCE carries no classifying sentence, so the controls would prove nothing'
+fi
+
+# The deployment-role half: a fleet Application whose service manifest
+# declares a load-bearing dependency on a licence-refused (operated)
+# service is itself operated-side. keyholder is the shape: BSL-1.1, so
+# the licence half passes it — but its cafaye.yml requires box, the
+# operated control plane it exchanges capabilities against, so a box
+# running keyholder would exchange against itself. The anchor set is
+# DERIVED from the sibling licences (the same classifier as above), so no
+# service name is typed in kit: an absent checkout is a note, and a
+# dependency on it is not asserted. A dependency marked `required: false`
+# is not load-bearing and does not refuse.
+check_substrate_deployment_role() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import sys
+
+import yaml
+
+apps_dir, fleet_dir = sys.argv[1:3]
+FLEET_ROOT = "oci://ghcr.io/cafaye/charts/"
+
+def classify(text):
+    stripped = text.lstrip()
+    if stripped.startswith("Business Source License 1.1") and \
+            "Change Date:" in text and "Change License:" in text:
+        return "runnable"
+    lowered = text.lower()
+    if "never part of" in lowered and "deployment substrate" in lowered:
+        return "refused"
+    if "runs on cafaye infrastructure" in lowered and \
+            ("forked catalog" in lowered or "operated registry" in lowered):
+        return "refused"
+    return "unclassifiable"
+
+def fleet_service(app_file):
+    try:
+        doc = yaml.safe_load(open(app_file, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        return None, f"{os.path.basename(app_file)}: does not parse ({e})"
+    if not isinstance(doc, dict):
+        return None, f"{os.path.basename(app_file)}: not a mapping"
+    repo = ((doc.get("spec") or {}).get("source") or {}).get("repoURL", "")
+    if isinstance(repo, str) and repo.startswith(FLEET_ROOT):
+        chart = repo[len(FLEET_ROOT):]
+        if chart and "/" not in chart:
+            return chart, None
+    return None, None
+
+# The anchor set: every sibling service whose licence classifies refused.
+# Derived, never typed — an absent checkout contributes nothing.
+refused = set()
+for svc in sorted(os.listdir(fleet_dir)):
+    lic = os.path.join(fleet_dir, svc, "LICENSE")
+    if not os.path.isfile(lic):
+        continue
+    try:
+        with open(lic, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        continue
+    if classify(text) == "refused":
+        refused.add(svc)
+
+problems = []
+notes = []
+graded = []
+for f in sorted(os.listdir(apps_dir)):
+    if not f.endswith((".yaml", ".yml")):
+        continue
+    svc, err = fleet_service(os.path.join(apps_dir, f))
+    if err:
+        problems.append(err)
+        continue
+    if svc is None:
+        continue
+    manifest = os.path.join(fleet_dir, svc, "cafaye.yml")
+    if not os.path.isfile(manifest):
+        notes.append(f"{svc}: no sibling cafaye.yml under {fleet_dir} — not asserted")
+        continue
+    try:
+        man = yaml.safe_load(open(manifest, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        problems.append(f"{f}: the {svc} cafaye.yml does not parse ({e}) — an unreadable manifest is not a permission")
+        continue
+    deps = (man.get("dependencies") or []) if isinstance(man, dict) else []
+    if not isinstance(deps, list):
+        problems.append(f"{f}: the {svc} cafaye.yml dependencies is not a list — an unreadable manifest is not a permission")
+        continue
+    graded.append(svc)
+    for dep in deps:
+        if not isinstance(dep, dict):
+            continue
+        name = dep.get("name")
+        if dep.get("required", True) and name in refused:
+            problems.append(
+                f"{f}: {svc} requires {name}, which its licence names Cafaye-operated — "
+                "a service that needs the operated plane at runtime is operated-side, not box-run"
+            )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+for note in notes:
+    print(f"note: {note}")
+print(f"deployment role: {len(graded)} manifest(s) graded ({', '.join(sorted(graded)) or 'none'}), "
+      f"{len(refused)} licence-refused anchor(s) ({', '.join(sorted(refused)) or 'none'}), {len(notes)} noted")
+PY
+}
+
+run 'no fleet Application requires an operated service at runtime' green \
+  check_substrate_deployment_role "$MANIFESTS" "$ROOT/.."
+
+# RED CONTROL — a BSL-but-operated service fails the deployment-role check.
+# `ledger` is BSL (the licence half passes it, the way keyholder passes)
+# and requires the licence-refused `box`, the way keyholder requires the
+# control plane it exchanges against. A check that only reads licences
+# cannot see it; this one must.
+fixture_apps_ledger="$WORK/apps-ledger-role"
+rm -rf "$fixture_apps_ledger"
+mkdir -p "$fixture_apps_ledger"
+sed 's/courier/ledger/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_ledger/ledger.yaml"
+cat >"$fixture_fleet/ledger/cafaye.yml" <<'YAML'
+name: ledger
+description: A BSL service that requires the operated control plane.
+language: go
+core: ^0.2.0
+dependencies:
+  - name: box
+    version: ^0.1.0
+    required: true
+repository:
+  url: git@github.com:cafaye/ledger.git
+  visibility: private
+owner:
+  team: ledger
+  contact: ledger@cafaye.com
+YAML
+if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/ledger' "$fixture_apps_ledger/ledger.yaml" && \
+   grep -q 'name: box' "$fixture_fleet/ledger/cafaye.yml" && \
+   grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE"; then
+  run 'control: a BSL service requiring an operated service fails the deployment-role check' red \
+    check_substrate_deployment_role "$fixture_apps_ledger" "$fixture_fleet"
+else
+  fail 'control fixture: the ledger shape did not land' \
+    'the fixture names no ledger chart, no box dependency or no refused anchor, so the control would prove nothing'
+fi
+
+# The route half: gateway's ROUTE_TABLE names the operated pantry origin
+# for both pantry routes, from the one chart value. An in-cluster baseUrl
+# (http://pantry*) is the shape that produced the live 503 — a route at an
+# address no box serves. An absent gateway checkout is a note, not a
+# verdict (the §11b precedent); a present checkout is graded.
+OPERATED_PANTRY_ORIGIN="https://pantry.cafaye.com"
+check_gateway_operated_pantry() {
+  "$PY" - "$1" "$2" <<'PY'
+import json
+import os
+import sys
+
+import yaml
+
+apps_flag, fleet_dir = sys.argv[1:3]
+checkout = os.path.join(fleet_dir, "gateway")
+values_path = os.path.join(checkout, "charts", "gateway", "values.yaml")
+if not os.path.isfile(values_path):
+    print(f"note: no sibling gateway checkout under {fleet_dir} — not asserted")
+    print("route: gateway checkout absent, noted")
+    sys.exit(0)
+try:
+    values = yaml.safe_load(open(values_path, encoding="utf-8"))
+except yaml.YAMLError as e:
+    print(f"gateway's chart values do not parse ({e})")
+    sys.exit(1)
+table_raw = ((values.get("env") or {}).get("ROUTE_TABLE")) if isinstance(values, dict) else None
+if not table_raw:
+    print("gateway's chart ships no env.ROUTE_TABLE — the pantry route's origin cannot be found")
+    sys.exit(1)
+try:
+    table = json.loads(table_raw)
+except (ValueError, TypeError) as e:
+    print(f"gateway's ROUTE_TABLE is not JSON ({e})")
+    sys.exit(1)
+problems = []
+for prefix in ("/v1/pantry", "/v1/pantry-writes"):
+    entry = table.get(prefix)
+    if not isinstance(entry, dict):
+        problems.append(f"{prefix} is not a routed entry — the published pantry surface moved without its origin")
+        continue
+    base = entry.get("baseUrl", "")
+    if base != "https://pantry.cafaye.com":
+        problems.append(
+            f"{prefix} names {base!r}, want the operated origin https://pantry.cafaye.com — "
+            "an in-cluster pantry is the live 503 again"
+        )
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print("both pantry routes name the operated origin https://pantry.cafaye.com, from the one ROUTE_TABLE value")
+PY
+}
+
+run 'gateway routes pantry at the operated origin' green \
+  check_gateway_operated_pantry "$MANIFESTS" "$ROOT/.."
+
+# RED CONTROL — a fixture whose ROUTE_TABLE names an in-cluster pantry
+# fails. The shape that produced the live 503 must not come back.
+fixture_gw="$WORK/gateway-incluster"
+rm -rf "$fixture_gw/gateway/charts/gateway"
+mkdir -p "$fixture_gw/gateway/charts/gateway"
+cat >"$fixture_gw/gateway/charts/gateway/values.yaml" <<'YAML'
+env:
+  ROUTE_TABLE: '{"/v1/pantry":{"baseUrl":"http://pantry:8080","public":true},"/v1/pantry-writes":{"baseUrl":"http://pantry:8080","principal":["sub"]}}'
+YAML
+if grep -q 'http://pantry:8080' "$fixture_gw/gateway/charts/gateway/values.yaml"; then
+  run 'control: an in-cluster pantry ROUTE_TABLE fails the route check' red \
+    check_gateway_operated_pantry "$MANIFESTS" "$fixture_gw"
+else
+  fail 'control fixture: the in-cluster ROUTE_TABLE did not land' \
+    'the fixture names no in-cluster pantry, so the control would prove nothing'
+fi
 
 # ===========================================================================
 # 16. THE CLUSTER THAT IS ALREADY THERE — KIT_SUBSTRATE_KUBECONFIG

@@ -2,6 +2,26 @@
 
 ### Substrate
 
+- **The substrate carries only what a customer runs: pantry, box and
+  keyholder are out.** All three are Cafaye-operated and reached over
+  HTTPS — pantry at `https://pantry.cafaye.com` (gateway's ROUTE_TABLE
+  names the operated origin for both pantry routes, from the one chart
+  value), the registry exchange at `KIT_SUBSTRATE_REGISTRY_URL`, the
+  control plane at `KIT_SUBSTRATE_BOX_URL` — so their Applications,
+  databases, roles, secrets and migrate wiring are removed, and
+  `KIT_SUBSTRATE_DATABASES` shrinks to
+  `identity,gateway,courier,parlor`. The boundary is checked three
+  ways: no Application, database, role, secret or migration names an
+  operated service; every fleet Application's licence permits a
+  customer's box to run it (BSL-1.1 passes; either proprietary operated
+  sentence — box's substrate refusal, pantry's forked-catalog refusal —
+  fails; keyholder is BSL and passes this half); and no fleet
+  Application may require an operated service at runtime (keyholder's
+  own manifest requires box, which is the dimension that catches it).
+  A 503 naming the unreachable *external* pantry origin is the honest
+  answer until Cafaye hosts the registry. See
+  `REPORT-roll-c5-operated-out.md`.
+
 - **Step 5 asks GHCR first, and only reaches for the capability when an
   artifact is private.** The pull-secret step demanded a single-use,
   minutes-lived, box-bound capability before looking at a single artifact —

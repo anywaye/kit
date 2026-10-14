@@ -4669,10 +4669,12 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 #   does not provision, and an Application Argo cannot render is Unknown
 #   (ComparisonError at loki/storage.bucketNames.chunks) — see
 #   REPORT-roll-c5-loki-render.md.
-# The service set follows manifests/applications/: pantry, box and keyholder
-# ship Applications at the same private-OCI triple, so an unclassified
-# Application still fails closed while the fleet's own charts resolve.
-SERVICE_APPS = {"identity", "gateway", "courier", "parlor", "pantry", "box", "keyholder"}
+# The service set follows manifests/applications/: the four services a
+# customer runs. Pantry, box and keyholder ship no Application — all three
+# are Cafaye-operated and reached over HTTPS — so an Application naming one
+# of them is unclassified and still fails closed while the fleet's own
+# charts resolve.
+SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
 EXPECTED = {
     "alloy": (GRAFANA_REPO, "alloy", "1.13.0"),
     "grafana": (GRAFANA_REPO, "grafana", "10.5.15"),
