@@ -77,6 +77,29 @@
 #      place holds the number, and a service with no chart still composes —
 #      the read resolves to empty and the image keeps its sha/branch/latest
 #      three. `sha-<40>` is untouched.
+#
+#   3b. THE IMAGE DIGEST — THE OTHER HALF OF THE SAME NAME, AND THE HALF THAT
+#      REACHES THE POD. The tag in seam 3 is overwritten on EVERY push (it is
+#      this file's own appVersion hand-off, re-published per master push), and
+#      charts pinned the image by that tag: the rendered Deployment was
+#      textually identical before and after a build, Argo's diff reported
+#      `Synced` with no rollout, and the box sat on the old image. MEASURED
+#      (roll-c5-image-digest): the registry's `ghcr.io/cafaye/gateway:0.1.0`
+#      held `sha256:c264…37165` while the node ran `sha256:8e60…e79b`, six
+#      hours after the fix was merged and published — a refresh reported
+#      `Synced` with no diff and `imagePullPolicy: IfNotPresent` re-served
+#      the stale copy on every pod restart. So the chart names the image by
+#      DIGEST, which cannot move, and THIS COMPOSER is the party that knows
+#      both ends: it takes the image job's build output and hands it to the
+#      chart job, which writes it into `values.yaml`'s `image.digest` before
+#      `helm push`. The pushed chart therefore names the bytes the registry
+#      holds beside it, a new build is a textual diff Argo rolls, and the
+#      chart VERSION still does not move — seam 2's targetRevision agreement
+#      is untouched, which is what lets the chart's content change under a
+#      fixed tag. The tag stays as well: it is the human-readable half of the
+#      name, every service chart keeps `image.tag` equal to `appVersion` (the
+#      publish seam asserts it), and `bin/chart-test` renders it beside the
+#      digest.
 name: publish
 
 on:
@@ -220,10 +243,33 @@ jobs:
       app-version: ${{ needs.resolve.outputs.app-version }}
   # Same rule as `image` above: a `uses:` job cannot carry `timeout-minutes`;
   # the chart job's ceiling is chart.reusable.yml's own 15 minutes.
+  #
+  # AND WHY THE CHART JOB WAITS FOR THE IMAGE JOB (`needs:` is one of the few
+  # keywords a `uses:` job may carry, which is what makes the hand-off legal).
+  # The chart names the image by DIGEST, and chart.reusable.yml writes that
+  # digest into values.yaml from the image job's build output — so the chart
+  # cannot be packaged until the image job has produced it. A compose run
+  # therefore serializes image-then-chart, which is the correct order for a
+  # publish anyway: the artifact that names an image is made after the image.
+  #
+  # THE COST, NAMED, BECAUSE IT IS NOT ZERO: on a `push: false` run the image
+  # job still builds first and its digest output is empty (nothing was
+  # pushed), so the chart job waits for a build whose digest it will not use
+  # and packages the chart with the digest values.yaml COMMITS. That is the
+  # honest price of one derivation: the alternative — a chart job that reads
+  # the digest from the registry with `crane` — is a second source for one
+  # fact and a race against the image job's push. The committed digest is
+  # what a fresh clone renders too, which is why every service keeps one.
   chart:
     name: chart
+    needs: [resolve, image]
     uses: ./.github/workflows/chart.reusable.yml
     with:
       push: ${{ inputs.push }}
       registry: ${{ inputs.registry }}
       chart-dir: ${{ inputs.chart-dir }}
+      # Derived, never typed — the same rule as `app-version` above. A
+      # literal here would be a digest a human pasted, and the chart would
+      # name an image nobody built, which is the defect in a new spelling.
+      # Empty when nothing was pushed: the chart then packages as committed.
+      image-digest: ${{ needs.image.outputs.digest }}
