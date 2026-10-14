@@ -19,12 +19,12 @@ spec:
   # complaining on without thinking about what the Applications actually need.
   # That shape is the controller's own auto-created default, and it is the
   # right default for a cluster that has to run unknown Applications. This
-  # substrate is not that cluster: it runs eight known Applications whose
+  # substrate is not that cluster: it runs seven known Applications whose
   # charts and namespaces are enumerated in this repository, so the project
   # can be scoped to exactly those.
   #
-  #   sourceRepos        what the eight Applications name and no other: the
-  #                      two upstream Helm repos for the observability four,
+  #   sourceRepos        what the seven Applications name and no other: the
+  #                      two upstream Helm repos for the observability three,
   #                      and a chart-path GLOB for the four service charts
   #                      (oci://ghcr.io/cafaye/charts/*) — because each
   #                      Application names its own chart's PATH
@@ -91,7 +91,7 @@ spec:
   # If the maximal shape is ever needed again, the reason must be written
   # beside it — a project that allows * is a project that has stopped being
   # a boundary.
-  description: "The default project for the cafaye substrate — the eight Applications' project"
+  description: "The default project for the cafaye substrate — the seven Applications' project"
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts

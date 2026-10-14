@@ -4387,7 +4387,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # SILENTLY when the two disagree — Argo reports no error, it just never
   # finds the artifact — and the fact that BOTH ends of that seam live in
   # this repository is what makes it provable here rather than documented.
-  # The OBSERVABILITY half (`alloy`, `grafana`, `loki`, `prometheus`) is
+  # The OBSERVABILITY half (`alloy`, `grafana`, `prometheus`) is
   # NOT this seam: those are upstream charts nobody in the fleet publishes,
   # so they point at their official chart repositories with pinned versions,
   # and `check_obs_chart_sources` below governs them. This check covers the
@@ -4468,12 +4468,12 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # The observability chart sources — every Application resolves to a chart
   # somebody publishes.
   #
-  # WHY THIS CHECK EXISTS. The four observability `Application`s (`alloy`,
-  # `grafana`, `loki`, `prometheus`) once named `oci://ghcr.io/cafaye/charts`
+  # WHY THIS CHECK EXISTS. The three observability `Application`s (`alloy`,
+  # `grafana`, `prometheus`) once named `oci://ghcr.io/cafaye/charts`
   # — the fleet's private registry — for charts nothing in the fleet
   # publishes (measured: kit holds no `Chart.yaml` for any of them, and no
   # service repository's publish workflow pushes them either). On a customer
-  # box `install.sh` applied eight `Application`s and four could never sync:
+  # box `install.sh` applied seven `Application`s and three could never sync:
   # Argo reports no error for an artifact that does not exist, it just never
   # finds it — the same silent shape as the publish/consume seam above, at
   # the other end of the same directory.
@@ -4542,13 +4542,16 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 # The single rule, as data: service names resolve to the fleet's registry,
 # observability names resolve to (upstream repo, chart, pinned version).
 # The pins were verified against the upstream index before they were written:
-#   alloy 1.13.0, grafana 10.5.15, loki 7.3.0 in the grafana index;
+#   alloy 1.13.0, grafana 10.5.15 in the grafana index;
 #   prometheus 29.36.0 in the prometheus-community index.
+#   loki 7.3.0 was removed: its chart requires object storage this substrate
+#   does not provision, and an Application Argo cannot render is Unknown
+#   (ComparisonError at loki/storage.bucketNames.chunks) — see
+#   REPORT-roll-c5-loki-render.md.
 SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
 EXPECTED = {
     "alloy": (GRAFANA_REPO, "alloy", "1.13.0"),
     "grafana": (GRAFANA_REPO, "grafana", "10.5.15"),
-    "loki": (GRAFANA_REPO, "loki", "7.3.0"),
     "prometheus": (PROM_REPO, "prometheus", "29.36.0"),
 }
 
@@ -4629,7 +4632,7 @@ PY
     # (a) THE REGISTRY CONTROL: one observability Application's repoURL
     # reverted to the private OCI registry — the defect this packet removed.
     # Nothing publishes these charts there, so the install this fixture
-    # describes syncs four Applications forever.
+    # describes syncs three Applications forever.
     local registry_fixture="$TMP/obs-chart-sources-registry"
     rm -rf "$registry_fixture"
     mkdir -p "$registry_fixture"
@@ -4638,8 +4641,8 @@ PY
     # argument after `-i` and GNU sed does not, so the in-place spelling is
     # one platform's bug and the other's no-op.
     sed 's|repoURL: https://grafana.github.io/helm-charts|repoURL: oci://ghcr.io/cafaye/charts|' \
-      "$registry_fixture/loki.yaml" >"$registry_fixture/loki.yaml.reverted"
-    mv "$registry_fixture/loki.yaml.reverted" "$registry_fixture/loki.yaml"
+      "$registry_fixture/alloy.yaml" >"$registry_fixture/alloy.yaml.reverted"
+    mv "$registry_fixture/alloy.yaml.reverted" "$registry_fixture/alloy.yaml"
     if "$PY" "$checker" "$registry_fixture" >/dev/null 2>&1; then
       printf '       control (a) the registry control did not go red — the repoURL comparison is not measuring what it claims\n'
       return 1
@@ -5099,14 +5102,14 @@ PY
   # The observability chart sources — every Application resolves to a chart
   # somebody publishes.
   #
-  # The four observability `Application`s once named the private OCI registry
+  # The three observability `Application`s once named the private OCI registry
   # for charts nothing publishes; the service four are untouched by that
-  # ruling. The check states the single rule over all eight manifests — each
+  # ruling. The check states the single rule over all seven manifests — each
   # resolves to either a fleet publication or its pinned upstream — and its
   # two controls (a reverted repoURL, a drifted chart name) must go red under
   # the same assertions the real tree passes.
   section 'static: the observability chart sources — every Application resolves to a chart somebody publishes'
-  check 'obs chart sources  (service charts stay on the private OCI registry at their own path and 0.1.0; alloy/grafana/loki/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
+  check 'obs chart sources  (service charts stay on the private OCI registry at their own path and 0.1.0; alloy/grafana/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
     check_obs_chart_sources \
       "$ROOT/templates/substrate/manifests/applications"
 

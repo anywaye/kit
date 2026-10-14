@@ -16,7 +16,7 @@ this file only describes what is here and what is proven.
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
 | `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
-| `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Loki, Grafana, Prometheus). |
+| `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Grafana, Prometheus). |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 | `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
@@ -46,7 +46,7 @@ this file only describes what is here and what is proven.
    "present" on the box holding the *wrong* project. So the operator stays
    guarded and the project is re-applied on every run — one local `kubectl
    apply`, which is a no-op round trip when it is unchanged, and the same
-   convergence mechanism step 6 uses for the eight Applications.
+   convergence mechanism step 6 uses for the seven Applications.
 5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
    its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
    minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived
@@ -158,12 +158,12 @@ annotation pointing at nothing, and every chart's TLS breaks at once.
 ## The publication half of the loop
 
 The deploy loop this substrate serves is **pull-based**: a commit changes a
-chart, Argo makes the box agree. The consume end is the eight `Application`
+chart, Argo makes the box agree. The consume end is the seven `Application`
 manifests in `manifests/applications/`, in two halves with different owners:
 the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
 their own chart's path in `oci://ghcr.io/cafaye/charts` — e.g.
 `oci://ghcr.io/cafaye/charts/identity` — at `targetRevision: 0.1.0`, and the
-four observability charts (`alloy`, `grafana`, `loki`, `prometheus`) pull their
+three observability charts (`alloy`, `grafana`, `prometheus`) pull their
 official upstream chart repositories at pinned chart versions (see [The
 observability half of the loop](#the-observability-half-of-the-loop)). **The publish end
 is kit's `.github/workflows/chart.reusable.yml`**, and a service adopts it by
@@ -210,14 +210,14 @@ to push. That is one packet per service, not this one.
 
 ## The observability half of the loop
 
-The four observability `Application`s (`alloy`, `grafana`, `loki`,
+The three observability `Application`s (`alloy`, `grafana`,
 `prometheus`) once named the same private OCI registry as the service charts
 — for charts nothing in the fleet publishes, so four Applications could never
 sync. Per `DEPLOYMENT.md` ("Who owns the `Application`", cited rather than
 restated so this file cannot drift from it), the private-OCI shape exists for
 **our closed-source service charts** — a customer must be able to pull them
 without read access to our repositories. It does not cover third-party
-components we do not author and do not modify. The observability four
+components we do not author and do not modify. The observability three
 therefore point at their official upstream chart repositories with a pinned
 chart version as `targetRevision` — the standard Argo shape — **shipped
 unmodified**:
@@ -226,13 +226,12 @@ unmodified**:
 |---|---|---|---|
 | `alloy` | `https://grafana.github.io/helm-charts` | `alloy` | `1.13.0` |
 | `grafana` | `https://grafana.github.io/helm-charts` | `grafana` | `10.5.15` |
-| `loki` | `https://grafana.github.io/helm-charts` | `loki` | `7.3.0` |
 | `prometheus` | `https://prometheus-community.github.io/helm-charts` | `prometheus` | `29.36.0` |
 
 Each pin was verified to exist in its upstream repository's `index.yaml`
 before it was written. No vendoring, no publish pipeline for charts we do not
 own, and the pin keeps "the stack you get on Tuesday is the stack you
-reviewed on Monday". Kit's gate states the whole rule over all eight
+reviewed on Monday". Kit's gate states the whole rule over all seven
 manifests — every `Application` resolves to either a fleet publication or its
 pinned upstream, and anything else fails closed.
 
@@ -954,11 +953,11 @@ is an operator action, and the URL works only when observed.
   `targetRevision: 0.1.0` is a promise, not a published artifact. The
   publish path that would push them now exists (kit's `chart.reusable.yml`,
   see [The publication half of the loop](#the-publication-half-of-the-loop));
-  the charts themselves are one packet per service. The observability four,
+  the charts themselves are one packet per service. The observability three,
   by contrast, resolve to pinned upstream charts (see [The observability half
   of the loop](#the-observability-half-of-the-loop)) — what remains unproven
   for them is the live sync and retention on a customer box, below.
-- That the observability stack (Alloy, Loki, Grafana, Prometheus) actually
+- That the observability stack (Alloy, Grafana, Prometheus) actually
   deploys and retains.
 - That the Postgres Cluster ever reaches Ready, that Redis answers, or that
   any service secret decrypts into a working boot. What is proven is **a
@@ -983,7 +982,7 @@ The first real run, on a Linux box with 8GB or more:
 
 1. `curl https://cafaye.com/box/install | sh` completes all ten steps.
 2. `kubectl get nodes` shows the node Ready.
-3. `kubectl get applications -n argocd` shows all eight Applications synced.
+3. `kubectl get applications -n argocd` shows all seven Applications synced.
 4. The observability stack is reachable and retaining.
 
 Until those four are observed on real hardware, the substrate is a checked
