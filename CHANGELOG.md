@@ -2,6 +2,19 @@
 
 ### Substrate
 
+- **The OIDC patch restarts identity and watches its JWKS route answer.**
+  The patch wrote all four OIDC keys into a secret whose pod was already
+  running (`envFrom` is read at pod start): the keys round-tripped while the
+  pod served `identity_jwks=404` — secret created 2026-10-14T20:58:43Z, pod
+  started 28s earlier — with `OIDCEnabled()` false in that process and
+  gateway's `/readyz` 503 x61 over 10m. After the round-trip check the patch
+  path now restarts `deployment/identity`, watches the rollout bounded
+  (`IDENTITY_ROLLOUT_TIMEOUT`, existence re-proven first per the wait-lists
+  rule), then probes `GET /.well-known/jwks.json` for 2xx; a stuck rollout
+  or a non-2xx route is fatal. Creation path and converged re-runs restart
+  nothing. The done report names verified vs unverified instead of promising
+  a route the run did not watch. See `REPORT-roll-c5-oidc-restart.md`.
+
 - **The substrate carries only what a customer runs: pantry, box and
   keyholder are out.** All three are Cafaye-operated and reached over
   HTTPS — pantry at `https://pantry.cafaye.com` (gateway's ROUTE_TABLE

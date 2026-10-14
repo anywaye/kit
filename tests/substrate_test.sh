@@ -4774,12 +4774,34 @@ for bad in "https://app.example.com/sign-in?x=1" "https://app.example.com/sign-i
   fi
 done
 
+# oidc_jwks_curl — identity's JWKS route over the forwarded port, answered
+# from the environment. Prints the bare HTTP status the way
+# `curl -o /dev/null -w '%{http_code}'` does. OIDC_JWKS_STATUS forces the red
+# shapes: 404 is the live box (the route absent on the stale pod), anything
+# non-2xx must be fatal. Unmocked URLs fail loudly, never silently 200.
+oidc_jwks_curl() {
+  printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
+  case "$*" in
+    *"/.well-known/jwks.json"*)
+      printf '%s' "${OIDC_JWKS_STATUS:-200}"
+      return 0
+      ;;
+    *)
+      printf 'oidc_jwks_curl: unmocked %s\n' "$*" >&2
+      return 1
+      ;;
+  esac
+}
+
 # Warm-box reconcile: a pre-existing identity-secrets without OIDC_LOGIN_UI_URL
 # gains the fourth key when the operator now supplies both inputs, reusing the
 # stored signing key.
 MOCK_ROOT="$WORK/oidc-warm-reconcile"
 mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
+# The identity Deployment the live box holds: the pod whose environment the
+# patch must reach (started 28s BEFORE the secret on the measured box).
+mkdir -p "$MOCK_ROOT/identity/deploy-identity"
 # Legacy secret: three OIDC keys but no login UI (the crashloop shape).
 mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
 mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
@@ -4799,6 +4821,11 @@ oidc_warm_ec=0
   # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
+  curl() { oidc_jwks_curl "$@"; }
+  # The port-forward is stubbed (it never blocks here), so the port wait must
+  # be too — the mint harness stubs it for the same reason, and the wait
+  # itself is proven green and red against a real socket in 13f-2.
+  kit_substrate_await_port() { return 0; }
   mfa_smtp_env
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$OIDC_FOUR_LOGIN"
@@ -4813,6 +4840,403 @@ elif [ "$(mock_get identity identity-secrets OIDC_SIGNING_KEY)" != "$legacy_oidc
 else
   pass 'warm: a legacy secret without login UI is patched, reusing the stored signing key'
 fi
+# The patch must REACH the pod: identity is restarted, the rollout is watched
+# bounded, and the JWKS route is probed — the stale-pod gap is a restart the
+# installer never asked for.
+if grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv"; then
+  pass 'warm: identity is restarted after its OIDC secret is patched'
+else
+  fail 'warm: identity is restarted after its OIDC secret is patched' "no rollout restart in $(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null)"
+fi
+if grep -q 'rollout status deployment/identity.*--timeout=' "$MOCK_ROOT/kubectl-argv"; then
+  pass 'warm: the OIDC restart is watched with a bounded rollout status'
+else
+  fail 'warm: the OIDC restart is watched with a bounded rollout status' "no bounded rollout status in $(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null)"
+fi
+case "$(cat "$WORK/oidc-warm.log")" in
+  *'JWKS route answers 2'*)
+    pass 'warm: the JWKS route is verified serving after the restart'
+    ;;
+  *)
+    fail 'warm: the JWKS route is verified serving after the restart' "$(cat "$WORK/oidc-warm.log")"
+    ;;
+esac
+
+# ===========================================================================
+# 13d-oidc-restart. The OIDC patch restarts identity and watches its JWKS
+# route answer — a patched secret reaches no running pod (envFrom is read at
+# pod start).
+# ===========================================================================
+#
+# THE LIVE DEFECT (2026-10-14/15, test box, warm re-run with issuer and login
+# UI set): the secret gained all four keys and the read-back verified them,
+# but the pod never saw them —
+#   identity_jwks=404                      (from a pod in the gateway namespace)
+#   identity-secrets created: 2026-10-14T20:58:43Z
+#   identity pod startTime:   2026-10-14T20:58:15Z   (28 SECONDS BEFORE the secret)
+#   gateway readiness: 503 x61 over 10m
+# so OIDCEnabled() was false in that process, the routes absent rather than
+# present-and-500, and gateway's /readyz 503 forever — while the report said
+# the issuer was set.
+#
+# THE FIX. reconcile_oidc_identity_secrets restarts deployment/identity after
+# a patch that changed the secret, watches the rollout bounded, then probes
+# GET /.well-known/jwks.json for 2xx. Only the patch path: the creation path
+# has no running pod to restart, and the guard's early return (both keys
+# already stored) keeps a converged re-run a no-op.
+#
+# Green, real tree: patch restarts, the rollout is watched bounded, the route
+# answers. Green: converged re-run and creation path restart nothing. Red:
+# the master-shaped fixture (patch, no restart) fails the restart check; a
+# stuck rollout is fatal, never forgiven; a 404 JWKS is fatal.
+oidc_patch_seed() {
+  # The warm legacy box: three OIDC keys, no login UI, Deployment present.
+  mfa_seed_roles
+  mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
+  mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
+  mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
+  mock_seed identity identity-secrets NATS_URL "nats://nats.data.svc.cluster.local:4222"
+  mock_seed identity identity-secrets OIDC_ISSUER "$OIDC_FOUR_ISSUER"
+  mock_seed identity identity-secrets OIDC_SIGNING_KEY "legacy-oidc-key"
+  mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "legacy-oidc-kid"
+  mock_seed gateway gateway-secrets REDIS_URL "redis://:pw@redis.data.svc.cluster.local:6379"
+  mock_seed gateway gateway-secrets ASSERTION_SIGNING_KEY "dummy"
+  mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/courier"
+  mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
+  mkdir -p "$MOCK_ROOT/identity/deploy-identity"
+}
+
+# oidc_patch_kubectl — mock_kubectl with a stuck-rollout hook: OIDC_ROLLOUT_FAIL
+# set refuses `rollout status deployment/identity` the way a Deployment that
+# never completes answers it. The argv line is still recorded, so the check
+# can tell "the wait ran and lost" from "no wait ran".
+oidc_patch_kubectl() {
+  case "$*" in
+    *"rollout status deployment/identity"*)
+      if [ -n "${OIDC_ROLLOUT_FAIL:-}" ]; then
+        printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
+        printf 'error: deployment "identity" exceeded its progress deadline\n' >&2
+        return 1
+      fi
+      ;;
+  esac
+  mock_kubectl "$@"
+}
+
+# oidc_nodeploy_kubectl — the API server on a box Argo has not synced yet: a
+# GET of the named Deployment is NotFound (exit 1), exactly as real kubectl
+# answers it. mock_kubectl cannot model this — its get-deployment branch
+# exits 0 on a missing object — so the restart-skipped branch needs its own
+# verbatim refusal.
+oidc_nodeploy_kubectl() {
+  case "$*" in
+    *"get deployment identity"*)
+      printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
+      printf 'Error from server (NotFound): deployments.apps "identity" not found\n' >&2
+      return 1
+      ;;
+    *)
+      oidc_patch_kubectl "$@"
+      ;;
+  esac
+}
+
+# oidc_patch_run <sourced-fixture> — the warm legacy secret against that
+# fixture. Leaves the exit in $oidc_patch_ec, output in
+# $WORK/oidc-patch-run.log, argv in $MOCK_ROOT/kubectl-argv. OIDC_PATCH_TIMEOUT
+# overrides the rollout bound when set; OIDC_JWKS_STATUS answers the probe.
+oidc_patch_run() {
+  oidc_patch_ec=0
+  (
+    # shellcheck source=/dev/null
+    . "$1"
+    kubectl() { "${OIDC_KUBECTL_FN:-oidc_patch_kubectl}" "$@"; }
+    curl() { oidc_jwks_curl "$@"; }
+    # The port-forward is stubbed (it never blocks here), so the port wait
+    # must be too — the mint harness stubs it for the same reason, and the
+    # wait itself is proven green and red against a real socket in 13f-2.
+    kit_substrate_await_port() { return 0; }
+    mfa_smtp_env
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$OIDC_FOUR_LOGIN"
+    if [ -n "${OIDC_PATCH_TIMEOUT:-}" ]; then
+      IDENTITY_ROLLOUT_TIMEOUT="$OIDC_PATCH_TIMEOUT"
+    fi
+    install_service_secrets >"$WORK/oidc-patch-run.log" 2>&1
+  ) || oidc_patch_ec=$?
+}
+
+# check_oidc_patch_restart <sourced-fixture> — one property per check: the
+# patch reaches the pod (restart), the restart is watched (bounded status),
+# and the route is verified (2xx in the log). Any failure names which half
+# is missing, so a red control that fails for another reason cannot satisfy
+# it by accident.
+check_oidc_patch_restart() {
+  MOCK_ROOT="$WORK/oidc-patch-green"
+  rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+  OIDC_PATCH_TIMEOUT=5
+  oidc_patch_seed
+  oidc_patch_run "$1"
+  OIDC_PATCH_TIMEOUT=""
+  if [ "$oidc_patch_ec" -ne 0 ]; then
+    printf 'the warm patch exited %s\n%s\n' "$oidc_patch_ec" "$(cat "$WORK/oidc-patch-run.log")"
+    return 1
+  fi
+  if ! grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+    printf 'identity was not restarted after its OIDC secret changed\n'
+    return 1
+  fi
+  if ! grep -q 'rollout status deployment/identity.*--timeout=5s' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+    printf 'the restart was not watched with the bounded rollout status\n%s\n' "$(cat "$MOCK_ROOT/kubectl-argv")"
+    return 1
+  fi
+  case "$(cat "$WORK/oidc-patch-run.log")" in
+    *'JWKS route answers 2'*) ;;
+    *)
+      printf 'the JWKS route was not verified serving after the restart\n%s\n' "$(cat "$WORK/oidc-patch-run.log")"
+      return 1
+      ;;
+  esac
+  if [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" != "$OIDC_FOUR_LOGIN" ]; then
+    printf 'the fourth key did not land: OIDC_LOGIN_UI_URL=%s\n' "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)"
+    return 1
+  fi
+  printf 'patched, restarted, rollout watched bounded, JWKS answers 2xx'
+}
+run 'warm: the OIDC patch restarts identity, watches the rollout bounded, and verifies the JWKS route' green \
+  check_oidc_patch_restart "$fixture_sourced"
+
+# Converged re-run: the secret already carries all four keys, so the guard's
+# early return holds and NOTHING restarts — a needless restart is a needless
+# outage. Self-contained: converge the store first, then re-run against it.
+check_oidc_patch_noop() {
+  MOCK_ROOT="$WORK/oidc-patch-noop"
+  rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+  oidc_patch_seed
+  oidc_patch_run "$1"
+  if [ "$oidc_patch_ec" -ne 0 ]; then
+    printf 'the converging run exited %s\n%s\n' "$oidc_patch_ec" "$(cat "$WORK/oidc-patch-run.log")"
+    return 1
+  fi
+  : >"$MOCK_ROOT/kubectl-argv"
+  oidc_patch_run "$1"
+  if [ "$oidc_patch_ec" -ne 0 ]; then
+    printf 'the converged re-run exited %s\n%s\n' "$oidc_patch_ec" "$(cat "$WORK/oidc-patch-run.log")"
+    return 1
+  fi
+  if grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+    printf 'a converged re-run restarted identity — the guard early return is broken\n'
+    return 1
+  fi
+  printf 'converged re-run restarts nothing'
+}
+run 'warm: a converged OIDC box restarts nothing on a re-run' green \
+  check_oidc_patch_noop "$fixture_sourced"
+
+# Creation path: a fresh box writes the keys with the secret and has no
+# running pod to restart.
+check_oidc_create_no_restart() {
+  MOCK_ROOT="$WORK/oidc-patch-create"
+  rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+  mfa_seed_roles
+  oidc_patch_run "$1"
+  if [ "$oidc_patch_ec" -ne 0 ]; then
+    printf 'the fresh install exited %s\n%s\n' "$oidc_patch_ec" "$(cat "$WORK/oidc-patch-run.log")"
+    return 1
+  fi
+  for k in OIDC_ISSUER OIDC_SIGNING_KEY OIDC_SIGNING_KEY_ID OIDC_LOGIN_UI_URL; do
+    if [ -z "$(mock_get identity identity-secrets "$k")" ]; then
+      printf 'the creation path did not write %s\n' "$k"
+      return 1
+    fi
+  done
+  if grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+    printf 'the creation path restarted a pod that does not exist yet\n'
+    return 1
+  fi
+  printf 'creation writes all four keys and restarts nothing'
+}
+run 'warm: the OIDC creation path writes the keys and restarts nothing' green \
+  check_oidc_create_no_restart "$fixture_sourced"
+
+# THE RED CONTROL is the master shape: the patch without the restart — the
+# real tree with reconcile's restart/wait/probe block deleted, so the control
+# tracks future edits to the surrounding code. Its premise is asserted first:
+# the probe call is gone but the round-trip check stands, so the fixture is
+# the patch path that leaves the pod stale rather than some other breakage.
+# If the restart check passed against it, the check would be worthless.
+oidc_norestart_fixture="$WORK/install-oidc-norestart.sh"
+# From the main-stripped fixture, not the raw tree: sourcing a file that still
+# carries its trailing `main "$@"` would execute the install with the fixture
+# path as its argument rather than defining its functions.
+awk '
+  /^reconcile_oidc_identity_secrets\(\)/ { in_fn=1 }
+  in_fn && /^  if kubectl .* get deployment identity -n identity/ { skip=1; next }
+  skip && /^  fi$/ { skip=0; next }
+  skip { next }
+  { print }
+' "$fixture_sourced" >"$oidc_norestart_fixture"
+if grep -q 'verify_oidc_jwks_route || exit 1' "$oidc_norestart_fixture" \
+  || grep -q 'restarted deployment/identity so the patched OIDC surface' "$oidc_norestart_fixture"; then
+  fail 'control fixture: reconcile restarts nothing' \
+    "the restart/wait/probe deletion did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+elif ! grep -q 'did not round-trip' "$oidc_norestart_fixture"; then
+  fail 'control fixture: reconcile restarts nothing' \
+    "the round-trip check is gone too — the fixture is no longer the patch path"
+  failures=$((failures + 1))
+else
+  oidc_red_out=""; oidc_red_ec=0
+  oidc_red_out="$(check_oidc_patch_restart "$oidc_norestart_fixture" 2>&1)" || oidc_red_ec=$?
+  if [ "$oidc_red_ec" -eq 0 ]; then
+    fail 'control: the master-shaped patch leaves the pod stale, failing the check' \
+      "exit 0 — the check passed against a patch with no restart, so it discriminates nothing"
+  elif case "$oidc_red_out" in *'was not restarted'*) true ;; *) false ;; esac; then
+    pass 'control: the master-shaped patch leaves the pod stale, failing the check'
+  else
+    fail 'control: the master-shaped patch leaves the pod stale, failing the check' "$oidc_red_out"
+  fi
+fi
+
+# A STUCK ROLLOUT IS FATAL. A wait that forgives it reports success over a box
+# still serving no route — worse than no wait. Same warm seed; only the
+# rollout status refuses.
+MOCK_ROOT="$WORK/oidc-patch-stuck"
+rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+oidc_patch_seed
+OIDC_ROLLOUT_FAIL=1
+oidc_patch_run "$fixture_sourced"
+OIDC_ROLLOUT_FAIL=""
+if [ "$oidc_patch_ec" -eq 0 ]; then
+  fail 'warm: a stuck OIDC rollout refuses rather than reporting success' "exit 0 — the wait forgave the stuck rollout"
+elif ! grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+  fail 'warm: a stuck OIDC rollout refuses rather than reporting success' "the restart never ran — the wait was skipped, not lost"
+elif ! grep -q 'rollout status deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+  fail 'warm: a stuck OIDC rollout refuses rather than reporting success' "the rollout was never watched"
+else
+  case "$(cat "$WORK/oidc-patch-run.log")" in
+    *'did not roll out after the OIDC patch'*)
+      case "$(cat "$WORK/oidc-patch-run.log")" in
+        *'JWKS route answers 2'*)
+          fail 'warm: a stuck OIDC rollout refuses rather than reporting success' "the run refused AND claimed the route verified"
+          ;;
+        *)
+          pass 'warm: a stuck OIDC rollout refuses rather than reporting success'
+          ;;
+      esac
+      ;;
+    *)
+      fail 'warm: a stuck OIDC rollout refuses rather than reporting success' "$(cat "$WORK/oidc-patch-run.log")"
+      ;;
+  esac
+fi
+
+# The live 404: the route absent on the restarted pod is fatal too — a secret
+# that round-trips while the service serves no route is the gap this packet
+# exists to close, and reporting success over it is the old defect exactly.
+MOCK_ROOT="$WORK/oidc-patch-404"
+rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+oidc_patch_seed
+OIDC_JWKS_STATUS=404
+oidc_patch_run "$fixture_sourced"
+OIDC_JWKS_STATUS=""
+if [ "$oidc_patch_ec" -eq 0 ]; then
+  fail 'warm: a 404 JWKS after the OIDC restart refuses rather than reporting success' "exit 0 — identity_jwks=404 reported as success"
+else
+  case "$(cat "$WORK/oidc-patch-run.log")" in
+    *'answers 404'*)
+      pass 'warm: a 404 JWKS after the OIDC restart refuses rather than reporting success'
+      ;;
+    *)
+      fail 'warm: a 404 JWKS after the OIDC restart refuses rather than reporting success' "$(cat "$WORK/oidc-patch-run.log")"
+      ;;
+  esac
+fi
+
+# No Deployment yet: the secret converges, no restart is attempted, and the
+# run still exits 0 — the next sync boots with the patched secret. The same
+# warm seed minus the Deployment Argo has not synced, and a kubectl that
+# answers the named GET the way the API server does (NotFound, exit 1).
+MOCK_ROOT="$WORK/oidc-patch-nodeploy"
+rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
+mfa_seed_roles
+mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
+mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
+mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
+mock_seed identity identity-secrets NATS_URL "nats://nats.data.svc.cluster.local:4222"
+mock_seed identity identity-secrets OIDC_ISSUER "$OIDC_FOUR_ISSUER"
+mock_seed identity identity-secrets OIDC_SIGNING_KEY "legacy-oidc-key"
+mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "legacy-oidc-kid"
+mock_seed gateway gateway-secrets REDIS_URL "redis://:pw@redis.data.svc.cluster.local:6379"
+mock_seed gateway gateway-secrets ASSERTION_SIGNING_KEY "dummy"
+mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/courier"
+mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
+OIDC_KUBECTL_FN=oidc_nodeploy_kubectl
+oidc_patch_run "$fixture_sourced"
+OIDC_KUBECTL_FN=""
+if [ "$oidc_patch_ec" -ne 0 ]; then
+  fail 'warm: the OIDC patch without a Deployment converges the secret and skips the restart' "$(cat "$WORK/oidc-patch-run.log")"
+elif [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" != "$OIDC_FOUR_LOGIN" ]; then
+  fail 'warm: the OIDC patch without a Deployment converges the secret and skips the restart' "the fourth key did not land"
+elif grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
+  fail 'warm: the OIDC patch without a Deployment converges the secret and skips the restart' "a missing Deployment was restarted"
+else
+  case "$(cat "$WORK/oidc-patch-run.log")" in
+    *'restart skipped'*'unverified by this run'*)
+      pass 'warm: the OIDC patch without a Deployment converges the secret and skips the restart'
+      ;;
+    *)
+      fail 'warm: the OIDC patch without a Deployment converges the secret and skips the restart' "$(cat "$WORK/oidc-patch-run.log")"
+      ;;
+  esac
+fi
+
+# The done report names which OIDC state the run produced: verified this run,
+# patched-but-unwatched, or neither. The unset-issuer wording is asserted in
+# §27 and untouched; these three cover the set-issuer half the stale-pod gap
+# is about.
+oidc_report_final() {
+  # $1: OIDC_ROUTE_VERIFIED value. $2: OIDC_SECRET_PATCHED value.
+  (
+    # shellcheck source=/dev/null
+    . "$fixture_sourced"
+    READINESS_TLS_PENDING=""
+    READINESS_DNS_SPLIT=""
+    READINESS_DNS_STATUS=""
+    REGISTRY_PATH="anonymous"
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+    OIDC_ROUTE_VERIFIED="$1"
+    OIDC_SECRET_PATCHED="$2"
+    kit_substrate_readiness_final
+  ) 2>&1
+}
+oidc_report_out="$(oidc_report_final 1 "")"
+case "$oidc_report_out" in
+  *'watched its JWKS route answer 2xx'*)
+    pass 'report: a verified OIDC run says the route was watched this run'
+    ;;
+  *)
+    fail 'report: a verified OIDC run says the route was watched this run' "$oidc_report_out"
+    ;;
+esac
+oidc_report_out="$(oidc_report_final "" 1)"
+case "$oidc_report_out" in
+  *'no rollout was watched and the JWKS route is unverified'*)
+    pass 'report: a patched-but-unwatched OIDC run names the unverified route'
+    ;;
+  *)
+    fail 'report: a patched-but-unwatched OIDC run names the unverified route' "$oidc_report_out"
+    ;;
+esac
+oidc_report_out="$(oidc_report_final "" "")"
+case "$oidc_report_out" in
+  *'did not verify identity'"'"'s JWKS route'*)
+    pass 'report: an unverified OIDC run does not promise a watched route'
+    ;;
+  *)
+    fail 'report: an unverified OIDC run does not promise a watched route' "$oidc_report_out"
+    ;;
+esac
 
 # 13d-bis. A gateway-secrets that PREDATES the assertion key is healed on a
 # re-run. This is the live box exactly: all four service secrets exist (so the

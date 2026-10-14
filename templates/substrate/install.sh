@@ -3269,6 +3269,13 @@ reconcile_oidc_identity_secrets() {
   if kubectl --kubeconfig="$KUBECONFIG" get deployment identity -n identity >/dev/null 2>&1; then
     kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
     kit_substrate_out "      restarted deployment/identity so the patched OIDC surface reaches the pod (envFrom is read at pod start)"
+    # EXISTENCE, THEN WAIT: `rollout status` on a missing object is NotFound,
+    # not a wait, so the Deployment the restart just kicked is re-proven
+    # first — the same two-waits shape step 12 uses, and the shape the
+    # wait-lists audit demands. Returns at once while the list is non-empty;
+    # only a Deployment deleted mid-restart polls to the bound and refuses
+    # naming it.
+    kit_substrate_await_list "$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity
     # A restart that is not waited for is a step reporting success over a pod
     # still coming up, so the rollout is watched with the same bound the
     # file's other identity rollouts use — and a stuck rollout is fatal here,
