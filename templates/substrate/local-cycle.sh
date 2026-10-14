@@ -106,11 +106,11 @@ printf 'local-cycle: kubeconfig %s -> %s\n' "$KUBECONFIG_FILE" "$SERVER"
 export KIT_SUBSTRATE_KUBECONFIG="$KUBECONFIG_FILE"
 # THE MANIFEST'S SET, not a shorter one the operator has to fix. It was
 # `identity,gateway,courier,parlor` while the Cluster provisions
-# `box,courier,gateway,identity,pantry,parlor`, so the installer's own refusal —
+# `courier,gateway,identity,parlor`, so the installer's own refusal —
 # `KIT_SUBSTRATE_DATABASES does not match the Cluster manifest` — was the first
 # thing a developer met. A local cycle's list must be the list the tree ships;
 # a caller with a real box overrides it, which the `:-` still allows.
-export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-box,courier,gateway,identity,pantry,parlor}"
+export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-courier,gateway,identity,parlor}"
 export KIT_SUBSTRATE_ACME_EMAIL="${KIT_SUBSTRATE_ACME_EMAIL:-dev@cafaye.test}"
 # THE OPERATOR-SOURCED VALUES AS PLACEHOLDERS, and the reason is the step that
 # would otherwise refuse before reaching anything interesting. Step 9 refuses
