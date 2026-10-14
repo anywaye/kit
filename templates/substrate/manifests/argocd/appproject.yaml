@@ -23,13 +23,48 @@ spec:
   # charts and namespaces are enumerated in this repository, so the project
   # can be scoped to exactly those.
   #
-  #   sourceRepos        the three repoURLs the eight Applications name and
-  #                      no other: the two upstream Helm repos for the
-  #                      observability four and oci://ghcr.io/cafaye/charts
-  #                      for the four service charts. A project that allows *
-  #                      lets an Application pull from a repo this repository
-  #                      never reviewed; a project that lists these three
-  #                      refuses it before a chart is fetched.
+  #   sourceRepos        what the eight Applications name and no other: the
+  #                      two upstream Helm repos for the observability four,
+  #                      and a chart-path GLOB for the four service charts
+  #                      (oci://ghcr.io/cafaye/charts/*) — because each
+  #                      Application names its own chart's PATH
+  #                      (oci://ghcr.io/cafaye/charts/gateway, …/courier, …),
+  #                      not the registry root. A project that allows * lets an
+  #                      Application pull from a repo this repository never
+  #                      reviewed; this project refuses it before a chart is
+  #                      fetched.
+  #
+  # WHY A GLOB AND NOT FOUR NAMES — AND WHY IT IS NOT A `*`.
+  #   The four OCI paths are one chart per service, and a fifth service must
+  #   not require an edit here. Enumerating the four names would
+  #   make this file a second list to keep in step with manifests/applications/,
+  #   and the packet that moved the Applications from the registry ROOT to
+  #   per-chart paths is exactly the seam where a second list drifts. Argo CD's
+  #   `sourceRepos` is glob-aware, and the `*` here does NOT open the project:
+  #   it is anchored after the registry and org this repo owns
+  #   (`oci://ghcr.io/cafaye/charts/`), and Argo matches with `/` as the glob
+  #   separator, so `*` matches ONE chart-name segment and cannot cross a `/`
+  #   into a different registry, org or nested path.
+  #
+  # THE EVIDENCE, FROM THE PINNED ARGO, NOT FROM DOCUMENTATION.
+  #   install.sh installs Argo CD `v3.5.4`. In that tag,
+  #   `pkg/apis/application/v1alpha1/app_project_types.go` resolves a source
+  #   with `IsSourcePermitted`, which normalises BOTH the source and each
+  #   `sourceRepos` entry through `git.NormalizeGitURL` (lower-case, trim a
+  #   `.git` suffix — `util/git/git.go`) and then matches them with
+  #   `util/glob.Match(pattern, value, '/')` — gobwas/glob with `/` as the
+  #   separator. So `*` matches any run of characters that is not a `/`. The
+  #   normaliser leaves the wildcard intact:
+  #   `oci://ghcr.io/cafaye/charts/*` → `oci://ghcr.io/cafaye/charts/*`.
+  #   Measured against gobwas/glob (the library that tag imports):
+  #     oci://ghcr.io/cafaye/charts/gateway   matches
+  #     oci://ghcr.io/cafaye/charts/courier   matches
+  #     oci://ghcr.io/cafaye/charts/a/b       does NOT (a `*` cannot cross a `/`)
+  #     oci://ghcr.io/cafaye/other/gateway    does NOT
+  #     oci://ghcr.io/evil/charts/gateway     does NOT
+  #   tests/substrate_test.sh §21 asserts every Application's source.repoURL is
+  #   permitted by these patterns, with the pre-fix bare-root spelling as a red
+  #   control.
   #
   #   destinations       the five namespaces the Applications deploy into
   #                      (observability, identity, gateway, courier, parlor)
@@ -60,7 +95,10 @@ spec:
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts
-    - oci://ghcr.io/cafaye/charts
+    # One chart-name segment under the registry root this repo owns; NOT `*`
+    # (see "WHY A GLOB" above). Argo v3.5.4 matches this with `/` as the glob
+    # separator, so it permits `…/gateway` and refuses `…/a/b`.
+    - oci://ghcr.io/cafaye/charts/*
   destinations:
     - namespace: observability
       server: https://kubernetes.default.svc

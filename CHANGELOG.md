@@ -2,6 +2,30 @@
 
 ### Substrate
 
+- **The AppProject permitted the registry ROOT while every Application named
+  its own chart's PATH, so the controller refused all eight Applications.**
+  A sibling packet moved each Application's OCI `source.repoURL` from
+  `oci://ghcr.io/cafaye/charts` to `oci://ghcr.io/cafaye/charts/<chart>`
+  (Argo resolves an OCI source's revision against the full path), and
+  `manifests/argocd/appproject.yaml` — written before that change — still
+  listed the bare root. The box's symptom was
+  `application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+  project 'default'` on every Application; the name-equality check in §21 could
+  not see it, because the project and Applications agree on the name and
+  disagree on the sources. **`sourceRepos` now lists
+  `oci://ghcr.io/cafaye/charts/*`** — a PATTERN, not four enumerated chart
+  names, so a fifth service needs no edit here, and **not a bare `*`**: Argo CD
+  v3.5.4 (`pkg/apis/application/v1alpha1/app_project_types.go`
+  `IsSourcePermitted`, `util/glob.Match(pattern, value, '/')`) matches
+  `sourceRepos` with `/` as the glob separator, so `*` covers exactly one
+  chart-name segment and cannot cross a `/` into another registry, org or
+  nested path. `tests/substrate_test.sh` §21 now asserts every Application's
+  `source.repoURL` is permitted by the project's patterns (the same
+  normalise-then-glob algorithm the pinned Argo uses), with the pre-fix
+  bare-root pair as a red control, a foreign-registry Application as a red
+  control, a nested OCI path as a red control (the separator), and a fifth
+  chart as a green control (the pattern, not an enumeration).
+
 - **The image workflow's `add the chart's appVersion as a tag` step held a
   quoted assignment split across two physical lines, and `tests/validate.sh`
   § "every run: body" mis-read it as a prefix assignment (`tags="$tags` as the

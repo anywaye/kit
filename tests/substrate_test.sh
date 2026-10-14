@@ -6783,16 +6783,40 @@ run 'control: removing the glob filter lets AppleDouble break the apply again' g
 # that Argo never made. The manager hand-fixed the box with a maximal project
 # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); kit ships
 # the least-privilege one in manifests/argocd/appproject.yaml — sourceRepos
-# exactly the three repoURLs the eight Applications use, destinations exactly
-# the five namespaces they deploy into on https://kubernetes.default.svc, no
-# cluster-scoped whitelist — and step 4 applies it right after Argo CD is
-# Available and before any Application is applied (see install_argocd).
+# the two upstream Helm repoURLs plus the chart-path glob
+# oci://ghcr.io/cafaye/charts/*, destinations exactly the five namespaces they
+# deploy into on https://kubernetes.default.svc, no cluster-scoped whitelist —
+# and step 4 applies it right after Argo CD is Available and before any
+# Application is applied (see install_argocd).
 #
 # The check is a STATIC equality over YAML: the project the Applications name
 # and the shipped AppProject's name must be one fact, one spelling. A static
 # check is the right shape here because the defect is a name that disagrees
 # across files rather than a runtime behaviour; the runtime behaviour is what
 # the box showed.
+#
+# AND THE SECOND SEAM THIS PACKET EXISTS FOR: the AppProject's sourceRepos and
+# the Applications' source.repoURL are TWO SETS OVER ONE FACT, and they drifted.
+# A sibling packet moved each Application from the registry ROOT to its own
+# chart's PATH (oci://ghcr.io/cafaye/charts/gateway, …/courier, …/identity,
+# …/parlor) because Argo resolves an OCI source's revision against the full
+# path; appproject.yaml still listed the bare root, so the controller refused
+# every Application with
+#   application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+#   project 'default'
+# The name-equality check above cannot see it — the project is named `default`
+# and the Applications name `default`, so it is green on the exact box that is
+# broken. The check below is over the OTHER two sets, and the control is that
+# historical pair: the pre-fix bare root + the per-chart Applications goes red.
+#
+# The permission test mirrors the pinned Argo (v3.5.4) exactly:
+# `IsSourcePermitted` normalises both sides with `git.NormalizeGitURL`
+# (lower-case, trim a `.git` suffix) and matches with `util/glob.Match(pat,
+# val, '/')` — gobwas/glob with `/` as the separator, so a `*` cannot cross a
+# `/`. This is glob-aware on purpose: the project permits ONE chart-name
+# segment under the root, not a fixed four, so a fifth service needs no edit
+# here, and a fixture adding a fifth chart must stay green while a fixture
+# naming another registry must go red.
 APP_PROJECT="$SUBSTRATE/manifests/argocd/appproject.yaml"
 
 check_appproject() {
@@ -6862,15 +6886,18 @@ if shipped != apps_project:
     sys.exit(1)
 
 # Least-privilege shape: the project must list exactly the repoURLs and
-# destinations the Applications use, and no wildcard. A maximal project
+# destinations the Applications use, and no bare wildcard. A maximal project
 # (sourceRepos *, destinations */*) would pass the equality check above while
 # being the boundary the packet exists to tighten, so the least-privilege
 # half is asserted here too — the same way the static phase's allowlist
-# hygiene refuses an entry matching nothing.
+# hygiene refuses an entry matching nothing. A glob that is a PATH under a
+# repo this project owns (`oci://ghcr.io/cafaye/charts/*`) is not a bare `*`
+# and is allowed; the check is exact membership, so `"*" == repo` is what it
+# refuses, not any repo containing a `*`.
 spec = proj_doc.get("spec", {})
 repos = spec.get("sourceRepos", [])
 if "*" in repos:
-    print("sourceRepos contains '*' — the project is maximal; list exactly the three repoURLs the Applications use")
+    print("sourceRepos contains a bare '*' — the project is maximal; list the repoURLs the Applications use")
     sys.exit(1)
 dests = spec.get("destinations", [])
 for d in dests:
@@ -6906,6 +6933,219 @@ fixture_project_renamed="$WORK/appproject-renamed.yaml"
 sed 's/name: default/name: cafaye/' "$APP_PROJECT" >"$fixture_project_renamed"
 run 'control: a shipped AppProject with a different name goes red' red \
   check_appproject "$MANIFESTS" "$fixture_project_renamed"
+
+# --- The permission check: the AppProject's sourceRepos must permit every
+# Application's source.repoURL. This is the seam the name-equality check above
+# cannot see (see the section comment) and the exact on-box refusal.
+check_appproject_permits() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import re
+import sys
+
+import yaml
+
+
+def normalize(repo):
+    # Mirrors argo-cd v3.5.4 util/git/git.go NormalizeGitURL for the URL forms
+    # this substrate uses (https and oci, never git@/ssh): lower-case, trim a
+    # trailing `.git`, and leave everything else — including a `*`.
+    repo = repo.strip().lower()
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    return repo
+
+
+def glob_to_regex(pattern):
+    # gobwas/glob with '/' as the separator, which is what util/glob.Match is
+    # called with: `*` matches a run of non-'/' characters, `?` one non-'/'
+    # character, `[...]` a class. Everything else is literal.
+    i, n, out = 0, len(pattern), []
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        elif c == "[":
+            j = i + 1
+            if j < n and pattern[j] in "!^":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:
+                out.append(r"\[")
+            else:
+                cls = pattern[i + 1:j]
+                if cls.startswith("!"):
+                    cls = "^" + cls[1:]
+                out.append("[" + cls + "]")
+                i = j
+        else:
+            out.append(re.escape(c))
+        i += 1
+    return re.compile("^" + "".join(out) + "$")
+
+
+def glob_match(pattern, value):
+    # The `pattern == "*"` shortcut is Argo's own (globMatch in
+    # app_project_types.go): a bare `*` allows everything before globbing.
+    if pattern == "*":
+        return True
+    return bool(glob_to_regex(pattern).match(value))
+
+
+def permitted(repo_url, patterns):
+    # The exact algorithm of AppProject.IsSourcePermitted (v3.5.4): normalise
+    # both sides, match with '/' as separator, honour `!` deny patterns.
+    src = normalize(repo_url)
+    any_matched = False
+    for raw in patterns:
+        raw = raw.strip()
+        if raw.startswith("!"):
+            norm = "!" + normalize(raw[1:])
+            matched = not glob_match(norm[1:], src)
+            if not matched:
+                return False  # a deny pattern that matches refuses the source
+            any_matched = True
+        else:
+            if glob_match(normalize(raw), src):
+                any_matched = True
+    return any_matched
+
+
+apps_dir, proj_path = sys.argv[1:3]
+
+try:
+    proj_doc = yaml.safe_load(open(proj_path, encoding="utf-8"))
+except FileNotFoundError:
+    print(f"{proj_path}: no such file")
+    sys.exit(1)
+except yaml.YAMLError as e:
+    print(f"{proj_path}: does not parse ({e})")
+    sys.exit(1)
+if not isinstance(proj_doc, dict) or proj_doc.get("kind") != "AppProject":
+    print(f"{proj_path}: not an AppProject")
+    sys.exit(1)
+patterns = (proj_doc.get("spec") or {}).get("sourceRepos") or []
+if not isinstance(patterns, list) or not patterns:
+    print(f"{proj_path}: spec.sourceRepos is empty — nothing is permitted")
+    sys.exit(1)
+
+files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
+if not files:
+    print(f"{apps_dir}: no Application manifests found")
+    sys.exit(1)
+
+refused = []
+seen = 0
+for f in files:
+    doc = yaml.safe_load(open(os.path.join(apps_dir, f), encoding="utf-8"))
+    src = (doc.get("spec") or {}).get("source") or {}
+    repo = src.get("repoURL")
+    if not repo:
+        refused.append(f"{f}: spec.source.repoURL is missing")
+        continue
+    seen += 1
+    if not permitted(repo, patterns):
+        refused.append(
+            f"{f}: repoURL {repo!r} is not permitted by any of {patterns!r}"
+        )
+
+if refused:
+    print("; ".join(refused))
+    sys.exit(1)
+print(f"{seen} Application(s), every repoURL permitted by {len(patterns)} sourceRepos entry/entries")
+PY
+}
+
+# GRANT: the real tree. Every Application's repoURL is permitted.
+run 'every Application source.repoURL is permitted by the AppProject sourceRepos' green \
+  check_appproject_permits "$MANIFESTS" "$APP_PROJECT"
+
+# RED CONTROL 1 — the historical PAIR. appproject.yaml used to list the bare
+# registry ROOT while the Applications name per-chart PATHS, which is the exact
+# refusal measured on the box:
+#   application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+#   project 'default'
+# Rebuild the pre-fix project and require the check to see it.
+fixture_project_bare_root="$WORK/appproject-bare-root.yaml"
+sed 's|^    - oci://ghcr.io/cafaye/charts/\*$|    - oci://ghcr.io/cafaye/charts|' \
+  "$APP_PROJECT" >"$fixture_project_bare_root"
+# The guard reads the LIST ITEM, not a substring of the file: the comment above
+# the list explains the glob and names it, so a whole-file grep would find the
+# explanation and call a correct fixture unbuilt.
+if grep -qE '^ +- oci://ghcr\.io/cafaye/charts/\*' "$fixture_project_bare_root"; then
+  fail 'control fixture: the bare-root AppProject was not built' \
+    "the sed did not strip the chart glob from sourceRepos, so the control would prove nothing"
+else
+  run 'control: the pre-fix bare-root AppProject refuses the per-chart Applications' red \
+    check_appproject_permits "$MANIFESTS" "$fixture_project_bare_root"
+fi
+
+# RED CONTROL 2 — an Application naming a repo OUTSIDE the project entirely.
+fixture_foreign_repo="$WORK/apps-foreign-repo"
+mkdir -p "$fixture_foreign_repo"
+cp "$MANIFESTS"/*.yaml "$fixture_foreign_repo/"
+sed -i '' 's|repoURL: oci://ghcr.io/cafaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
+  "$fixture_foreign_repo/courier.yaml" 2>/dev/null || \
+  sed -i 's|repoURL: oci://ghcr.io/cafaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
+  "$fixture_foreign_repo/courier.yaml"
+if grep -q 'oci://ghcr.io/evil/charts/courier' "$fixture_foreign_repo/courier.yaml"; then
+  run 'control: an Application naming a repo the project does not permit goes red' red \
+    check_appproject_permits "$fixture_foreign_repo" "$APP_PROJECT"
+else
+  fail 'control fixture: the foreign-repo Application was not built' \
+    "the sed did not rewrite courier's repoURL, so the control would prove nothing"
+fi
+
+# RED CONTROL 3 — the `*` cannot cross a `/`. A nested OCI path under the same
+# root is refused, which is the "it is not a bare `*`" posture the AppProject
+# comment claims; the check must encode the separator, not just a prefix.
+fixture_nested_repo="$WORK/apps-nested-repo"
+mkdir -p "$fixture_nested_repo"
+cp "$MANIFESTS"/*.yaml "$fixture_nested_repo/"
+sed -i '' 's|repoURL: oci://ghcr.io/cafaye/charts/identity|repoURL: oci://ghcr.io/cafaye/charts/nested/identity|' \
+  "$fixture_nested_repo/identity.yaml" 2>/dev/null || \
+  sed -i 's|repoURL: oci://ghcr.io/cafaye/charts/identity|repoURL: oci://ghcr.io/cafaye/charts/nested/identity|' \
+  "$fixture_nested_repo/identity.yaml"
+if grep -q 'charts/nested/identity' "$fixture_nested_repo/identity.yaml"; then
+  run 'control: a nested OCI path is refused (the `*` cannot cross a `/`)' red \
+    check_appproject_permits "$fixture_nested_repo" "$APP_PROJECT"
+else
+  fail 'control fixture: the nested-repo Application was not built' \
+    "the sed did not nest the identity repoURL, so the control would prove nothing"
+fi
+
+# GREEN CONTROL — a FIFTH chart under the same root is permitted with no edit
+# to the project. This is the whole reason for the glob rather than four names:
+# a new service must not require an edit to appproject.yaml, and a check that
+# only knew the four shipped names would pass on an enumeration.
+fixture_fifth_chart="$WORK/apps-fifth-chart"
+mkdir -p "$fixture_fifth_chart"
+cp "$MANIFESTS"/*.yaml "$fixture_fifth_chart/"
+# A new Application, assembled rather than sed'ed from an existing one so its
+# name and chart agree.
+cat >"$fixture_fifth_chart/pantry.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pantry
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/pantry
+    chart: pantry
+    targetRevision: 0.1.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pantry
+YAML
+run 'the project permits a FIFTH chart with no edit (the glob, not four names)' green \
+  check_appproject_permits "$fixture_fifth_chart" "$APP_PROJECT"
 
 # ===========================================================================
 # 22. No other substrate manifest names an object core-install does not ship

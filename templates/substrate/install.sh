@@ -1202,8 +1202,10 @@ install_argocd() {
     # exist` and creates nothing — step 12 then times out waiting for a
     # Deployment Argo never made. The hand-fix was a maximal project
     # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
-    # is least-privilege — sourceRepos exactly the three repoURLs the
-    # Applications use, destinations exactly the five namespaces they deploy
+    # is least-privilege — sourceRepos the two upstream Helm repos plus a
+    # chart-path GLOB (oci://ghcr.io/cafaye/charts/*, Argo is glob-aware and
+    # matches with `/` as the separator, so it permits one chart-name segment
+    # and not `*`), destinations exactly the five namespaces they deploy
     # into on https://kubernetes.default.svc, and no cluster-scoped whitelist
     # (the charts create only namespaced resources). That is the tightest set
     # that still syncs, and the reason is written here rather than only in the
