@@ -36,7 +36,7 @@
   check already refuses an `echo` or a `printf` outside the two writers, so the
   only way to break the channel is a command this file **spawns**, and no audit of
   its own statements can see those: `main` saves the real stdout on fd 3 in
-  headless mode (`exec 3>&1 1>&2`) and the two event writers target fd 3, so
+  headless mode and the two event writers target the saved descriptor, so
   every tool's progress line lands beside the operator's output instead of inside
   the event stream.
 - **`templates/substrate/local-cycle.sh` — the substrate on a cluster that is
@@ -47,7 +47,7 @@
   it, and prints the per-step table read back out of the same JSONL a box emits,
   the wall clock, the receipt and `kubectl -n argocd get applications`. Measured:
   a warm cycle is 2 s, a cold one (cluster created, the three operators applied
-  and waited on) is 274 s of substrate work and 316 s end to end, against the
+  and waited on) is 3m06s of substrate work before it stops at step 4, against the
   ~10-minute VPS cycle it replaces. k3d lives in that script and nowhere else —
   the installer needs a kubeconfig, which is what a customer with their own
   Kubernetes has too. Its cluster probe reads a variable rather than a pipe:

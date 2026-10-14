@@ -88,6 +88,13 @@ local-cycle: the substrate did NOT reach install.done
   refused at step 5 (pull-secret): KIT_SUBSTRATE_BOX_ID is not set
 ```
 
+**A third measurement, and its caveat:** the same cycle in plan mode
+(`DRY_RUN=1 HEADLESS=1`, 1.8s) reaches `install.done` with all 13 steps and 48
+JSONL events, so a reader can compare a local run's event shape against a box's
+line for line. It is **not** the green control: `kit_substrate_guard` returns
+"absent" without asking anything in DRY_RUN, so a plan never reads the cluster it
+would install into, and a plan that passes proves nothing about the guards.
+
 **Against the VPS cycle:** a wipe (2 min), `cafe box setup` (2-4 min) and the
 substrate (3-6 min) — **~10 minutes per iteration, over SSH, against a machine on
 another continent**, and every defect found costs another full pass. The local
