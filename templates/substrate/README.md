@@ -47,13 +47,19 @@ this file only describes what is here and what is proven.
    guarded and the project is re-applied on every run — one local `kubectl
    apply`, which is a no-op round trip when it is unchanged, and the same
    convergence mechanism step 6 uses for the eight Applications.
-5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
-   its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
-   minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived
-   dockerconfigjson, held in a shell variable and applied through a pipe. No
+5. **The GHCR image pull secret** — **measured, not demanded.** The step derives
+   every GHCR chart and image the Applications name and asks GHCR for an
+   anonymous fetch of each. Where **all answer**, no credential is needed and
+   none is demanded: an empty-auths pull secret (`{"auths":{}}`, inert —
+   GHCR falls back to anonymous for public pulls) is written through the same
+   pipe into the same namespaces, with no box id, no capability and no
+   exchange. Where **one does not**, today's path runs unchanged: the box
+   presents its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`,
+   single-use, minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives
+   ONE short-lived dockerconfigjson, held in a shell variable and applied
+   through a pipe — and the refusal names which artifacts need it. No
    long-lived registry credential is handed over, and nothing reaches disk,
-   argv or stdout. Re-running re-redeems, because a credential with minutes of
-   life is supposed to be replaced. **The six namespaces that pull are created
+   argv or stdout. **The six namespaces that pull are created
    by this step, idempotently, before the secret is written into each of
    them** — the credential has to exist before the first pod that pulls with
    it is scheduled, and five of those six namespaces do not exist until step
@@ -437,14 +443,18 @@ developer is the one who needs a cluster to point at. `tests/substrate_test.sh`
 asserts both directions — the installer names no k3d, and the developer's script
 names no box address and dials no ssh.
 
-**What a local cycle does not do, and it is not a detail:** it stops at step 5.
-The registry credential is redeemed per run from a capability that is
-single-use, minutes-lived and **bound to an enrolled box**, so a developer
-without that box cannot pass the pull secret, and steps 6-13 then wait on the
-fleet's images with no credential to pull them. That is the substrate's own
-invariant 2 working as designed, and it is where the next packet starts: the
-local cycle needs a local exchange, and the decision belongs in one place rather
-than in a flag nobody can find.
+**What a local cycle does not do, and it is not a detail:** it stops at step 5
+whenever an artifact the Applications name is not anonymously fetchable. Step
+5 probes first: with every artifact public the install proceeds with no box
+id, no capability and no exchange. Measured on this machine (2026-10-14):
+11 of 14 artifacts answer anonymously, and 3 refuse —
+`cafaye/charts/box:0.1.0`, `cafaye/box:0.1.0`, `cafaye/charts/pantry:0.1.0` —
+so the step takes the capability path and refuses, naming those three,
+because a developer has no box-bound capability to exchange. That is the
+substrate's own invariant 2 working as designed, and the unblock is a registry
+fact rather than an installer edit: publish (or make public) those three
+packages and the same command proceeds. See `REPORT-roll-c5-public-artifacts.md`
+for the run logs and the per-artifact measurements.
 
 ### `--headless` — the mode an agent drives
 
