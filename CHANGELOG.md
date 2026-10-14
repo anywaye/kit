@@ -27,7 +27,14 @@
   empty because nothing was pushed — packages the chart as committed, which
   is why every service keeps a committed digest. Residue, stated: the OCI tag
   `0.1.0` is still overwritten per push; the Application notices because the
-  chart content changes and a refresh re-resolves it.
+  chart content changes and a refresh re-resolves it. Assigned, not asserted
+  by eye: `tests/publish_seam_check.sh` now proves the seam and adds five red
+  controls — the image workflow's `digest` output deleted, the chart job's
+  `needs.image.outputs.digest` hand-off removed, the writing step deleted, the
+  writing step moved after `helm package`, and its `sha256:<64 hex>` refusal
+  weakened — each of which must go RED under the same assertions the real tree
+  passes. The previous attempt left the step reachable only by review; a check
+  that passes because the field is absent is worse than no check.
 
 - **A long-lived box accumulates ReplicaSets its Deployments no longer name.**
   The gateway namespace on Contabo held five ReplicaSets for one Deployment

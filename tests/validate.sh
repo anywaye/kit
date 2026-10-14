@@ -4443,12 +4443,13 @@ print(prefix + ("notarealsecret" * 3)[:32])
 
   check_publish_seam() {
     # Single source of truth, the same rule: tests/publish_seam_check.sh
-    # holds the publish-path assertions and all four red controls — the
+    # holds the publish-path assertions and all nine red controls — the
     # root-relative `uses:` references, the caller/callee agreement in both
     # directions, the derived appVersion image tag, the surviving sha-<40>,
-    # and every sibling chart beside $ROOT/.. against its Application. The
-    # gate calls it so a PASS here means exactly what the focused proof
-    # (tests/focused_publish.sh) means.
+    # the image digest derived from the image job and written into the chart
+    # before `helm package`, and every sibling chart beside $ROOT/.. against
+    # its Application. The gate calls it so a PASS here means exactly what the
+    # focused proof (tests/focused_publish.sh) means.
     bash "$ROOT/tests/publish_seam_check.sh" "$1" "$2" "$3" "$4"
   }
 
@@ -5075,11 +5076,13 @@ PY
   # read is a silent pass. On a fresh clone every service is a note and the
   # four in-repo assertions still run.
   #
-  # Its four controls (unresolved path, literal tag, values pinning an
-  # unpublished tag, sha tag deleted) must go red under the same assertions
-  # the real tree passes.
+  # Its nine controls (unresolved path, literal tag, values pinning an
+  # unpublished tag, sha tag deleted, digest hand-off removed, pin step
+  # deleted, pin step reordered after `helm package`, digest grammar
+  # weakened, image workflow's digest output deleted) must go red under the
+  # same assertions the real tree passes.
   section 'static: the publish path — the references resolve, and the tag the chart pins is the tag the publish produces'
-  check 'publish seam  (local uses root-relative and resolving; caller/callee inputs agree both ways; appVersion derived into the image tag; sha-<40> kept; sibling charts agree with their Applications)' \
+  check 'publish seam  (local uses root-relative and resolving; caller/callee inputs agree both ways; appVersion derived into the image tag; sha-<40> kept; image digest derived from the image job, written before helm package, refused when malformed; sibling charts agree with their Applications)' \
     check_publish_seam "$ROOT/.github/workflows" \
       "$ROOT/templates/substrate/manifests/applications" \
       "$ROOT/.." \
