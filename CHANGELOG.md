@@ -2,6 +2,26 @@
 
 ### Substrate
 
+- **pantry deploys: the registry the routes already named.** gateway has
+  published `/v1/pantry` (public) and `/v1/pantry-writes` at
+  `http://pantry:8080` since the routes were written, and no pantry has
+  ever existed on the box — `GET /v1/pantry` answers gateway's own 503
+  ("the service this request needs could not be reached"). The service
+  was never deployed because nothing ever published it (no `publish.yml`,
+  so no image and no chart in the registry — both token scopes still
+  DENIED at this writing) and the substrate named nothing of it. Now:
+  a pantry `Application` (`oci://ghcr.io/cafaye/charts/pantry`,
+  `targetRevision` 0.1.0) with `imagePullSecrets` pointed at the
+  installer-exchanged `ghcr-pull-secret`; a pantry database, owner/app
+  roles, the five NOLOGIN RLS roles and three memberships in the Cluster
+  manifest; `pantry-secrets` (`PANTRY_DATABASE_URL` + the telemetry
+  off-switch — the write path and tier 2 stay unmounted by design); and
+  a step-10 migrate Job running the service's own `service migrate` as
+  the OWNER role. `KIT_SUBSTRATE_DATABASES` is
+  `identity,gateway,courier,parlor,pantry`, and the refusal names the
+  new set. The pantry half (publish workflow, digest-pinned chart,
+  owner-runnable migrations) ships in `cafaye/pantry`.
+
 - **The readiness preflight reads INGRESS hosts, so the box reports every
   condition it has.** The live box's readiness event named 2 pending hosts
   (`app.cafaye.com`, `auth.cafaye.com`) while `kubectl get ingress -A` on the

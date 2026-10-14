@@ -19,7 +19,7 @@
 #   Redis image is pinned exact, the NATS broker is installed with the fleet's
 #   stream defined idempotently and matching the local stack's nats-stream-init,
 #   the recorded secret name-and-key list matches what install.sh creates, and
-#   every secret NAME and KEY the four service charts mount or read is in that
+#   every secret NAME and KEY the five service charts mount or read is in that
 #   list — a chart key with no writer is a pod that never starts,
 #   no image floats on `latest`, no secret is a literal in the tree, step 6
 #   waits on nothing — the core-install reality, executed against a mock whose
@@ -645,7 +645,7 @@ if store.get("storageClass") != "local-path":
         f"storageClass is {store.get('storageClass')!r}, not 'local-path'"
         " (k3s's default provisioner)"
     )
-svcs = ("identity", "gateway", "courier", "parlor")
+svcs = ("identity", "gateway", "courier", "parlor", "pantry")
 sql = "\n".join(initdb.get("postInitSQL", []))
 for svc in svcs:
     for needle in (
@@ -688,7 +688,7 @@ for svc in svcs:
 if problems:
     print("; ".join(problems))
     sys.exit(1)
-print("1 Cluster (data/postgres), 4 services provisioned, no imageName")
+print("1 Cluster (data/postgres), 5 services provisioned, no imageName")
 PY
 }
 
@@ -1142,7 +1142,7 @@ for secret, keys in records:
             problems.append(f"{secret} records {key} but no --from-literal sets it")
 created = set(re.findall(r"create secret generic (\S+)", code))
 for secret in created:
-    if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor")):
+    if secret not in recorded and secret.startswith(("identity", "gateway", "courier", "parlor", "pantry")):
         problems.append(f"{secret} is created but not recorded")
 for key in set(re.findall(r"--from-literal=([A-Z_]+)=", code)) | patch_keys:
     if key in conditional:
@@ -1195,7 +1195,7 @@ run 'control: a secret with an unrecorded key goes red' red check_secret_record 
 # surfacing as a pod that hangs, the class nobody attributes. The SECRET RECORD
 # check above proves the record and install.sh agree with each other; neither
 # half can see a chart that consumes a key neither names. This check closes the
-# loop: it reads the four service charts beside kit (READ-ONLY) and requires
+# loop: it reads the five service charts beside kit (READ-ONLY) and requires
 # every secret NAME and KEY they consume to be in install.sh's own inventory.
 #
 # THREE REFERENCES, and all three are checked because all three have failed in
@@ -1223,7 +1223,7 @@ import yaml
 
 install_path, fleet = sys.argv[1], sys.argv[2]
 
-SERVICES = ("identity", "gateway", "courier", "parlor")
+SERVICES = ("identity", "gateway", "courier", "parlor", "pantry")
 
 # install.sh's inventory: the SECRET RECORD maps a secret to the keys it writes,
 # and the two writers are the `--from-literal=KEY=` sites plus step 11's merge
@@ -1350,7 +1350,7 @@ run 'every secret key a chart mounts or names is written by install.sh' green \
 
 # The controls run against a THROWAWAY fixture fleet, so the check's ability to
 # see a missing writer never depends on a neighbour being checked out. The
-# fixture carries all three reference shapes the four charts use, with the
+# fixture carries all three reference shapes the five charts use, with the
 # gateway volume ITEM as the load-bearing one (it is the shape that produced the
 # 152-minute ContainerCreating).
 build_chart_fixture() {
@@ -2978,7 +2978,7 @@ for secret in sorted(store):
 
 # The DATABASE_URL half: step 9's naming function must read the APP role's
 # secret and password, and the DSN must name the app role and the database.
-for svc in ("identity", "gateway", "courier", "parlor"):
+for svc in ("identity", "gateway", "courier", "parlor", "pantry"):
     try:
         url = open(os.path.join(root, f"url-{svc}.txt"), encoding="utf-8").read()
     except OSError:
@@ -8228,7 +8228,7 @@ elif tuple(defs[0]) != (SWITCH_KEY, SWITCH_VALUE):
 # 2. Every generated-chart service's secret carries it BY REFERENCE. A window
 #    after the create line is long enough for the multi-line invocations and
 #    short enough not to reach the next secret.
-for secret in ("identity-secrets", "courier-secrets", "parlor-secrets"):
+for secret in ("identity-secrets", "courier-secrets", "parlor-secrets", "pantry-secrets"):
     m = re.search(r"create secret generic " + re.escape(secret) + r"\b", code)
     if not m:
         problems.append(f"{secret} is never created")
@@ -8264,7 +8264,7 @@ else:
 #    secret to carry the switch or an Application that does. A service dropped
 #    from the secret step is a service nothing configures.
 services = set(re.findall(r"create secret generic (\S+-secrets)", code))
-for svc in ("identity", "gateway", "courier", "parlor"):
+for svc in ("identity", "gateway", "courier", "parlor", "pantry"):
     if f"{svc}-secrets" not in services:
         problems.append(f"{svc} has no secret in install.sh")
 
