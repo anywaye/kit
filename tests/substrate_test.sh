@@ -2413,12 +2413,29 @@ mock_kubectl() {
       # A `"key":null` entry DELETES the stored key, exactly as a real merge
       # patch does — the orphan sweep relies on it, and a mock that stored an
       # empty file (or the string "null") would be green on a sweep that wrote
-      # the wrong patch.
+      # the wrong patch. `data` is the persisted map, so a null there deletes
+      # the entry; a value there is base64, decoded the way read_secret_key
+      # decodes it.
       for patch_key in ${patch_keys[@]+"${patch_keys[@]}"}; do
-        if [ "$(printf '%s' "$body" | jq -r --arg k "$patch_key" '.stringData[$k] | type')" = "null" ]; then
-          rm -f "$d/$patch_key"
-        else
+        # A null under stringData is a NO-OP, exactly as on the API server:
+        # stringData is write-only and is never persisted, so the stored
+        # object carries no such field for the null to delete. (The sweep
+        # deletes under `data` for this reason.) A mock that deleted here
+        # would be green on a patch the box silently ignores.
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$patch_key" '.stringData[$k] | type')" != "null" ]; then
           printf '%s' "$body" | jq -jr --arg k "$patch_key" '.stringData[$k] // empty' >"$d/$patch_key"
+        fi
+      done
+      local -a data_keys=()
+      local data_key
+      while IFS= read -r data_key; do
+        [ -n "$data_key" ] && data_keys+=("$data_key")
+      done < <(printf '%s' "$body" | jq -r '.data // {} | keys[]')
+      for data_key in ${data_keys[@]+"${data_keys[@]}"}; do
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$data_key" '.data[$k] | type')" = "null" ]; then
+          rm -f "$d/$data_key"
+        else
+          printf '%s' "$body" | jq -jr --arg k "$data_key" '.data[$k] // empty' | base64 -d >"$d/$data_key"
         fi
       done
       return 0
@@ -3160,8 +3177,32 @@ check_patch_convention() {
     printf '%s' '{"stringData":{"username":"never"}}' |
       "$mock" -n data patch secret probe --type=merge --patch-file=- 2>"$root/dash.err" &&
       { echo "$mock accepted --patch-file=-, which real kubectl refuses"; exit 4; }
+    # (3) a null under `data` deletes the key — the orphan sweep's own
+    # spelling — while a null under `stringData` is a no-op, exactly as on
+    # the API server (stringData is write-only and never persisted, so the
+    # stored object carries no such field for the null to delete).
+    mock_seed data probe doomed old
+    printf '%s' '{"data":{"doomed":null}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
+      { echo "$mock refused the data-null patch"; exit 5; }
+    printf '%s' '{"stringData":{"username":null}}' |
+      "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
+      { echo "$mock refused the stringData-null patch"; exit 6; }
     exit 0
   ) || ec=$?
+  MOCK_ROOT="$root"
+  if [ "$ec" -ne 0 ]; then
+    echo "the mock-convention check failed (exit $ec)"
+    return 1
+  fi
+  if [ -f "$root/data/probe/doomed" ]; then
+    echo "the data-null patch did not delete the key"
+    return 1
+  fi
+  if [ "$(mock_get data probe username)" != "new" ]; then
+    echo "the stringData-null patch touched the key (stored '$(mock_get data probe username)') — the box would ignore it"
+    return 1
+  fi
   MOCK_ROOT="$root"
   if [ "$ec" -ne 0 ]; then
     echo "the mock-convention check failed (exit $ec)"
@@ -5869,17 +5910,31 @@ rollout_kubectl() {
       mkdir -p "$pdir"
       # A `"key":null` entry DELETES the stored key, exactly as a real merge
       # patch does — the orphan sweep relies on it (see mock_kubectl's patch
-      # branch for the same contract).
+      # branch for the same contract). `data` is the persisted map: a null
+      # there deletes the entry, a value there is base64 and is decoded the
+      # way the jsonpath read decodes it.
       local -a rollout_patch_keys=()
       local rollout_patch_key
       while IFS= read -r rollout_patch_key; do
         [ -n "$rollout_patch_key" ] && rollout_patch_keys+=("$rollout_patch_key")
       done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
       for rollout_patch_key in ${rollout_patch_keys[@]+"${rollout_patch_keys[@]}"}; do
-        if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_patch_key" '.stringData[$k] | type')" = "null" ]; then
-          rm -f "$pdir/$rollout_patch_key"
-        else
+        # A null under stringData is a NO-OP here too — see mock_kubectl's
+        # patch branch for why the box ignores it.
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_patch_key" '.stringData[$k] | type')" != "null" ]; then
           printf '%s' "$body" | jq -jr --arg k "$rollout_patch_key" '.stringData[$k]' >"$pdir/$rollout_patch_key"
+        fi
+      done
+      local -a rollout_data_keys=()
+      local rollout_data_key
+      while IFS= read -r rollout_data_key; do
+        [ -n "$rollout_data_key" ] && rollout_data_keys+=("$rollout_data_key")
+      done < <(printf '%s' "$body" | jq -r '.data // {} | keys[]')
+      for rollout_data_key in ${rollout_data_keys[@]+"${rollout_data_keys[@]}"}; do
+        if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_data_key" '.data[$k] | type')" = "null" ]; then
+          rm -f "$pdir/$rollout_data_key"
+        else
+          printf '%s' "$body" | jq -jr --arg k "$rollout_data_key" '.data[$k]' | base64 -d >"$pdir/$rollout_data_key"
         fi
       done
       return 0

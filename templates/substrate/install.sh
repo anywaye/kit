@@ -2743,11 +2743,17 @@ validate_app_base_url() {
 # clears it. The intended state with KIT_SUBSTRATE_APP_BASE_URL unset is NO
 # courier keys at all (`present == 0`, the supported no-mail state), so the
 # sweep deletes whichever of the seven keys are present — one merge patch with
-# `"key":null`, which removes the named keys and touches nothing else — prints
-# what it removed and why, restarts identity so the change reaches the pod, and
-# re-reads the secret to prove the block is empty. A patch that silently did
-# nothing is the defect this function exists to end, so a read-back that still
-# carries a courier key fails the step naming the leftover.
+# `"key":null` under `data`, which removes the named keys and touches nothing
+# else — prints what it removed and why, restarts identity so the change
+# reaches the pod, and re-reads the secret to prove the block is empty. A
+# patch that silently did nothing is the defect this function exists to end, so
+# a read-back that still carries a courier key fails the step naming the
+# leftover.
+#
+# The nulls go under `data` and NOT under `stringData` on purpose: stringData
+# is write-only and is never persisted, so a null there merges into a field
+# the stored object does not carry and deletes nothing, while a null under
+# `data` removes the entry at the JSON level before the object is decoded.
 #
 # Called ABOVE the mint guard as well as in the unset branch below it: a warm
 # box that already minted (guard: COURIER_IDENTITY_TOKEN present) still carries
@@ -2767,7 +2773,7 @@ converge_identity_courier_block() {
     return 0
   fi
   local orphan_patch
-  orphan_patch="$(printf '%s' "$orphans" | tr ' ' '\n' | jq -Rn '[inputs | select(length > 0)] | map({(.): null}) | add | {stringData: .}')"
+  orphan_patch="$(printf '%s' "$orphans" | tr ' ' '\n' | jq -Rn '[inputs | select(length > 0)] | map({(.): null}) | add | {data: .}')"
   printf '%s' "$orphan_patch" |
     kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
     --type=merge --patch-file=/dev/stdin
