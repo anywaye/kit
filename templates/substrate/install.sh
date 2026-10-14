@@ -2772,12 +2772,22 @@ JSON
   done
 }
 
+# cnpg_cluster_phase — the CNPG Cluster's status.phase, or empty when it
+# cannot be read. For FAILURE MESSAGES only, never as a wait predicate (see
+# step 8): a `connection refused` that is really "the primary is not up yet"
+# sends the operator to the wrong place, and the phase is what tells them
+# which one it is.
+cnpg_cluster_phase() {
+  kubectl --kubeconfig="$KUBECONFIG" get cluster.postgresql.cnpg.io postgres -n data \
+    -o jsonpath='{.status.phase}' 2>/dev/null || true
+}
+
 # --- step 8: the Postgres Cluster -------------------------------------------
-# The two bounds below are this step's own 600s, split the way step 1's are:
-# 60s for the CNPG operator to create a pod the selector can see, then Ready
-# inside what is left. Overridable so the suite can shorten the first half.
-: "${CNPG_POD_TIMEOUT:=60}"
-: "${CNPG_POD_READY_TIMEOUT:=540}"
+# ONE BOUND, 600s, FOR THE CLUSTER TO REPORT READY — the same total the wait
+# below always had, not a second longer. Overridable so the suite can shorten
+# it; the audit in tests/substrate_test.sh pins the number, because a bound
+# that grows to make a slow box pass is the same race with more room.
+: "${CNPG_CLUSTER_READY_TIMEOUT:=600}"
 # One CNPG Cluster in the `data` namespace, reproducing the local contract
 # (templates/compose/postgres/initdb/10-cluster.sh) through CNPG's bootstrap
 # plus managed roles — see manifests/data/postgres-cluster.yaml's header for
@@ -2860,22 +2870,39 @@ install_postgres_cluster() {
   # rather than silently ignored. See the note above install_applications.
   kit_substrate_check_manifest_dir "$DATA_DIR"
   kubectl --kubeconfig="$KUBECONFIG" apply -f "$DATA_DIR/postgres-cluster.yaml"
-  # The pods, not the Cluster phase: pod Ready means the instance passed its
-  # readiness probe, which is the observable property the services need. A
-  # phase-string wait encodes a CNPG status vocabulary this script does not
-  # own; a label-selected pod wait encodes the contract.
+  # THE WAIT READS THE CLUSTER, NOT ITS PODS — AND THE DISTINCTION IS THE FIX.
+  # The selector this step used to wait on (`-l cnpg.io/cluster=postgres`) also
+  # matches CloudNativePG's bootstrap Job pod: on a fresh box the run logged
+  # `pod/postgres-1-initdb-s5lq8 condition met` while no instance pod existed
+  # yet, step 10 launched, and the first migration to reach postgres-rw died
+  # with `connection refused` — while the second one connected, the primary
+  # having come up between the two, which is the ordering proof that the
+  # cluster was healthy and the signal was wrong rather than Postgres being
+  # broken. A pod wait is satisfied by the pods that exist at that moment; the
+  # initdb Job's pod is one of them, and it answers a question about the wrong
+  # object. So no pod is listed here at all: excluding the initdb pod by name
+  # would be a second thing to drift, and the Cluster object is the authority.
   #
-  # TWO WAITS, AND THIS ONE WAS ALWAYS RACY. The Cluster CR is applied
-  # SYNCHRONOUSLY above, but its pods are created ASYNCHRONOUSLY by the CNPG
-  # operator, which has to notice the CR, reconcile it and schedule the
-  # instance — so the selector below can match ZERO pods the instant the apply
-  # returns, and `kubectl wait -l cnpg.io/cluster=postgres` on an empty list is
-  # the same error step 1 hit, on an object owned by a different controller.
-  # It is not the object this step applied, so existence is proved first here
-  # too: 60s for the operator to make a pod, then Ready inside the 600s this
-  # step always had.
-  kit_substrate_await_list "$CNPG_POD_TIMEOUT" pod -l cnpg.io/cluster=postgres -n data
-  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready pod -l cnpg.io/cluster=postgres -n data --timeout="$((CNPG_POD_READY_TIMEOUT))s"
+  # The Cluster is applied SYNCHRONOUSLY above — a `kubectl apply` is a round
+  # trip, so the object exists when it returns and no existence probe is needed
+  # the way step 1's Node or the operator Deployments need one. CNPG reports
+  # readiness on the Cluster itself: a `Ready` condition
+  # (`ConditionClusterReady`, api/v1/cluster_types.go in the pinned v1.30.1,
+  # set by the operator from the instances' reported state) which no initdb
+  # Job can satisfy, beside `status.phase` (`Cluster in healthy state` when
+  # settled). The wait reads the CONDITION, not the phase string: `Ready` is
+  # the generic Kubernetes readiness convention — the same predicate every Pod
+  # and Deployment wait in this file already uses — while the phase vocabulary
+  # is CNPG's own and stays informational, in the refusal below. A Cluster that
+  # never reports Ready still fails, with the bound, naming the Cluster and
+  # its phase.
+  if ! kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout="${CNPG_CLUSTER_READY_TIMEOUT}s"; then
+    local cluster_phase
+    cluster_phase="$(cnpg_cluster_phase)"
+    kit_substrate_refuse "the CNPG Cluster postgres in namespace data" \
+      "check the CNPG operator (kubectl -n cnpg-system logs deploy/cnpg-controller-manager) and the Cluster's phase, then re-run — every step that already completed is skipped by its guard" \
+      "the Postgres Cluster did not become Ready within ${CNPG_CLUSTER_READY_TIMEOUT}s (phase: '${cluster_phase:-unknown}')"
+  fi
 }
 
 # --- step 9: Redis and the services' secrets ----------------------------------
@@ -3703,6 +3730,22 @@ install_migrations() {
     return 0
   fi
 
+  # THE CLUSTER BEFORE THE MIGRATIONS. Step 8 waits for Ready on a fresh
+  # install, but a re-run SKIPS step 8 at its guard — the Cluster object
+  # exists, so there is nothing to re-provision — and "exists" is not "Ready":
+  # a cluster mid-restart answers `connection refused` on postgres-rw while
+  # every object the guard probed is present. So this step waits for the same
+  # Ready condition on the same object, under the same bound, before launching
+  # a single migrate pod. No retry loop around the migrations below: the wait
+  # is the fix, and a retry would only make a genuinely broken cluster slower
+  # to report.
+  if ! kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout="${CNPG_CLUSTER_READY_TIMEOUT}s"; then
+    cluster_phase="$(cnpg_cluster_phase)"
+    kit_substrate_refuse "the CNPG Cluster postgres in namespace data" \
+      "re-run 'caf box apply --phase 8' on the box once the Cluster is Ready, then this step" \
+      "the Postgres Cluster is not Ready (phase: '${cluster_phase:-unknown}') — refusing to migrate into a half-ready cluster"
+  fi
+
   # INDEPENDENCE: identity and courier each own a separate database
   # (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier")
   # and a separate OWNER role, provisioned in
@@ -3715,6 +3758,7 @@ install_migrations() {
   # DDL time. If a future service's migration depends on another's schema it
   # must be placed in a later wave, not in this launch set.
   local svc image cmd
+  local cluster_phase=""
   local -a marker_args=() failed=() launched=()
   # Phase 1: launch every independent Job, wait for none.
   for svc in identity courier; do
@@ -3780,6 +3824,11 @@ install_migrations() {
       echo "error:   service: ${svc}" >&2
       echo "error:   dsn:     $(owner_database_url_for "$svc" | sed 's#://[^:]*:[^@]*@#://OWNER:<redacted>@#') (role ${svc}, the OWNER)" >&2
       echo "error:   image:   ${image}" >&2
+      # The cluster's own phase, so a `connection refused` that is really "the
+      # primary is not up yet" reads as one: the DSN above names where the pod
+      # dialled, this names whether anything was listening.
+      cluster_phase="$(cnpg_cluster_phase)"
+      echo "error:   cluster: postgres in namespace data (phase: '${cluster_phase:-unknown}')" >&2
       echo "error: the pod is left in namespace ${svc} for diagnosis; its logs follow:" >&2
       kubectl --kubeconfig="$KUBECONFIG" logs "pod/kit-migrate-${svc}" -n "$svc" >&2 2>&1 || true
       failed+=("$svc")
