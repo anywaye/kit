@@ -488,6 +488,15 @@ jobs:
   # gate has asked for a green checkmark on nothing, which is the same defect
   # as a coverage threshold left at 0. Deliberately strict, and the failure
   # message says which file is missing.
+  #
+  # THE `full` JOB IN ci.yml KEEPS CALLING THIS, and that is a decision rather
+  # than inertia: kit is the one repository that ships `tests/validate.sh`, so
+  # `language: none` is meaningful here and only here — it is kit gating itself,
+  # the release proof. The guard above was read first (the file exists at this
+  # path, so the entry runs the gate rather than the refusal); dropping the
+  # entry would leave the repository that defines the standard structurally
+  # excluded from using it, which is the sharper reason above restated as the
+  # verdict. A service repo with no gate of its own must pass a real language.
   none:
     name: none
     if: ${{ inputs.language == 'none' }}
@@ -500,12 +509,12 @@ jobs:
     services:
       postgres:
         # postgres:17-alpine with the default superuser untouched — the fleet's
-        # convention. The tenancy substrate expects roles/databases (alpha,
-        # beta, …) that a bare postgres does not provide, so the provisioning
-        # step below creates them as NOSUPERUSER NOBYPASSRLS, mimicking
-        # templates/compose/postgres/initdb/10-cluster.sh locally. Without it
-        # the substrate's `psql -U alpha -d beta` dies with
-        # `permission denied for database "beta"`.
+        # convention. The tenancy proof needs two isolated tenants (alpha, beta,
+        # each with its own database and `_app` login role) that a bare postgres
+        # does not provide, so the provisioning step below runs kit's own
+        # templates/compose/postgres/initdb/10-cluster.sh against this service.
+        # Without it the tier's `psql -U alpha -d beta` dies with
+        # `permission denied for database "beta"` before a query is parsed.
         image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
@@ -522,46 +531,48 @@ jobs:
         with:
           persist-credentials: false
       - name: provision tenancy substrate (alpha, beta)
-        # The tenancy proof needs two isolated tenants. A plain
-        # postgres:17-alpine has only the superuser `postgres`; the substrate
-        # expects `alpha`/`beta` and `alpha_app`/`beta_app` as
-        # NOSUPERUSER NOBYPASSRLS with databases they own. Create them here so
-        # the workflow's services block expresses exactly what
-        # `docker compose up -d postgres` + kit's init does locally.
+        # The tenancy proof needs two isolated tenants, and the SHAPE of a tenant
+        # is kit's own contract, not this step's: one database and TWO roles per
+        # service — the owner, and a login role that owns nothing, with the
+        # membership in one direction only (`GRANT <svc>_app TO <svc>`, which is
+        # what lets the owner impersonate the weaker role the drivers `SET ROLE`
+        # to). A hand-rolled CREATE ROLE here would be a second copy of that
+        # contract, and a copy that drifts the day the template changes — so this
+        # step runs templates/compose/postgres/initdb/10-cluster.sh itself,
+        # unmodified, against the service above. The template is the source of
+        # truth; the workflow only names which tenants to make.
+        # RLS is deliberately untouched here: FORCE ROW LEVEL SECURITY is per
+        # table, not per cluster, and lives in
+        # templates/database/tenancy/substrate.sql, which the tier applies and
+        # asserts — including the control with FORCE removed going red on the
+        # owner half while the login half stays green.
+        env:
+          KIT_POSTGRES_DATABASES: alpha,beta
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: postgres
+          PGHOST: localhost
+          PGPORT: 5432
+          PGPASSWORD: postgres
         run: |
           set -euo pipefail
-          psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 <<'SQL'
-          DO $$ BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'alpha') THEN
-              CREATE ROLE alpha LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            ELSE
-              ALTER ROLE alpha WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beta') THEN
-              CREATE ROLE beta LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            ELSE
-              ALTER ROLE beta WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'alpha_app') THEN
-              CREATE ROLE alpha_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            ELSE
-              ALTER ROLE alpha_app WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'beta_app') THEN
-              CREATE ROLE beta_app LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            ELSE
-              ALTER ROLE beta_app WITH LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD 'cafaye';
-            END IF;
-          END $$;
-          SELECT 'CREATE DATABASE alpha OWNER alpha' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='alpha')\gexec
-          SELECT 'CREATE DATABASE beta OWNER beta' WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname='beta')\gexec
-          SQL
-          for db in alpha beta; do
-            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "REVOKE ALL ON DATABASE $db FROM PUBLIC"
-            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE $db TO $db"
-            psql "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" -v ON_ERROR_STOP=1 -c "GRANT CONNECT ON DATABASE $db TO ${db}_app"
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get install -y postgresql-client
+          fi
+          bash templates/compose/postgres/initdb/10-cluster.sh
+          # The topology the tenancy tier asserts before it asserts anything
+          # else: each database exists, each `_app` role is a non-superuser
+          # LOGIN, and the owner can impersonate exactly its own `_app` role.
+          for svc in alpha beta; do
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -tAX \
+              -c "SELECT count(*) FROM pg_database WHERE datname = '$svc'" | grep -qx 1
+            psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -tAX \
+              -c "SELECT count(*) FROM pg_roles WHERE rolname = '${svc}_app' AND rolcanlogin AND NOT rolsuper" \
+              | grep -qx 1
           done
-          echo "provisioned alpha/beta and alpha_app/beta_app as NOSUPERUSER NOBYPASSRLS"
+          PGPASSWORD=postgres psql -h localhost -U alpha -d alpha -v ON_ERROR_STOP=1 \
+            -c "SET ROLE alpha_app; SHOW ROLE;" | grep -q alpha_app
+          echo "provisioned KIT_POSTGRES_DATABASES=$KIT_POSTGRES_DATABASES: one database and two roles each"
       - name: kit gate
         working-directory: ${{ inputs.working-dir }}
         # The gate bootstraps its own dependencies (PyYAML, yamllint, hadolint)
