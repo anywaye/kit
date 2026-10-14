@@ -4584,6 +4584,9 @@ EMITTERS = {
 VALUE_PRODUCERS = {
     "database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for",
     "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
+    "kit_substrate_url_host", "kit_substrate_intended_hosts",
+    "kit_substrate_readiness_pending_count", "kit_substrate_readiness_summary",
+    "kit_substrate_readiness_json",
 }
 
 # Every variable in install.sh that HOLDS secret material, by name. This is a
@@ -7915,6 +7918,301 @@ if grep -q 'wait --for=condition=Available deployment -n cnpg-system cnpg-contro
 else
   run 'control: a dropped operator wait goes red' red check_operator_overlap "$fixture_drop_cnpg_wait"
 fi
+
+# ===========================================================================
+# 25. The done report is honest: pending TLS and the unwired OIDC path are
+#     named, with the exact remedy — and silence goes red
+# ===========================================================================
+#
+# WHY THIS EXISTS. The live Contabo box: the install ran to completion and
+# exited 0 while Argo showed gateway Synced/Degraded and gateway's pods
+# logged `Readiness probe failed: HTTP probe failed with statuscode: 503`
+# 1564 times over four hours. Two independent causes, both silent:
+# ACME could never complete (`... lookup api.cafaye.com ...: no such host` —
+# DNS never pointed at the box) and gateway could never be Ready (its
+# /readyz probes identity's JWKS, served only when
+# KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set, and it was not). Neither is
+# refused — a firewalled box is legitimate and an issuer must not be
+# guessed — so the installer REPORTS: a preflight verdict before anything is
+# created, a THIS BOX WILL NOT FULLY SERVE UNTIL section beside the step
+# times, and the same verdict as a `readiness` JSONL event.
+#
+# Three green checks against the real tree, each a DRY_RUN (a plan prints the
+# same verdict the live run prints, without a box):
+#   1. an unresolving ingress host is reported in the pending-TLS section
+#      with its consequence — and the install still exits 0;
+#   2. an unset OIDC issuer names gateway's never-Ready state and the export
+#      that fixes it;
+#   3. a resolving host plus a set issuer prints neither warning — while
+#      still printing the verdict header, so a silent report cannot satisfy
+#      it.
+# Plus the headless half (the `tls_pending_hosts` field beside
+# `oidc_configured`, existing events untouched), the wrong-host control (a
+# host that DOES resolve must NOT warn), and the intended-hosts unit (hosts
+# are read out of what the installer writes, not out of a second list).
+#
+# The RED controls run the same checks against a master-shaped fixture — the
+# real install.sh with the honest-done block deleted — and each must go red.
+# Hosts: `*.invalid` never resolves (RFC 2606); `localhost` always does. No
+# network dependence, no flake.
+HONEST_BAD_HOST="tls-pending-never-resolves.invalid"
+HONEST_BAD_URL="https://${HONEST_BAD_HOST}"
+
+# honest_dry_run <install.sh> — DRY_RUN to completion, all output on stdout.
+# The case's APP_BASE_URL / OIDC_ISSUER ride in the environment; DATABASES
+# and RECEIPT are fixed here so every case shares them. Prints the output;
+# the exit status is the install's (a verdict must never become a refusal).
+honest_dry_run() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    DRY_RUN=1 bash "$script" 2>&1)" || ec=$?
+  printf '%s' "$out"
+  return "$ec"
+}
+
+# 1. Green, real tree: an ingress host that does not resolve is reported in
+# the pending-TLS section with its consequence — and the install exits 0.
+check_tls_pending() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    KIT_SUBSTRATE_APP_BASE_URL="$HONEST_BAD_URL" \
+    env -u KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER DRY_RUN=1 bash "$script" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'exit %s, not 0 — the verdict became a refusal\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *"$HONEST_BAD_HOST"*) ;;
+    *) printf 'the unresolving host is not reported\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'DOES NOT RESOLVE'*) ;;
+    *) printf 'no DOES NOT RESOLVE verdict\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'the ACME HTTP-01 self check will fail'*) ;;
+    *) printf 'the TLS consequence is not named\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'THIS BOX WILL NOT FULLY SERVE UNTIL'*) ;;
+    *) printf 'the done-report verdict header is missing\n'; return 1 ;;
+  esac
+  printf 'unresolving host reported with consequence, exit 0\n'
+}
+
+# 2. Green, real tree: an unset OIDC issuer names gateway's never-Ready state
+# and the export that fixes it. The app URL resolves, so only the OIDC half
+# can fire — one property per check.
+check_oidc_unset() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    KIT_SUBSTRATE_APP_BASE_URL='http://localhost' \
+    env -u KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER DRY_RUN=1 bash "$script" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'exit %s, not 0\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'serves no JWKS route'*) ;;
+    *) printf 'the JWKS consequence is not named\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'never becomes Ready'*) ;;
+    *) printf 'gateway never-Ready state is not named\n'; return 1 ;;
+  esac
+  case "$out" in
+    *"export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="*) ;;
+    *) printf 'the fixing export is not printed\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'THIS BOX WILL NOT FULLY SERVE UNTIL'*) ;;
+    *) printf 'the done-report verdict header is missing\n'; return 1 ;;
+  esac
+  printf 'unset issuer names the never-Ready state and its fix\n'
+}
+
+# 3. Green, real tree: resolving host plus set issuer prints NEITHER warning
+# — while still printing the verdict header, so a report that says nothing
+# at all fails this check rather than passing it.
+check_clean() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    KIT_SUBSTRATE_APP_BASE_URL='http://localhost' \
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://localhost:8443' \
+    DRY_RUN=1 bash "$script" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'exit %s, not 0\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'THIS BOX WILL NOT FULLY SERVE UNTIL'*) ;;
+    *) printf 'the verdict header is missing — a silent report satisfies nothing\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'DOES NOT RESOLVE'*) printf 'a resolving host is reported unresolving\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'never becomes Ready'*) printf 'a set issuer still warns never-Ready\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'serves no JWKS route'*) printf 'a set issuer still warns no-JWKS\n'; return 1 ;;
+  esac
+  printf 'clean box: verdict present, neither warning printed\n'
+}
+
+# The headless half: the JSONL stream carries the same verdict as a
+# `readiness` event — field `tls_pending_hosts` beside `oidc_configured` —
+# and the existing events are untouched (install.done still closes the run).
+check_headless_readiness() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    KIT_SUBSTRATE_APP_BASE_URL="$HONEST_BAD_URL" \
+    env -u KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER HEADLESS=1 DRY_RUN=1 bash "$script" --headless 2>/dev/null)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'exit %s, not 0\n%s' "$ec" "$out"; return 1; }
+  printf '%s' "$out" >"$WORK/honest-stdout.jsonl"
+  case "$out" in
+    *'"event":"readiness"'*) ;;
+    *) printf 'no readiness event on stdout\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'"tls_pending_hosts"'*) ;;
+    *) printf 'the tls_pending_hosts field is missing\n'; return 1 ;;
+  esac
+  case "$out" in
+    *"$HONEST_BAD_HOST"*) ;;
+    *) printf 'the pending host is not in the verdict\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'"oidc_configured":false'*) ;;
+    *) printf 'oidc_configured:false is missing for an unset issuer\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'"event":"install.done"'*) ;;
+    *) printf 'install.done is missing — an existing event moved\n'; return 1 ;;
+  esac
+  "$PY" - "$WORK/honest-stdout.jsonl" <<'PY' || return 1
+import json
+import sys
+
+bad = 0
+for n, line in enumerate(open(sys.argv[1], encoding="utf-8"), 1):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        json.loads(line)
+    except json.JSONDecodeError as e:
+        print(f"stdout line {n} is not JSON: {e}")
+        bad += 1
+sys.exit(1 if bad else 0)
+PY
+  printf 'readiness event with tls_pending_hosts, install.done untouched, every line JSON\n'
+}
+
+# The wrong-host control: a check aimed at a host that DOES resolve must NOT
+# warn. localhost resolves on every machine, with no network.
+check_no_warn_resolving_host() {
+  local script="$1" out ec=0
+  out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
+    KIT_SUBSTRATE_APP_BASE_URL='http://localhost' \
+    env -u KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER DRY_RUN=1 bash "$script" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'exit %s, not 0\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'DOES NOT RESOLVE'*) printf 'a resolving host was reported unresolving\n'; return 1 ;;
+  esac
+  printf 'no warning for the resolving control host\n'
+}
+
+# The intended-hosts unit: hosts are READ out of what the installer writes —
+# the two operator URLs plus public hosts in the Applications' helm.values —
+# never out of a second hard-coded list. A fixture Application carries all
+# four shapes: a public values host (listed), an in-cluster values host
+# (dropped), a fetch coordinate (repoURL — dropped), and a URL in a comment
+# (dropped).
+check_intended_hosts() {
+  local script="$1"
+  local adir="$WORK/honest-apps"
+  mkdir -p "$adir"
+  cat >"$adir/svc.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: svc
+spec:
+  project: default
+  source:
+    repoURL: https://charts.example.com/upstream
+    chart: svc
+    helm:
+      values: |
+        env:
+          PUBLIC_URL: "https://shop.example.com"
+          INTERNAL_URL: "http://svc.svc-ns.svc.cluster.local:8080"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: svc
+YAML
+  printf '# the fleet default is https://auth.cafaye.com but this box does not set it\n' >>"$adir/svc.yaml"
+  local src="$WORK/honest-sourced.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  local out ec=0
+  out="$(KIT_SUBSTRATE_APP_BASE_URL='https://app.example.com' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$adir" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the extractor failed\n%s' "$out"; return 1; }
+  case "$out" in
+    *'shop.example.com'*) ;;
+    *) printf 'the public helm.values host is not listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'app.example.com'*) ;;
+    *) printf 'the operator URL host is not listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'charts.example.com'*) printf 'a repoURL fetch coordinate is listed as served\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'kubernetes.default.svc'*) printf 'the destination server is listed as served\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'auth.cafaye.com'*) printf 'a URL from a comment is listed as intended\n'; return 1 ;;
+  esac
+  case "$out" in
+    *'svc.cluster.local'*) printf 'an in-cluster host is listed as public\n'; return 1 ;;
+  esac
+  printf 'intended hosts read from values and operator URLs, fetch/comment/cluster names dropped\n'
+}
+
+run 'an unresolving ingress host is reported with its consequence (exit 0)' green check_tls_pending "$SUBSTRATE/install.sh"
+run 'an unset OIDC issuer names gateway never-Ready and its fix' green check_oidc_unset "$SUBSTRATE/install.sh"
+run 'a resolving host plus a set issuer prints neither warning (verdict still present)' green check_clean "$SUBSTRATE/install.sh"
+run 'headless stdout carries the readiness event with tls_pending_hosts' green check_headless_readiness "$SUBSTRATE/install.sh"
+run 'control: a resolving host does not warn' green check_no_warn_resolving_host "$SUBSTRATE/install.sh"
+run 'intended hosts are read from values and operator URLs, not listed twice' green check_intended_hosts "$SUBSTRATE/install.sh"
+
+# The RED controls: the report as it stands on master — the real install.sh
+# with the honest-done block deleted — must fail each check above. The
+# fixture asserts its own premise first: it really lacks the verdict, it
+# still parses, and a DRY_RUN over it still exits 0 (so a red below is the
+# missing verdict, not a broken fixture). The fixture lives in its own
+# directory with the real manifests beside it, because a relocated
+# install.sh finds its manifests through its own SCRIPT_DIR.
+fixture_master_dir="$WORK/master-shape"
+fixture_master="$fixture_master_dir/install-master.sh"
+mkdir -p "$fixture_master_dir"
+cp -R "$SUBSTRATE/manifests" "$fixture_master_dir/manifests"
+sed -e '/honest-done BEGIN/,/honest-done END/d' -e '/# honest-done$/d' \
+  "$SUBSTRATE/install.sh" >"$fixture_master"
+case "$(cat "$fixture_master")" in
+  *'THIS BOX WILL NOT FULLY SERVE UNTIL'* | *'tls_pending_hosts'* | *'kit_substrate_readiness'*)
+    fail 'control fixture: the master shape still carries the verdict' \
+      'the sed did not remove the honest-done block — this control would prove nothing'
+    ;;
+  *)
+    if ! bash -n "$fixture_master"; then
+      fail 'control fixture: the master shape does not parse' \
+        'the sed broke the file — a red below would be a syntax error wearing the finding clothes'
+    elif ! honest_dry_run "$fixture_master" >/dev/null 2>&1; then
+      fail 'control fixture: DRY_RUN over the master shape fails' \
+        'the sed broke the run — a red below would be a broken fixture, not a silent report'
+    else
+      run 'control: the silent report fails the TLS check' red check_tls_pending "$fixture_master"
+      run 'control: the silent report fails the OIDC check' red check_oidc_unset "$fixture_master"
+      run 'control: the silent report fails the clean check (no verdict at all)' red check_clean "$fixture_master"
+      run 'control: the silent report carries no readiness event' red check_headless_readiness "$fixture_master"
+    fi
+    ;;
+esac
 
 # ===========================================================================
 # Summary
