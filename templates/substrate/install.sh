@@ -256,6 +256,13 @@ NATS_URL="nats://nats.data.svc.cluster.local:4222"
 # values that must move together are one fact with two names.
 COURIER_URL="http://courier.courier.svc.cluster.local:4000"
 IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
+# IDENTITY_COURIER_KEYS — the seven keys of identity's courier block: the pair
+# plus the five link templates. ONE list for the set-branch write and the
+# unset-branch sweep-and-verify, so the two can never disagree about the
+# block's extent. The set-branch patch below still spells every key literally
+# (the record tripwire reads them out of the stringData block); this list is
+# what the sweep scans, deletes and re-verifies.
+IDENTITY_COURIER_KEYS=(COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE)
 
 # --- the services' telemetry on a box: DELIBERATELY OFF ---------------------
 # THE BOX DEPLOYS NO OTLP ENDPOINT, SO THE SERVICES MUST NOT TRY TO REACH ONE.
@@ -2727,8 +2734,71 @@ validate_app_base_url() {
   esac
 }
 
+# converge_identity_courier_block — remove identity's courier keys when the box
+# declares no public origin. A box installed by an older installer may already
+# carry COURIER_TOKEN without COURIER_BASE_URL (or templates pointing at a base
+# this box no longer declares); identity's own loader refuses exactly that
+# half-pair (`loadCourier`: "must both be set, or neither of them"), so the
+# orphan crashloops identity and a re-run that only writes the happy path never
+# clears it. The intended state with KIT_SUBSTRATE_APP_BASE_URL unset is NO
+# courier keys at all (`present == 0`, the supported no-mail state), so the
+# sweep deletes whichever of the seven keys are present — one merge patch with
+# `"key":null`, which removes the named keys and touches nothing else — prints
+# what it removed and why, restarts identity so the change reaches the pod, and
+# re-reads the secret to prove the block is empty. A patch that silently did
+# nothing is the defect this function exists to end, so a read-back that still
+# carries a courier key fails the step naming the leftover.
+#
+# Called ABOVE the mint guard as well as in the unset branch below it: a warm
+# box that already minted (guard: COURIER_IDENTITY_TOKEN present) still carries
+# the orphan, and the guard's early return would otherwise skip the sweep — the
+# same shape as the AppProject reapply fix. Courier's own pair is NOT swept:
+# COURIER_IDENTITY_TOKEN is required by courier's runtime regardless.
+converge_identity_courier_block() {
+  local k v orphans=""
+  for k in ${IDENTITY_COURIER_KEYS[@]+"${IDENTITY_COURIER_KEYS[@]}"}; do
+    v="$(read_secret_key identity identity-secrets "$k")"
+    if [ -n "$v" ]; then
+      orphans="${orphans:+$orphans }$k"
+    fi
+  done
+  if [ -z "$orphans" ]; then
+    kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): no identity courier keys written, so identity boots into its supported no-mail state and every recovery route answers 503"
+    return 0
+  fi
+  local orphan_patch
+  orphan_patch="$(printf '%s' "$orphans" | tr ' ' '\n' | jq -Rn '[inputs | select(length > 0)] | map({(.): null}) | add | {stringData: .}')"
+  printf '%s' "$orphan_patch" |
+    kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets \
+    --type=merge --patch-file=/dev/stdin
+  kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): removed orphaned courier key(s):$orphans — leftovers from an installer that wrote half a pair, and each one is either a half-pair that crashloops identity or a template pointing at a base this box no longer declares"
+  if kubectl --kubeconfig="$KUBECONFIG" get deployment identity -n identity >/dev/null 2>&1; then
+    kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
+  else
+    kit_substrate_out "      identity Deployment not present — restart skipped (the secret is already converged; the next sync boots clean)"
+  fi
+  local leftover=""
+  for k in ${IDENTITY_COURIER_KEYS[@]+"${IDENTITY_COURIER_KEYS[@]}"}; do
+    v="$(read_secret_key identity identity-secrets "$k")"
+    if [ -n "$v" ]; then
+      leftover="${leftover:+$leftover }$k"
+    fi
+  done
+  if [ -n "$leftover" ]; then
+    echo "error: identity-secrets still carries courier key(s) after the orphan sweep:$leftover — the patch did not converge" >&2
+    return 1
+  fi
+}
+
 mint_courier_identity_token() {
   log_step "courier's identity credential, minted on this box"
+  # THE WARM-BOX SWEEP runs above the guard on purpose: a box installed before
+  # the pair landed together may already hold the minted credential (so the
+  # guard below returns early) AND the orphaned half-pair. Converging first
+  # means the re-run heals the secret even when there is nothing left to mint.
+  if [ -z "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
+    converge_identity_courier_block || return 1
+  fi
   # The guard is the resume path, and it is the VALUE rather than a step flag:
   # a re-run that finds the credential already minted has nothing to mint.
   if [ -n "$(read_secret_key courier courier-secrets COURIER_IDENTITY_TOKEN)" ]; then
@@ -2894,10 +2964,12 @@ mint_courier_identity_token() {
   #     ONE merge patch. One patch because a base URL and a token with no
   #     template is a refusal at boot, and deriving all five from the one origin
   #     is what keeps two of them from drifting.
-  #   * KIT_SUBSTRATE_APP_BASE_URL UNSET — identity's courier block is written
-  #     NOT AT ALL: no COURIER_BASE_URL, no COURIER_TOKEN. identity's own loader
-  #     treats "everything absent" as a supported deployment with no mail path
-  #     (`loadCourier`'s `present == 0` branch: "all three absent is a deployment
+  #   * KIT_SUBSTRATE_APP_BASE_URL UNSET — identity's courier block is CONVERGED
+  #     to absent: whatever of the seven keys a previous installer left behind
+  #     is removed (converge_identity_courier_block, one `"key":null` merge
+  #     patch, verified by re-read), and no new identity courier key is written.
+  #     identity's own loader treats "everything absent" as a supported
+  #     deployment with no mail path (`loadCourier`'s `present == 0` branch: "all three absent is a deployment
   #     with no mail path, and is supported"), so it BOOTS and every recovery
   #     route answers 503 — the honest state — instead of a rollout that never
   #     goes Ready. Courier's own pair is STILL written below, because
@@ -2939,7 +3011,10 @@ mint_courier_identity_token() {
       --type=merge --patch-file=/dev/stdin
     kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
   else
-    kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): no identity courier keys written, so identity boots into its supported no-mail state and every recovery route answers 503"
+    # The sweep already ran above the guard; it runs again here so the branch
+    # itself converges and re-verifies after the mint (a no-op when the first
+    # run removed everything, since the mint writes no identity courier key).
+    converge_identity_courier_block || return 1
   fi
   printf '%s' "$(jq -nc --arg url "$IDENTITY_URL" --arg t "$token" \
     '{"stringData":{"COURIER_IDENTITY_URL":$url,"COURIER_IDENTITY_TOKEN":$t}}')" |
