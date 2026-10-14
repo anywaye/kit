@@ -7342,9 +7342,10 @@ run 'control: removing the glob filter lets AppleDouble break the apply again' g
 # the least-privilege one in manifests/argocd/appproject.yaml — sourceRepos
 # the two upstream Helm repoURLs plus the chart-path glob
 # oci://ghcr.io/cafaye/charts/*, destinations exactly the five namespaces they
-# deploy into on https://kubernetes.default.svc, no cluster-scoped whitelist —
-# and step 4 applies it right after Argo CD is Available and before any
-# Application is applied (see install_argocd).
+# deploy into on https://kubernetes.default.svc, and a clusterResourceWhitelist
+# of exactly the three cluster-scoped kinds the observability charts render
+# (see §28) — and step 4 applies it right after Argo CD is Available and
+# before any Application is applied (see install_argocd).
 #
 # The check is a STATIC equality over YAML: the project the Applications name
 # and the shipped AppProject's name must be one fact, one spelling. A static
@@ -7462,7 +7463,7 @@ for d in dests:
         print(f"destination {d} contains '*' — list exactly the fleet's namespaces on https://kubernetes.default.svc")
         sys.exit(1)
 if any(c.get("group") == "*" and c.get("kind") == "*" for c in spec.get("clusterResourceWhitelist", [])):
-    print("clusterResourceWhitelist contains group '*' kind '*' — the project is maximal; the charts need no cluster-scoped resources")
+    print("clusterResourceWhitelist contains group '*' kind '*' — the project stays bounded: whitelist exactly the kinds the Applications declare, never */*")
     sys.exit(1)
 
 print(f"{len(apps)} Applications name project {apps_project!r}, shipped AppProject is {shipped!r}, least-privilege")
@@ -9936,6 +9937,353 @@ empty_apps="$WORK/empty-apps"
 mkdir -p "$empty_apps"
 run 'control: empty apps directory goes red (vacuity guard)' red \
   check_loki_honest "$empty_apps" "$SUBSTRATE/install.sh"
+
+# ===========================================================================
+# 28. The AppProject whitelists exactly the cluster-scoped kinds the
+#     observability charts create — and nothing else
+# ===========================================================================
+#
+# THE DEFECT, MEASURED ON A LIVE BOX. Four Applications never synced:
+#
+#   kubectl -n argocd get applications
+#   alloy        OutOfSync     Missing
+#   grafana      OutOfSync     Missing
+#   prometheus   OutOfSync     Missing
+#   (courier/gateway/identity/parlor all Synced/Healthy)
+#
+#   kubectl -n observability get pods
+#   No resources found in observability namespace.
+#
+# Argo's own reason for alloy:
+#
+#   SyncError=Failed last sync attempt to [1.13.0]: one or more synchronization
+#   tasks are not valid: resource apiextensions.k8s.io:CustomResourceDefinition
+#   is not permitted in project default; resource
+#   rbac.authorization.k8s.io:ClusterRole is not permitted in project default;
+#   resource rbac.authorization.k8s.io:ClusterRoleBinding is not permitted in
+#   project default (retried 5 times).
+#
+# The AppProject listed no clusterResourceWhitelist, so the default applied
+# (no cluster-scoped resources) — and its own comment claimed the
+# observability charts "do the same inside observability", i.e. create nothing
+# cluster-scoped. That sentence is false. Rendered with the pinned versions,
+# defaults, and --include-crds (the flags Argo itself passes):
+#
+#   helm template alloy grafana/alloy --version 1.13.0 --include-crds
+#     CustomResourceDefinition podlogs.monitoring.grafana.com
+#       (apiextensions.k8s.io), ClusterRole alloy + ClusterRoleBinding alloy
+#       (rbac.authorization.k8s.io)
+#   helm template grafana grafana/grafana --version 10.5.15 --include-crds
+#     ClusterRole grafana-clusterrole + ClusterRoleBinding
+#     grafana-clusterrolebinding (rbac.authorization.k8s.io), no CRDs
+#   helm template prometheus prometheus-community/prometheus --version 29.36.0
+#     --include-crds
+#     ClusterRole + ClusterRoleBinding x2 (kube-state-metrics, server)
+#     (rbac.authorization.k8s.io), no CRDs
+#
+# So the substrate shipped a policy its own manifests violate. The four
+# service Applications really are namespaced-only and converge; the three
+# observability ones never could.
+#
+# THE SHAPE. Each Application declares the cluster-scoped kinds its chart
+# creates in the `cafaye.io/cluster-resources` annotation (absent means none
+# — the service Applications and the pin below assert that). The AppProject
+# whitelists exactly the union, one {group, kind} per need with the reason
+# beside it. The checks:
+#   * check_appproject_cluster_scope — every declared need is whitelisted
+#     (completeness: the live-box SyncError), every whitelist entry is
+#     declared by at least one Application (no over-grant: an allowlist entry
+#     matching nothing is a ratchet that only turns one way), and no entry
+#     carries `*` (bounded, never */*).
+#   * check_appproject_cluster_scope_pins — every Application's annotation
+#     equals the pinned render above, and an Application with no pin record
+#     fails closed (a new chart whose scope nobody measured is visible).
+#   * check_appproject_no_star — the whitelist contains no `*` entry on its
+#     own line, so the over-grant direction has its own verdict.
+# A check that passes against an empty directory is not a check: fewer than
+# seven manifests is red before anything else is read.
+check_appproject_cluster_scope() {
+  "$PY" - "$1" "$2" <<'PY'
+import os
+import sys
+
+import yaml
+
+apps_dir, proj_path = sys.argv[1:3]
+
+files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
+if len(files) < 7:
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 7 — an empty or partial directory proves nothing")
+    sys.exit(1)
+
+try:
+    proj_doc = yaml.safe_load(open(proj_path, encoding="utf-8"))
+except FileNotFoundError:
+    print(f"{proj_path}: no such file — the project the Applications name is not shipped")
+    sys.exit(1)
+except yaml.YAMLError as e:
+    print(f"{proj_path}: does not parse ({e})")
+    sys.exit(1)
+if not isinstance(proj_doc, dict) or proj_doc.get("kind") != "AppProject":
+    print(f"{proj_path}: not an AppProject")
+    sys.exit(1)
+spec = proj_doc.get("spec") or {}
+raw_wl = spec.get("clusterResourceWhitelist") or []
+if not isinstance(raw_wl, list):
+    print(f"{proj_path}: spec.clusterResourceWhitelist is not a list")
+    sys.exit(1)
+whitelist = set()
+for entry in raw_wl:
+    if not isinstance(entry, dict) or "group" not in entry or "kind" not in entry:
+        print(f"{proj_path}: clusterResourceWhitelist entry {entry!r} is not a {{group, kind}} pair")
+        sys.exit(1)
+    whitelist.add((entry["group"], entry["kind"]))
+
+problems = []
+for group, kind in sorted(whitelist):
+    if group == "*" or kind == "*":
+        problems.append(
+            f"clusterResourceWhitelist entry group {group!r} kind {kind!r} is a wildcard — whitelist exactly the kinds the Applications declare, never */*"
+        )
+
+needs = {}
+for f in files:
+    path = os.path.join(apps_dir, f)
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        problems.append(f"{f}: does not parse ({e})")
+        continue
+    if not isinstance(doc, dict):
+        problems.append(f"{f}: not a mapping")
+        continue
+    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("cafaye.io/cluster-resources", "")
+    declared = set()
+    if ann and ann.strip():
+        for item in ann.split(","):
+            item = item.strip()
+            if item.count("/") != 1 or item.startswith("/") or item.endswith("/"):
+                problems.append(f"{f}: annotation cafaye.io/cluster-resources entry {item!r} is not 'group/kind'")
+                continue
+            group, kind = item.split("/")
+            declared.add((group.strip(), kind.strip()))
+    needs[f] = declared
+
+for f in files:
+    for pair in sorted(needs.get(f, set())):
+        if pair not in whitelist:
+            problems.append(
+                f"{f} declares cluster-scoped {pair[0]}/{pair[1]} but the AppProject does not whitelist it — this is the live-box SyncError ('is not permitted in project default')"
+            )
+
+declared_union = set()
+for pairs in needs.values():
+    declared_union.update(pairs)
+for pair in sorted(whitelist):
+    if pair[0] != "*" and pair[1] != "*" and pair not in declared_union:
+        problems.append(
+            f"clusterResourceWhitelist entry {pair[0]}/{pair[1]} is declared by no Application — an over-grant is the same defect as an under-grant"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{len(files)} Applications, every declared cluster-scoped kind whitelisted, every whitelist entry declared ({len(whitelist)} pairs, no wildcards)")
+PY
+}
+
+# The pin: each Application's annotation must equal the render measured above.
+# Keyed by manifest file (one Application per file); an Application with no
+# record fails closed so a new chart's scope is measured, not assumed.
+check_appproject_cluster_scope_pins() {
+  "$PY" - "$1" <<'PY'
+import os
+import sys
+
+import yaml
+
+apps_dir = sys.argv[1]
+
+# The renders this table is read from (defaults, --include-crds, the pinned
+# targetRevision each Application names):
+#   alloy.yaml       alloy 1.13.0:        CRD podlogs.monitoring.grafana.com,
+#                                        ClusterRole + ClusterRoleBinding alloy
+#   grafana.yaml     grafana 10.5.15:     ClusterRole + ClusterRoleBinding
+#                                        grafana-clusterrole[grafana-clusterrolebinding]
+#   prometheus.yaml  prometheus 29.36.0:  ClusterRole + ClusterRoleBinding x2
+#                                        (kube-state-metrics, server)
+#   identity/courier/gateway/parlor: namespaced-only (Deployments, Services,
+#                                        ConfigMaps, Secrets in their own
+#                                        namespace; nothing cluster-scoped).
+EXPECTED = {
+    "alloy.yaml": {
+        ("apiextensions.k8s.io", "CustomResourceDefinition"),
+        ("rbac.authorization.k8s.io", "ClusterRole"),
+        ("rbac.authorization.k8s.io", "ClusterRoleBinding"),
+    },
+    "grafana.yaml": {
+        ("rbac.authorization.k8s.io", "ClusterRole"),
+        ("rbac.authorization.k8s.io", "ClusterRoleBinding"),
+    },
+    "prometheus.yaml": {
+        ("rbac.authorization.k8s.io", "ClusterRole"),
+        ("rbac.authorization.k8s.io", "ClusterRoleBinding"),
+    },
+    "courier.yaml": set(),
+    "gateway.yaml": set(),
+    "identity.yaml": set(),
+    "parlor.yaml": set(),
+}
+
+files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
+if len(files) < 7:
+    print(f"{apps_dir} holds {len(files)} Application manifest(s), expected at least 7 — an empty or partial directory proves nothing")
+    sys.exit(1)
+
+problems = []
+for f in files:
+    if f not in EXPECTED:
+        problems.append(
+            f"{f}: no cluster-scope record — render its chart (defaults, --include-crds, the pinned targetRevision) and record its cluster-scoped kinds"
+        )
+        continue
+    path = os.path.join(apps_dir, f)
+    try:
+        doc = yaml.safe_load(open(path, encoding="utf-8"))
+    except yaml.YAMLError as e:
+        problems.append(f"{f}: does not parse ({e})")
+        continue
+    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("cafaye.io/cluster-resources", "")
+    declared = set()
+    if ann and ann.strip():
+        for item in ann.split(","):
+            item = item.strip()
+            if item.count("/") == 1 and not item.startswith("/") and not item.endswith("/"):
+                group, kind = item.split("/")
+                declared.add((group.strip(), kind.strip()))
+    if declared != EXPECTED[f]:
+        problems.append(
+            f"{f}: annotation declares {sorted(declared)} but the pinned render is {sorted(EXPECTED[f])} — the annotation must tell the truth about its chart"
+        )
+
+if problems:
+    print("; ".join(problems))
+    sys.exit(1)
+print(f"{len(files)} Applications, every annotation equals its pinned render (service Applications: no cluster scope)")
+PY
+}
+
+check_appproject_no_star() {
+  "$PY" - "$1" <<'PY'
+import sys
+
+import yaml
+
+proj_path = sys.argv[1]
+try:
+    proj_doc = yaml.safe_load(open(proj_path, encoding="utf-8"))
+except FileNotFoundError:
+    print(f"{proj_path}: no such file")
+    sys.exit(1)
+except yaml.YAMLError as e:
+    print(f"{proj_path}: does not parse ({e})")
+    sys.exit(1)
+spec = (proj_doc or {}).get("spec") or {}
+raw_wl = spec.get("clusterResourceWhitelist") or []
+stars = [(e.get("group"), e.get("kind")) for e in raw_wl if isinstance(e, dict) and (e.get("group") == "*" or e.get("kind") == "*")]
+if stars:
+    print(f"clusterResourceWhitelist carries wildcard entries {stars} — the project stays bounded, never */*")
+    sys.exit(1)
+print(f"clusterResourceWhitelist holds {len(raw_wl)} exact {{group, kind}} pair(s), no wildcards")
+PY
+}
+
+run 'every Application-declared cluster-scoped kind is whitelisted, every whitelist entry declared, no wildcards' green \
+  check_appproject_cluster_scope "$MANIFESTS" "$APP_PROJECT"
+run 'every Application annotation equals its pinned chart render (services: no cluster scope)' green \
+  check_appproject_cluster_scope_pins "$MANIFESTS"
+run 'the clusterResourceWhitelist contains no wildcard entry' green \
+  check_appproject_no_star "$APP_PROJECT"
+
+# RED CONTROL 1 — the project as it stands on master: no whitelist at all.
+# That is the live-box failure reproduced (SyncError ... is not permitted in
+# project default), and it must go red.
+fixture_project_no_wl="$WORK/appproject-no-whitelist.yaml"
+"$PY" - "$APP_PROJECT" "$fixture_project_no_wl" <<'PY'
+import sys
+
+import yaml
+
+src, dst = sys.argv[1:3]
+doc = yaml.safe_load(open(src, encoding="utf-8"))
+(spec := doc.get("spec") or {}).pop("clusterResourceWhitelist", None)
+yaml.safe_dump(doc, open(dst, "w", encoding="utf-8"), default_flow_style=False)
+PY
+case "$(cat "$fixture_project_no_wl")" in
+  *clusterResourceWhitelist*)
+    fail 'control fixture: the master shape still carries a whitelist' \
+      'the transform did not remove clusterResourceWhitelist — this control would prove nothing'
+    ;;
+  *)
+    run 'control: the master-shape project (no whitelist) fails the completeness check' red \
+      check_appproject_cluster_scope "$MANIFESTS" "$fixture_project_no_wl"
+    ;;
+esac
+
+# RED CONTROL 2 — a chart grows a cluster-scoped kind nobody whitelisted.
+# grafana's annotation gains admissionregistration.k8s.io/
+# MutatingWebhookConfiguration while the project is untouched: the check doing
+# the job it exists for must go red naming the missing pair.
+fixture_apps_grown="$WORK/apps-grown-kind"
+rm -rf "$fixture_apps_grown"
+mkdir -p "$fixture_apps_grown"
+cp -R "$MANIFESTS/." "$fixture_apps_grown/"
+"$PY" - "$fixture_apps_grown/grafana.yaml" <<'PY'
+import sys
+
+import yaml
+
+path = sys.argv[1]
+docs = list(yaml.safe_load_all(open(path, encoding="utf-8")))
+doc = docs[0]
+ann = (doc.setdefault("metadata", {}).setdefault("annotations", {}))
+have = ann.get("cafaye.io/cluster-resources", "")
+ann["cafaye.io/cluster-resources"] = (have + ", admissionregistration.k8s.io/MutatingWebhookConfiguration").lstrip(", ")
+yaml.safe_dump_all(docs, open(path, "w", encoding="utf-8"), default_flow_style=False)
+PY
+if grep -q 'admissionregistration.k8s.io/MutatingWebhookConfiguration' "$fixture_apps_grown/grafana.yaml"; then
+  run 'control: a chart growing an unwhitelisted cluster-scoped kind goes red' red \
+    check_appproject_cluster_scope "$fixture_apps_grown" "$APP_PROJECT"
+else
+  fail 'control fixture: the grown kind did not land' \
+    'grafana.yaml carries no MutatingWebhookConfiguration, so the control would prove nothing'
+fi
+
+# RED CONTROL 3 — over-granting is the defect the other direction, and the
+# more dangerous one. A project whitelisting */* must go red.
+fixture_project_star="$WORK/appproject-star.yaml"
+"$PY" - "$APP_PROJECT" "$fixture_project_star" <<'PY'
+import sys
+
+import yaml
+
+src, dst = sys.argv[1:3]
+doc = yaml.safe_load(open(src, encoding="utf-8"))
+(doc.get("spec") or {})["clusterResourceWhitelist"] = [{"group": "*", "kind": "*"}]
+yaml.safe_dump(doc, open(dst, "w", encoding="utf-8"), default_flow_style=False)
+PY
+if grep -q "kind: '\*'" "$fixture_project_star"; then
+  run 'control: a project whitelisting */* goes red' red \
+    check_appproject_no_star "$fixture_project_star"
+else
+  fail 'control fixture: the */* whitelist did not land' \
+    'the fixture carries no wildcard entry, so the control would prove nothing'
+fi
+
+# Empty-directory vacuity guard: a check that passes against an empty directory
+# is not a check.
+run 'control: empty apps directory goes red (vacuity guard)' red \
+  check_appproject_cluster_scope "$empty_apps" "$APP_PROJECT"
 
 # ===========================================================================
 # Summary
