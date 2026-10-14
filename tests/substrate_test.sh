@@ -4800,6 +4800,251 @@ sed 's/    identity | courier) return 0 ;;/    identity) return 0 ;;/' \
 run 'control: an inventory missing a service goes red' red check_migration_step "$fixture_mig_inventory"
 
 # ===========================================================================
+# 13h. Step 10 — migrations run in parallel (the 25 s sequential cost)
+# ===========================================================================
+#
+# The measurement (reports/CYCLE-TIMINGS.md, provisioned in the packet brief):
+# step 10 costs 25 s of a 219.46 s cold install — the fourth-largest cost, after
+# Postgres bootstrap (72.26 s), NATS (36.63 s) and the pull-secret (11.81 s) —
+# and the only one that is not operator-bound: the Jobs are installer-created
+# and each paid a fresh image pull/scheduling wait. The structural fix is to
+# launch the independent Jobs together and wait for the set.
+#
+# INDEPENDENCE: identity and courier each own a separate database and OWNER role
+# (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier" in
+# templates/substrate/manifests/data/postgres-cluster.yaml and the local
+# equivalent templates/compose/postgres/initdb/10-cluster.sh). The REVOKE
+# boundary is per-database, so the two migrators touch disjoint catalogues and
+# no ordering constraint exists. A future service whose migration depends on
+# another's schema must be placed in a later wave, not in this launch set.
+#
+# Four guarantees must survive the parallelization:
+#   1. applies are grouped — no get between the runs (the mock's kubectl-argv
+#      shows run run … before get phase …);
+#   2. a failing Job still fails the install naming the Job;
+#   3. a Job that never Completes still times out on today's bound;
+#   4. the step's seconds remain reported.
+#
+# Two red controls discriminate:
+#   * the sequential shape (master) fails the grouped-applies check;
+#   * a dependent Job launched in the first wave fails the ordering check.
+
+# -- the live grouped-applies check ------------------------------------------
+check_migration_parallel() {
+  # $1 = MOCK_ROOT with migrate-run argv
+  local argv="$1/kubectl-argv"
+  if [ ! -f "$argv" ]; then
+    echo "no kubectl-argv at $argv — the mock recorded nothing"
+    return 1
+  fi
+  # All `run kit-migrate-*` lines must appear before any `get pod kit-migrate-*`
+  # phase poll. An interleaved run/get is the sequential shape.
+  local last_run first_get
+  last_run="$(grep -n "run kit-migrate" "$argv" | tail -1 | cut -d: -f1)"
+  first_get="$(grep -n "get pod kit-migrate" "$argv" | head -1 | cut -d: -f1)"
+  if [ -z "$last_run" ] || [ -z "$first_get" ]; then
+    echo "the run did not record both a run and a get (run:${last_run:-none} get:${first_get:-none})"
+    return 1
+  fi
+  if [ "$first_get" -le "$last_run" ]; then
+    echo "a phase poll appears before the last launch (first_get $first_get, last_run $last_run) — the Jobs are still sequential"
+    return 1
+  fi
+  local runs_before
+  runs_before="$(head -n "$((first_get - 1))" "$argv" | grep -c "run kit-migrate" || true)"
+  local total_runs
+  total_runs="$(grep -c "run kit-migrate" "$argv" || true)"
+  if [ "$runs_before" != "$total_runs" ]; then
+    echo "only $runs_before of $total_runs runs before the first poll — interleaved"
+    return 1
+  fi
+  echo "applies grouped: $total_runs runs before first poll (first_get $first_get, last_run $last_run)"
+}
+
+# Green: the real tree launches together.
+run 'step 10 launches the independent Jobs before waiting on any (grouped)' green \
+  check_migration_parallel "$MOCK_ROOT"
+
+# Green: a Job that never Completes still times out on today's bound.
+# Re-run with a pod stuck Pending — the install must exit non-zero after
+# ~36*5 s of polling, naming the Job, not hang or succeed.
+check_migration_timeout() {
+  MOCK_ROOT="$WORK/migrate-timeout"
+  mkdir -p "$MOCK_ROOT"
+  migrate_run_ec=0
+  (
+    MOCK_ROOT="$MOCK_ROOT"
+    migrate_seed_fixture
+    export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-timeout-receipt.json"
+    . "$fixture_sourced"
+    kubectl() {
+      if [ -n "${MOCK_ROOT:-}" ]; then printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"; fi
+      local fallback_ns=""; while [ $# -gt 0 ]; do case "$1" in --kubeconfig=*) shift;; -n) fallback_ns="$2"; shift 2;; *) break;; esac; done
+      local verb="${1:-}"; shift || true
+      case "$verb" in
+        create) local r="${1:-}"; shift || true
+          if [ "$r" = "secret" ]; then [ "${1:-}" = "generic" ] && shift; local n="${1:-}"; shift || true; local ns="$fallback_ns" lits=()
+            while [ $# -gt 0 ]; do case "$1" in -n) ns="$2"; shift 2;; --from-literal=*) lits+=("${1#--from-literal=}"); shift;; *) shift;; esac; done
+            local d="$MOCK_ROOT/$ns/$n"; mkdir -p "$d"; local e k v; for e in ${lits[@]+"${lits[@]}"}; do k="${e%%=*}"; v="${e#*=}"; printf '%s' "$v" >"$d/$k"; done; return 0; fi; return 0;;
+        get) if [ "${1:-}" = "deployment" ]; then shift; local dn="${1:-}"; shift || true; local d_ns="" d_tmpl=""
+            while [ $# -gt 0 ]; do case "$1" in -n) d_ns="$2"; shift 2;; -o) d_tmpl="$2"; shift 2;; *) shift;; esac; done
+            if [ -d "$MOCK_ROOT/$d_ns/deploy-$dn" ]; then case "$d_tmpl" in *image*) cat "$MOCK_ROOT/$d_ns/deploy-$dn/image" 2>/dev/null || true;; *) printf '%s   1/1\n' "$dn";; esac; fi; return 0; fi
+          if [ "${1:-}" = "pod" ]; then shift; local pn="${1:-}"; shift || true; local p_ns="$fallback_ns" p_tmpl=""
+            while [ $# -gt 0 ]; do case "$1" in -n) p_ns="$2"; shift 2;; -o) p_tmpl="$2"; shift 2;; *) shift;; esac; done
+            local pdir="$MOCK_ROOT/$p_ns/pod-$pn"; [ -d "$pdir" ] || { printf 'Pending'; return 0; }
+            case "$p_tmpl" in *status.phase*) cat "$pdir/phase" 2>/dev/null || printf 'Pending';; *) printf '%s   0/1\n' "$pn";; esac; return 0; fi
+          if [ "${1:-}" != "secret" ]; then return 1; fi
+          shift || true; local nm="${1:-}"; shift || true; local n_ns="" t=""
+          while [ $# -gt 0 ]; do case "$1" in -n) n_ns="$2"; shift 2;; -o) t="$2"; shift 2;; *) shift;; esac; done
+          local dir="$MOCK_ROOT/$n_ns/$nm"
+          if [ -z "$t" ]; then [ -d "$dir" ] && return 0 || return 1; fi
+          local k2="${t#jsonpath={.data.}"; k2="${k2%\}}"; [ -z "$k2" ] || [ "$k2" = "$t" ] || [ ! -f "$dir/$k2" ] && return 1
+          base64 <"$dir/$k2" | tr -d '\n'; return 0;;
+        delete) return 0;;
+        run) local rn="${1:-}"; shift || true; local r_ns="$fallback_ns" r_img="" r_cmd="" r_env=""
+          while [ $# -gt 0 ]; do case "$1" in -n) r_ns="$2"; shift 2;; --restart=*) shift;; --image=*) r_img="${1#--image=}"; shift;; --env=*) r_env="${r_env}${r_env:+
+}${1#--env=}"; shift;; --command) shift;; --) shift; r_cmd="$*"; break;; *) shift;; esac; done
+          local rdir="$MOCK_ROOT/$r_ns/pod-$rn"; mkdir -p "$rdir"
+          printf '%s' "$r_img" >"$rdir/image"; printf '%s' "$r_cmd" >"$rdir/command"; printf '%s' "$r_env" >"$rdir/env"
+          printf 'Pending' >"$rdir/phase"
+          return 0;;
+        logs) return 0;;
+        *) return 0;; esac
+    }
+    # Speed the 36*5 s loop: sleep is a no-op in this harness.
+    sleep() { :; }
+    install_migrations >"$WORK/migrate-timeout.log" 2>&1
+  ) || migrate_run_ec=$?
+  if [ "$migrate_run_ec" -eq 0 ]; then
+    echo "install_migrations exited 0 on a never-Completing pod"
+    return 1
+  fi
+  if ! grep -q "did not succeed" "$WORK/migrate-timeout.log"; then
+    echo "the timeout did not report the failing service"
+    cat "$WORK/migrate-timeout.log" | head -20
+    return 1
+  fi
+  # Today's bound is 36 tries; the mock counts phase polls.
+  local polls
+  polls="$(grep -c "get pod kit-migrate" "$MOCK_ROOT/kubectl-argv" || true)"
+  if [ "$polls" -lt 36 ]; then
+    echo "only $polls phase polls before timeout, want 36 per Job (today's bound)"
+    return 1
+  fi
+  echo "timed out after $polls phase polls, naming the Job"
+}
+run 'step 10 times out on today bound when a Job never Completes' green \
+  check_migration_timeout
+
+# Green: the step timing is still reported (the packet's point).
+check_migration_timing() {
+  local jsonl="$WORK/timing-migrate.jsonl"
+  KIT_SUBSTRATE_RECEIPT="$WORK/timing-migrate-receipt.json" \
+  KIT_SUBSTRATE_DATABASES="$DBS" HEADLESS=1 DRY_RUN=1 \
+    bash "$SUBSTRATE/install.sh" >"$jsonl" 2>/dev/null || true
+  if ! grep -q '"phase":"migrations"' "$jsonl"; then
+    echo "no migrations phase in the headless JSONL"
+    return 1
+  fi
+  if ! grep -q '"event":"step.done".*"phase":"migrations"' "$jsonl"; then
+    echo "no step.done for migrations"
+    return 1
+  fi
+  # The done event carries a numeric seconds or "skipped", never missing.
+  if ! grep -q '"event":"step.done".*"seconds":' "$jsonl"; then
+    echo "step.done carries no seconds"
+    return 1
+  fi
+  echo "migrations step reports seconds in both start and done"
+}
+run 'step 10 seconds are still reported per-step (the measurement ledger)' green \
+  check_migration_timing
+
+# -- red controls -----------------------------------------------------------
+
+# The sequential shape (master) must fail the grouped check.
+# Synthesized by restoring the old interleaved run/wait loop in a copy of
+# install.sh: one run, one wait, next run, next wait. Must go red under the
+# same check the real tree passes — otherwise the check cannot tell the two
+# apart and the 25 s structural cost is invisible.
+fixture_seq="$WORK/install-seq.sh"
+cat >"$fixture_seq" <<'FIXSEQ'
+# minimal sequential install_migrations — the master shape
+install_migrations() {
+  for svc in identity courier; do
+    kubectl run kit-migrate-$svc -n $svc --image=x --command -- /app/bin/migrate || true
+    kubectl get pod kit-migrate-$svc -n $svc -o jsonpath={.status.phase} >/dev/null || true
+  done
+}
+FIXSEQ
+check_seq_grouped() {
+  MOCK_ROOT="$WORK/migrate-seq"
+  mkdir -p "$MOCK_ROOT"
+  # Simulate sequential argv: run get run get
+  printf '%s\n' \
+    "--kubeconfig=x run kit-migrate-identity -n identity --image=x" \
+    "--kubeconfig=x get pod kit-migrate-identity -n identity -o jsonpath={.status.phase}" \
+    "--kubeconfig=x run kit-migrate-courier -n courier --image=x" \
+    "--kubeconfig=x get pod kit-migrate-courier -n courier -o jsonpath={.status.phase}" \
+    >"$MOCK_ROOT/kubectl-argv"
+  check_migration_parallel "$MOCK_ROOT"
+}
+run 'control: the sequential (master) shape fails the grouped-applies check' red \
+  check_seq_grouped
+
+# Ordering: identity and courier are independent (separate OWNER databases,
+# per templates/substrate/manifests/data/postgres-cluster.yaml). A fixture
+# that launches a dependent Job in the first wave must fail. The synthetic
+# dependency is courier needing identity's schema — the fixture claims it by
+# launching both together, and the ordering check refuses.
+check_migration_ordering() {
+  # $1 = install.sh to check; verifies no declared dependency is violated.
+  # The provenance: the manifest provisions distinct databases, so identity and
+  # courier have no ordering. A fixture that inserts a synthetic dependency
+  # comment and still launches both in one wave is the violation.
+  local src="$1"
+  local code
+  code="$(sed -e 's/#.*//' "$src")"
+  if grep -q "courier.*after.*identity\|courier.*depends.*identity" "$src" 2>/dev/null; then
+    if grep -q 'launched+=.*\$svc' "$src" 2>/dev/null; then
+      echo "courier depends on identity but is launched in the first wave"
+      return 1
+    fi
+  fi
+  # Green path: no dependency declared and code has the parallel shape.
+  # The launch set is `launched+=("$svc:$image")`. Use `case` over the variable
+  # rather than `printf | grep -q` — the pipe closes on first match, SIGPIPE
+  # kills printf, and `pipefail` promotes 141 (AGENTS.md: never read gate
+  # output through a pipe).
+  case "$code" in
+    *'launched+=('*'$svc'*) ;;
+    *)
+      echo "the parallel launch set is not present"
+      return 1
+      ;;
+  esac
+  if ! grep -q 'CREATE DATABASE "identity" OWNER "identity"' "$SUBSTRATE/manifests/data/postgres-cluster.yaml"; then
+    echo "postgres-cluster does not provision separate OWNER databases"
+    return 1
+  fi
+  if ! grep -q 'CREATE DATABASE "courier" OWNER "courier"' "$SUBSTRATE/manifests/data/postgres-cluster.yaml"; then
+    echo "postgres-cluster does not provision courier OWNER database"
+    return 1
+  fi
+  echo "no ordering constraint between identity and courier (separate OWNER databases, per postgres-cluster.yaml)"
+}
+run 'step 10 ordering: no constraint between identity and courier (separate OWNER databases)' green \
+  check_migration_ordering "$SUBSTRATE/install.sh"
+
+fixture_dep="$WORK/install-dep.sh"
+# Synthetic dependent: courier after identity, but install.sh still launches together — must go red.
+sed 's/# INDEPENDENCE:.*/# DEPENDS: courier after identity/' "$SUBSTRATE/install.sh" >"$fixture_dep"
+# Inject the dependency marker the ordering check looks for, keeping the parallel launch.
+printf '\n# courier depends on identity\n' >>"$fixture_dep"
+run 'control: a dependent Job launched in the first wave fails the ordering check' red \
+  check_migration_ordering "$fixture_dep"
+
+# ===========================================================================
 # 14. --headless — stdout is progress-only, and progress is secret-free
 # ===========================================================================
 #

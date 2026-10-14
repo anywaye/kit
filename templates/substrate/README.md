@@ -84,14 +84,20 @@ this file only describes what is here and what is proven.
     schema-owning service (`identity`, `courier`), in that service's own
     **running image** (read back from the Deployment Argo synced, so there is
     no second pin) and connected as its **OWNER** role (a migration is DDL;
-    `<svc>_app` owns nothing). The pod's phase is waited to completion, its
-    logs are printed on failure, and the step fails the install naming the
-    service and its OWNER DSN — never a pod `Ready` over an empty schema.
-    `gateway` (an explicit no-op `bin/migrate`) and `parlor` (no database at
-    all) are named in the plan and skipped. Idempotent twice over: the tools'
-    version tables make a replay a no-op, and a marker Secret records the
-    image whose schema was applied so a re-run does not even launch the pods.
-    See [The services' database schemas](#the-services-database-schemas).
+    `<svc>_app` owns nothing). The two schema-owning services each own a
+    separate database and OWNER role (`identity` vs `courier`, per
+    `manifests/data/postgres-cluster.yaml` and the local equivalent
+    `templates/compose/postgres/initdb/10-cluster.sh`), so their migrations
+    touch disjoint catalogues and no ordering constraint exists — both Jobs are
+    launched together and waited as a set, and a Job that fails still fails
+    the install naming its Job while a Job that never Completes still times out
+    on the same 36×5 s bound per Job. The per-step `seconds` remain reported
+    for the whole step, and the headless JSONL keeps per-Job outcomes. `gateway`
+    (an explicit no-op `bin/migrate`) and `parlor` (no database at all) are
+    named in the plan and skipped. Idempotent twice over: the tools' version
+    tables make a replay a no-op, and a marker Secret records the image whose
+    schema was applied so a re-run does not even launch the pods. See
+    [The services' database schemas](#the-services-database-schemas).
 11. **NATS with JetStream and the fleet's stream** — one Deployment + Service
     + PVC in `data`, applied from `manifests/data/nats.yaml` with the pinned
     image substituted at apply time, then the one-shot stream init defining
@@ -534,9 +540,15 @@ are read from the running world rather than restated:
 
 The pod is run with `--restart=Never`, its phase is watched to `Succeeded`, and
 a `Failed` phase prints the pod's logs and **fails the install**, naming the
-service and its OWNER DSN. There is no `kubectl exec … migrate || true`, no
-sleep, and no "the service migrates at boot" assumed — that last one is
-checked, not believed.
+service and its OWNER DSN. The two schema-owning services (`identity`,
+`courier`) each own a separate database and OWNER role per
+`manifests/data/postgres-cluster.yaml`, so no cross-service ordering constraint
+exists — their Jobs are **launched together** and waited as a set, with the
+same per-Job 36×5 s timeout and per-Job outcome reporting. If a future service's
+migration depends on another's schema it must be placed in a later wave, not in
+the launch set (see `install.sh`'s independence note). There is no
+`kubectl exec … migrate || true`, no sleep, and no "the service migrates at
+boot" assumed — that last one is checked, not believed.
 
 **The inventory, which is a finding and not an assumption:**
 
