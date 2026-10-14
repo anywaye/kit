@@ -59,6 +59,20 @@ require git
 step "go mod download"
 go mod download
 
+step "no Go generate line pins a module version"
+# A Go service's `//go:generate` must not name a module version (`@v…`),
+# because a gate that fetches a module on demand is a gate that cannot run
+# where the module cache is cold. See ci.reusable.yml's `no generate version
+# pin` step and gateway/tools.go for the pattern. The fix is to declare the
+# tool as a dependency (a blank import in tools.go with `//go:build tools`)
+# and run it as `go run <module>` with no `@<version>`.
+if grep -rn --include='*.go' '^//go:generate.*@v' .; then
+  echo "bin/prime: a //go:generate line pins a module version with @v — remove the @<version>" >&2
+  echo "  so the tool resolves inside this module rather than in a throwaway one." >&2
+  echo "  The version lives once, in go.mod's require (through tools.go)." >&2
+  exit 1
+fi
+
 step "go build ./..."
 go build ./...
 

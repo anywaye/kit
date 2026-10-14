@@ -1995,6 +1995,70 @@ json.loads("".join(out))
   fi
 
   # -------------------------------------------------------------------------
+  section 'static: no Go generate line pins a module version'
+  # A Go service's `//go:generate` must not name a module version (`@v…`),
+  # because a gate that fetches a module on demand is a gate that cannot run
+  # where the module cache is cold. The fleet-wide check lives in two places:
+  #   - ci.reusable.yml's Go job (`no generate version pin` step) — the CI
+  #     enforcement every Go service inherits by calling the reusable workflow.
+  #   - templates/bin-prime/go.sh (`no Go generate line pins...` step) — the
+  #     local `bin/prime` enforcement for the same rule.
+  # Both are asserted here; a service that copies an old template or a
+  # workflow that loses the step is a fleet regression that must go red.
+  # The grep itself is also proven red/green on fixtures, so the pattern is
+  # not vacuous.
+  check 'ci.reusable.yml Go job has no-generate-version guard' bash -c '
+    set -euo pipefail
+    f="$1/.github/workflows/ci.reusable.yml"
+    # The step name and the grep pattern must both be present in the Go job;
+    # a step that was renamed or a pattern that was softened is a failure.
+    if ! grep -q "no generate version pin" "$f"; then
+      echo "ci.reusable.yml Go job has no \"no generate version pin\" step" >&2
+      exit 1
+    fi
+    if ! grep -q "go:generate.*@v" "$f"; then
+      echo "ci.reusable.yml Go job has no grep for go:generate.*@v" >&2
+      exit 1
+    fi
+  ' -- "$ROOT"
+  check 'templates/bin-prime/go.sh has no-generate-version guard' bash -c '
+    set -euo pipefail
+    f="$1/templates/bin-prime/go.sh"
+    if ! grep -q "no Go generate line pins" "$f"; then
+      echo "templates/bin-prime/go.sh has no generate-version guard" >&2
+      exit 1
+    fi
+    if ! grep -q "go:generate.*@v" "$f"; then
+      echo "templates/bin-prime/go.sh has no grep for go:generate.*@v" >&2
+      exit 1
+    fi
+  ' -- "$ROOT"
+  check 'generate-version guard discriminates (red on @v, green without)' bash -c '
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap '\''rm -rf "$tmp"'\'' EXIT
+    # RED fixture: a Go file that pins a version must be caught.
+    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml\n" > "$tmp/red.go"
+    if ! grep -q "^//go:generate.*@v" "$tmp/red.go"; then
+      echo "fixture red.go not matched by pattern — guard is vacuous" >&2
+      exit 1
+    fi
+    if grep -rn --include="*.go" "^//go:generate.*@v" "$tmp" >/dev/null; then
+      : # red correctly goes red
+    else
+      echo "generate-version guard did not fire on red fixture" >&2
+      exit 1
+    fi
+    # GREEN fixture: a Go file without version must pass.
+    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen --config oapi-codegen.yaml\n" > "$tmp/green.go"
+    rm "$tmp/red.go"
+    if grep -rn --include="*.go" "^//go:generate.*@v" "$tmp" >/dev/null; then
+      echo "generate-version guard fired on green fixture — false positive" >&2
+      exit 1
+    fi
+  '
+
+  # -------------------------------------------------------------------------
   section 'static: templates/otel — every artifact is present'
   # This runs on a machine with no language toolchains at all. A template that
   # was deleted or renamed must fail the gate here, not "skip" later.
