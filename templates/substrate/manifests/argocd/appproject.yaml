@@ -74,19 +74,39 @@ spec:
   #                      or argocd itself; this one does not.
   #
   #   clusterResourceWhitelist / namespaceResourceWhitelist
-  #                      not listed, so the defaults apply: no cluster-scoped
-  #                      resources and all namespaced resources. The service
-  #                      charts create Deployments, Services, ConfigMaps and
-  #                      Secrets in their own namespace and nothing
-  #                      cluster-scoped; the observability charts do the same
-  #                      inside observability. Allowing a clusterResource would
+  #                      namespaceResourceWhitelist is not listed, so the
+  #                      default applies: all namespaced resources. The
+  #                      service charts create Deployments, Services,
+  #                      ConfigMaps and Secrets in their own namespace and
+  #                      nothing cluster-scoped, and that namespaced-only
+  #                      shape is pinned by tests/substrate_test.sh §28.
+  #                      clusterResourceWhitelist IS listed, because the
+  #                      observability charts are NOT namespaced-only —
+  #                      rendered with the pinned versions, defaults and
+  #                      --include-crds (the flags Argo itself passes):
+  #                        alloy 1.13.0:      CustomResourceDefinition
+  #                          podlogs.monitoring.grafana.com, ClusterRole
+  #                          alloy, ClusterRoleBinding alloy
+  #                        grafana 10.5.15:   ClusterRole
+  #                          grafana-clusterrole, ClusterRoleBinding
+  #                          grafana-clusterrolebinding (no CRDs)
+  #                        prometheus 29.36.0: ClusterRole +
+  #                          ClusterRoleBinding x2 (kube-state-metrics,
+  #                          server; no CRDs)
+  #                      Each Application declares its own kinds in the
+  #                      `cafaye.io/cluster-resources` annotation beside
+  #                      the chart version that was rendered; the three
+  #                      entries below are exactly the union of those
+  #                      declarations — each with its reason, none `*/*`.
+  #                      Allowing a clusterResource no chart creates would
   #                      let a chart create a ClusterRole that binds to any
   #                      namespace, which is exactly the privilege the
   #                      database-per-service boundary exists to prevent.
-  #                      If a chart later needs a cluster-scoped kind, that
-  #                      kind is added here explicitly, with the reason beside
-  #                      it — the project is the one place a cluster-scoped
-  #                      grant is visible.
+  #                      If a chart later needs a new cluster-scoped kind,
+  #                      that kind is added to its annotation AND here,
+  #                      with the reason beside it — the project is the one
+  #                      place a cluster-scoped grant is visible, and §28
+  #                      fails the run when the two disagree.
   #
   # If the maximal shape is ever needed again, the reason must be written
   # beside it — a project that allows * is a project that has stopped being
@@ -110,3 +130,20 @@ spec:
       server: https://kubernetes.default.svc
     - namespace: parlor
       server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    # alloy 1.13.0 renders CustomResourceDefinition
+    # podlogs.monitoring.grafana.com (its PodLogs CRD). Without this the CRD
+    # is never applied and the sync fails naming
+    # apiextensions.k8s.io:CustomResourceDefinition as not permitted.
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    # alloy (alloy), grafana (grafana-clusterrole) and prometheus
+    # (kube-state-metrics, server) each render ClusterRoles that let their
+    # ServiceAccounts read what they scrape. One pair covers all three —
+    # the whitelist is over (group, kind), not over names.
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    # The bindings beside those roles (alloy, grafana-clusterrolebinding,
+    # kube-state-metrics, server). Same shape: one pair, not `*/*`.
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
