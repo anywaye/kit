@@ -3003,8 +3003,20 @@ install_migrations() {
     return 0
   fi
 
-  local svc image cmd phase tries
-  local -a env_args=() marker_args=() failed=()
+  # INDEPENDENCE: identity and courier each own a separate database
+  # (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier")
+  # and a separate OWNER role, provisioned in
+  # templates/substrate/manifests/data/postgres-cluster.yaml (and the local
+  # equivalent templates/compose/postgres/initdb/10-cluster.sh). The REVOKE
+  # boundary is per-database, so the two migrators touch disjoint catalogues
+  # and cannot see each other's rows. No migration reads the other service's
+  # schema. Both Jobs are therefore launched together and waited as a set —
+  # the 25 s sequential cost is the image-pull/scheduling wait per Job, not
+  # DDL time. If a future service's migration depends on another's schema it
+  # must be placed in a later wave, not in this launch set.
+  local svc image cmd
+  local -a marker_args=() failed=() launched=()
+  # Phase 1: launch every independent Job, wait for none.
   for svc in identity courier; do
     migration_service_has_schema "$svc" || continue
     # The image the Running Deployment runs — the same build as the service.
@@ -3015,14 +3027,14 @@ install_migrations() {
       exit 1
     fi
     cmd="$(migration_command_for "$svc")"
-    env_args=()
+    local -a env_args=()
     while IFS= read -r arg; do
       env_args+=("$arg")
     done < <(migration_env_args_for "$svc")
 
     kit_substrate_out "      migrating ${svc} as its OWNER role, in ${image}"
     # The same one-shot discipline step 11's stream init uses: delete a leftover
-    # from a previous run, run the pod with Never semantics, watch its phase.
+    # from a previous run, run the pod with Never semantics.
     kubectl --kubeconfig="$KUBECONFIG" delete pod "kit-migrate-${svc}" -n "$svc" --ignore-not-found >/dev/null 2>&1 || true
     if ! kubectl --kubeconfig="$KUBECONFIG" run "kit-migrate-${svc}" -n "$svc" \
       --restart=Never \
@@ -3031,9 +3043,20 @@ install_migrations() {
       --command -- $cmd; then
       # The image could not even start the command — a distroless service with
       # no migrate entrypoint. That is the finding the step exists to surface,
-      # not a transient. Fall through to the phase read, which reports it.
+      # not a transient. Fall through to the phase wait below, which reports it.
       :
     fi
+    launched+=("$svc:$image")
+  done
+
+  # Phase 2: wait for the whole set. A failure fails the install and names the
+  # Job; a Job that never Completes times out on the same 36×5 s bound as
+  # before, per Job. Order is the launch order, not interleaved with launches.
+  local entry phase tries svc_image
+  for entry in ${launched[@]+"${launched[@]}"}; do
+    svc="${entry%%:*}"
+    svc_image="${entry#*:}"
+    image="$svc_image"
     phase=""
     tries=36
     while [ "$tries" -gt 0 ]; do
