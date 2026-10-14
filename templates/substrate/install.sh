@@ -2190,7 +2190,7 @@ install_cluster_issuers() {
 # and the reconcile is not part of the re-provision.
 create_postgres_role_secrets() {
   local svc role secret_name pw
-  for svc in identity gateway courier parlor pantry; do
+  for svc in identity gateway courier parlor pantry box; do
     for role in "$svc" "${svc}_app"; do
       # The secret name wears the service's spelling (`-app`); the username
       # key must wear the ROLE's (`_app`). The mapping is explicit so the two
@@ -2244,7 +2244,7 @@ install_postgres_cluster() {
   log_step "the Postgres Cluster (from KIT_SUBSTRATE_DATABASES, in the data namespace)"
   if [ -z "$KIT_SUBSTRATE_DATABASES" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry,box' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES is not set"
   fi
   # The manifest is the contract and the variable is the operator confirming
@@ -2256,12 +2256,12 @@ install_postgres_cluster() {
   have="$(printf '%s' "$KIT_SUBSTRATE_DATABASES" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u | tr '\n' ',')"
   if [ -z "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry,box' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES names no services (empty after trimming)"
   fi
   if [ "$want" != "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,pantry,box' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
       "KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})"
   fi
   # The extension list is declared (default: vector, mirroring compose) and
@@ -2336,7 +2336,7 @@ install_postgres_cluster() {
 # from the `redis-password` secret — and the secrets half has its own guard,
 # so a half-finished step 9 resumes the secrets without touching Redis.
 install_redis_and_secrets() {
-  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor, pantry)"
+  log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor, pantry, box)"
   if kit_substrate_guard redis; then
     kit_substrate_out "      already installed, skipping"
   elif dry_run "create secret redis-password (generated once) and apply ${DATA_DIR}/redis.yaml"; then

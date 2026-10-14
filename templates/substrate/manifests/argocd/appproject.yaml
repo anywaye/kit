@@ -23,7 +23,7 @@ spec:
   # charts and namespaces are enumerated in this repository, so the project
   # can be scoped to exactly those.
   #
-  #   sourceRepos        what the eight Applications name and no other: the
+  #   sourceRepos        what the ten Applications name and no other: the
   #                      two upstream Helm repos for the observability three,
   #                      and a chart-path GLOB for the five service charts
   #                      (oci://ghcr.io/cafaye/charts/*) — because each
@@ -66,7 +66,7 @@ spec:
   #   permitted by these patterns, with the pre-fix bare-root spelling as a red
   #   control.
   #
-  #   destinations       the six namespaces the Applications deploy into
+  #   destinations       the eight namespaces the Applications deploy into
   #                      (observability, identity, gateway, courier, parlor,
   #                      pantry)
   #                      on the one cluster this substrate runs
@@ -112,7 +112,7 @@ spec:
   # If the maximal shape is ever needed again, the reason must be written
   # beside it — a project that allows * is a project that has stopped being
   # a boundary.
-  description: "The default project for the cafaye substrate — the eight Applications' project"
+  description: "The default project for the cafaye substrate — the ten Applications' project"
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts
@@ -132,6 +132,10 @@ spec:
     - namespace: parlor
       server: https://kubernetes.default.svc
     - namespace: pantry
+      server: https://kubernetes.default.svc
+    - namespace: box
+      server: https://kubernetes.default.svc
+    - namespace: keyholder
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     # alloy 1.13.0 renders CustomResourceDefinition
