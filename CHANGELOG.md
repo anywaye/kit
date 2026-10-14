@@ -2,6 +2,28 @@
 
 ### Substrate
 
+- **A long-lived box accumulates ReplicaSets its Deployments no longer name.**
+  The gateway namespace on Contabo held five ReplicaSets for one Deployment
+  at `spec.replicas: 1` — two of them live, the older on an image nobody
+  asked for, burning CPU on a readiness probe that could never succeed, with
+  the Docker Hub generation sitting in `ImagePullBackOff` for seven hours
+  and 46 minutes. Argo CD converges the Applications, not the ReplicaSets a
+  previous revision left behind, so step 13 now converges them:
+  `converge_residual_replicasets` reads each of the four service
+  Deployments' `spec.replicas` and pod spec, finds the owned live RS whose
+  pod spec matches (reading its pod-template-hash for the report — the
+  Deployment object carries none), and scales every other live RS to 0,
+  printing each with its image, age and Deployment. Scale, not delete: the
+  revision history stays, pods terminate gracefully, and a second run
+  changes nothing. A Deployment at `replicas: 0` is operator intent and is
+  skipped whole; a mid-rollout Deployment is left to its controller; an
+  unsynced Deployment is skipped quietly. `tests/substrate_test.sh` §26
+  proves it against a file-backed mock: reported and converged, idempotent,
+  current/scaled-down/mid-rollout/unsynced untouched, dry run prints and
+  changes nothing, and two red controls (master shape without the step
+  leaves the residual; an inverted hash check converges the current RS).
+  See `REPORT-roll-c5-rs-residual.md`.
+
 - **The orphan sweep deleted a WORKING mail path and called it leftovers.**
   The live Contabo box carries a complete seven-key courier block
   (`COURIER_BASE_URL` and `COURIER_TOKEN` both present, five link templates

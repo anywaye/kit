@@ -137,20 +137,20 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The twelve steps, in order. The markers are `[1/12]` … `[12/12]`; the check
+# The thirteen steps, in order. The markers are `[1/13]` … `[13/13]`; the check
 # reads them out of the output in the order they appear and compares against
 # the expected sequence, so a script that printed them out of order — or
 # skipped one — would go red here rather than passing on the presence of all
-# twelve. The `|| true` is load-bearing: with no `[n/12]` markers printed yet,
+# thirteen. The `|| true` is load-bearing: with no `[n/13]` markers printed yet,
 # grep exits 1, and under `set -o pipefail` a failing command substitution
 # would take the harness down before the status is ever read — the same shape
 # the `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/12\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/13\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12" ]; then
-  pass 'DRY_RUN prints the twelve steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12 13" ]; then
+  pass 'DRY_RUN prints the thirteen steps in order'
 else
-  fail 'DRY_RUN prints the twelve steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the thirteen steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
@@ -1540,7 +1540,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=12", "TOTAL is not 12 — step 10 (the services' schemas), step 11 (NATS) and step 12 (the courier credential minted on this box) widen the plan and the DRY_RUN order check with it")
+need("TOTAL=13", "TOTAL is not 13 — step 10 (the services' schemas), step 11 (NATS), step 12 (the courier credential minted on this box) and step 13 (the residual ReplicaSets) widen the plan and the DRY_RUN order check with it")
 need('NATS_VERSION="2.10.24-alpine"', "no exact NATS_VERSION pin beside the other pins")
 need('NATS_BOX_VERSION="0.20.0"', "no exact NATS_BOX_VERSION pin for the stream-init image")
 if not re.search(r"(?m)^install_nats\(\)", code):
@@ -4752,7 +4752,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=12", "TOTAL is not 12")
+need("TOTAL=13", "TOTAL is not 13")
 if not re.search(r"(?m)^install_migrations\(\)", code):
     problems.append("no install_migrations step")
 if not re.search(r"(?m)^  install_migrations$", code):
@@ -8295,11 +8295,11 @@ KIT_SUBSTRATE_RECEIPT="$WORK/timing-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS"
 
 timing_starts="$(grep -c '"event":"step.start"' "$timing_jsonl" || true)"
 timing_dones="$(grep -c '"event":"step.done"' "$timing_jsonl" || true)"
-if [ "$timing_starts" -eq 12 ] && [ "$timing_dones" -eq 12 ]; then
+if [ "$timing_starts" -eq 13 ] && [ "$timing_dones" -eq 13 ]; then
   pass 'every step emits a start and a done event'
 else
   fail 'every step emits a start and a done event' \
-    "${timing_starts} start(s), ${timing_dones} done(s) — expected 12 and 12"
+    "${timing_starts} start(s), ${timing_dones} done(s) — expected 13 and 13"
 fi
 
 run 'the step timings are present and the total covers the steps' green check_timing "$timing_jsonl"
@@ -9169,6 +9169,515 @@ case "$(cat "$fixture_master")" in
       run 'control: the silent report fails the clean check (no verdict at all)' red check_clean "$fixture_master"
       run 'control: the silent report carries no readiness event' red check_headless_readiness "$fixture_master"
     fi
+    ;;
+esac
+
+# ===========================================================================
+# 26. The residual ReplicaSets are converged (step 13)
+# ===========================================================================
+# MEASURED, ON THE LIVE BOX. One Deployment at spec.replicas 1 held two live
+# ReplicaSets: the digest-pinned current one and a tag-based older generation
+# burning CPU on a readiness probe that could never succeed — and each
+# generation leaves one more behind, because Argo CD converges the
+# Applications rather than the ReplicaSets a previous revision left. Step 13
+# scales a live non-current RS to 0 and reports it with its image, its age
+# and its Deployment. It never touches the current RS, never touches a
+# deliberately scaled-to-zero Deployment, and never touches a rollout in
+# flight.
+#
+# install.sh needs a cluster, so none of this runs against one. The installer
+# is sourced with its trailing `main` call removed (the same fixture_sourced
+# the secrets section built) and converge_one_deployment_rs is executed
+# against a file-backed kubectl mock: $MOCK_ROOT/<ns>/deploy-<name>.json is
+# the Deployment, $MOCK_ROOT/<ns>/rs.json is the ReplicaSet list, and a scale
+# mutates the list and appends to $MOCK_ROOT/scaled. Every assertion below
+# reads a captured variable with a shell `case`, never a pipe.
+
+# rs_mock_kubectl — the file-backed kubectl for step 13. Emulates only what
+# converge_one_deployment_rs uses: `get deployment <name> -o json` (missing
+# object exits 1, the "Argo has not synced yet" state) and `get rs -o json`
+# (an empty namespace is an empty list, not an error), and
+# `scale replicaset/<name> --replicas=0`, which sets the RS's spec.replicas
+# to 0 in the store and records the scale. Anything else is a loud failure.
+rs_mock_kubectl() {
+  if [ -n "${MOCK_ROOT:-}" ]; then
+    printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
+  fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kubeconfig=*) shift ;;
+      -n) RS_MOCK_NS="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  local verb="${1:-}"
+  shift || true
+  case "$verb" in
+    get)
+      local res="${1:-}"
+      shift || true
+      local name="" is_json=0
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) RS_MOCK_NS="$2"; shift 2 ;;
+          -o) if [ "${2:-}" = "json" ]; then is_json=1; fi; shift 2 ;;
+          *) name="$1"; shift ;;
+        esac
+      done
+      [ "$is_json" -eq 1 ] || { echo "rs_mock_kubectl: only -o json is emulated" >&2; return 1; }
+      if [ "$res" = "deployment" ]; then
+        [ -f "$MOCK_ROOT/$RS_MOCK_NS/deploy-$name.json" ] || return 1
+        cat "$MOCK_ROOT/$RS_MOCK_NS/deploy-$name.json"
+        return 0
+      fi
+      if [ "$res" = "rs" ] || [ "$res" = "replicaset" ] || [ "$res" = "replicasets" ]; then
+        if [ -f "$MOCK_ROOT/$RS_MOCK_NS/rs.json" ]; then
+          cat "$MOCK_ROOT/$RS_MOCK_NS/rs.json"
+        else
+          printf '{"items":[]}'
+        fi
+        return 0
+      fi
+      echo "rs_mock_kubectl: unhandled get $res" >&2
+      return 1
+      ;;
+    scale)
+      local target="${1:-}"
+      shift || true
+      local replicas=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -n) RS_MOCK_NS="$2"; shift 2 ;;
+          --replicas=*) replicas="${1#--replicas=}"; shift ;;
+          *) shift ;;
+        esac
+      done
+      local rs_name="${target#replicaset/}"
+      rs_name="${rs_name#rs/}"
+      [ "$replicas" = "0" ] || { echo "rs_mock_kubectl: only --replicas=0 is emulated" >&2; return 1; }
+      "$PY" - "$MOCK_ROOT/$RS_MOCK_NS/rs.json" "$rs_name" <<'PY'
+import json
+import sys
+path, name = sys.argv[1], sys.argv[2]
+doc = json.load(open(path))
+hit = False
+for item in doc.get("items", []):
+    if item.get("metadata", {}).get("name") == name:
+        item["spec"]["replicas"] = 0
+        hit = True
+if not hit:
+    sys.exit(1)
+json.dump(doc, open(path, "w"), indent=2)
+PY
+      printf '%s/%s\n' "$RS_MOCK_NS" "$rs_name" >>"$MOCK_ROOT/scaled"
+      return 0
+      ;;
+    *)
+      echo "rs_mock_kubectl: unhandled verb $verb" >&2
+      return 1
+      ;;
+  esac
+}
+
+# rs_seed_standard <root> — the live-box shape in miniature: gateway holds a
+# live current RS (digest image), a live residual RS (old tag, old timestamp)
+# and a dead RS at 0; identity holds only its current RS; parlor is
+# deliberately scaled to 0 with its RS still live; courier is mid-rollout
+# (updated 0 of 1) with a live old RS. Every image, hash and timestamp is a
+# FAKE label, and each is asserted in the output below.
+rs_seed_standard() {
+  "$PY" - "$1" <<'PY'
+import json
+import os
+import sys
+root = sys.argv[1]
+
+def deploy(ns, name, replicas, updated, image):
+    doc = {
+        "metadata": {"name": name, "namespace": ns},
+        "spec": {"replicas": replicas,
+                 "template": {"metadata": {"labels": {"app": name}},
+                              "spec": {"containers": [{"name": name, "image": image}]}}},
+        "status": {"replicas": replicas, "updatedReplicas": updated,
+                   "availableReplicas": replicas},
+    }
+    os.makedirs(os.path.join(root, ns), exist_ok=True)
+    json.dump(doc, open(os.path.join(root, ns, "deploy-%s.json" % name), "w"), indent=2)
+
+def rs_list(ns, items):
+    out = []
+    for name, dep, h, live, image, created in items:
+        out.append({
+            "metadata": {"name": name, "namespace": ns, "creationTimestamp": created,
+                         "labels": {"pod-template-hash": h},
+                         "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment",
+                                              "name": dep, "uid": "uid-%s" % name}]},
+            "spec": {"replicas": 1 if live else 0,
+                     "template": {"metadata": {"labels": {"app": dep, "pod-template-hash": h}},
+                                  "spec": {"containers": [{"name": dep, "image": image}]}}},
+        })
+    os.makedirs(os.path.join(root, ns), exist_ok=True)
+    json.dump({"items": out}, open(os.path.join(root, ns, "rs.json"), "w"), indent=2)
+
+deploy("gateway", "gateway", 1, 1, "ghcr.io/cafaye/gateway@sha256:NEWLABEL")
+rs_list("gateway", [
+    ("gateway-aaaaaa", "gateway", "AAAAAA", True, "ghcr.io/cafaye/gateway@sha256:NEWLABEL", "2026-10-14T10:00:00Z"),
+    ("gateway-bbbbbb", "gateway", "BBBBBB", True, "ghcr.io/cafaye/gateway:0.1.0", "2026-10-13T01:00:00Z"),
+    ("gateway-cccccc", "gateway", "CCCCCC", False, "ghcr.io/cafaye/gateway:0.0.9", "2026-10-12T01:00:00Z"),
+])
+deploy("identity", "identity", 1, 1, "ghcr.io/cafaye/identity@sha256:I1LABEL")
+rs_list("identity", [
+    ("identity-xxxxxx", "identity", "XXXXXX", True, "ghcr.io/cafaye/identity@sha256:I1LABEL", "2026-10-14T09:00:00Z"),
+])
+deploy("parlor", "parlor", 0, 0, "ghcr.io/cafaye/parlor@sha256:P1LABEL")
+rs_list("parlor", [
+    ("parlor-pppppp", "parlor", "PPPPPP", True, "ghcr.io/cafaye/parlor@sha256:P0LABEL", "2026-10-13T05:00:00Z"),
+])
+deploy("courier", "courier", 1, 0, "ghcr.io/cafaye/courier@sha256:C1LABEL")
+rs_list("courier", [
+    ("courier-oooooo", "courier", "OOOOOO", True, "ghcr.io/cafaye/courier:0.1.0", "2026-10-14T08:00:00Z"),
+])
+print("standard RS store seeded")
+PY
+}
+
+# check_rs_converge <sourced-install.sh> <store> — the residual is reported
+# with its image, its age and its Deployment, and converged to 0, while the
+# current RS keeps its replica.
+check_rs_converge() {
+  local src="$1"
+  local MOCK_ROOT="$2"
+  local out ec=0
+  out="$(
+    DRY_RUN=0 HEADLESS=0
+    # The suite sources the real installer into its MAIN shell (the
+    # registry section does), so its functions are inherited here — and
+    # sourcing a fixture WITHOUT them does not undefine them. Forget both
+    # before sourcing, so the master control really meets the installer as
+    # it stands on master; a no-op when the sourced script defines them.
+    unset -f converge_one_deployment_rs converge_residual_replicasets
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs gateway gateway
+  )" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'converge exited %s\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'residual gateway/gateway-bbbbbb'*'(deployment gateway'*'ghcr.io/cafaye/gateway:0.1.0'*'2026-10-13T01:00:00Z'*) ;;
+    *) printf 'the residual is not reported with its image, its age and its Deployment\n%s' "$out"; return 1 ;;
+  esac
+  case "$(cat "$MOCK_ROOT/scaled" 2>/dev/null || true)" in
+    *'gateway/gateway-bbbbbb'*) ;;
+    *) printf 'the residual was not scaled to 0\n%s' "$out"; return 1 ;;
+  esac
+  "$PY" - "$MOCK_ROOT/gateway/rs.json" <<'PY'
+import json
+import sys
+doc = json.load(open(sys.argv[1]))
+by_name = {i["metadata"]["name"]: i["spec"]["replicas"] for i in doc.get("items", [])}
+if by_name.get("gateway-bbbbbb") != 0:
+    print("the residual still names a replica: %r" % (by_name,))
+    sys.exit(1)
+if by_name.get("gateway-aaaaaa") != 1:
+    print("the CURRENT RS was scaled: %r" % (by_name,))
+    sys.exit(1)
+print("residual at 0, current at 1")
+PY
+}
+
+# check_rs_idempotent <sourced-install.sh> <store> — a second run on a
+# converged box reports no residual and scales nothing new.
+check_rs_idempotent() {
+  local src="$1"
+  local MOCK_ROOT="$2"
+  local first ec_first=0 second ec_second=0
+  first="$(
+    DRY_RUN=0 HEADLESS=0
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs gateway gateway
+  )" || ec_first=$?
+  second="$(
+    DRY_RUN=0 HEADLESS=0
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs gateway gateway
+  )" || ec_second=$?
+  [ "$ec_first" -eq 0 ] || { printf 'first converge exited %s\n%s' "$ec_first" "$first"; return 1; }
+  [ "$ec_second" -eq 0 ] || { printf 'second converge exited %s\n%s' "$ec_second" "$second"; return 1; }
+  case "$second" in
+    *'no residual ReplicaSets'*) ;;
+    *) printf 'the second run does not report a converged box\n%s' "$second"; return 1 ;;
+  esac
+  case "$(cat "$MOCK_ROOT/scaled" 2>/dev/null || true)" in
+    'gateway/gateway-bbbbbb') printf 'converged once, second run scaled nothing new\n' ;;
+    *) printf 'the scale record is not exactly one scale:\n%s' "$(cat "$MOCK_ROOT/scaled" 2>/dev/null || echo '(no scales)')"; return 1 ;;
+  esac
+}
+
+# check_rs_safe <sourced-install.sh> <store> — the current RS of every
+# Deployment is never touched, a Deployment at replicas 0 is left to its
+# operator, a mid-rollout Deployment is left to its controller, and a
+# Deployment Argo has not synced yet is silent. NOTHING is scaled.
+check_rs_safe() {
+  local src="$1"
+  local MOCK_ROOT="$2"
+  local out ec=0
+  out="$(
+    DRY_RUN=0 HEADLESS=0
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs identity identity
+    converge_one_deployment_rs parlor parlor
+    converge_one_deployment_rs courier courier
+    converge_one_deployment_rs gateway nosuchdeploy
+  )" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'converge exited %s\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'identity/identity: no residual ReplicaSets'*) ;;
+    *) printf 'the current-only Deployment is not reported clean\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'parlor/parlor is scaled to 0 by its operator'*) ;;
+    *) printf 'the deliberately scaled-down Deployment is not named as operator intent\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'courier/courier is mid-rollout'*) ;;
+    *) printf 'the mid-rollout Deployment is not left to its controller\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'nosuchdeploy'*) printf 'the unsynced Deployment is not silent\n%s' "$out"; return 1 ;;
+  esac
+  if [ -f "$MOCK_ROOT/scaled" ]; then
+    printf 'a protected Deployment was scaled:\n%s' "$(cat "$MOCK_ROOT/scaled")"
+    return 1
+  fi
+  printf 'current, scaled-to-zero, mid-rollout and unsynced Deployments all untouched\n'
+}
+
+# check_rs_dryrun <sourced-install.sh> <store> — the dry run prints the
+# residual it would converge (with the plan line) and scales nothing.
+check_rs_dryrun() {
+  local src="$1"
+  local MOCK_ROOT="$2"
+  local out ec=0
+  out="$(
+    DRY_RUN=1 HEADLESS=0
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs gateway gateway
+  )" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'dry-run converge exited %s\n%s' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'residual gateway/gateway-bbbbbb'*'DRY_RUN: scale replicaset/gateway-bbbbbb'*) ;;
+    *) printf 'the dry run does not print the residual it would converge\n%s' "$out"; return 1 ;;
+  esac
+  if [ -f "$MOCK_ROOT/scaled" ]; then
+    printf 'the dry run scaled:\n%s' "$(cat "$MOCK_ROOT/scaled")"
+    return 1
+  fi
+  "$PY" - "$MOCK_ROOT/gateway/rs.json" <<'PY'
+import json
+import sys
+doc = json.load(open(sys.argv[1]))
+by_name = {i["metadata"]["name"]: i["spec"]["replicas"] for i in doc.get("items", [])}
+if by_name.get("gateway-bbbbbb") != 1:
+    print("the dry run changed the store: %r" % (by_name,))
+    sys.exit(1)
+print("dry run changed nothing")
+PY
+}
+
+# check_rs_current_untouched <sourced-install.sh> <store> — a box whose only
+# live RS IS the current one is converged to nothing. This is the defect the
+# step could introduce if the hash check is wrong, and the reason this check
+# exists: it fails the moment the step scales what the Deployment names.
+check_rs_current_untouched() {
+  local src="$1"
+  local MOCK_ROOT="$2"
+  local out ec=0
+  out="$(
+    DRY_RUN=0 HEADLESS=0
+    # Same inherited-function rule as check_rs_converge: forget before
+    # sourcing, so the fixture under test is what runs.
+    unset -f converge_one_deployment_rs converge_residual_replicasets
+    . "$src"
+    kubectl() { rs_mock_kubectl "$@"; }
+    converge_one_deployment_rs gateway gateway
+  )" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'converge exited %s\n%s' "$ec" "$out"; return 1; }
+  if [ -f "$MOCK_ROOT/scaled" ]; then
+    printf 'the CURRENT RS was converged:\n%s' "$(cat "$MOCK_ROOT/scaled")"
+    return 1
+  fi
+  printf 'the current RS was not converged\n'
+}
+
+rs_store_green="$WORK/rs-green"
+mkdir -p "$rs_store_green"
+rs_seed_standard "$rs_store_green" >/dev/null
+run 'a residual RS is reported (image, age, Deployment) and scaled to 0' green \
+  check_rs_converge "$fixture_sourced" "$rs_store_green"
+
+rs_store_idem="$WORK/rs-idempotent"
+mkdir -p "$rs_store_idem"
+rs_seed_standard "$rs_store_idem" >/dev/null
+run 'a second run on a converged box changes nothing' green \
+  check_rs_idempotent "$fixture_sourced" "$rs_store_idem"
+
+rs_store_safe="$WORK/rs-safe"
+mkdir -p "$rs_store_safe"
+rs_seed_standard "$rs_store_safe" >/dev/null
+run 'the current RS, the scaled-to-zero Deployment, the mid-rollout and the unsynced Deployment are untouched' green \
+  check_rs_safe "$fixture_sourced" "$rs_store_safe"
+
+rs_store_dry="$WORK/rs-dry"
+mkdir -p "$rs_store_dry"
+rs_seed_standard "$rs_store_dry" >/dev/null
+run 'the dry run prints the residual it would converge and converges nothing' green \
+  check_rs_dryrun "$fixture_sourced" "$rs_store_dry"
+
+# A check that passes against an empty directory is not a check: with no
+# Deployment and no RS in the store there is no residual to report, so the
+# converge check must go red here.
+mkdir -p "$WORK/rs-empty"
+run 'control: the converge check needs its fixture (empty store goes red)' red \
+  check_rs_converge "$fixture_sourced" "$WORK/rs-empty"
+
+# The whole step at once, the way main calls it: all four Deployments, the
+# timing events the rest of the installer emits, and STEP_SKIPPED cleared by
+# real work. HEADLESS=1 so stdout is the JSONL event stream (step.start /
+# step.done with seconds) and the human lines land on stderr beside the
+# STEP_SKIPPED marker the subshell prints there.
+rs_store_full="$WORK/rs-full"
+mkdir -p "$rs_store_full"
+rs_seed_standard "$rs_store_full" >/dev/null
+rs_full_human="$WORK/rs-full.human"
+rs_full_ec=0
+rs_full_out="$(
+  export KIT_SUBSTRATE_RECEIPT="$WORK/rs-full-receipt.json"
+  export HEADLESS=1 DRY_RUN=0
+  MOCK_ROOT="$rs_store_full"
+  unset -f converge_one_deployment_rs converge_residual_replicasets
+  . "$fixture_sourced"
+  kubectl() { rs_mock_kubectl "$@"; }
+  CURRENT_PHASE="rs-residual"
+  {
+    converge_residual_replicasets
+    printf 'STEP_SKIPPED=%s\n' "$STEP_SKIPPED" >&2
+    kit_substrate_step_finalize
+  } 2>"$rs_full_human"
+)" || rs_full_ec=$?
+if [ "$rs_full_ec" -ne 0 ]; then
+  fail 'the whole step converges all four Deployments' "exit ${rs_full_ec}: $(printf '%s' "$rs_full_out" | head -8)"
+else
+  case "$rs_full_out" in
+    *'"event":"step.start"'*'"event":"step.done"'*'"seconds":'[0-9]*) ;;
+    *) fail 'the whole step emits step.start/step.done with seconds' "$(printf '%s' "$rs_full_out" | head -4)" ;;
+  esac
+  if [ "$failures" -ne 0 ]; then
+    : # the event-shape failure above is already recorded; skip the rest
+  elif ! grep -q 'residual gateway/gateway-bbbbbb' "$rs_full_human"; then
+    fail 'the whole step reports the residual' "$(head -8 "$rs_full_human")"
+  elif ! grep -q 'STEP_SKIPPED=0' "$rs_full_human"; then
+    fail 'the whole step clears STEP_SKIPPED on real work' "$(tail -4 "$rs_full_human")"
+  elif [ "$(cat "$rs_store_full/scaled" 2>/dev/null || true)" != "gateway/gateway-bbbbbb" ]; then
+    fail 'the whole step scales only the residual' "$(cat "$rs_store_full/scaled" 2>/dev/null || echo '(no scales)')"
+  else
+    pass 'the whole step converges all four Deployments, timed, STEP_SKIPPED cleared'
+  fi
+fi
+
+# The RED controls. First: the installer as it stands on master — the step
+# deleted — leaves the residual live. The fixture asserts its own premise
+# (it really lacks the step, it still parses), then the converge check that
+# is green above must go red against it.
+fixture_rs_master="$WORK/rs-master.sh"
+sed -e '/^converge_residual_replicasets() {$/,/^}$/d' \
+    -e '/^converge_one_deployment_rs() {$/,/^}$/d' \
+    -e '/^  CURRENT_PHASE="rs-residual"$/d' \
+    -e '/^  converge_residual_replicasets$/d' \
+    "$SUBSTRATE/install.sh" >"$fixture_rs_master"
+# A check that a comment can satisfy is not a check, and the mirror holds
+# for a premise: the step's own comment names the function, so the premise
+# strips full-line comments before asking whether the CODE is gone.
+case "$(grep -v '^[[:space:]]*#' "$fixture_rs_master")" in
+  *'converge_one_deployment_rs'* | *'converge_residual_replicasets'* | *'rs-residual'*)
+    fail 'control fixture: the master shape still carries the RS step' \
+      'the sed did not remove the step — this control would prove nothing'
+    ;;
+  *)
+    if ! bash -n "$fixture_rs_master"; then
+      fail 'control fixture: the master shape does not parse' \
+        'the sed broke the file — a red below would be a syntax error wearing the finding clothes'
+    else
+      fixture_rs_master_sourced="$WORK/rs-master-sourced.sh"
+      sed '/^main "$@"/d' "$fixture_rs_master" >"$fixture_rs_master_sourced"
+      rs_store_master="$WORK/rs-master"
+      mkdir -p "$rs_store_master"
+      rs_seed_standard "$rs_store_master" >/dev/null
+      run 'control: without the step the residual survives' red \
+        check_rs_converge "$fixture_rs_master_sourced" "$rs_store_master"
+    fi
+    ;;
+esac
+
+# Second: the defect this step could introduce. A box whose only live RS is
+# the current one must be converged to nothing — green on the real tree, and
+# red on a tree whose hash comparison is inverted (the one-character defect
+# that scales what the Deployment names). The inverted fixture asserts its
+# own premise first: it still parses, and it really carries the inversion.
+rs_store_current="$WORK/rs-current"
+mkdir -p "$rs_store_current/gateway"
+"$PY" - "$rs_store_current" <<'PY'
+import json
+import os
+import sys
+root = sys.argv[1]
+deploy = {
+    "metadata": {"name": "gateway", "namespace": "gateway"},
+    "spec": {"replicas": 1,
+             "template": {"metadata": {"labels": {"app": "gateway"}},
+                          "spec": {"containers": [{"name": "gateway",
+                                                   "image": "ghcr.io/cafaye/gateway@sha256:ONLYLABEL"}]}}},
+    "status": {"replicas": 1, "updatedReplicas": 1, "availableReplicas": 1},
+}
+json.dump(deploy, open(os.path.join(root, "gateway", "deploy-gateway.json"), "w"), indent=2)
+rs = {"metadata": {"name": "gateway-only", "namespace": "gateway",
+                   "creationTimestamp": "2026-10-14T10:00:00Z",
+                   "labels": {"pod-template-hash": "ONLYHASH"},
+                   "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment",
+                                        "name": "gateway", "uid": "uid-only"}]},
+      "spec": {"replicas": 1,
+               "template": {"metadata": {"labels": {"app": "gateway",
+                                                    "pod-template-hash": "ONLYHASH"}},
+                            "spec": {"containers": [{"name": "gateway",
+                                                     "image": "ghcr.io/cafaye/gateway@sha256:ONLYLABEL"}]}}}}
+json.dump({"items": [rs]}, open(os.path.join(root, "gateway", "rs.json"), "w"), indent=2)
+PY
+run 'a box whose only live RS is current is converged to nothing' green \
+  check_rs_current_untouched "$fixture_sourced" "$rs_store_current"
+fixture_rs_inverted="$WORK/rs-inverted.sh"
+sed 's/!= \$hash/== $hash/' \
+  "$SUBSTRATE/install.sh" >"$fixture_rs_inverted"
+case "$(cat "$fixture_rs_inverted")" in
+  *'// "") == $hash'*)
+    if ! bash -n "$fixture_rs_inverted"; then
+      fail 'control fixture: the inverted shape does not parse' \
+        'the sed broke the file — a red below would be a syntax error wearing the finding clothes'
+    else
+      fixture_rs_inverted_sourced="$WORK/rs-inverted-sourced.sh"
+      sed '/^main "$@"/d' "$fixture_rs_inverted" >"$fixture_rs_inverted_sourced"
+      rs_store_inverted="$WORK/rs-inverted"
+      mkdir -p "$rs_store_inverted/gateway"
+      cp "$rs_store_current/gateway/deploy-gateway.json" "$rs_store_inverted/gateway/"
+      cp "$rs_store_current/gateway/rs.json" "$rs_store_inverted/gateway/"
+      run 'control: an inverted hash check converges the current RS' red \
+        check_rs_current_untouched "$fixture_rs_inverted_sourced" "$rs_store_inverted"
+    fi
+    ;;
+  *)
+    fail 'control fixture: the inversion did not land' \
+      'the sed matched nothing — this control would prove nothing'
     ;;
 esac
 

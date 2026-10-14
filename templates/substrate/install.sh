@@ -578,7 +578,7 @@ kit_substrate_present() {
 #                that would read as "this step is free".
 #   * absent   → STEP_START_MS=now, the step's OWN boundary, after the probe.
 # In DRY_RUN the probe is skipped and every step is stamped as if it would run,
-# so a plan is timed end to end rather than reported as twelve skips.
+# so a plan is timed end to end rather than reported as thirteen skips.
 kit_substrate_guard() {
   local component="$1"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -605,10 +605,10 @@ kit_substrate_pending() {
 KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
 STEP=0
-TOTAL=12
+TOTAL=13
 # The phase the install is in — set by main before each step, read by the
 # emit path and the receipt. It names the STEP, not the sub-step, so the
-# receipt's phase is always one of the twelve (or preflight/complete).
+# receipt's phase is always one of the thirteen (or preflight/complete).
 CURRENT_PHASE="install"
 
 # --- timing state -----------------------------------------------------------
@@ -714,7 +714,7 @@ kit_substrate_skip() {
 # kit_substrate_step_finalize — close the step in flight, if any, and append it
 # to the ledger. Called by the NEXT log_step (and once by main after the last
 # step), so a step that returns early — a skip, a dry-run plan — is still
-# closed without twelve end-of-step calls that a later edit could forget.
+# closed without thirteen end-of-step calls that a later edit could forget.
 #
 # Three shapes, and the first is the one the packet names: a SKIPPED step did
 # no work, so it reports the string "skipped" and never `0.000`, which would
@@ -785,13 +785,13 @@ EOF
 log_step() {
   # Finalise the PREVIOUS step first: its window closed when this step's
   # log_step began. This is the whole reason the boundary is here and not at
-  # the end of each of the twelve steps — there is one place to get right.
+  # the end of each of the thirteen steps — there is one place to get right.
   kit_substrate_step_finalize
   STEP=$((STEP + 1))
   STEP_PHASE="$CURRENT_PHASE"
   # The step's window opens HERE, by default. A step that has a guard re-stamps
   # it after the guard's probe (so the probe is not charged to the step), and a
-  # step with no guard — five of the twelve have none, because their work is
+  # step with no guard — six of the thirteen have none, because their work is
   # idempotent without a presence check — keeps this stamp. Either way every
   # step is measured; none reports `unknown` for want of a guard.
   STEP_START_MS="$(kit_substrate_now)"
@@ -3512,6 +3512,157 @@ mint_courier_identity_token() {
   fi
 }
 
+# --- step 13: converge the residual ReplicaSets ---------------------------------
+# MEASURED, ON THE LIVE BOX. The gateway namespace held five ReplicaSets for
+# one Deployment at `spec.replicas: 1`:
+#
+#   NAME                DESIRED  CURRENT  READY  AGE
+#   gateway-6d5d9495df  1        1        1      2m52s   <-- the digest-pinned RS
+#   gateway-6f9c8bfdd   0        0        0      10h     <-- the bare cafaye/gateway:0.1.0 (Docker Hub) RS
+#   gateway-7cd45d569   0        0        0      6h52m
+#   gateway-858665c58b  1        1        0      93m     <-- a tag-based RS Argo keeps making current
+#   gateway-8977f6fcb   0        0        0      4m23s   <-- a mis-transcribed digest
+#
+# Two live ReplicaSets for one replica: the Deployment controller kept an RS
+# holding a pod (`0/1 Running`, against the OLD image, on a readiness probe
+# that can never succeed) that the Deployment no longer names. Each generation
+# leaves one behind — the Docker Hub RS sat in ImagePullBackOff for seven
+# hours and 46 minutes before it was retired — and nothing shrinks the number
+# as the box ages, because Argo CD converges the Applications (HELM's
+# objects), not the ReplicaSets a previous Deployment revision left behind.
+#
+# WHAT A RESIDUAL RS IS. One rule, read three ways: an RS owned by one of the
+# four service Deployments is residual when it is LIVE (its spec.replicas is
+# above 0 — it names pods it wants) and its pod template is NOT the
+# Deployment's current one. The CURRENT RS is the owned RS whose pod spec
+# matches the Deployment's; its pod-template-hash is read off it for the
+# report. An RS at 0 names no pods and is left alone — it is history, not
+# load — and an RS with no ownerReference to the Deployment is not this
+# Deployment's to judge.
+#
+# WHY THE HASH IS READ OFF THE CURRENT RS AND NOT THE DEPLOYMENT. The
+# Deployment object carries no pod-template-hash — the controller stamps that
+# label on the RS and its pods, never on the Deployment's own template. So
+# "current" is decided by pod-spec equality with the Deployment (the object
+# this repository's Applications actually write), and the hash is what is
+# PRINTED, so the operator sees which generation each RS belongs to.
+#
+# WHY SCALE TO 0 AND NOT DELETE. The box was fixed by hand this circle by
+# scaling the residual to 0, and that is what the step does: the RS object
+# stays (with its revision history — `kubectl rollout history` keeps working),
+# its pods terminate gracefully through the controller, and the write is
+# reversible where a delete is not. A second run finds no live residual and
+# changes nothing, which is the idempotence the suite asserts.
+#
+# THE TWO DEPLOYMENTS THIS STEP NEVER TOUCHES. A Deployment at `spec.replicas:
+# 0` is OPERATOR INTENT — a deliberately scaled-down service is a state, not a
+# defect, and deleting its RSs' pods would destroy the state the operator
+# asked for — so the whole Deployment is skipped. A Deployment mid-rollout
+# (`status.updatedReplicas` != `spec.replicas`) belongs to its controller for
+# the duration: converging an RS the controller is about to scale itself would
+# fight the rollout, so the step reports it and moves on. A Deployment Argo
+# has not synced yet (steps 7-11 sit between the Applications apply and here)
+# is neither: it is skipped quietly, and the next re-run meets it.
+#
+# WHY NO GUARD. There is no one object whose presence answers "converged" — a
+# box with no residuals and a box that never synced gateway give the same
+# probe. The step always runs its reads (eight API round trips) and reports
+# TIMED, never `skipped`: like the AppProject reapply in step 4, real work
+# clears STEP_SKIPPED rather than claiming it.
+converge_residual_replicasets() {
+  log_step "the residual ReplicaSets of the four service Deployments (identity, gateway, courier, parlor)"
+  if dry_run "list the ReplicaSets of identity, gateway, courier and parlor, report each one holding a pod under an old pod template, and scale it to 0"; then
+    return 0
+  fi
+  local pair
+  for pair in identity/identity gateway/gateway courier/courier parlor/parlor; do
+    converge_one_deployment_rs "${pair%%/*}" "${pair#*/}" || return 1
+  done
+  # Real work by construction — the reads above ran on every box — so the
+  # step is timed rather than reported as a skip, the same clearing the
+  # AppProject reapply in step 4 carries.
+  STEP_SKIPPED=0
+}
+
+# converge_one_deployment_rs <namespace> <deployment> — scale that
+# Deployment's live non-current ReplicaSets to 0, reporting each with its
+# image, its age and its pod-template-hash. Never touches the current RS,
+# never touches a deliberately scaled-to-zero Deployment, never touches a
+# rollout in flight. Exit 0 in all three skips: none of them is a failure.
+converge_one_deployment_rs() {
+  local ns="$1" dep="$2"
+  local dep_json
+  # Not synced yet is not a defect — see the step note above.
+  dep_json="$(kubectl --kubeconfig="$KUBECONFIG" -n "$ns" get deployment "$dep" -o json 2>/dev/null)" || return 0
+  [ -n "$dep_json" ] || return 0
+  local desired
+  desired="$(printf '%s' "$dep_json" | jq -r '.spec.replicas // 1')"
+  if [ "$desired" = "0" ]; then
+    kit_substrate_out "      ${ns}/${dep} is scaled to 0 by its operator — leaving its ReplicaSets alone"
+    return 0
+  fi
+  local updated
+  updated="$(printf '%s' "$dep_json" | jq -r '.status.updatedReplicas // 0')"
+  if [ "$updated" != "$desired" ]; then
+    kit_substrate_out "      ${ns}/${dep} is mid-rollout (updated ${updated} of ${desired}) — leaving its ReplicaSets to the controller"
+    return 0
+  fi
+  local current_spec
+  current_spec="$(printf '%s' "$dep_json" | jq -c '.spec.template.spec')"
+  local current_hash
+  current_hash="$(kubectl --kubeconfig="$KUBECONFIG" -n "$ns" get rs -o json |
+    jq -r --arg dep "$dep" --argjson current "$current_spec" '
+      [(.items // [])[]
+       | select(((.metadata.ownerReferences // []) | map(select(.name == $dep)) | length) > 0)
+       | select((.spec.replicas // 0) > 0)
+       | select(.spec.template.spec == $current)
+       | .metadata.labels."pod-template-hash" // empty]
+      | .[0] // empty
+    ')"
+  local rs_json
+  rs_json="$(kubectl --kubeconfig="$KUBECONFIG" -n "$ns" get rs -o json)"
+  # No owned live RS matches the current pod spec. Guessing which live RS is
+  # "current" is the defect this step could introduce, so the step converges
+  # nothing and says so — the controller owns every live RS until one of them
+  # matches the template the Deployment names.
+  if [ -z "$current_hash" ]; then
+    local live_count
+    live_count="$(printf '%s' "$rs_json" | jq -r --arg dep "$dep" '
+      [(.items // [])[]
+       | select(((.metadata.ownerReferences // []) | map(select(.name == $dep)) | length) > 0)
+       | select((.spec.replicas // 0) > 0)] | length')"
+    if [ "$live_count" != "0" ]; then
+      kit_substrate_out "      ${ns}/${dep} has ${live_count} live ReplicaSet(s) and none matches the current pod template — leaving them to the controller"
+    fi
+    return 0
+  fi
+  local residual_found=0
+  local rs_name rs_hash rs_image rs_created
+  while IFS=$'\t' read -r rs_name rs_hash rs_image rs_created; do
+    [ -n "$rs_name" ] || continue
+    residual_found=1
+    kit_substrate_out "      residual ${ns}/${rs_name} (deployment ${dep}, image ${rs_image}, created ${rs_created}, pod-template-hash ${rs_hash}): scaling to 0"
+    if dry_run "scale replicaset/${rs_name} -n ${ns} to 0 (residual: image ${rs_image}, created ${rs_created}, pod-template-hash ${rs_hash})"; then
+      continue
+    fi
+    kubectl --kubeconfig="$KUBECONFIG" -n "$ns" scale "replicaset/${rs_name}" --replicas=0
+  done <<EOF
+$(printf '%s' "$rs_json" | jq -r --arg dep "$dep" --arg hash "$current_hash" '
+  (.items // [])[]
+  | select(((.metadata.ownerReferences // []) | map(select(.name == $dep)) | length) > 0)
+  | select((.spec.replicas // 0) > 0)
+  | select((.metadata.labels."pod-template-hash" // "") != $hash)
+  | [.metadata.name,
+     (.metadata.labels."pod-template-hash" // "unlabelled"),
+     ((.spec.template.spec.containers // [])[0].image // "unknown"),
+     (.metadata.creationTimestamp // "unknown")]
+  | @tsv')
+EOF
+  if [ "$residual_found" -eq 0 ]; then
+    kit_substrate_out "      ${ns}/${dep}: no residual ReplicaSets (live generations match pod-template-hash ${current_hash})"
+  fi
+}
+
 # --- main -------------------------------------------------------------------
 main() {
   # --headless is the agent-driven mode: JSONL on stdout, a receipt on disk.
@@ -3574,6 +3725,8 @@ main() {
   install_nats
   CURRENT_PHASE="courier-mint"
   mint_courier_identity_token
+  CURRENT_PHASE="rs-residual"
+  converge_residual_replicasets
 
   # Close the LAST step (every other step was closed by the next one's
   # log_step), then read the total off the same clock. `total` and the steps
