@@ -482,7 +482,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -1118,13 +1118,14 @@ for block in re.findall(r'"stringData"\s*:\s*\{([^}]*)\}', code):
 # every install writes COURIER_BASE_URL + COURIER_TOKEN and
 # COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN, and the record names them.
 # OIDC_SIGNING_KEY and its id are now GENERATED ON THE BOX rather than
-# supplied, but still only when the operator sets an issuer — the surface
-# stays all-or-nothing, so they stay unrecorded beside the issuer that gates
-# them.
+# supplied, but still only when the operator sets an issuer and a login UI —
+# the surface stays all-or-nothing, so they stay unrecorded beside the issuer
+# and login UI that gate them.
 conditional = {
     "OIDC_SIGNING_KEY",
     "OIDC_SIGNING_KEY_ID",
     "OIDC_ISSUER",
+    "OIDC_LOGIN_UI_URL",
     "OAUTH_ENCRYPTION_KEY",
     "MAIL_FROM",
     "MAIL_FROM_NAME",
@@ -2578,6 +2579,7 @@ mfa_smtp_env() {
   # these unconditionally, so an unset variable is a fatal rather than an
   # absent surface. Empty is the absent surface the installer documents.
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
 }
@@ -4023,6 +4025,7 @@ oidc_a_ec=0
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="https://app.example.com/sign-in/oidc"
   install_service_secrets >"$WORK/oidc-a.log" 2>&1
 ) || oidc_a_ec=$?
 if [ "$oidc_a_ec" -ne 0 ]; then
@@ -4048,10 +4051,10 @@ case "$oidc_id_a" in
 esac
 run 'oidc: the generated key never reaches the output' green oidc_log_clean "$(cat "$WORK/oidc-a.log")" "$oidc_key_a"
 run 'control: a key echoed into the log is caught' red oidc_log_clean "created with OIDC_SIGNING_KEY=${oidc_key_a}" "$oidc_key_a"
-if [ "$(mock_get identity identity-secrets OIDC_ISSUER)" = "https://identity.example.com" ]; then
-  pass 'oidc: the issuer rides along — the surface is issuer, key and id, or nothing'
+if [ "$(mock_get identity identity-secrets OIDC_ISSUER)" = "https://identity.example.com" ] && [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" = "https://app.example.com/sign-in/oidc" ]; then
+  pass 'oidc: the issuer and login UI ride along — the surface is issuer, key, id and login UI, or nothing'
 else
-  fail 'oidc: the issuer rides along — the surface is issuer, key and id, or nothing' "OIDC_ISSUER: $(mock_get identity identity-secrets OIDC_ISSUER)"
+  fail 'oidc: the issuer and login UI ride along — the surface is issuer, key, id and login UI, or nothing' "OIDC_ISSUER: $(mock_get identity identity-secrets OIDC_ISSUER) OIDC_LOGIN_UI_URL: $(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)"
 fi
 
 # The re-run: nothing regenerates. The stored key is read back, the id is read
@@ -4066,6 +4069,7 @@ oidc_b_ec=0
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="https://app.example.com/sign-in/oidc"
   install_service_secrets >"$WORK/oidc-b.log" 2>&1
 ) || oidc_b_ec=$?
 oidc_key_b="$(mock_get identity identity-secrets OIDC_SIGNING_KEY)"
@@ -4088,6 +4092,7 @@ oidc_rerun_ec=0
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://identity.example.com"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="https://app.example.com/sign-in/oidc"
   install_service_secrets >"$WORK/oidc-rerun1.log" 2>&1
   install_service_secrets >"$WORK/oidc-rerun2.log" 2>&1
 ) || oidc_rerun_ec=$?
@@ -4108,6 +4113,221 @@ case "$oidc_id_rerun" in
     ;;
   *) fail 'oidc: the key id is read back with the key' "id: $oidc_id_rerun" ;;
 esac
+
+# OIDC four-member surface: the installer as it stands on master wires three
+# keys (issuer + signing key + id) and leaves OIDC_LOGIN_UI_URL absent — the
+# shape identity refuses with `OIDC_LOGIN_UI_URL: no OIDC login UI configured`
+# (CrashLoopBackOff). The packet adds the fourth member and the all-or-nothing
+# refusal before any secret is written.
+OIDC_FOUR_ISSUER="https://identity.example.com"
+OIDC_FOUR_LOGIN="https://app.example.com/sign-in/oidc"
+
+# Green: with issuer and login UI both set, identity-secrets carries all four.
+MOCK_ROOT="$WORK/oidc-four-green"
+mkdir -p "$MOCK_ROOT"
+oidc_four_green_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$OIDC_FOUR_LOGIN"
+  install_service_secrets >"$WORK/oidc-four-green.log" 2>&1
+) || oidc_four_green_ec=$?
+if [ "$oidc_four_green_ec" -ne 0 ]; then
+  fail 'oidc four: issuer and login UI both set wires all four keys' "$(cat "$WORK/oidc-four-green.log")"
+elif [ "$(mock_get identity identity-secrets OIDC_ISSUER)" != "$OIDC_FOUR_ISSUER" ] || \
+     [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" != "$OIDC_FOUR_LOGIN" ] || \
+     [ -z "$(mock_get identity identity-secrets OIDC_SIGNING_KEY)" ] || \
+     [ -z "$(mock_get identity identity-secrets OIDC_SIGNING_KEY_ID)" ]; then
+  fail 'oidc four: issuer and login UI both set wires all four keys' \
+    "OIDC_ISSUER='$(mock_get identity identity-secrets OIDC_ISSUER)' OIDC_LOGIN_UI_URL='$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)' key present? $([ -n "$(mock_get identity identity-secrets OIDC_SIGNING_KEY)" ] && echo yes || echo no)"
+else
+  pass 'oidc four: issuer and login UI both set wires all four keys'
+fi
+# Read-back on a warm box: a secret written but not readable is the defect the
+# whole record tripwire exists to catch. Verify the four round-trip.
+if [ "$oidc_four_green_ec" -eq 0 ]; then
+  if [ "$(mock_get identity identity-secrets OIDC_ISSUER)" = "$OIDC_FOUR_ISSUER" ] && \
+     [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" = "$OIDC_FOUR_LOGIN" ]; then
+    pass 'oidc four: the four keys round-trip on a warm box (read-back agrees)'
+  else
+    fail 'oidc four: the four keys round-trip on a warm box (read-back agrees)' "stored keys do not match inputs"
+  fi
+fi
+
+# Green: the login UI alone, or the issuer alone, is REFUSED before any secret
+# is written — and the refusal names the missing variable.
+oidc_refused_case() {
+  local has_issuer="$1" has_login="$2" want_var="$3" name="$4"
+  MOCK_ROOT="$WORK/oidc-refuse-$name"
+  mkdir -p "$MOCK_ROOT"
+  mfa_seed_roles
+  local ec=0 log="$WORK/oidc-refuse-$name.log"
+  (
+    # shellcheck source=/dev/null
+    . "$fixture_sourced"
+    kubectl() { mock_kubectl "$@"; }
+    mfa_smtp_env
+    if [ "$has_issuer" -eq 1 ]; then export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"; else export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""; fi
+    if [ "$has_login" -eq 1 ]; then export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$OIDC_FOUR_LOGIN"; else export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""; fi
+    install_service_secrets >"$log" 2>&1
+  ) || ec=$?
+  if [ "$ec" -eq 0 ]; then
+    printf 'issuer-alone shape was not refused (exit 0)\n'
+    return 1
+  fi
+  case "$(cat "$log")" in
+    *"$want_var"*) ;;
+    *)
+      printf 'the refusal did not name %s\n%s\n' "$want_var" "$(cat "$log")"
+      return 1
+      ;;
+  esac
+  if [ -d "$MOCK_ROOT/identity/identity-secrets" ]; then
+    printf 'a refused run still wrote identity-secrets\n'
+    return 1
+  fi
+  printf 'refused, naming %s, with no secret written' "$want_var"
+}
+run 'oidc four: issuer alone is refused, naming the missing login UI' green oidc_refused_case 1 0 "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" issuer-alone
+run 'oidc four: login UI alone is refused, naming the missing issuer' green oidc_refused_case 0 1 "KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" login-alone
+
+# RED control: the installer as it stands on master (three keys, no refusal)
+# passes the issuer-alone shape through without complaint — i.e. the refusal
+# check actually discriminates. Revert the new code and the check must go red;
+# if it does not, the check is worthless. The fixture is the PARENT commit's
+# install.sh — the pre-fix, three-key installer. It must NOT be HEAD: this
+# branch's own commit IS the four-key installer, so a fixture taken from HEAD
+# carries the new variable reference, and `set -u` then trips it as an
+# "unbound variable" instead of showing the pass-through this control is about.
+fixture_oidc_three_orig="$WORK/install-oidc-three-orig.sh"
+if ! git -C "$ROOT" show HEAD~1:templates/substrate/install.sh >"$fixture_oidc_three_orig" 2>/dev/null; then
+  fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "git show HEAD:templates/substrate/install.sh failed"
+else
+  sed '/^main "$@"/d' "$fixture_oidc_three_orig" >"$WORK/install-oidc-three-sourced.sh"
+  MOCK_ROOT="$WORK/oidc-three-control"
+  mkdir -p "$MOCK_ROOT"
+  oidc_three_ec=0
+  (
+    mfa_seed_roles
+    # shellcheck source=/dev/null
+    . "$WORK/install-oidc-three-sourced.sh"
+    kubectl() { mock_kubectl "$@"; }
+    # The three-key installer reads KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER but not
+    # KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL — unset the latter so set -u
+    # does not fatal, and do not export it at all for this fixture.
+    mfa_smtp_env
+    unset KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL 2>/dev/null || true
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+    install_service_secrets >"$WORK/oidc-three-control.log" 2>&1
+  ) || oidc_three_ec=$?
+  # The old installer PASSES issuer-alone (exit 0) and writes three keys.
+  if [ "$oidc_three_ec" -eq 0 ] && [ -n "$(mock_get identity identity-secrets OIDC_ISSUER)" ] && [ -z "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL 2>/dev/null || true)" ]; then
+    pass 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)'
+  else
+    fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "exit $oidc_three_ec: $(cat "$WORK/oidc-three-control.log")"
+  fi
+fi
+# And the new installer is the one that GOES RED on the same input — the
+# discrimination the control above proves is not vacuous.
+run 'control: the four-key installer refuses issuer-alone (the new code discriminates)' green oidc_refused_case 1 0 "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" issuer-alone
+
+# Red control: a login UI that is not an http(s) origin is refused (that is
+# oidc.ValidateLoginUIURL's own rule — mirror it, do not re-derive it).
+MOCK_ROOT="$WORK/oidc-bad-login"
+mkdir -p "$MOCK_ROOT"
+oidc_bad_ec=0
+(
+  mfa_seed_roles
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="not-a-url"
+  install_service_secrets >"$WORK/oidc-bad.log" 2>&1
+) || oidc_bad_ec=$?
+if [ "$oidc_bad_ec" -eq 0 ]; then
+  fail 'oidc four: a non-http(s) login UI is refused' "exit 0 — the shape check did not fire"
+else
+  case "$(cat "$WORK/oidc-bad.log")" in
+    *KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL*)
+      pass 'oidc four: a non-http(s) login UI is refused, naming the variable'
+      ;;
+    *)
+      fail 'oidc four: a non-http(s) login UI is refused, naming the variable' "$(cat "$WORK/oidc-bad.log")"
+      ;;
+  esac
+fi
+if [ -d "$MOCK_ROOT/identity/identity-secrets" ]; then
+  fail 'oidc four: a refused bad login UI writes no secret' "identity-secrets was created despite the refusal"
+else
+  pass 'oidc four: a refused bad login UI writes no secret'
+fi
+# Additional bad shapes, each refused: query, fragment, userinfo, no host.
+for bad in "https://app.example.com/sign-in?x=1" "https://app.example.com/sign-in#frag" "https://user@app.example.com/sign-in" "https:///sign-in"; do
+  MOCK_ROOT="$WORK/oidc-bad-$(printf '%s' "$bad" | tr -c 'A-Za-z0-9' '-')"
+  mkdir -p "$MOCK_ROOT"
+  oidc_bad2_ec=0
+  (
+    mfa_seed_roles
+    # shellcheck source=/dev/null
+    . "$fixture_sourced"
+    kubectl() { mock_kubectl "$@"; }
+    mfa_smtp_env
+    export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+    export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$bad"
+    install_service_secrets >"$WORK/oidc-bad2.log" 2>&1
+  ) || oidc_bad2_ec=$?
+  if [ "$oidc_bad2_ec" -eq 0 ]; then
+    fail "oidc four: bad login UI '$bad' is refused" "exit 0"
+  else
+    pass "oidc four: bad login UI '$bad' is refused"
+  fi
+done
+
+# Warm-box reconcile: a pre-existing identity-secrets without OIDC_LOGIN_UI_URL
+# gains the fourth key when the operator now supplies both inputs, reusing the
+# stored signing key.
+MOCK_ROOT="$WORK/oidc-warm-reconcile"
+mkdir -p "$MOCK_ROOT"
+mfa_seed_roles
+# Legacy secret: three OIDC keys but no login UI (the crashloop shape).
+mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
+mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
+mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
+mock_seed identity identity-secrets NATS_URL "nats://nats.data.svc.cluster.local:4222"
+legacy_oidc_key="$(openssl genrsa 2048 2>/dev/null)"
+legacy_oidc_kid="$(printf 'box-%s' "$(printf '%s' "$legacy_oidc_key" | openssl dgst -sha256 -hex | sed 's/^.*= *//' | cut -c1-16)")"
+mock_seed identity identity-secrets OIDC_ISSUER "$OIDC_FOUR_ISSUER"
+mock_seed identity identity-secrets OIDC_SIGNING_KEY "$legacy_oidc_key"
+mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "$legacy_oidc_kid"
+mock_seed gateway gateway-secrets REDIS_URL "redis://:pw@redis.data.svc.cluster.local:6379"
+mock_seed gateway gateway-secrets ASSERTION_SIGNING_KEY "dummy"
+mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/courier"
+mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
+oidc_warm_ec=0
+(
+  # shellcheck source=/dev/null
+  . "$fixture_sourced"
+  kubectl() { mock_kubectl "$@"; }
+  mfa_smtp_env
+  export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
+  export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL="$OIDC_FOUR_LOGIN"
+  install_service_secrets >"$WORK/oidc-warm.log" 2>&1
+) || oidc_warm_ec=$?
+if [ "$oidc_warm_ec" -ne 0 ]; then
+  fail 'warm: a legacy secret without login UI is patched on a re-run' "$(cat "$WORK/oidc-warm.log")"
+elif [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" != "$OIDC_FOUR_LOGIN" ]; then
+  fail 'warm: a legacy secret without login UI is patched on a re-run' "OIDC_LOGIN_UI_URL not patched: '$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)'"
+elif [ "$(mock_get identity identity-secrets OIDC_SIGNING_KEY)" != "$legacy_oidc_key" ]; then
+  fail 'warm: a legacy secret reuses its stored signing key' "signing key was rotated"
+else
+  pass 'warm: a legacy secret without login UI is patched, reusing the stored signing key'
+fi
 
 # 13d-bis. A gateway-secrets that PREDATES the assertion key is healed on a
 # re-run. This is the live box exactly: all four service secrets exist (so the

@@ -85,10 +85,24 @@
 #                                  empty, naming the fix.
 #   KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER optional: the URL identity publishes as
 #                                  its OIDC issuer. NOT a secret — and when it
-#                                  is set the signing key and its id are
-#                                  GENERATED ON THE BOX beside it, because
-#                                  identity's OIDC surface is all-or-nothing
-#                                  (issuer + key + id, or none of them).
+#                                  is set the signing key, its id and the login
+#                                  UI URL are GENERATED (key/id) or SET (login
+#                                  UI) ON THE BOX beside it, because identity's
+#                                  OIDC surface is all-or-nothing (issuer +
+#                                  key + id + login UI, or none of them).
+#   KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL optional: the URL a browser is sent
+#                                  to in order to authenticate — the login UI
+#                                  (parlor on this substrate). When the issuer
+#                                  is set this MUST be set too, and vice versa;
+#                                  a lone issuer is a CrashLoopBackOff
+#                                  (`OIDC_LOGIN_UI_URL: no OIDC login UI
+#                                  configured`). Identity validates it as an
+#                                  http(s) URL with a host, no query, no
+#                                  fragment and no userinfo — the same rule as
+#                                  `oidc.ValidateLoginUIURL`. NOT a secret, and
+#                                  never guessed: a guessed URL sends a browser
+#                                  somewhere the operator never chose, the same
+#                                  rule `KIT_SUBSTRATE_APP_BASE_URL` states.
 #   KIT_SUBSTRATE_SMTP_ADAPTER     courier's mail adapter: smtp or postmark.
 #   KIT_SUBSTRATE_SMTP_HOST        the SMTP relay host (when the adapter is smtp).
 #   KIT_SUBSTRATE_SMTP_PORT        default 587, the submission port.
@@ -402,9 +416,10 @@ SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)
 # It is the customer's own key, so it is BORN ON THIS BOX — generated on first
 # creation, read back once-only thereafter, and printed never. It is written
 # beside an issuer the operator may set, because identity's OIDC surface is
-# all-or-nothing (issuer + key + key id, or none of the three): a lone key is
-# a boot-time refusal, not a half-configured provider.
+# all-or-nothing (issuer + key + key id + login UI, or none of the four): a
+# lone key is a boot-time refusal, not a half-configured provider.
 : "${KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER:=}"
+: "${KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL:=}"
 : "${KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY:=}"
 : "${KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY:=}"
 
@@ -2340,6 +2355,127 @@ reconcile_gateway_assertion_key() {
   kit_substrate_out "      secret gateway-secrets existed without ASSERTION_SIGNING_KEY — patched it in (gateway's pod mounts this key; without it the mount never resolves)"
 }
 
+# validate_oidc_login_ui_url — the login UI URL, when set, must be what
+# identity's oidc.ValidateLoginUIURL accepts: an http(s) URL with a host,
+# no query, no fragment and no userinfo. A refused value names the VARIABLE,
+# never the value. Unset means no OIDC surface. Called on the LIVE path only,
+# beside the other externally-sourced validations — a dry run is a plan and
+# does not need the URL to print it.
+validate_oidc_login_ui_url() {
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" ]; then
+    return 0
+  fi
+  local url="$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL"
+  local why=""
+  case "$url" in
+    http://* | https://*) ;;
+    *)
+      why="its scheme is not http or https"
+      ;;
+  esac
+  if [ -z "$why" ]; then
+    local hostpart="${url#*://}"
+    case "$hostpart" in
+      "" | "/"* | "?"* | "#"* | "@"*)
+        why="it has no host, so there is nowhere to send a browser"
+        ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    case "$url" in
+      *\?*)
+        why="it carries a query"
+        ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    case "$url" in
+      *\#*)
+        why="it carries a fragment, which is not sent to a server"
+        ;;
+    esac
+  fi
+  if [ -z "$why" ]; then
+    local without_scheme="${url#*://}"
+    local host_and_rest="${without_scheme%%/*}"
+    host_and_rest="${host_and_rest%%\?*}"
+    host_and_rest="${host_and_rest%%\#*}"
+    case "$host_and_rest" in
+      *@*)
+        why="it has a userinfo section, so the host in it is not the host it resolves to"
+        ;;
+    esac
+  fi
+  if [ -n "$why" ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" \
+      "export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL='https://app.example.com/sign-in/oidc' — an http(s) URL with a host, no query, no fragment and no userinfo — and re-run" \
+      "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL $why"
+  fi
+}
+
+# validate_oidc_all_or_nothing — the OIDC surface is four keys or none.
+# identity's loader counts issuer/key/id and then requires the login UI; a
+# lone issuer or a lone login UI is a boot refusal discovered three steps
+# later. The installer refuses before writing anything, naming the missing
+# variable. Called on the LIVE path only.
+validate_oidc_all_or_nothing() {
+  local has_issuer has_login
+  has_issuer=0; [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ] && has_issuer=1
+  has_login=0; [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" ] && has_login=1
+  if [ "$has_issuer" -eq 1 ] && [ "$has_login" -eq 0 ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" \
+      "export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL='https://app.example.com/sign-in/oidc' — the page that asks a person for their password — and re-run" \
+      "KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set but KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL is not — the OIDC surface is all-or-nothing (issuer + signing key + id + login UI, or none of them)"
+  fi
+  if [ "$has_issuer" -eq 0 ] && [ "$has_login" -eq 1 ]; then
+    kit_substrate_refuse "KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" \
+      "export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://auth.example.com' — the URL identity publishes as its issuer — and re-run, or leave both unset for no OIDC surface" \
+      "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL is set but KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is not — the OIDC surface is all-or-nothing (issuer + signing key + id + login UI, or none of them)"
+  fi
+  if [ "$has_login" -eq 1 ]; then
+    validate_oidc_login_ui_url
+  fi
+}
+
+# reconcile_oidc_identity_secrets — patch a pre-existing identity-secrets that
+# predates the login UI surface (or the whole OIDC surface) with the four keys
+# the operator's input now supplies. Runs ABOVE the `secrets` guard, on
+# purpose: a box installed before this packet holds all four service secrets, so
+# the guard would skip the step whole and leave identity CrashLoopBackOff on a
+# secret missing OIDC_LOGIN_UI_URL. A stored signing key is read back, never
+# rotated — the same once-only rule as SIGNUP_SIGNING_KEY — so a re-run keeps
+# the key its verifiers cached.
+reconcile_oidc_identity_secrets() {
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ] || [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" ]; then
+    return 0
+  fi
+  if ! kubectl --kubeconfig="$KUBECONFIG" get secret identity-secrets -n identity >/dev/null 2>&1; then
+    return 0
+  fi
+  local stored_issuer stored_login
+  stored_issuer="$(read_secret_key identity identity-secrets OIDC_ISSUER)"
+  stored_login="$(read_secret_key identity identity-secrets OIDC_LOGIN_UI_URL)"
+  if [ -n "$stored_issuer" ] && [ -n "$stored_login" ]; then
+    return 0
+  fi
+  resolve_oidc_signing_key
+  local oidc_key="$OIDC_SIGNING_KEY" oidc_key_id="$OIDC_SIGNING_KEY_ID"
+  printf '%s' "$(jq -nc --arg issuer "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" --arg key "$oidc_key" --arg kid "$oidc_key_id" --arg login "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" '{"stringData":{"OIDC_ISSUER":$issuer,"OIDC_SIGNING_KEY":$key,"OIDC_SIGNING_KEY_ID":$kid,"OIDC_LOGIN_UI_URL":$login}}')" |
+    kubectl --kubeconfig="$KUBECONFIG" -n identity patch secret identity-secrets --type=merge --patch-file=/dev/stdin >/dev/null
+  kit_substrate_out "      secret identity-secrets existed without OIDC surface — patched in OIDC_ISSUER, OIDC_SIGNING_KEY, OIDC_SIGNING_KEY_ID, OIDC_LOGIN_UI_URL (signing key reused if stored)"
+  # Read-back: a secret written but not readable is the defect the whole record
+  # tripwire exists to catch, so verify the four keys round-trip.
+  local got_issuer got_login got_key got_kid
+  got_issuer="$(read_secret_key identity identity-secrets OIDC_ISSUER)"
+  got_login="$(read_secret_key identity identity-secrets OIDC_LOGIN_UI_URL)"
+  got_key="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY)"
+  got_kid="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY_ID)"
+  if [ "$got_issuer" != "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ] || [ "$got_login" != "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" ] || [ -z "$got_key" ] || [ -z "$got_kid" ]; then
+    echo "error: identity-secrets patch did not round-trip — OIDC keys not readable" >&2
+    exit 1
+  fi
+}
+
 # validate_mfa_override — the operator-supplied MFA key, when set, must be
 # exactly what identity's config parser accepts: base64url without padding
 # decoding to 32 bytes (43 characters from A-Z a-z 0-9 - _). A refused value
@@ -2464,6 +2600,16 @@ install_service_secrets() {
   else
     reconcile_gateway_assertion_key
   fi
+  # The OIDC repair runs above the guard for the same reason: a box installed
+  # before OIDC_LOGIN_UI_URL existed holds all four secrets (so the guard would
+  # skip) and carries OIDC_ISSUER + key + id without the login UI — the shape
+  # identity refuses with `OIDC_LOGIN_UI_URL: no OIDC login UI configured` and
+  # CrashLoopBackOff. That box is the packet's own reproduction.
+  if dry_run "ensure identity-secrets carries OIDC_LOGIN_UI_URL when the OIDC surface is wired (the fourth member of the all-or-nothing surface)"; then
+    :
+  else
+    reconcile_oidc_identity_secrets
+  fi
   if kit_substrate_guard secrets; then
     kit_substrate_out "      already installed, skipping"
     return 0
@@ -2499,6 +2645,11 @@ install_service_secrets() {
       ;;
   esac
 
+  # Externally sourced OIDC surface is validated before any secret is written.
+  # A lone issuer or a lone login UI is a boot-time refusal discovered three
+  # steps later; the installer refuses by name before writing anything.
+  validate_oidc_all_or_nothing
+
   local ns
   for ns in identity gateway courier parlor; do
     kubectl --kubeconfig="$KUBECONFIG" create namespace "$ns" --dry-run=client -o yaml |
@@ -2507,17 +2658,21 @@ install_service_secrets() {
 
   # identity-secrets. Always: DATABASE_URL (agrees with the Cluster),
   # SIGNUP_SIGNING_KEY (generated once) and MFA_ENCRYPTION_KEY (generated
-  # once, or the validated operator override). When the operator set an issuer:
-  # OIDC_ISSUER plus a signing key and key id GENERATED ON THIS BOX — the
-  # customer's own key, which is why it is not an input. Step 11 adds
-  # COURIER_TOKEN with the value it minted, so identity holds exactly the key
-  # courier presents rather than one the operator matched up by hand.
+  # once, or the validated operator override). When the operator set an issuer
+  # and a login UI: OIDC_ISSUER plus a signing key and key id GENERATED ON
+  # THIS BOX — the customer's own key, which is why it is not an input — plus
+  # OIDC_LOGIN_UI_URL, the browser target for authentication (parlor on this
+  # substrate). Step 11 adds COURIER_TOKEN with the value it minted, so
+  # identity holds exactly the key courier presents rather than one the
+  # operator matched up by hand.
   # A pre-existing identity-secrets is NEVER patched — not with a generated
-  # key and not with an override. The stored key is a persistent encryption
-  # key: an imported database could hold ciphertext sealed under a key no
-  # longer present, so guessing a fresh one in would fork it. A legacy
-  # secret without the key keeps running unwired; the operator path to MFA
-  # on such an install is in README.md, not guessed here.
+  # key and not with an override — except for the OIDC surface above the
+  # guard, which patches a legacy secret missing the login UI. The MFA stored
+  # key is a persistent encryption key: an imported database could hold
+  # ciphertext sealed under a key no longer present, so guessing a fresh one
+  # in would fork it. A legacy secret without the MFA key keeps running
+  # unwired; the operator path to MFA on such an install is in README.md, not
+  # guessed here.
   # The generation is SIGNUP_SIGNING_KEY's own spelling (32 random bytes as
   # base64url, no padding): identity decodes MFA_ENCRYPTION_KEY with
   # base64.RawURLEncoding and refuses any other length at boot.
@@ -2553,16 +2708,18 @@ install_service_secrets() {
     --from-literal=SIGNUP_SIGNING_KEY="$signup_key"
     --from-literal=MFA_ENCRYPTION_KEY="$mfa_key"
     --from-literal=NATS_URL="$NATS_URL")
-  # The OIDC surface, when wired, carries three keys or none: identity refuses
-  # to boot on a lone key. The signing key is generated here and never printed;
-  # the issuer is configuration and is echoed as configuration.
+  # The OIDC surface, when wired, carries four keys or none: identity refuses
+  # to boot on a lone key and on a missing login UI. The signing key is
+  # generated here and never printed; the issuer and login UI are configuration
+  # and are echoed as configuration.
   if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     resolve_oidc_signing_key
     oidc_key="$OIDC_SIGNING_KEY"
     oidc_key_id="$OIDC_SIGNING_KEY_ID"
     identity_args+=(--from-literal=OIDC_ISSUER="$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER"
       --from-literal=OIDC_SIGNING_KEY="$oidc_key"
-      --from-literal=OIDC_SIGNING_KEY_ID="$oidc_key_id")
+      --from-literal=OIDC_SIGNING_KEY_ID="$oidc_key_id"
+      --from-literal=OIDC_LOGIN_UI_URL="$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL")
   fi
   [ -n "$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY" ] &&
     identity_args+=(--from-literal=OAUTH_ENCRYPTION_KEY="$KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY")
@@ -2572,6 +2729,19 @@ install_service_secrets() {
     kubectl --kubeconfig="$KUBECONFIG" create secret generic identity-secrets -n identity \
       "${identity_args[@]}" "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
     kit_substrate_out "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
+    # Read-back on a cold box: a secret written but not readable is the defect
+    # the whole record tripwire exists to catch.
+    if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+      local verify_issuer verify_login verify_key verify_kid
+      verify_issuer="$(read_secret_key identity identity-secrets OIDC_ISSUER)"
+      verify_login="$(read_secret_key identity identity-secrets OIDC_LOGIN_UI_URL)"
+      verify_key="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY)"
+      verify_kid="$(read_secret_key identity identity-secrets OIDC_SIGNING_KEY_ID)"
+      if [ "$verify_issuer" != "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ] || [ "$verify_login" != "$KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" ] || [ -z "$verify_key" ] || [ -z "$verify_kid" ]; then
+        echo "error: identity-secrets does not carry the OIDC surface after creation — OIDC keys not readable or mismatched" >&2
+        exit 1
+      fi
+    fi
   fi
 
   # gateway-secrets. Two keys, and both are REQUIRED references the chart names:
