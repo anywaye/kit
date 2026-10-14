@@ -7943,7 +7943,7 @@ fi
 # warm one is not a fix, and the industrial-scale verification ("challenge the
 # verifier") fails on it.
 #
-# WHY THIS IS EXECUTED AND NOT STATIC. §25 reads step 4's SHAAPE with comments
+# WHY THIS IS EXECUTED AND NOT STATIC. §25 reads step 4's SHAPE with comments
 # stripped and would be perfectly happy with the apply sitting inside
 # `if [ "$argocd_present" -eq 0 ]` — nothing in that check reads which side of
 # the guard a line is on. So the property is proven by RUNNING the step against
