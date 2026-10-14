@@ -2,6 +2,24 @@
 
 ### Substrate
 
+- **Step 5 asks GHCR first, and only reaches for the capability when an
+  artifact is private.** The pull-secret step demanded a single-use,
+  minutes-lived, box-bound capability before looking at a single artifact —
+  a required ritual that buys nothing where every artifact is public (a
+  stale/wrong pull secret does not break a public pull; GHCR falls back to
+  anonymous). Now the step derives every GHCR chart and image the
+  Applications name (`repoURL`/`targetRevision` plus the image each cafaye
+  chart runs — 14 rows, no flag) and asks GHCR for an anonymous token and a
+  manifest HEAD per artifact, both bounded. All public: an empty-auths pull
+  secret through the same pipe into the same namespaces, with no box id, no
+  capability and no exchange. One private: today's exchange unchanged, its
+  refusals now naming which artifacts need the credential, and the readiness
+  report naming the path taken (`registry: …` / `"registry_path"`). Measured
+  today: 11 of 14 anonymously fetchable; `cafaye/box`, `cafaye/charts/box`
+  and `cafaye/charts/pantry` refuse anonymous fetch, so installs pulling
+  them still take the capability path. See
+  `REPORT-roll-c5-public-artifacts.md`.
+
 - **pantry deploys: the registry the routes already named.** gateway has
   published `/v1/pantry` (public) and `/v1/pantry-writes` at
   `http://pantry:8080` since the routes were written, and no pantry has

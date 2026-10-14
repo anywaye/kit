@@ -3308,6 +3308,13 @@ done
 . "$fixture_sourced"
 
 run 'the capability is validated: the minted shape is accepted' green registry_capability_shape_ok "$CAP_GOOD"
+# Step 5 derives its artifact list from MANIFEST_DIR, and the sourced
+# installer's SCRIPT_DIR is this temp fixture — so without the line below the
+# step reads $WORK/manifests/applications, which holds nothing, and refuses on
+# an unmeasured claim. Set AFTER the source: install.sh assigns MANIFEST_DIR
+# from SCRIPT_DIR at source time, so a value written before it would be
+# overwritten. (The same reason apps_step sets it per runner, below.)
+export MANIFEST_DIR="$MANIFESTS"
 run 'control: a dockerconfigjson is refused as a capability' red registry_capability_shape_ok "$CAP_B64_PULL_SECRET"
 run 'control: a short capability is refused' red registry_capability_shape_ok "cap_deadbeef"
 run 'control: an empty capability is refused' red registry_capability_shape_ok ""
@@ -3564,6 +3571,10 @@ export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
 export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
 # shellcheck source=/dev/null
 . "$fixture_sourced"
+# MANIFEST_DIR after the source: the sourced copy's SCRIPT_DIR is $WORK, so
+# without this the probe reads an empty dir and refuses on an unmeasured
+# claim instead of reaching the exchange this runner is about.
+export MANIFEST_DIR="$MANIFESTS"
 kubectl() { mock_kubectl "\$@"; }
 curl() {
   printf '%s\n' "\$*" >>"\$MOCK_ROOT/curl-calls"
@@ -3784,6 +3795,10 @@ export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
 printf 'argocd\n' >"\$MOCK_ROOT/namespaces"
 # shellcheck source=/dev/null
 . "$fixture_no_ns"
+# MANIFEST_DIR after the source, as in ns-runner above: without it the probe
+# refuses on an empty dir before the missing namespace is ever reached, and
+# the control would prove the probe rather than the creation.
+export MANIFEST_DIR="$MANIFESTS"
 kubectl() { mock_kubectl "\$@"; }
 curl() {
   printf '%s\n' "\$*" >>"\$MOCK_ROOT/curl-calls"
@@ -3960,8 +3975,14 @@ exchange_case answer 200 "$(exchange_body "$(printf 'not base64 at all' | base64
 ')" "$receipt_expires" 3480)"   "not a ghcr.io credential"   'a dockerconfigjson that is not a ghcr.io credential is refused'
 
 # The control on the shape check: a pasted dockerconfigjson in the
-# capability's place is refused before any network call. The recorded calls
-# are cleared first, so "no network" is measured for this case alone.
+# capability's place is refused before the capability could be spent or sent.
+# Since step 5 probes first, the refusal is no longer preceded by zero
+# traffic — the anonymous probe runs before the shape check — so "no network
+# call" would fail on the probe's own anonymous halves. The property that
+# matters is what the probe never carries: the pasted value appears in no
+# call, and the exchange route is never spoken. (If this check was weakened
+# to get green, the commit message says so — it was not: the secret still
+# travels nowhere.)
 rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml"
 (
   kubectl() { mock_kubectl "$@"; }
@@ -3971,11 +3992,411 @@ rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml
   export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
   install_pull_secret >"$WORK/pull-secret-paste.log" 2>&1
 ) || true
-if grep -q "OLD runbook" "$WORK/pull-secret-paste.log" 2>/dev/null && [ ! -s "$MOCK_ROOT/curl-calls" ]; then
-  pass 'control: a pasted dockerconfigjson is refused before any network call'
+if grep -q "OLD runbook" "$WORK/pull-secret-paste.log" 2>/dev/null \
+  && ! grep -q "$CAP_B64_PULL_SECRET" "$MOCK_ROOT/curl-calls" 2>/dev/null \
+  && ! grep -q "/v1/registry-credentials" "$MOCK_ROOT/curl-calls" 2>/dev/null; then
+  pass 'control: a pasted dockerconfigjson is refused before the capability could be spent or sent'
 else
-  fail 'control: a pasted dockerconfigjson is refused before any network call' "$(cat "$WORK/pull-secret-paste.log")"
+  fail 'control: a pasted dockerconfigjson is refused before the capability could be spent or sent' "$(cat "$WORK/pull-secret-paste.log")"
 fi
+
+# 13e. Step 5 asks GHCR first, and only reaches for the capability when an
+# artifact is private.
+#
+# The packet: step 5 DERIVES every GHCR chart and image the Applications name,
+# asks GHCR for an ANONYMOUS fetch of each, and takes the anonymous half (no
+# box id, no capability, no exchange) when all answer — the capability path
+# running unchanged when one does not, its refusal NAMING the artifact.
+# Five proofs, each with the control that must answer differently:
+#   1. the derivation off the real tree names the fleet's charts AND images
+#      (7 + 7) and nothing over plain HTTPS;
+#   2. all public, no box id, no capability: the step SUCCEEDS, writes an
+#      empty-auths pull secret, never speaks the exchange route, and says the
+#      anonymous line;
+#   3. one private artifact, no capability: the step REFUSES, naming that
+#      artifact, in the capability's own words;
+#   4. the probe is a FETCH check, not a token check: a token that answers
+#      with a manifest that 404s is still private (a public repo with a
+#      missing tag issues a token and refuses the manifest);
+#   5. the capability half is unchanged: private artifacts plus a valid box id
+#      and capability exchange and write the minted credential, saying the
+#      private line.
+# The mocks below answer GHCR's two anonymous halves from the environment, so
+# no test here needs the network: MOCK_TOKEN_DENY names the repo whose token
+# is refused, MOCK_MANIFEST_DENY names the manifest ref refused. A mock that
+# answered everything public would make cases 3 and 4 vacuous; each sets its
+# own denial.
+PROBE_APPS="$WORK/probe-apps"
+mkdir -p "$PROBE_APPS"
+probe_app() { # <file> <repoURL> <chart> <rev>
+  cat >"$PROBE_APPS/$1.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: $1
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: $2
+    chart: $3
+    targetRevision: $4
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: $1
+YAML
+}
+probe_app anon-identity oci://ghcr.io/cafaye/charts/identity identity 0.1.0
+probe_app anon-gateway oci://ghcr.io/cafaye/charts/gateway gateway 0.1.0
+probe_app anon-grafana https://grafana.github.io/helm-charts grafana 10.5.15
+
+# mock_probe_curl — GHCR's two anonymous halves, answered from the
+# environment, plus the exchange from the response file. The token half reads
+# the BODY, never the status: real GHCR answers a refused token with HTTP 401
+# and an error document, and curl without -f exits 0 on it — so the mock
+# prints the error document and exits 0, the shape the installer must read.
+# The manifest half prints only the bare status, the way `curl -o /dev/null
+# -w '%{http_code}' -I` does (under -I the headers ARE the output, so -o
+# discards them and only the -w line reaches stdout).
+mock_probe_curl() {
+  printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
+  case "$*" in
+    *"/token?"*)
+      case "$*" in
+        *"repository:${MOCK_TOKEN_DENY:-__none__}:"*)
+          printf '{"errors":[{"code":"UNAUTHORIZED","message":"authentication required"}]}'
+          return 0 ;;
+      esac
+      printf '{"token":"mock-anon-token"}'
+      return 0 ;;
+    *"/manifests/"*)
+      case "$*" in
+        *"manifests/${MOCK_MANIFEST_DENY:-__none__}"*)
+          printf '404' ;;
+        *)
+          printf '200' ;;
+      esac
+      return 0 ;;
+    *"/v1/registry-credentials"*)
+      cat "$MOCK_ROOT/curl-response"
+      case "$*" in
+        *"-w"*) printf '\n%s\n' "${MOCK_CURL_STATUS:-200}" ;;
+      esac
+      return 0 ;;
+  esac
+  printf 'mock_probe_curl: unhandled call: %s\n' "$*" >&2
+  return 1
+}
+
+# 1. The derivation, off the real tree: 7 charts + 7 images, and no
+# plain-HTTPS chart among them.
+derived_ok() {
+  local rows n want
+  rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
+  n="$(printf '%s\n' "$rows" | grep -c .)"
+  [ "$n" -eq 14 ] || { printf 'derived %s artifact rows, expected 14\n%s\n' "$n" "$rows"; return 1; }
+  for want in "cafaye/charts/box 0.1.0" "cafaye/box 0.1.0" \
+    "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
+    "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
+    "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \
+    "cafaye/charts/keyholder 0.1.0" "cafaye/keyholder 0.1.0" \
+    "cafaye/charts/pantry 0.1.0" "cafaye/pantry 0.1.0" \
+    "cafaye/charts/parlor 0.1.0" "cafaye/parlor 0.1.0"; do
+    case "$rows" in
+      *"$want"*) ;;
+      *) printf 'missing derived row: %s\n%s\n' "$want" "$rows"; return 1 ;;
+    esac
+  done
+  case "$rows" in
+    *grafana* | *alloy* | *prometheus*)
+      printf 'a plain-HTTPS chart was probed:\n%s\n' "$rows"; return 1 ;;
+  esac
+  printf '14 rows: 7 charts + 7 images, no plain-HTTPS chart'
+}
+run 'the probe derives every GHCR chart and image off the real manifests' green derived_ok
+
+# The control: a fixture with one GHCR Application and one plain-HTTPS one
+# derives exactly the chart and its image — two rows, and the HTTPS chart is
+# nowhere. A derivation that listed everything would pass the count above by
+# accident.
+PROBE_FIX_DERIVE="$WORK/probe-derive"
+mkdir -p "$PROBE_FIX_DERIVE"
+cat >"$PROBE_FIX_DERIVE/demo.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/demo
+    chart: demo
+    targetRevision: 2.0.0
+YAML
+cat >"$PROBE_FIX_DERIVE/grafana.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: grafana
+    targetRevision: 10.5.15
+YAML
+derived_fixture_ok() {
+  local rows
+  rows="$(MANIFEST_DIR="$PROBE_FIX_DERIVE" registry_derived_artifacts | sort)"
+  [ "$rows" = "$(printf 'cafaye/charts/demo 2.0.0\ncafaye/demo 2.0.0')" ] || {
+    printf 'fixture derivation is not exactly the chart plus its image:\n%s\n' "$rows"
+    return 1
+  }
+  printf 'exactly the chart and its image; the HTTPS chart excluded'
+}
+run 'control: the derivation lists a fixture chart plus its image, nothing else' green derived_fixture_ok
+
+# 2. All public, no box id, no capability: the step succeeds down the
+# anonymous half.
+MOCK_ROOT_ANON="$WORK/pull-secret-anon"
+mkdir -p "$MOCK_ROOT_ANON"
+rm -f "$MOCK_ROOT_ANON/curl-calls" "$MOCK_ROOT_ANON/curl-response" "$MOCK_ROOT_ANON/kubectl-argv" \
+  "$MOCK_ROOT_ANON/applied.yaml" "$MOCK_ROOT_ANON/namespaces" "$WORK/pull-secret-anon.log"
+anon_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() { mock_probe_curl "$@"; }
+  export MOCK_ROOT="$MOCK_ROOT_ANON"
+  export MANIFEST_DIR="$PROBE_APPS"
+  export MOCK_TOKEN_DENY="__none__" MOCK_MANIFEST_DENY="__none__"
+  export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  install_pull_secret >"$WORK/pull-secret-anon.log" 2>&1
+  printf 'REGISTRY_PATH=%s\n' "$REGISTRY_PATH" >>"$WORK/pull-secret-anon.log"
+) || anon_ec=$?
+anon_ok() {
+  [ "$anon_ec" -eq 0 ] || { printf 'exit %s: %s\n' "$anon_ec" "$(cat "$WORK/pull-secret-anon.log")"; return 1; }
+  case "$(cat "$WORK/pull-secret-anon.log")" in
+    *"every artifact is public; no registry credential was needed"*) ;;
+    *) printf 'the anonymous line is missing\n%s\n' "$(cat "$WORK/pull-secret-anon.log")"; return 1 ;;
+  esac
+  case "$(cat "$WORK/pull-secret-anon.log")" in
+    *"REGISTRY_PATH=anonymous"*) ;;
+    *) printf 'the step did not record the anonymous path\n'; return 1 ;;
+  esac
+  case "$(cat "$MOCK_ROOT_ANON/curl-calls" 2>/dev/null || true)" in
+    *"/v1/registry-credentials"*)
+      printf 'the exchange route was spoken on the anonymous path\n'; return 1 ;;
+  esac
+  local ns
+  for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
+    grep -q "namespace: $ns" "$MOCK_ROOT_ANON/applied.yaml" 2>/dev/null || {
+      printf 'no pull secret was applied in %s\n' "$ns"; return 1
+    }
+  done
+  printf 'anonymous path: anonymous line, no exchange call, secret in every namespace'
+}
+run 'all public with no box id and no capability: step 5 succeeds anonymously' green anon_ok
+
+# The anonymous Secret is INERT, not a credential: it decodes once to empty
+# auths. The kubelet-shaped read from 3b is reused in shape but asserts the
+# opposite content — a username here would be a credential the anonymous path
+# must never hold.
+pull_secret_anon_kubelet_ok() {
+  "$PY" - "$MOCK_ROOT_ANON/applied.yaml" <<'PY'
+import base64
+import json
+import sys
+vals = []
+for ln in open(sys.argv[1], encoding="utf-8"):
+    if ".dockerconfigjson:" in ln:
+        vals.append(ln.split(":", 1)[1].strip())
+if not vals:
+    print("no .dockerconfigjson data in the applied Secret")
+    sys.exit(1)
+for v in vals:
+    try:
+        doc = json.loads(base64.b64decode(v))
+    except Exception as e:
+        print("the applied data does not decode once to JSON (%s)" % (e,))
+        sys.exit(1)
+    if doc.get("auths") != {}:
+        print("the anonymous Secret carries credentials: %r" % (doc.get("auths"),))
+        sys.exit(1)
+print("%d Secret(s), each decoding once to empty auths" % (len(vals),))
+PY
+}
+run 'the anonymous Secret decodes once, as the kubelet does, to empty auths' green pull_secret_anon_kubelet_ok
+
+# The control: the same run against a fixture that answers the token but
+# 404s nothing must NOT take the anonymous half — inverted below in case 4.
+# Here the inverted control: point the derivation at a fixture with one
+# private TOKEN, and the anonymous assertions must fail.
+PROBE_PRIV="$WORK/probe-priv"
+mkdir -p "$PROBE_PRIV"
+cat >"$PROBE_PRIV/priv.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: priv
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/priv-fixture
+    chart: priv-fixture
+    targetRevision: 9.9.9
+YAML
+
+# 3. One private artifact, no capability: the step refuses, NAMING it, in the
+# capability's own words. The fixture's image row (cafaye/priv-fixture:9.9.9)
+# stays public — the denial names only the chart repo — so the refusal proves
+# per-artifact granularity rather than a blanket private verdict.
+MOCK_ROOT_PRIV="$WORK/pull-secret-priv"
+mkdir -p "$MOCK_ROOT_PRIV"
+rm -f "$MOCK_ROOT_PRIV/curl-calls" "$MOCK_ROOT_PRIV/curl-response" "$MOCK_ROOT_PRIV/kubectl-argv" \
+  "$MOCK_ROOT_PRIV/applied.yaml" "$MOCK_ROOT_PRIV/namespaces" "$WORK/pull-secret-priv.log"
+priv_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() { mock_probe_curl "$@"; }
+  export MOCK_ROOT="$MOCK_ROOT_PRIV"
+  export MANIFEST_DIR="$PROBE_PRIV"
+  export MOCK_TOKEN_DENY="cafaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
+  export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  install_pull_secret >"$WORK/pull-secret-priv.log" 2>&1
+) || priv_ec=$?
+priv_ok() {
+  [ "$priv_ec" -ne 0 ] || { printf 'the step succeeded with a private artifact and no capability\n'; return 1; }
+  case "$(cat "$WORK/pull-secret-priv.log")" in
+    *"cafaye/charts/priv-fixture:9.9.9"*) ;;
+    *) printf 'the refusal does not name the private artifact\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
+  esac
+  case "$(cat "$WORK/pull-secret-priv.log")" in
+    *"KIT_SUBSTRATE_BOX_ID is not set"*) ;;
+    *) printf 'the refusal is not in the capability words\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
+  esac
+  case "$(cat "$WORK/pull-secret-priv.log")" in
+    *"public: cafaye/priv-fixture:9.9.9"*) ;;
+    *) printf 'the public image row was not measured public\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
+  esac
+  printf 'refused in the capability words, naming the one private artifact'
+}
+run 'one private artifact with no capability: the refusal names that artifact' green priv_ok
+
+# 4. The probe is a FETCH check, not a token check. The token answers; the
+# manifest 404s (a public repo with a missing tag). A probe that read only
+# the token would take the anonymous half here — and the assertion below
+# would go green on a probe that cannot fail.
+PROBE_TAG="$WORK/probe-tag"
+mkdir -p "$PROBE_TAG"
+cat >"$PROBE_TAG/tag.yaml" <<YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tag
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/identity
+    chart: identity
+    targetRevision: 0.0.0-no-such-tag
+YAML
+MOCK_ROOT_TAG="$WORK/pull-secret-tag"
+mkdir -p "$MOCK_ROOT_TAG"
+rm -f "$MOCK_ROOT_TAG/curl-calls" "$MOCK_ROOT_TAG/curl-response" "$MOCK_ROOT_TAG/kubectl-argv" \
+  "$MOCK_ROOT_TAG/applied.yaml" "$MOCK_ROOT_TAG/namespaces" "$WORK/pull-secret-tag.log"
+tag_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() { mock_probe_curl "$@"; }
+  export MOCK_ROOT="$MOCK_ROOT_TAG"
+  export MANIFEST_DIR="$PROBE_TAG"
+  export MOCK_TOKEN_DENY="__none__" MOCK_MANIFEST_DENY="0.0.0-no-such-tag"
+  export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  install_pull_secret >"$WORK/pull-secret-tag.log" 2>&1
+) || tag_ec=$?
+tag_ok() {
+  [ "$tag_ec" -ne 0 ] || { printf 'the step went anonymous on a token-answered, manifest-missing artifact\n'; return 1; }
+  case "$(cat "$WORK/pull-secret-tag.log")" in
+    *"cafaye/charts/identity:0.0.0-no-such-tag"*) ;;
+    *) printf 'the refusal does not name the unfetchable artifact\n%s\n' "$(cat "$WORK/pull-secret-tag.log")"; return 1 ;;
+  esac
+  printf 'a token with a missing manifest is still private'
+}
+run 'control: a probe that cannot fail is not a probe — answered token, missing manifest' green tag_ok
+
+# 5. The capability half is unchanged: private artifacts plus a valid box id
+# and capability exchange and write the MINTED credential, saying the
+# private line. The kubelet-shaped read from 3b proves the content is the
+# exchange's credential and not the anonymous empty auths.
+MOCK_ROOT_CAP="$WORK/pull-secret-cap"
+mkdir -p "$MOCK_ROOT_CAP"
+rm -f "$MOCK_ROOT_CAP/curl-calls" "$MOCK_ROOT_CAP/curl-response" "$MOCK_ROOT_CAP/kubectl-argv" \
+  "$MOCK_ROOT_CAP/applied.yaml" "$MOCK_ROOT_CAP/namespaces" "$WORK/pull-secret-cap.log"
+exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_CAP/curl-response"
+cap_ec=0
+(
+  kubectl() { mock_kubectl "$@"; }
+  curl() { mock_probe_curl "$@"; }
+  export MOCK_ROOT="$MOCK_ROOT_CAP"
+  export MANIFEST_DIR="$PROBE_PRIV"
+  export MOCK_TOKEN_DENY="cafaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
+  export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  install_pull_secret >"$WORK/pull-secret-cap.log" 2>&1
+  printf 'REGISTRY_PATH=%s\n' "$REGISTRY_PATH" >>"$WORK/pull-secret-cap.log"
+) || cap_ec=$?
+cap_ok() {
+  [ "$cap_ec" -eq 0 ] || { printf 'exit %s: %s\n' "$cap_ec" "$(cat "$WORK/pull-secret-cap.log")"; return 1; }
+  case "$(cat "$WORK/pull-secret-cap.log")" in
+    *"1 artifact(s) are private; the capability exchange was used"*) ;;
+    *) printf 'the private line is missing\n%s\n' "$(cat "$WORK/pull-secret-cap.log")"; return 1 ;;
+  esac
+  case "$(cat "$WORK/pull-secret-cap.log")" in
+    *"REGISTRY_PATH=capability"*) ;;
+    *) printf 'the step did not record the capability path\n'; return 1 ;;
+  esac
+  printf 'capability path: private line, minted credential exchanged'
+}
+run 'private artifacts with a valid box id and capability: the exchange runs unchanged' green cap_ok
+MOCK_ROOT_SAVED_CAP="$MOCK_ROOT"
+MOCK_ROOT="$MOCK_ROOT_CAP"
+run 'the capability-path Secret decodes once to the minted ghcr.io credential' green pull_secret_kubelet_ok
+MOCK_ROOT="$MOCK_ROOT_SAVED_CAP"
+
+# An empty manifest dir refuses rather than going anonymous: a probe that
+# listed nothing proved nothing, and the anonymous half on zero evidence is
+# the fail-open this packet exists to close.
+PROBE_EMPTY="$WORK/probe-empty"
+mkdir -p "$PROBE_EMPTY"
+probe_empty() {
+  MANIFEST_DIR="$PROBE_EMPTY" registry_probe_artifacts >/dev/null 2>&1
+}
+run 'an empty manifest dir refuses rather than going anonymous' red probe_empty
+
+# The master-behavior control: the exchange ALONE still demands a capability
+# before seeing a single artifact. This is the shape step 5 had on master —
+# the live refusal on a workstation without a capability is quoted in the
+# packet's report — and the probe is what now gates it. The function returns
+# 1 (red) exactly when the refusal carries the capability line, so `run`
+# going green means the demand is still unconditional at this layer.
+master_refusal_pins() {
+  local out ec=0
+  out="$(KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID" KIT_SUBSTRATE_REGISTRY_CAPABILITY="" REGISTRY_PRIVATE_ARTIFACTS="" exchange_registry_credential 2>&1)" || ec=$?
+  [ "$ec" -ne 0 ] || { printf 'the exchange succeeded with no capability\n'; return 0; }
+  case "$out" in
+    *"export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'"*) return 1 ;;
+    *) printf 'the refusal does not carry the capability line\n%s\n' "$out"; return 0 ;;
+  esac
+}
+run 'control: the exchange alone still demands a capability before seeing any artifact' red master_refusal_pins
 
 # 13d. The OIDC signing key is born on THIS box.
 #
@@ -5122,6 +5543,7 @@ VALUE_PRODUCERS = {
     "kit_substrate_ingress_host", "kit_substrate_ingress_hosts",
     "kit_substrate_readiness_pending_count", "kit_substrate_readiness_summary",
     "kit_substrate_readiness_json", "kit_substrate_log_store",
+    "registry_derived_artifacts",
 }
 
 # Every variable in install.sh that HOLDS secret material, by name. This is a

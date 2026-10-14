@@ -1576,6 +1576,18 @@ EOF
   if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    - KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set (export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://<your-issuer>') — until then identity serves no JWKS route, so gateway's /readyz fails and its Deployment never becomes Ready"
   fi
+  # The registry half: which credential path step 5 took. Not a serving
+  # condition — an installed box serves either way — but the operator reading
+  # the end of a run must see which world they are in: no credential, or the
+  # capability exchange for private artifacts.
+  case "$REGISTRY_PATH" in
+    anonymous)
+      kit_substrate_out "  registry: every artifact is public; no registry credential was needed" ;;
+    capability)
+      kit_substrate_out "  registry: at least one artifact is private; the capability exchange was used" ;;
+    *)
+      kit_substrate_out "  registry: step 5 has not run (no pull secret written by this run)" ;;
+  esac
   if [ -z "$READINESS_TLS_PENDING" ] && [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    (none — every intended host resolves and the OIDC issuer is set)"
     kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS for every host"
@@ -1622,7 +1634,7 @@ kit_substrate_readiness_json() {
     oidc="true"
   fi
   store="$(kit_substrate_log_store)"
-  printf ',"tls_pending_hosts":%s,"oidc_configured":%s,"log_store":"%s","dns_split_hosts":%s,"dns_cluster_pending_hosts":%s' "$hosts_json" "$oidc" "$store" "$split_json" "$cluster_json"
+  printf ',"tls_pending_hosts":%s,"oidc_configured":%s,"log_store":"%s","dns_split_hosts":%s,"dns_cluster_pending_hosts":%s,"registry_path":%s' "$hosts_json" "$oidc" "$store" "$split_json" "$cluster_json" "$(json_str "$REGISTRY_PATH")"
 }
 # --- honest-done END
 
@@ -2047,6 +2059,116 @@ REGISTRY_PULL_SECRET_NAME="ghcr-pull-secret"
 # preflight exists to prevent, arriving at image-pull time.
 REGISTRY_CREDENTIAL_MIN_SECONDS=60
 
+# --- step 5's question: is every artifact anonymously fetchable? ----------------
+# The exchange below buys a short-lived pull-only dockerconfigjson for PRIVATE
+# artifacts. Every artifact this substrate pulls may already be PUBLIC — an
+# anonymous token from ghcr.io/token plus a manifest HEAD, no credentials at
+# all — and a stale/wrong pull secret does not break a public pull (GHCR falls
+# back to anonymous). Demanding a single-use, minutes-lived, box-bound
+# capability for a fetch that needs none is a required ritual that buys
+# nothing: a developer on a workstation has no box id, no capability and no
+# exchange, and needs none of the three for a public pull.
+#
+# So step 5 PROBES FIRST and exchanges only when the probe says it must. The
+# list is DERIVED, never flagged: every GHCR chart the Applications name
+# (repoURL/targetRevision out of manifests/applications/*.yaml) plus the image
+# each cafaye chart runs. The image half is the fleet's own convention — the
+# publish path names the image ghcr.io/cafaye/<chart> and tags it with the
+# chart's version, verified per service in its chart's values.yaml (identity,
+# gateway, courier, parlor, pantry, box, keyholder: all 0.1.0) — and the probe
+# measures rather than assumes: a chart whose image moves takes the capability
+# path without anyone editing this file, because the probe is what decides,
+# per artifact, per run. Non-GHCR charts (alloy, grafana, prometheus over
+# plain-HTTPS helm repos) need no registry credential at all and are not
+# probed: the secret this step writes is a ghcr.io credential, so the question
+# is only ever about ghcr.io.
+#
+# A PROBE IS TWO CALLS, and both must answer. An anonymous token alone proves
+# nothing — a public repository with a missing tag issues a token and 404s the
+# manifest — so the token is followed by a manifest HEAD carrying it. Either
+# half refusing marks the artifact private.
+: "${KIT_SUBSTRATE_REGISTRY_PROBE_TIMEOUT:=10}"
+
+# THE PROBE'S ANSWER, and it is state rather than a return code: step 5's two
+# branches and the readiness report all read it.
+#   REGISTRY_PRIVATE_ARTIFACTS — one `repo:ref` per line, every artifact the
+#     anonymous probe refused. Empty means every artifact is public.
+#   REGISTRY_PATH — which half of step 5 ran: "anonymous" or "capability".
+#     Empty until step 5 runs, so the readiness report can tell "not installed"
+#     from "installed without a credential".
+REGISTRY_PRIVATE_ARTIFACTS=""
+REGISTRY_PATH=""
+
+# registry_derived_artifacts — every GHCR artifact the Applications name, one
+# `repo ref` per line: the chart Argo pulls, then the image that chart runs.
+# A VALUE PRODUCER: every call site reads it inside $(...) — see the stdout
+# check in tests/substrate_test.sh, whose VALUE_PRODUCERS list names it.
+registry_derived_artifacts() {
+  local f repo rev name
+  for f in "$MANIFEST_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    repo="$(sed -n 's/^[[:space:]]*repoURL:[[:space:]]*oci:\/\/ghcr.io\///p' "$f" | head -1)"
+    [ -n "$repo" ] || continue
+    rev="$(sed -n 's/^[[:space:]]*targetRevision:[[:space:]]*//p' "$f" | head -1)"
+    [ -n "$rev" ] || continue
+    printf '%s %s\n' "$repo" "$rev"
+    case "$repo" in
+      cafaye/charts/*)
+        name="${repo#cafaye/charts/}"
+        printf 'cafaye/%s %s\n' "$name" "$rev"
+        ;;
+    esac
+  done
+}
+
+# registry_probe_artifact <repo> <ref> — is this one artifact anonymously
+# fetchable? Exit 0 when both halves answer, 1 otherwise. Prints NOTHING: the
+# token never reaches stdout, an emitter, or (beyond curl's own header)
+# anywhere a test would have to redact. Both calls are bounded by
+# KIT_SUBSTRATE_REGISTRY_PROBE_TIMEOUT, so a box with no network to GHCR fails
+# here in seconds — and the preflight has already refused an unreachable
+# ghcr.io before step 5 runs, so this bound is the second layer rather than
+# the only one.
+registry_probe_artifact() {
+  local repo="$1" ref="$2" tok probe_token code
+  tok="$(curl -s --max-time "$KIT_SUBSTRATE_REGISTRY_PROBE_TIMEOUT" --connect-timeout 5 \
+    "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" 2>/dev/null)" || return 1
+  probe_token="$(printf '%s' "$tok" | jq -r '.token // empty' 2>/dev/null)" || return 1
+  [ -n "$probe_token" ] || return 1
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time "$KIT_SUBSTRATE_REGISTRY_PROBE_TIMEOUT" --connect-timeout 5 \
+    -H "Authorization: Bearer ${probe_token}" \
+    -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+    -I "https://ghcr.io/v2/${repo}/manifests/${ref}" 2>/dev/null)" || return 1
+  case "$code" in
+    2*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# registry_probe_artifacts — ask GHCR about every derived artifact, print what
+# was measured, and leave the answer in the state above. Runs once per install,
+# not per retry: step 5 calls it once and both branches read the answer.
+registry_probe_artifacts() {
+  local repo="" ref="" probed=0 private=""
+  while read -r repo ref; do
+    [ -n "$repo" ] && [ -n "$ref" ] || continue
+    probed=$((probed + 1))
+    if registry_probe_artifact "$repo" "$ref"; then
+      kit_substrate_out "      public: ${repo}:${ref} (anonymous fetch)"
+    else
+      kit_substrate_out "      private: ${repo}:${ref} (anonymous fetch refused)"
+      private="${private}${repo}:${ref}
+"
+    fi
+  done <<EOF
+$(registry_derived_artifacts)
+EOF
+  REGISTRY_PRIVATE_ARTIFACTS="$private"
+  if [ "$probed" -eq 0 ]; then
+    kit_substrate_refuse "" "restore ${MANIFEST_DIR}'s manifests — step 5 derives its artifact list from them" "the registry probe listed no artifacts — refusing rather than installing on an unmeasured claim"
+  fi
+}
+
 registry_capability_shape_ok() {
   [[ "${1:-}" =~ ^cap_[0-9a-f]{64}$ ]]
 }
@@ -2062,15 +2184,28 @@ registry_capability_shape_ok() {
 # line rather than with `-f`, because a refusal we cannot see is a refusal we
 # cannot name the fix for.
 exchange_registry_credential() {
+  # WHAT NEEDS THE CREDENTIAL, when the probe said something does. Step 5
+  # probes before it exchanges, so by the time this runs
+  # REGISTRY_PRIVATE_ARTIFACTS names every artifact the anonymous fetch
+  # refused. The two refusals below keep their words; this line is APPENDED so
+  # a refusal on an install pulling private artifacts names WHICH ONES — that
+  # is the operator's next question, and an unset capability refusing before
+  # looking at a single artifact is the defect this packet ends. Empty when the
+  # probe found nothing private or never ran (the suite calls this function
+  # directly), so those refusals read exactly as they always have.
+  local need_line=""
+  if [ -n "$REGISTRY_PRIVATE_ARTIFACTS" ]; then
+    need_line=" — this install pulls private artifact(s) needing a credential: $(printf '%s' "$REGISTRY_PRIVATE_ARTIFACTS" | tr '\n' ' ' | sed 's/ *$//')"
+  fi
   if [ -z "$KIT_SUBSTRATE_BOX_ID" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_BOX_ID" "export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>' and re-run — the box's own identity, and what the registry capability is bound to" "KIT_SUBSTRATE_BOX_ID is not set
   export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
-  # the box's own identity, and what the registry capability is bound to"
+  # the box's own identity, and what the registry capability is bound to${need_line}"
   fi
   if ! registry_capability_shape_ok "$KIT_SUBSTRATE_REGISTRY_CAPABILITY"; then
     kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
-  # a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted"
+  # a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted${need_line}"
   fi
   local raw http_status body encoded expires seconds
   # `curl -sS -w` appends the status on its own line after the body, so both
@@ -2231,13 +2366,43 @@ apply_pull_secret() {
 }
 
 install_pull_secret() {
-  log_step "the GHCR image pull secret, exchanged for box ${KIT_SUBSTRATE_BOX_ID:-<unset>}"
-  if dry_run "exchange the registry capability at ${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials, ensure each of ${REGISTRY_PULL_NAMESPACES[*]} exists, and apply ${REGISTRY_PULL_SECRET_NAME} in it"; then
+  local private_count=0
+  log_step "the GHCR image pull secret (anonymous where every artifact is public, exchanged where one is not)"
+  if dry_run "probe every GHCR chart and image the Applications name for anonymous fetch; where all answer, write an empty-auths pull secret, else exchange the registry capability at ${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials; ensure each of ${REGISTRY_PULL_NAMESPACES[*]} exists, and apply ${REGISTRY_PULL_SECRET_NAME} in it"; then
     return 0
   fi
-  exchange_registry_credential
-  apply_pull_secret
-  kit_substrate_out "      pull secret applied in ${#REGISTRY_PULL_NAMESPACES[@]} namespaces (short-lived by design — a re-run exchanges a fresh capability for a fresh credential)"
+  # THE QUESTION THAT MATTERS. Every chart and image below is measured, once,
+  # and the answer picks the half: all public means no credential is needed and
+  # none is demanded; one private means today's path runs unchanged.
+  registry_probe_artifacts
+  if [ -z "$REGISTRY_PRIVATE_ARTIFACTS" ]; then
+    # THE ANONYMOUS PATH. No box id, no capability, no exchange — a fetch that
+    # needs none of them asks for none of them.
+    REGISTRY_PATH="anonymous"
+    # EMPTY AUTHS, NOT NO SECRET — and the shape is the whole reason. Three
+    # charts (box, keyholder, pantry) name `imagePullSecrets:
+    # ghcr-pull-secret`, so the Secret must EXIST wherever a pod references it:
+    # a missing Secret is a kubelet-level failure whose voice varies by
+    # version, while a Secret carrying `{"auths":{}}` is inert everywhere —
+    # GHCR falls back to anonymous for these artifacts (measured: a
+    # stale/wrong secret does not break a public pull), and the object keeps
+    # the same name, type and namespaces on both halves, so Argo and the
+    # kubelet see one contract. Written through the same pipe as the exchanged
+    # credential, then cleared the same way.
+    REGISTRY_DOCKERCONFIGJSON="$(printf '{"auths":{}}' | base64 | tr -d '\n')"
+    apply_pull_secret
+    kit_substrate_out "      every artifact is public; no registry credential was needed"
+  else
+    # THE CAPABILITY PATH, UNCHANGED. A customer pulling their own PRIVATE
+    # image is the case this machinery exists for: the same refusals (now
+    # naming which artifacts need the credential), the same exchange call, the
+    # same secret shape.
+    REGISTRY_PATH="capability"
+    private_count="$(printf '%s' "$REGISTRY_PRIVATE_ARTIFACTS" | grep -c .)"
+    exchange_registry_credential
+    apply_pull_secret
+    kit_substrate_out "      ${private_count} artifact(s) are private; the capability exchange was used"
+  fi
 }
 
 # --- reading a manifest DIRECTORY deliberately -------------------------------
