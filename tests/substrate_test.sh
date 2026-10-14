@@ -5108,6 +5108,8 @@ VALUE_PRODUCERS = {
     "database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for",
     "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
     "kit_substrate_url_host", "kit_substrate_intended_hosts",
+    "kit_substrate_intended_host_table", "kit_substrate_host_source",
+    "kit_substrate_ingress_host", "kit_substrate_ingress_hosts",
     "kit_substrate_readiness_pending_count", "kit_substrate_readiness_summary",
     "kit_substrate_readiness_json", "kit_substrate_log_store",
 }
@@ -9554,6 +9556,438 @@ case "$(cat "$fixture_master")" in
     fi
     ;;
 esac
+
+# ===========================================================================
+# 27 (continued). The intended-hosts derivation reads INGRESS hosts — every
+#     served name, from where names are actually declared
+# ===========================================================================
+#
+# THE DEFECT, MEASURED ON THE BOX. The readiness event named 2 pending hosts
+# (app.cafaye.com, auth.cafaye.com) on a box whose `kubectl get ingress -A`
+# held THREE — gateway's api.cafaye.com among them — and gateway's
+# Certificate had sat READY=False for 98 minutes. The installer reported a
+# box with FEWER conditions than it had. WHY: an Ingress host is a BARE
+# hostname (`spec.rules.host`, or a chart's `host` value) and the URL grep
+# the derivation used cannot match one by construction — the pattern
+# requires a scheme. app.cafaye.com survived only because
+# KIT_SUBSTRATE_APP_BASE_URL happens to name the same host as parlor's
+# Ingress; the coincidence hid the gap for one of three.
+#
+# The fix parses the `host:` key where hosts are declared — in the manifests
+# and in the charts' values — as key lines over comment-stripped text. Four
+# greens and one count unit against the real install.sh (sourced, `main`
+# stripped — §27's idiom), the over-reporting control, and two reds: the
+# master-shaped derivation (URLs only) and a loose-grep mutant that reads a
+# host no manifest serves. `*.invalid` never resolves (RFC 2606); localhost,
+# 127.0.0.1 and in-cluster names never enter the list. No network, no flake.
+
+# 1. Green, real tree: an Ingress host is intended — BOTH shapes. A `host:`
+# key in an Application's chart values (where a chart's ingress host lives)
+# and a `- host:` in an Ingress manifest (spec.rules) are listed, alongside
+# the two URL sources they must not replace.
+check_ingress_hosts_listed() {
+  local script="$1" adir="$WORK/ingress-apps"
+  mkdir -p "$adir"
+  cat >"$adir/gw.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gw
+spec:
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/gateway
+    chart: gateway
+    helm:
+      values: |
+        ingress:
+          host: values-host.example.com
+        env:
+          PUBLIC_URL: "https://url-host.example.com"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gateway
+YAML
+  cat >"$adir/ingress.yaml" <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gw
+spec:
+  rules:
+    - host: ingress-host.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gw
+                port:
+                  number: 80
+YAML
+  local src="$WORK/ingress-sourced.sh"
+  sed '/^main "\$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'the sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(KIT_SUBSTRATE_APP_BASE_URL='https://operator-app.example.com' \
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://operator-auth.example.com' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$adir" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the extractor failed\n%s' "$out"; return 1; }
+  case "$out" in
+    *'values-host.example.com'*) ;;
+    *) printf 'a host in the chart values is not listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'ingress-host.example.com'*) ;;
+    *) printf 'an Ingress spec.rules host is not listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'url-host.example.com'*) ;;
+    *) printf 'the https URL source was displaced\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'operator-app.example.com'*) ;;
+    *) printf 'the APP_BASE_URL host is not listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'operator-auth.example.com'*) ;;
+    *) printf 'the OIDC issuer host is not listed\n%s' "$out"; return 1 ;;
+  esac
+  # The real-tree half: every `host:` key the SHIPPED manifests declare is in
+  # the derivation. The shipped Applications carry none today, so this half
+  # is the ratchet for the day one appears — the fixture above is the
+  # load-bearing proof, and a vacuous half is named as the vacuous half it is.
+  local shipped shippedout h
+  shipped="$(grep -hE '^[[:space:]]*(-[[:space:]]+)?host:[[:space:]]+' "$MANIFESTS"/*.yaml 2>/dev/null \
+    | sed -E -e 's/^[[:space:]]*(-[[:space:]]+)?host:[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\1/" \
+    | awk 'NF' || true)"
+  if [ -n "$shipped" ]; then
+    shippedout="$(KIT_SUBSTRATE_APP_BASE_URL='' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+      bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$MANIFESTS" 2>&1)" || shippedout=""
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      case "$shippedout" in
+        *"$h"*) ;;
+        *) printf 'the shipped manifests declare %s and the derivation does not list it\n' "$h"; return 1 ;;
+      esac
+    done <<EOF
+$shipped
+EOF
+  fi
+  printf 'intended hosts include the chart-values host, the Ingress host and the URL sources\n'
+}
+
+# 2. Green, real tree: a host named by BOTH an Ingress and a URL is reported
+# ONCE. The assertion is a COUNT, not a containment test, because a count is
+# the only shape that tells one line from two.
+check_ingress_host_dedup() {
+  local script="$1" adir="$WORK/dual-apps"
+  mkdir -p "$adir"
+  cat >"$adir/dual.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dual
+spec:
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/dual
+    chart: dual
+    helm:
+      values: |
+        ingress:
+          host: dual.example.com
+        env:
+          PUBLIC_URL: "https://dual.example.com"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dual
+YAML
+  local src="$WORK/dual-sourced.sh"
+  sed '/^main "\$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'the sourced copy does not parse\n'; return 1; }
+  local out t sn ec=0
+  out="$(KIT_SUBSTRATE_APP_BASE_URL='https://dual.example.com' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$adir" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the extractor failed\n%s' "$out"; return 1; }
+  local n
+  n="$(printf '%s' "$out" | grep -c '^dual\.example\.com$')"
+  [ "$n" -eq 1 ] || { printf 'dual.example.com is reported %s time(s), not once\n%s' "$n" "$out"; return 1; }
+  t="$(KIT_SUBSTRATE_APP_BASE_URL='https://dual.example.com' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_host_table "$1"' "$src" "$adir" 2>&1)" || t=""
+  sn="$(printf '%s' "$t" | awk -F '\t' -v h='dual.example.com' '$1 == h { n++ } END { print n + 0 }')"
+  [ "$sn" -eq 1 ] || { printf 'the table carries %s row(s) for dual.example.com\n%s' "$sn" "$t"; return 1; }
+  printf 'a host named by an Ingress and a URL is reported once\n'
+}
+
+# 3. Green, real tree: in-cluster names, localhost and 127.0.0.1 stay out of
+# the list now that a bare host can reach it. The fixture carries one
+# checkable host too, because an extractor listing nothing would otherwise
+# pass this check without proving it.
+check_ingress_host_exclusions() {
+  local script="$1" adir="$WORK/exclude-apps"
+  mkdir -p "$adir"
+  cat >"$adir/svc.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: svc
+spec:
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/svc
+    chart: svc
+    helm:
+      values: |
+        ingress:
+          host: localhost
+        internal:
+          host: identity.identity.svc.cluster.local
+          port: 8080
+        loopback:
+          host: 127.0.0.1
+        bare:
+          host: redis-master
+        public:
+          host: real.example.com
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: svc
+YAML
+  local src="$WORK/exclude-sourced.sh"
+  sed '/^main "\$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'the sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(KIT_SUBSTRATE_APP_BASE_URL='' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$adir" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the extractor failed\n%s' "$out"; return 1; }
+  case "$out" in
+    *'real.example.com'*) ;;
+    *) printf 'the checkable host is not listed — every assertion below is vacuous\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *localhost*) printf 'localhost is listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *svc.cluster.local*) printf 'an in-cluster name is listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *127.0.0.1*) printf '127.0.0.1 is listed\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *redis-master*) printf 'a single-label name is listed\n%s' "$out"; return 1 ;;
+  esac
+  printf 'localhost, in-cluster, loopback and single-label host values stay out\n'
+}
+
+# 4. Green, real tree: a host NAMED BY NO MANIFEST is not added. The fixture's
+# chart values carry the host in a comment — the shape a chart default
+# deliberately not set takes (auth.cafaye.com in gateway's values is exactly
+# this) — and the derivation must not probe it: a check reporting a condition
+# that does not exist is the check an operator learns to ignore. The fixture
+# also carries a live host, because an extractor listing nothing would
+# satisfy this check without proving it.
+check_no_manifestless_host() {
+  local script="$1" adir="$WORK/ghost-apps"
+  mkdir -p "$adir"
+  cat >"$adir/ghost.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ghost
+spec:
+  source:
+    repoURL: oci://ghcr.io/cafaye/charts/ghost
+    chart: ghost
+    helm:
+      values: |
+        # host: ghost.example.com
+        ingress:
+          host: live.example.com
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ghost
+YAML
+  # The fixture's own premise: the commented host is really there to be caught.
+  grep -q '# host: ghost.example.com' "$adir/ghost.yaml" \
+    || { printf 'the fixture lost its commented host — the red below would prove nothing\n'; return 1; }
+  local src="$WORK/ghost-sourced.sh"
+  sed '/^main "\$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'the sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(KIT_SUBSTRATE_APP_BASE_URL='' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' "$src" "$adir" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the extractor failed\n%s' "$out"; return 1; }
+  case "$out" in
+    *ghost.example.com*) printf 'a host named only in a comment is resolved — a condition that does not exist\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *live.example.com*) ;;
+    *) printf 'the fixture live host is not listed — silence satisfies nothing\n%s' "$out"; return 1 ;;
+  esac
+  printf 'a host no manifest serves is not added; the live one is\n'
+}
+
+# 5. Green, real tree: the readiness COUNT equals the pending list — one per
+# unresolving host, plus the OIDC half. The number on the live box becomes 3
+# because the LIST becomes 3; this is the unit that proves the number
+# follows the list rather than being computed beside it.
+check_readiness_count() {
+  local script="$1" src="$WORK/count-sourced.sh"
+  sed '/^main "\$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'the sourced copy does not parse\n'; return 1; }
+  local out ec=0
+  out="$(bash -c '. "$0"
+    KIT_SUBSTRATE_APP_BASE_URL="https://one.example.invalid"
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://localhost:8443"
+    kit_substrate_compute_readiness
+    printf "round1 pending=[%s] count=[%s]\n" "$(printf "%s" "$READINESS_TLS_PENDING" | grep -c .)" "$(kit_substrate_readiness_pending_count)"
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    kit_substrate_compute_readiness
+    printf "round2 pending=[%s] count=[%s]\n" "$(printf "%s" "$READINESS_TLS_PENDING" | grep -c .)" "$(kit_substrate_readiness_pending_count)"
+    READINESS_TLS_PENDING="a.example.invalid
+b.example.invalid"
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
+    printf "round3 pending=[%s] count=[%s]\n" "$(printf "%s" "$READINESS_TLS_PENDING" | grep -c .)" "$(kit_substrate_readiness_pending_count)"
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="https://localhost:8443"
+    printf "round4 pending=[%s] count=[%s]\n" "$(printf "%s" "$READINESS_TLS_PENDING" | grep -c .)" "$(kit_substrate_readiness_pending_count)"
+  ' "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'the count unit failed\n%s' "$out"; return 1; }
+  case "$out" in
+    *'round1 pending=[1] count=[1]'*) ;;
+    *) printf 'one pending host is not count 1\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'round2 pending=[1] count=[2]'*) ;;
+    *) printf 'the unset issuer does not add its one condition\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'round3 pending=[2] count=[3]'*) ;;
+    *) printf 'two pending hosts plus the OIDC half is not count 3\n%s' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'round4 pending=[2] count=[2]'*) ;;
+    *) printf 'the count does not follow the list\n%s' "$out"; return 1 ;;
+  esac
+  printf 'the readiness count equals the pending list, plus the OIDC half\n'
+}
+
+run 'an Ingress host is intended — the chart-values host, spec.rules, and the URL sources beside them' green \
+  check_ingress_hosts_listed "$SUBSTRATE/install.sh"
+run 'a host named by an Ingress and a URL is reported once' green \
+  check_ingress_host_dedup "$SUBSTRATE/install.sh"
+run 'localhost, in-cluster, 127.0.0.1 and single-label host values stay out' green \
+  check_ingress_host_exclusions "$SUBSTRATE/install.sh"
+run 'a host named only in a comment is not added' green \
+  check_no_manifestless_host "$SUBSTRATE/install.sh"
+run 'the readiness count equals the pending list, plus the OIDC half' green \
+  check_readiness_count "$SUBSTRATE/install.sh"
+
+# The RED controls, each asserting its own premise before the red runs —
+# a red from a broken fixture is not a red.
+#
+# R1: the master-shaped derivation — the real install.sh with the
+# Ingress-host parse and its call site deleted — i.e. the URL-only derivation
+# this packet replaced. Its derivation must list the URL hosts and NOT the
+# Ingress hosts, and DRY_RUN must still exit 0, so a red below is the missing
+# hosts and not a broken file.
+fixture_master_hosts_dir="$WORK/master-shape-hosts"
+fixture_master_hosts="$fixture_master_hosts_dir/install-master-hosts.sh"
+mkdir -p "$fixture_master_hosts_dir"
+cp -R "$SUBSTRATE/manifests" "$fixture_master_hosts_dir/manifests"
+sed -e '/# --- ingress-host-parse BEGIN/,/# --- ingress-host-parse END/d' \
+    -e '/# --- ingress-host-source BEGIN/,/# --- ingress-host-source END/d' \
+    "$SUBSTRATE/install.sh" >"$fixture_master_hosts"
+if ! bash -n "$fixture_master_hosts"; then
+  fail 'control fixture: the master shape does not parse' \
+    'the sed broke the file — a red below would be a syntax error wearing the finding clothes'
+elif ! honest_dry_run "$fixture_master_hosts" >/dev/null 2>&1; then
+  fail 'control fixture: DRY_RUN over the master shape fails' \
+    'the sed broke the run — a red below would be a broken fixture, not a URL-only derivation'
+else
+  mkdir -p "$WORK/master-hosts-apps"
+  cat >"$WORK/master-hosts-apps/ingress.yaml" <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+spec:
+  rules:
+    - host: premise-host.example.com
+YAML
+  sed '/^main "\$@"/d' "$fixture_master_hosts" >"$WORK/master-hosts-sourced.sh"
+  master_hosts_out="$(KIT_SUBSTRATE_APP_BASE_URL='https://premise-url.example.com' KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' \
+    bash -c '. "$0"; kit_substrate_intended_hosts "$1"' \
+      "$WORK/master-hosts-sourced.sh" "$WORK/master-hosts-apps" 2>&1)" || master_hosts_out=""
+  case "$master_hosts_out" in
+    *'premise-url.example.com'*) ;;
+    *) fail 'control fixture: the master shape lost the URL source' \
+         'the URL-only derivation must still list the operator URL — the reds below would prove nothing'
+       ;;
+  esac
+  case "$master_hosts_out" in
+    *'premise-host.example.com'*)
+      fail 'control fixture: the master shape still reads Ingress hosts' \
+        'the sed did not remove the derivation — the reds below would prove nothing'
+      ;;
+    *) ;;
+  esac
+  run 'control: the URL-only derivation fails the Ingress-host check' red \
+    check_ingress_hosts_listed "$fixture_master_hosts"
+  run 'control: the URL-only derivation fails the exclusions check' red \
+    check_ingress_host_exclusions "$fixture_master_hosts"
+fi
+
+# R2: the loose mutant. One function changed instead of deleted: the `host:`
+# read runs over RAW text with a loose `.*host:` match — no comment strip, no
+# key anchoring, exactly the "grep -h host:" the packet's parsing rule
+# forbids — so a host named only in a comment reaches the probe list. Built
+# by python because the replacement is a function body, not a whole line. Its
+# premise: the mutant still parses, still DRY_RUNs to 0, and its derivation
+# DOES list the commented host — the over-report in action.
+fixture_over_dir="$WORK/over-shape"
+fixture_over="$fixture_over_dir/install-over.sh"
+mkdir -p "$fixture_over_dir"
+cp -R "$SUBSTRATE/manifests" "$fixture_over_dir/manifests"
+"$PY" - "$SUBSTRATE/install.sh" "$fixture_over" <<'PY' || fixture_over=""
+import re
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+text = open(src, encoding="utf-8").read()
+# The mutant swaps the READER for a loose one — raw text, a `.*host:` match,
+# no comment strip and no key anchoring, exactly the "grep -h host:" shape
+# the parsing rule forbids. The normalizer beside it stays the production
+# one: what changes is what is read, not how a value is reduced.
+loose_fn = '''kit_substrate_ingress_hosts() {
+  local dir="$1"
+  grep -h 'host:' "$dir"/*.yaml 2>/dev/null | sed -E -e 's/.*host:[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/^"(.*)"$/\\1/' -e "s/^'(.*)'\\$/\\1/" | grep -v '^$' || true
+}
+'''
+fn = re.compile(r"kit_substrate_ingress_hosts\(\) \{.*?\n\}\n", re.S)
+loose_text, n = fn.subn(lambda _m: loose_fn, text, count=1)
+if n != 1:
+    raise SystemExit(f"the reader matched {n} time(s), not once")
+open(out, "w", encoding="utf-8").write(loose_text)
+PY
+if [ -z "$fixture_over" ] || [ ! -f "$fixture_over" ]; then
+  fail 'control fixture: the loose mutant did not build' \
+    'the python replacement of the fenced block failed — the red below would prove nothing'
+elif ! bash -n "$fixture_over"; then
+  fail 'control fixture: the loose mutant does not parse' \
+    'the replacement broke the file — a red below would be a syntax error'
+elif ! honest_dry_run "$fixture_over" >/dev/null 2>&1; then
+  fail 'control fixture: DRY_RUN over the loose mutant fails' \
+    'the replacement broke the run — a red below would be a broken fixture'
+else
+  over_out="$(sed '/^main "\$@"/d' "$fixture_over" >"$WORK/over-host-sourced.sh"; KIT_SUBSTRATE_APP_BASE_URL='' \
+    KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='' bash -c '. "$0"; kit_substrate_intended_hosts "$1"' \
+      "$WORK/over-host-sourced.sh" "$WORK/ghost-apps" 2>&1)" || over_out=""
+  case "$over_out" in
+    *ghost.example.com*) ;;
+    *) fail 'control fixture: the loose mutant does not over-report' \
+         'the mutant lists no commented host — the red below would prove nothing about the parsing rule'
+       ;;
+  esac
+  run 'control: a loose grep reading a commented host fails the no-invented check' red \
+    check_no_manifestless_host "$fixture_over"
+fi
 
 # ===========================================================================
 # 26. The residual ReplicaSets are converged (step 13)

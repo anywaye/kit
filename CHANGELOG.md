@@ -2,6 +2,36 @@
 
 ### Substrate
 
+- **The readiness preflight reads INGRESS hosts, so the box reports every
+  condition it has.** The live box's readiness event named 2 pending hosts
+  (`app.cafaye.com`, `auth.cafaye.com`) while `kubectl get ingress -A` on the
+  same box held three — gateway's `api.cafaye.com` among them, its Certificate
+  READY=False for 98 minutes. An Ingress host is a bare hostname
+  (`spec.rules.host`, or a chart's `host` value) and the URL grep the
+  derivation used cannot match one by construction — the pattern requires a
+  scheme; `app.cafaye.com` was caught only because
+  `KIT_SUBSTRATE_APP_BASE_URL` happens to name parlor's Ingress. The
+  derivation is now `kit_substrate_intended_host_table` — `host<TAB>source`
+  rows from three sources: the operator's two URLs, public https hosts in the
+  Applications' `helm.values`, and a NEW `host:` key parsed from the
+  manifests and the charts' values (key lines after indentation and an
+  optional list dash, over comment-stripped text). `kit_substrate_intended_hosts`
+  stays the table's first column, so every caller keeps the hosts-only
+  contract; dedup is by host with the first source winning, so a host named
+  two ways is reported once in a stable order. The preflight and the final
+  report name the source of each host, and the count follows the list — 3 on
+  the live box's shape. Stated rather than hidden: an Ingress host that exists
+  only inside a chart's templates is not readable by a box-side derivation;
+  where a chart's values carry the host it is read, and otherwise the fix
+  belongs in the tree — never in a literal here. `kit_substrate_is_checkable_host`
+  now also drops `127.*`, which resolves on the box by construction. Proved by
+  `tests/substrate_test.sh` §27 (continued): five greens (both host shapes,
+  the URL sources beside them, the once-per-dual-named-host count, the
+  in-cluster/localhost/loopback/single-label exclusions, the no-comment
+  over-reporting control, the count unit) and two reds — the master-shaped
+  URL-only derivation and a loose-grep mutant that reads a commented host —
+  each asserting its own premise before it runs. 346 passed, 0 failed.
+
 - **Publish writes the image's DIGEST into the chart it pushes, so a new build
   is a textual diff Argo rolls.** Measured on the live box: the registry's
   `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165` (the merged Redis
