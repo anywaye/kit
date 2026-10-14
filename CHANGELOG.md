@@ -2,6 +2,27 @@
 
 ### Substrate
 
+- **The glob-fixed AppProject never reached a box that already had Argo CD, so
+  every Application stayed `Unknown: repo … is not permitted in project
+  'default'`.** `install.sh` step 4's guard answers *is the operator installed*
+  (a probe of `deployment/argocd-repo-server`) and it wrapped the whole step,
+  including `kubectl apply -f appproject.yaml`. The live Contabo box therefore
+  carried the pre-glob `sourceRepos` —
+  `["https://grafana.github.io/helm-charts", "https://prometheus-community.github.io/helm-charts", "oci://ghcr.io/cafaye/charts"]` —
+  while this repository had already written `oci://ghcr.io/cafaye/charts/*`, and
+  the only way to land the fix was to delete Argo CD. **A guard that covers an
+  operator install and a policy file conflates two lifetimes**, so the AppProject
+  apply moved out of the operator's `if`: the OPERATOR stays guarded (a warm box
+  still re-applies no remote manifest) and the PROJECT is re-applied on every
+  run, below the grouped wait and before step 6's Applications — the same
+  convergence mechanism step 6 itself uses. A second guard on the project's own
+  existence was rejected because it answers "present" on the box holding the
+  *wrong* project. `tests/substrate_test.sh` §26 runs step 4 against a warm box
+  that has Argo CD and the stale project and asserts the result permits every
+  Application's `repoURL` under §21's glob-aware algorithm, with the pre-fix
+  installer as the red control, plus a DRY_RUN plan half that fires with every
+  guard forced present.
+
 - **The AppProject permitted the registry ROOT while every Application named
   its own chart's PATH, so the controller refused all eight Applications.**
   A sibling packet moved each Application's OCI `source.repoURL` from

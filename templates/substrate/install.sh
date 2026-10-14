@@ -1137,7 +1137,9 @@ install_argocd() {
   log_step "Argo CD core ${ARGOCD_VERSION}"
   # The guard no longer RETURNS on a hit: step 4 also drains the grouped waits
   # for the operators steps 2 and 3 applied, so a present Argo CD skips only its
-  # own apply and the appproject below — not the waits for its neighbours.
+  # own apply — not the waits for its neighbours, and not the AppProject below,
+  # which is deliberately outside the guard (see the decision at the bottom of
+  # this step).
   local argocd_present=0
   if kit_substrate_guard argocd; then
     kit_substrate_out "      already installed, skipping"
@@ -1146,15 +1148,18 @@ install_argocd() {
   # The third and largest remote manifest, and the second of the two CRDs that
   # overflowed the annotation ceiling on the box. Same flags, same reason; a
   # mode chosen per step is how a substrate ends up half-applied.
+  #
+  # The plan line is core-install ONLY. It used to end "and apply
+  # …/appproject.yaml", which described an apply that the guard below could
+  # suppress — a promise the plan made and the run did not keep.
   if [ "$argocd_present" -eq 0 ]; then
-    if dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml and apply ${ARGOCD_MANIFEST_DIR}/appproject.yaml (the default AppProject the Applications name)"; then
-      return 0
+    if ! dry_run "kubectl apply -n argocd --server-side=true --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml (the Argo CD core manifest)"; then
+      kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
+        kubectl --kubeconfig="$KUBECONFIG" apply -f -
+      kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
+        "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
+      kit_substrate_pending argocd
     fi
-    kubectl --kubeconfig="$KUBECONFIG" create namespace argocd --dry-run=client -o yaml |
-      kubectl --kubeconfig="$KUBECONFIG" apply -f -
-    kubectl --kubeconfig="$KUBECONFIG" apply -n argocd --server-side=true --force-conflicts -f \
-      "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/core-install.yaml"
-    kit_substrate_pending argocd
   fi
 
   # THE GROUPED WAIT — THE MEASURED SPEED DECISION, AND WHY IT IS SAFE. The
@@ -1195,41 +1200,74 @@ install_argocd() {
     STEP_SKIPPED=0
   fi
 
-  if [ "$argocd_present" -eq 0 ]; then
-    # The AppProject core-install does not ship. Eight Applications name
-    # `spec.project: default`, so without an AppProject named `default` the
-    # controller reports `Application referencing project default which does not
-    # exist` and creates nothing — step 12 then times out waiting for a
-    # Deployment Argo never made. The hand-fix was a maximal project
-    # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); this one
-    # is least-privilege — sourceRepos the two upstream Helm repos plus a
-    # chart-path GLOB (oci://ghcr.io/cafaye/charts/*, Argo is glob-aware and
-    # matches with `/` as the separator, so it permits one chart-name segment
-    # and not `*`), destinations exactly the five namespaces they deploy
-    # into on https://kubernetes.default.svc, and no cluster-scoped whitelist
-    # (the charts create only namespaced resources). That is the tightest set
-    # that still syncs, and the reason is written here rather than only in the
-    # manifest, so a reader who widens it knows what they are widening.
-    #
-    # WHY STEP 4 AND NOT STEP 6. The project must exist BEFORE the Applications
-    # that name it — Argo's application-controller reconciles an Application
-    # only when its project exists, so applying the project in the same
-    # `kubectl apply -f <dir>` as the Applications relies on apply ordering and
-    # on the controller re-queuing the Unknown Application after the project
-    # appears. Applying it here, right after Argo CD is Available and before
-    # any Application is applied at step 6, makes the ordering explicit in the
-    # install's own steps rather than in kubectl's file sort or the
-    # controller's retry. It is also idempotent: a re-run finds the Argo CD
-    # Deployments and skips the whole step, including this apply — a project
-    # that must be present is not re-applied on every run, but it is present
-    # because the first run put it there.
-    #
-    # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
-    # by name, so the file is deliberate; the directory is checked so a stray
-    # file beside it is surfaced rather than skipped (see install_applications).
-    kit_substrate_check_manifest_dir "$ARGOCD_MANIFEST_DIR"
-    kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"
+  # THE APPPROJECT, AND WHY IT IS NOT UNDER THE GUARD ABOVE.
+  #
+  # MEASURED, ON A WARM BOX. The live Contabo box carried the pre-glob project:
+  #   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
+  #   ["https://grafana.github.io/helm-charts",
+  #    "https://prometheus-community.github.io/helm-charts",
+  #    "oci://ghcr.io/cafaye/charts"]
+  # while this repository had already written
+  #   oci://ghcr.io/cafaye/charts/*
+  # for the per-chart OCI paths the Applications name. The apply that would
+  # have fixed it sat inside `if [ "$argocd_present" -eq 0 ]`, and the guard at
+  # the top of this step answered PRESENT — `kubectl get deployment -n argocd
+  # argocd-repo-server` succeeds on any box that ever got past step 4 — so the
+  # step printed "already installed, skipping" and the fixed file was never
+  # applied. Every Application read
+  #   Unknown: repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+  #   project 'default'
+  # on a box where nothing else was wrong, and the only way to land the fix was
+  # to delete Argo CD and re-run. A packet that passes on the next clean box
+  # and cannot reach a warm one is not a fix.
+  #
+  # THE DECISION: A GUARD THAT COVERS AN OPERATOR INSTALL AND A PROJECT FILE
+  # CONFLATES TWO LIFETIMES, and this one did. `kit_substrate_guard argocd`
+  # answers "is the OPERATOR installed" — a question about four Deployments this
+  # repository did not write and has no reason to rewrite. The AppProject is the
+  # other kind of thing: a file THIS repository owns, shipped in
+  # manifests/argocd/, edited whenever the Applications' chart paths move, and
+  # least-privilege by deliberate decision. The operator's stability was
+  # suppressing the policy file's currency, which is why the second spelling of
+  # the fix was rejected rather than chosen: a guard keyed on the AppProject's
+  # own EXISTENCE answers "present" on the exact box holding the WRONG project
+  # — green on the measured defect — and a guard keyed on the file's bytes is a
+  # diff against something already applied. A 112-line project file is too
+  # small to guard; what it needs is to be re-applied.
+  #
+  # AND RE-APPLYING IS ALREADY THIS INSTALLER'S OWN CONVERGENCE MECHANISM. Step
+  # 6 carries no guard either: it applies the eight Applications on every run,
+  # because `kubectl apply` of an unchanged object is one no-op API round trip
+  # and the convergence is worth more than the round trip. The AppProject is
+  # smaller than any one of those and the argument holds with more force. So
+  # the apply moves out of the operator's `if`, below the wait, and the
+  # OPERATOR stays guarded: a warm box now re-applies one small local file and
+  # still skips the three remote manifests — which is what "already installed,
+  # skipping" should have meant all along.
+  #
+  # WHY HERE AND NOT AT STEP 6, and why it survived the move. The AppProject CRD
+  # ships inside core-install.yaml, so on a cold box this apply needs the apply
+  # above to have returned and the grouped wait to have held before it can be
+  # parsed. On a warm box PENDING_WAITS is empty, the wait drains at once, and
+  # the CRD is there because the guard found the operator. And it must stay
+  # BEFORE step 6: Argo's application-controller reconciles an Application
+  # only when its project exists, so applying the project in the same
+  # `kubectl apply` as the Applications relies on apply ordering and on the
+  # controller re-queuing an Unknown Application after the project appears.
+  #
+  # LOCAL manifest, CLIENT-SIDE apply (the note above step 2 holds). Applied
+  # by name, so the file is deliberate; the directory is checked so a stray
+  # file beside it is surfaced rather than skipped (see install_applications).
+  if dry_run "kubectl apply -f ${ARGOCD_MANIFEST_DIR}/appproject.yaml (the default AppProject the Applications name)"; then
+    return 0
   fi
+  kit_substrate_check_manifest_dir "$ARGOCD_MANIFEST_DIR"
+  kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"
+  # This is WORK, so the step is timed rather than reported as a skip. A warm
+  # box finds the operator present — the step's headline — and still spends an
+  # API round trip here claiming the project; reporting `skipped` over it is the
+  # same misleading number the timing ledger refuses for a step that ran.
+  STEP_SKIPPED=0
 }
 
 # --- step 5: the image pull secret ------------------------------------------

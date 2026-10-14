@@ -36,6 +36,17 @@ this file only describes what is here and what is proven.
    cert-manager's rollout and Argo CD's behind CNPG's, and the three steps would
    add up; grouped, the controllers roll out concurrently. A component already
    present at its guard is not waited on again, so a warm re-run still skips.
+   **The `default` AppProject is applied AFTER the wait and is NOT behind the
+   guard.** `manifests/argocd/appproject.yaml` is a file this repo owns and edits
+   whenever the Applications' chart paths move; the guard above answers a
+   different question — *is the operator installed* — and covering both behind
+   one answer was how a box that already had Argo CD kept the pre-glob project
+   and refused every Application with `repo … is not permitted in project
+   'default'`. A guard on the project's own existence would be worse: it answers
+   "present" on the box holding the *wrong* project. So the operator stays
+   guarded and the project is re-applied on every run — one local `kubectl
+   apply`, which is a no-op round trip when it is unchanged, and the same
+   convergence mechanism step 6 uses for the eight Applications.
 5. **The GHCR image pull secret** — **redeemed, not supplied.** The box presents
    its own capability (`KIT_SUBSTRATE_REGISTRY_CAPABILITY`, single-use,
    minutes-lived, bound to `KIT_SUBSTRATE_BOX_ID`) and receives ONE short-lived

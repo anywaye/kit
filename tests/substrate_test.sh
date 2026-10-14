@@ -7917,6 +7917,411 @@ else
 fi
 
 # ===========================================================================
+# 26. A WARM BOX RE-APPLIES THE APPPROJECT — the guard's boundary, executed
+# ===========================================================================
+#
+# THE DEFECT, MEASURED ON A LIVE BOX. §21 and §25 both PROVE the AppProject is
+# correct — the name matches, the sourceRepos permit every Application's
+# repoURL, and the three operator applies are grouped with their waits. None of
+# them asks the only question the warm box asked: DOES THE FILE EVER LAND?
+#
+# `install_argocd`'s guard answers "is the OPERATOR installed" — a probe of
+# deployment/argocd-repo-server — and it wrapped the WHOLE step, including
+# `kubectl apply -f appproject.yaml`. So a box that ever got past step 4 skipped
+# the project apply forever. The live Contabo box was exactly that box, and it
+# still carried the PRE-GLOB list while master had already written the glob:
+#
+#   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
+#   ["https://grafana.github.io/helm-charts",
+#    "https://prometheus-community.github.io/helm-charts",
+#    "oci://ghcr.io/cafaye/charts"]                    <- the ROOT, on the box
+#   oci://ghcr.io/cafaye/charts/*                      <- in appproject.yaml
+#
+# and every Application read `Unknown: repo oci://ghcr.io/cafaye/charts/gateway
+# is not permitted in project 'default'`. The only way to land the fix was to
+# delete Argo CD. A packet that passes on the next clean box and cannot reach a
+# warm one is not a fix, and the industrial-scale verification ("challenge the
+# verifier") fails on it.
+#
+# WHY THIS IS EXECUTED AND NOT STATIC. §25 reads step 4's SHAPE with comments
+# stripped and would be perfectly happy with the apply sitting inside
+# `if [ "$argocd_present" -eq 0 ]` — nothing in that check reads which side of
+# the guard a line is on. So the property is proven by RUNNING the step against
+# a box that has Argo CD and an out-of-date project, which is the state no other
+# section in this file models.
+#
+# TWO LIFETIMES, AND THE ASSERTION HOLDS BOTH HALVES:
+#   * the OPERATOR stays guarded — the warm box re-applies no remote manifest;
+#   * the PROJECT is always current — the apply happens on every run, so what
+#     the controller reads is what this repository wrote.
+# A guard covering both is what conflated them; the assertion that only the
+# second moved is what proves the fix is not "unguard everything".
+WARM_DIR="$WORK/appproject-warm"
+mkdir -p "$WARM_DIR"
+
+# THE WRITE PATH, AS A FILE AND NOT A HEREDOC. `declare -f warm_kubectl` re-emits
+# a function's body RE-INDENTED, which moves a heredoc terminator off column 0
+# and swallows the rest of the generated script — so nothing inside
+# `warm_kubectl` may carry one. This is that file, written once here and invoked
+# by path. It is also the box's own semantics: `kubectl apply -f` writes an
+# OBJECT, validated before it is stored.
+WARM_PLANTER="$WARM_DIR/plant_appproject.py"
+cat >"$WARM_PLANTER" <<'PY'
+import shutil
+import sys
+
+import yaml
+
+
+src, dst = sys.argv[1:3]
+try:
+    doc = yaml.safe_load(open(src, encoding="utf-8"))
+except OSError as exc:
+    print(f"warm_kubectl: {src}: {exc}", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(doc, dict) or doc.get("kind") != "AppProject":
+    print(f"warm_kubectl: {src} is not an AppProject", file=sys.stderr)
+    sys.exit(1)
+if not (doc.get("spec") or {}).get("sourceRepos"):
+    print(f"warm_kubectl: {src} carries no sourceRepos", file=sys.stderr)
+    sys.exit(1)
+# The object becomes what the applied file describes, whole: a partial read
+# here would let a red control pass on a project that kept its old entries.
+shutil.copyfile(src, dst)
+PY
+
+# THE BOX'S APPPROJECT OBJECT. One file, because that is what the API server
+# holds: `kubectl apply -f` writes an OBJECT, and every read below is a read of
+# that object rather than of the file that was sent. The distinction is the
+# whole defect — the file was right and the object was stale.
+DEPLOYED_PROJECT="$WARM_DIR/deployed-appproject.yaml"
+
+# warm_seed — put the box in the state the live one was measured in: Argo CD
+# installed (the guard's probe will say so) and the PRE-GLOB AppProject
+# deployed. Re-run before every case, so a case cannot inherit the previous
+# case's write.
+warm_seed() {
+  cat >"$DEPLOYED_PROJECT" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: argocd
+spec:
+  description: "the pre-glob project the live box still carries"
+  sourceRepos:
+    - https://grafana.github.io/helm-charts
+    - https://prometheus-community.github.io/helm-charts
+    - oci://ghcr.io/cafaye/charts
+YAML
+  rm -f "$WARM_DIR/argv"
+}
+
+# mock_get_appproject — the controller's own read:
+#   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
+# one sourceRepos entry per line, in the order the API server returns them.
+# Read from the OBJECT, so a test that ignores the apply sees the stale list.
+mock_get_appproject() {
+  "$PY" - "$DEPLOYED_PROJECT" <<'PY'
+import sys
+
+import yaml
+
+
+doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+for repo in (doc.get("spec") or {}).get("sourceRepos") or []:
+    print(repo)
+PY
+}
+
+# warm_kubectl — the warm box, modelled. Exactly the calls step 4 makes against
+# a box whose operators are already installed, and nothing else: the guard's
+# probe, and the project apply. Anything beyond those is recorded and refused
+# loudly, because a warm box has no other work for this step to do — the
+# `--server-side` core-install apply is precisely what the guard must suppress.
+warm_kubectl() {
+  printf '%s\n' "$*" >>"$WARM_DIR/argv"
+  case "$*" in
+    *"get deployment -n argocd argocd-repo-server"*) return 0 ;;
+  esac
+  # Install.sh always prefixes `--kubeconfig=`, so the VERB is not `$1`. Strip
+  # the global flags before reading it — the same thing the real binary's arg
+  # parser does, and the reason the harness's own mock_kubectl strips them
+  # first too.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kubeconfig=*) shift ;;
+      *) break ;;
+    esac
+  done
+  local verb="${1:-}" f_target=""
+  shift || true
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f) f_target="$2"; shift 2 ;;
+      -f=*) f_target="${1#-f=}"; shift ;;
+      *) shift ;;
+    esac
+  done
+  case "$verb" in
+    apply)
+      [ -n "$f_target" ] || { printf 'warm_kubectl: apply with no -f\n' >&2; return 1; }
+      # THE WRITE. The box's project becomes what the applied file describes.
+      # Validated rather than copied, so a fixture that applies a non-AppProject
+      # or an object with no sourceRepos is a red case and not a silent write.
+      "$PY" "$WARM_PLANTER" "$f_target" "$DEPLOYED_PROJECT"
+      ;;
+    wait) return 0 ;;
+    create) return 0 ;;
+    *)
+      # A warm box must not re-install the operator: the remote manifest, a
+      # namespace create, a rollout kick. Recorded by the caller's argv
+      # assertion above, and refused here so a control cannot pass on a mock
+      # that answered everything with success.
+      printf 'warm_kubectl: unhandled %s\n' "$*" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# warm_run <fixture> — run step 4 for real against the warm box. A child bash,
+# for the reason §19's apps_step records: a guarded subshell would march past a
+# failing step and exit 0 — the opposite of the box, where the same failure
+# aborts the install. `ARGOCD_MANIFEST_DIR` is set AFTER the source because the
+# installer derives it from `SCRIPT_DIR` at source time and the fixture lives in
+# $WORK; without it the apply would target a path that does not exist and the
+# step would refuse for a reason that has nothing to do with this packet.
+warm_run() {
+  warm_seed
+  local script="$WARM_DIR/run.sh"
+  {
+    printf 'set -euo pipefail\n'
+    printf 'WARM_DIR=%q\n' "$WARM_DIR"
+    printf 'FIXTURE=%q\n' "$1"
+    printf 'MANIFEST_ARGOCD=%q\n' "$SUBSTRATE/manifests/argocd"
+    printf 'PY=%q\n' "$PY"
+    printf 'WARM_PLANTER=%q\n' "$WARM_PLANTER"
+    printf 'DEPLOYED_PROJECT=%q\n' "$DEPLOYED_PROJECT"
+    declare -f warm_kubectl
+    printf '%s\n' \
+      'export DRY_RUN=0 HEADLESS=1 KIT_SUBSTRATE_RECEIPT="$WARM_DIR/receipt.json"' \
+      '# shellcheck source=/dev/null' \
+      '. "$FIXTURE"' \
+      'ARGOCD_MANIFEST_DIR="$MANIFEST_ARGOCD"' \
+      'kubectl() { warm_kubectl "$@"; }' \
+      'install_argocd'
+  } >"$script"
+  bash "$script" >"$WARM_DIR/run.log" 2>&1
+}
+
+warm_fixture="$WORK/install-warm.sh"
+sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$warm_fixture"
+
+# THE PREMISE, ASSERTED BEFORE IT IS USED. The seeded box must hold the pre-glob
+# list, and that list must NOT permit the Applications — otherwise the green
+# case below is satisfied by a box that was never broken, which is the
+# "a green control two different states could satisfy proves neither" rule.
+warm_seed
+old_repos="$(mock_get_appproject | tr '\n' ' ')"
+old_repos="${old_repos% }"
+# The LIST ITEM, not a substring of the file: a grep over the whole YAML would
+# match the description line, which spells the bare root out in prose.
+warm_is_prefix_list=0
+while IFS= read -r warm_repo; do
+  [ -n "$warm_repo" ] || continue
+  if [ "$warm_repo" = "oci://ghcr.io/cafaye/charts" ]; then
+    warm_is_prefix_list=1
+  fi
+  case "$warm_repo" in
+    "oci://ghcr.io/cafaye/charts/*") warm_has_glob=1 ;;
+    *) warm_has_glob="${warm_has_glob:-0}" ;;
+  esac
+done < <(mock_get_appproject)
+if [ "$warm_is_prefix_list" -eq 1 ] && [ "${warm_has_glob:-0}" -eq 0 ]; then
+  pass 'warm-box fixture: the seeded project is the pre-glob list the live box carries'
+else
+  fail 'warm-box fixture: the seeded project is the pre-glob list the live box carries' \
+    "seeded sourceRepos: ${old_repos}"
+fi
+warm_old_permits_ec=0
+check_appproject_permits "$MANIFESTS" "$DEPLOYED_PROJECT" >/dev/null 2>&1 || warm_old_permits_ec=$?
+if [ "$warm_old_permits_ec" -ne 0 ]; then
+  pass 'warm-box fixture: the pre-glob project does NOT permit the Applications (the box really is broken)'
+else
+  fail 'warm-box fixture: the pre-glob project does NOT permit the Applications (the box really is broken)' \
+    'the seeded list already permits every repoURL, so the green case below would prove nothing'
+fi
+
+# THE CASE. Step 4 runs on a warm box. It must succeed...
+warm_ec=0
+warm_run "$warm_fixture" || warm_ec=$?
+if [ "$warm_ec" -ne 0 ]; then
+  fail 'a warm box re-applies the AppProject' "$(cat "$WARM_DIR/run.log")"
+else
+  pass 'a warm box re-applies the AppProject (step 4 exits 0)'
+fi
+
+# ...and the apply must have HAPPENED. Argv, because "the project was applied"
+# is a command and not a return code — the mock answers success for everything.
+if grep -q 'apply -f .*appproject\.yaml' "$WARM_DIR/argv"; then
+  pass 'a warm box re-applies the AppProject (the apply is in argv)'
+else
+  fail 'a warm box re-applies the AppProject (the apply is in argv)' \
+    "step 4 ran: $(tr '\n' ' | ' <"$WARM_DIR/argv")"
+fi
+
+# AND THE OPERATOR STAYS GUARDED. This is the half that stops the fix from
+# being "unguard everything": the remote core-install manifest, the namespace
+# create and any rollout kick must not appear. A warm box has nothing for those
+# to do, and one of them running is the defect §25 exists for.
+case "$(cat "$WARM_DIR/argv")" in
+  *core-install.yaml*)
+    fail 'a warm box re-applies ONLY the AppProject — the operator stays guarded' \
+      'step 4 re-applied the remote core-install manifest on a box that already has Argo CD'
+    ;;
+  *)
+    pass 'a warm box re-applies ONLY the AppProject — the operator stays guarded'
+    ;;
+esac
+
+# AND THE RESULT THE CONTROLLER READS. Not the file — the object. The mock
+# applies what it was given, so `$DEPLOYED_PROJECT` is now what the box holds,
+# and it must permit every Application's repoURL under the SAME glob-aware
+# algorithm §21 uses (the glob fix's own semantics, not a second spelling).
+new_repos="$(mock_get_appproject | tr '\n' ' ')"
+new_repos="${new_repos% }"
+if [ "$new_repos" != "$old_repos" ]; then
+  pass 'a warm box leaves the pre-glob list behind (the object changes)'
+else
+  fail 'a warm box leaves the pre-glob list behind (the object changes)' \
+    "the box still reads: ${new_repos}"
+fi
+run 'the re-applied AppProject permits every Application on a warm box' green \
+  check_appproject_permits "$MANIFESTS" "$DEPLOYED_PROJECT"
+
+# THE RED CONTROL, AND IT IS THE PACKET'S OWN DEFECT. Rebuild the pre-fix
+# installer — the AppProject apply moved back inside `if [ "$argocd_present" -eq
+# 0 ]`, the whole step behind the operator's guard — and run the IDENTICAL warm
+# box. The box must stay broken: the old list, and the refuse. This is the state
+# the live Contabo box was measured in, and it is what makes the green case
+# above a proof rather than a restatement.
+warm_prefix="$WORK/install-warm-prefix.py"
+cat >"$warm_prefix" <<'PY'
+import sys
+
+
+src, dst = sys.argv[1:3]
+lines = open(src, encoding="utf-8").readlines()
+out = []
+guarded = False
+closed = False
+for line in lines:
+    if line.startswith('  if dry_run "kubectl apply -f ${ARGOCD_MANIFEST_DIR}/appproject.yaml'):
+        # The pre-fix shape: the project's apply sits inside the operator's
+        # guard, so a box whose Argo CD is present suppresses it.
+        out.append('  if [ "$argocd_present" -eq 0 ]; then\n')
+        out.append(line)
+        guarded = True
+        continue
+    if line == '  kubectl --kubeconfig="$KUBECONFIG" apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"\n':
+        out.append(line)
+        out.append('  fi\n')
+        closed = True
+        continue
+    out.append(line)
+if not guarded:
+    print("no appproject apply line to guard — the fixture was not built", file=sys.stderr)
+    sys.exit(1)
+if not closed:
+    print("the guarded apply was never closed — the fixture was not built", file=sys.stderr)
+    sys.exit(1)
+open(dst, "w", encoding="utf-8").writelines(out)
+PY
+fixture_warm_prefix="$WORK/install-warm-prefix.sh"
+if "$PY" "$warm_prefix" "$warm_fixture" "$fixture_warm_prefix" &&
+  bash -n "$fixture_warm_prefix" >/dev/null 2>&1; then
+  # The fixture's PREMISE, asserted before it is run: the apply really is inside
+  # the operator's guard again. A transform that matched nothing would otherwise
+  # run the FIXED installer as the control and go green — the failure mode
+  # §26's own comment names at the top.
+  argo_body="$(sed -n '/^install_argocd()/,/^}/p' "$fixture_warm_prefix")"
+  case "$argo_body" in
+    *'if [ "$argocd_present" -eq 0 ]; then'*)
+      case "$argo_body" in
+        *'apply -f "$ARGOCD_MANIFEST_DIR/appproject.yaml"'*)
+          pass 'control fixture: the pre-fix installer guards the AppProject apply behind the operator'
+          ;;
+        *)
+          fail 'control fixture: the pre-fix installer guards the AppProject apply behind the operator' \
+            'the rebuilt step 4 has no AppProject apply at all, so the control would prove nothing'
+          ;;
+      esac
+      ;;
+    *)
+      fail 'control fixture: the pre-fix installer guards the AppProject apply behind the operator' \
+        'the rebuilt step 4 does not guard the AppProject apply, so the control would prove nothing'
+      ;;
+  esac
+else
+  fail 'control fixture: the pre-fix installer guards the AppProject apply behind the operator' \
+    'the python transform refused to build the fixture, or the result does not parse'
+fi
+
+warm_prefix_ec=0
+warm_run "$fixture_warm_prefix" || warm_prefix_ec=$?
+prefix_repos="$(mock_get_appproject | tr '\n' ' ')"
+prefix_repos="${prefix_repos% }"
+prefix_argv="$(tr '\n' ' | ' <"$WARM_DIR/argv")"
+if [ "$warm_prefix_ec" -eq 0 ] && [ "$prefix_repos" = "$old_repos" ]; then
+  case "$prefix_argv" in
+    *"apply -f "*appproject.yaml*) ;;
+    *)
+      pass 'control: the pre-fix guard leaves the warm box carrying the stale project'
+      ;;
+  esac
+else
+  fail 'control: the pre-fix guard leaves the warm box carrying the stale project' \
+    "exit ${warm_prefix_ec}; project now: ${prefix_repos}; argv: ${prefix_argv}"
+fi
+run 'control: the pre-fix guard is red on the warm box — every Application refused' red \
+  check_appproject_permits "$MANIFESTS" "$DEPLOYED_PROJECT"
+
+# THE PLAN HALF, GREEN AND RED WITHOUT A MOCK AT ALL. Force every guard to
+# answer "present" — the state a warm box is in — and require the DRY_RUN plan
+# to STILL name the AppProject apply. This is the property a static check cannot
+# read: §25 compares step bodies against each other and would be perfectly happy
+# with the apply behind `if [ "$argocd_present" -eq 0 ]`, because nothing in it
+# reads which side of a guard a line sits on. The plan is the one output that
+# records it, and it needs no kubectl.
+warm_plan_dir="$WORK/warm-plan"
+mkdir -p "$warm_plan_dir"
+ln -s "$SUBSTRATE/manifests" "$warm_plan_dir/manifests"
+sed 's/^kit_substrate_guard() {$/kit_substrate_guard() { STEP_SKIPPED=1; return 0;/' \
+  "$SUBSTRATE/install.sh" >"$warm_plan_dir/install.sh"
+plan_out="$WORK/warm-plan.out"
+KIT_SUBSTRATE_RECEIPT="$WORK/warm-plan-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS" \
+  HEADLESS=1 DRY_RUN=1 bash "$warm_plan_dir/install.sh" >"$plan_out" 2>&1 || true
+if grep -q 'appproject.yaml' "$plan_out"; then
+  pass 'a warm box plans the AppProject apply even with every guard present'
+else
+  fail 'a warm box plans the AppProject apply even with every guard present' \
+    "the DRY_RUN plan never names appproject.yaml"
+fi
+# The red half: the pre-fix installer, same forced guards, must NOT plan it.
+sed 's/^kit_substrate_guard() {$/kit_substrate_guard() { STEP_SKIPPED=1; return 0;/' \
+  "$fixture_warm_prefix" >"$warm_plan_dir/install-prefix.sh"
+plan_prefix_out="$WORK/warm-plan-prefix.out"
+KIT_SUBSTRATE_RECEIPT="$WORK/warm-plan-prefix-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS" \
+  HEADLESS=1 DRY_RUN=1 bash "$warm_plan_dir/install-prefix.sh" >"$plan_prefix_out" 2>&1 || true
+if grep -q 'appproject.yaml' "$plan_prefix_out"; then
+  fail 'control: the pre-fix installer does NOT plan the AppProject apply on a warm box' \
+    'the plan still names appproject.yaml, so the forced-present guards did not suppress it'
+else
+  pass 'control: the pre-fix installer does NOT plan the AppProject apply on a warm box'
+fi
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"
