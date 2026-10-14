@@ -1032,13 +1032,16 @@ kit_substrate_url_host() {
 }
 
 # kit_substrate_is_checkable_host <host> — is this a name public DNS must
-# resolve? In-cluster names (anything under .svc, .local, bare localhost or a
-# single label) are answered by the cluster or the box itself, so resolving
-# them here would prove nothing about ACME.
+# resolve? In-cluster names (anything under .svc, .local, bare localhost, the
+# whole 127. loopback block or a single label) are answered by the cluster or
+# the box itself, so resolving them here would prove nothing about ACME — and
+# a name nothing points anywhere is a condition that does not exist. The
+# loopback rule arrived with the Ingress-host derivation: a chart's `host:`
+# value may carry 127.0.0.1, and it resolves on the box by construction.
 kit_substrate_is_checkable_host() {
   case "$1" in
     "") return 1 ;;
-    localhost | *.svc.cluster.local | *.svc | *.local) return 1 ;;
+    localhost | *.svc.cluster.local | *.svc | *.local | 127.*) return 1 ;;
   esac
   case "$1" in
     *.*) return 0 ;;
@@ -1066,44 +1069,169 @@ kit_substrate_host_resolves() {
   return $?
 }
 
+# --- ingress-host-parse BEGIN
+# kit_substrate_ingress_hosts <dir> — every value of a `host:` KEY in <dir>'s
+# manifests, one per line, in file order. This is the field the readiness
+# derivation was blind to.
+#
+# THE EVIDENCE, FROM THE COLD BOX. The box's readiness event named TWO pending
+# hosts — `"tls_pending_hosts":["app.cafaye.com","auth.cafaye.com"]` — while
+# `kubectl get ingress -A` on the same box held THREE Ingresses, gateway's
+# `api.cafaye.com` among them, and gateway's Certificate had sat READY=False
+# for 98 minutes. The number said the box had FEWER conditions than it had,
+# which is the direction that matters.
+#
+# WHY IT WAS MISSED. An Ingress host is a BARE HOSTNAME — `spec.rules.host`,
+# or a chart's `host` value — and the URL pattern the derivation used cannot
+# match one by construction: the pattern requires a scheme. app.cafaye.com
+# survived only because KIT_SUBSTRATE_APP_BASE_URL happens to name the same
+# host as parlor's Ingress; the coincidence hid the gap for one of three.
+#
+# PARSED, NOT GREPPED LOOSELY. The key must OPEN the line — after indentation
+# and an optional YAML list dash, so `spec.rules`'s `- host:` and a values
+# block's `host:` are both read while `hostPath:`, `HOST:` and a URL that
+# merely contains one are not — and the value is the rest of the line with
+# surrounding quotes dropped. The read runs on COMMENT-STRIPPED text: a
+# `# host:` in prose (a chart default the box deliberately does not set) names
+# nothing and is served by no manifest, and a host no manifest serves must
+# never reach the probe list — a check reporting conditions that do not exist
+# is the check an operator learns to ignore.
+kit_substrate_ingress_hosts() {
+  local dir="$1"
+  sed 's/#.*//' "$dir"/*.yaml 2>/dev/null \
+    | sed -E -n 's/^[[:space:]]*(-[[:space:]]+)?host:[[:space:]]+//p' \
+    | sed -E -e 's/[[:space:]]+$//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\1/" \
+    | grep -v '^$' 2>/dev/null || true
+}
+
+# kit_substrate_ingress_host <value> — the DNS name inside one `host:` value.
+# A URL-shaped value (some charts carry a scheme, a port or a path in the same
+# key) is reduced by kit_substrate_url_host; a bare host is returned with any
+# `:port` suffix dropped, because `host: svc:8080` is a chart value and
+# `svc:8080` is not a name DNS can answer. Prints empty for nothing.
+kit_substrate_ingress_host() {
+  local v="$1"
+  case "$v" in
+    http://* | https://*)
+      kit_substrate_url_host "$v"
+      return
+      ;;
+  esac
+  v="${v%%/*}"
+  case "$v" in
+    *:[0-9]*) v="${v%:*}" ;;
+  esac
+  printf '%s' "$v"
+}
+# --- ingress-host-parse END
+
 # kit_substrate_intended_hosts [manifest_dir] — every public hostname the
-# install is about to serve, one per line, deduplicated. Two sources, both
-# read rather than listed: the operator's two URLs (APP_BASE_URL becomes
-# identity's link templates, OIDC_ISSUER becomes identity's issuer — both
-# written by this installer), and any public https host in the Applications'
-# helm.values. Comments are stripped before the scan so a URL mentioned in
-# prose (e.g. a chart default deliberately NOT set) is not reported as
-# intended. In-cluster names are dropped by kit_substrate_is_checkable_host.
+# install is about to serve, one per line, deduplicated, in a stable order.
+# The first column of kit_substrate_intended_host_table, which is where the
+# derivation and the three sources live; this entry point is unchanged.
 kit_substrate_intended_hosts() {
-  local dir="${1:-$MANIFEST_DIR}" hosts="" url h found
-  for url in "$KIT_SUBSTRATE_APP_BASE_URL" "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER"; do
-    [ -n "$url" ] || continue
-    h="$(kit_substrate_url_host "$url")"
+  local table
+  table="$(kit_substrate_intended_host_table "${1:-$MANIFEST_DIR}")"
+  printf '%s' "$table" | cut -f1
+}
+
+# kit_substrate_intended_host_table [manifest_dir] — "host<TAB>source" for
+# every public hostname the install is about to serve, and the ONE derivation:
+# kit_substrate_intended_hosts is its first column, the report names its
+# second. THREE sources, all read rather than listed:
+#
+#   1. the operator's two URLs — KIT_SUBSTRATE_APP_BASE_URL (identity's link
+#      templates) and KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER (identity's issuer),
+#      both written by this installer;
+#   2. any public https URL in the Applications' helm.values — comments are
+#      stripped before the scan so a URL mentioned in prose (a chart default
+#      deliberately NOT set) is not reported as intended;
+#   3. an INGRESS HOST — a `host:` key in the manifests and in the charts'
+#      values (kit_substrate_ingress_hosts), the field the URL pattern cannot
+#      match by construction. See its comment for the live box that named 2
+#      conditions where 3 existed.
+#
+# A host reachable from two sources is reported ONCE — the first source wins,
+# and the source reported is the one the reader sees — so two runs of one box
+# report the same list in the same order.
+#
+# In-cluster names, localhost and 127.* are dropped by
+# kit_substrate_is_checkable_host: they answer on the box by construction, so
+# probing them reports conditions that do not exist.
+#
+# THE ARGO FETCH COORDINATES (repoURL, destination.server) ARE NOT SERVED
+# NAMES — repoURL is where Argo pulls the chart from and destination.server is
+# the API server Argo talks to, so neither gets a Certificate and neither is
+# resolved here.
+#
+# THE ONE SOURCE THIS CANNOT READ, stated rather than hidden: an Ingress host
+# that exists ONLY inside a chart's templates. The gateway chart renders
+# api.cafaye.com, and no manifest, no values override and no operator input on
+# this tree names it — a box-side derivation reads the tree the box runs, not
+# the chart's compiled sources. Where a chart's values DO carry the host (an
+# Application's helm.values override) source 3 reads it. Where the host is
+# template-only, the derivation takes the sources that do exist and the fix
+# belongs in the tree — name the host in the Application's values — never in
+# a list here.
+kit_substrate_intended_host_table() {
+  local dir="${1:-$MANIFEST_DIR}" rows="" url h found v tab
+  tab="$(printf '\t')"
+  if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
+    h="$(kit_substrate_url_host "$KIT_SUBSTRATE_APP_BASE_URL")"
     if kit_substrate_is_checkable_host "$h"; then
-      hosts="${hosts}${h}
+      rows="${rows}${h}${tab}KIT_SUBSTRATE_APP_BASE_URL
 "
     fi
-  done
+  fi
+  if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    h="$(kit_substrate_url_host "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER")"
+    if kit_substrate_is_checkable_host "$h"; then
+      rows="${rows}${h}${tab}KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER
+"
+    fi
+  fi
   if [ -d "$dir" ]; then
-    # The Application's FETCH coordinates are not served names: repoURL is
-    # where Argo pulls the chart from and destination.server is the API
-    # server Argo talks to, so neither gets a Certificate and neither is
-    # resolved here. What is left after dropping those two keys (and the
-    # comments) is the helm.values the installer applies — the served
-    # surface, which today is in-cluster http only.
+    # Source 2 — the served surface: a public https host in the Applications'
+    # helm.values. Comments are stripped and the fetch coordinates are
+    # dropped by key, so neither prose nor Argo's own URLs are listed.
     found="$(sed 's/#.*//' "$dir"/*.yaml 2>/dev/null | grep -vE 'repoURL:|destination:|server: https://' | grep -oE 'https?://[^"'"'"' <>]+' 2>/dev/null || true)"
     while IFS= read -r url; do
       [ -n "$url" ] || continue
       h="$(kit_substrate_url_host "$url")"
       if kit_substrate_is_checkable_host "$h"; then
-        hosts="${hosts}${h}
+        rows="${rows}${h}${tab}an https URL in the Applications' helm.values
 "
       fi
     done <<EOF
 $found
 EOF
+# --- ingress-host-source BEGIN
+    # Source 3 — an Ingress host: a `host:` key in the manifests and in the
+    # charts' values. Parsed as key lines over comment-stripped text, then
+    # normalised and gated exactly like a URL host.
+    while IFS= read -r v; do
+      [ -n "$v" ] || continue
+      h="$(kit_substrate_ingress_host "$v")"
+      if kit_substrate_is_checkable_host "$h"; then
+        rows="${rows}${h}${tab}an ingress host in the manifests
+"
+      fi
+    done <<EOF
+$(kit_substrate_ingress_hosts "$dir")
+EOF
+# --- ingress-host-source END
   fi
-  printf '%s' "$hosts" | awk 'NF && !seen[$0]++'
+  printf '%s' "$rows" | awk 'NF && !seen[$1]++'
+}
+
+# kit_substrate_host_source <host> — where the derivation got <host>, the
+# table's second column. The reports name it beside each host so a condition
+# traces to the input or the file that carries it. Empty for a host the
+# derivation does not name, which nothing calls it for.
+kit_substrate_host_source() {
+  local table
+  table="$(kit_substrate_intended_host_table)"
+  printf '%s' "$table" | awk -F '\t' -v h="$1" '$1 == h { print $2; exit }'
 }
 
 # kit_substrate_compute_readiness — resolve every intended host now and store
@@ -1148,20 +1276,34 @@ EOF
 # with the one export that turns it on. A report, not a refusal.
 kit_substrate_readiness_preflight() {
   kit_substrate_compute_readiness
-  local h all
-  all="$(kit_substrate_intended_hosts)"
+  local h src tab table
+  tab="$(printf '\t')"
+  table="$(kit_substrate_intended_host_table)"
   kit_substrate_out "  readiness preflight: resolving the intended public hosts on this box"
-  if [ -z "$all" ]; then
+  if [ -z "$table" ]; then
     kit_substrate_out "    no checkable public host to resolve (unset or local/in-cluster URLs need no public DNS)"
-  elif [ -z "$READINESS_TLS_PENDING" ]; then
-    kit_substrate_out "    every intended host resolves"
   else
-    while IFS= read -r h; do
+    # Every intended host, and where the derivation got it. A host the box
+    # about to serve is a name nobody is watching until this line names it,
+    # and the source is what makes the number checkable.
+    kit_substrate_out "    intended hosts, and the source each one came from:"
+    while IFS="$tab" read -r h src; do
       [ -n "$h" ] || continue
-      kit_substrate_out "    ${h}: DOES NOT RESOLVE — the ACME HTTP-01 self check will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+      kit_substrate_out "      ${h} — from ${src}"
     done <<EOF
+$table
+EOF
+    if [ -z "$READINESS_TLS_PENDING" ]; then
+      kit_substrate_out "    every intended host resolves"
+    else
+      while IFS= read -r h; do
+        [ -n "$h" ] || continue
+        src="$(kit_substrate_host_source "$h")"
+        kit_substrate_out "    ${h}: DOES NOT RESOLVE (${src}) — the ACME HTTP-01 self check will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+      done <<EOF
 $READINESS_TLS_PENDING
 EOF
+    fi
   fi
   if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "  OIDC: KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is unset — identity serves no JWKS route, so gateway's /readyz fails and its Deployment never becomes Ready"
@@ -1198,12 +1340,13 @@ kit_substrate_log_store() {
 # header is unconditional so a run with nothing pending still names the
 # verdict rather than going quiet (quiet is the defect this ends).
 kit_substrate_readiness_final() {
-  local h
+  local h src
   kit_substrate_out "  THIS BOX WILL NOT FULLY SERVE UNTIL:"
   if [ -n "$READINESS_TLS_PENDING" ]; then
     while IFS= read -r h; do
       [ -n "$h" ] || continue
-      kit_substrate_out "    - ${h} resolves (point ${h} at this box) — until then the ACME HTTP-01 self check fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
+      src="$(kit_substrate_host_source "$h")"
+      kit_substrate_out "    - ${h} resolves (point ${h} at this box; from ${src}) — until then the ACME HTTP-01 self check fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
     done <<EOF
 $READINESS_TLS_PENDING
 EOF

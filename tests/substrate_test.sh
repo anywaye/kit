@@ -5108,6 +5108,8 @@ VALUE_PRODUCERS = {
     "database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for",
     "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
     "kit_substrate_url_host", "kit_substrate_intended_hosts",
+    "kit_substrate_intended_host_table", "kit_substrate_host_source",
+    "kit_substrate_ingress_host", "kit_substrate_ingress_hosts",
     "kit_substrate_readiness_pending_count", "kit_substrate_readiness_summary",
     "kit_substrate_readiness_json", "kit_substrate_log_store",
 }
