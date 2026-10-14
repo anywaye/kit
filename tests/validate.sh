@@ -1995,29 +1995,43 @@ json.loads("".join(out))
   fi
 
   # -------------------------------------------------------------------------
-  section 'static: no Go generate line pins a module version'
-  # A Go service's `//go:generate` must not name a module version (`@v…`),
-  # because a gate that fetches a module on demand is a gate that cannot run
-  # where the module cache is cold. The fleet-wide check lives in two places:
+  section 'static: no Go generate line pins a module version without a declared shape'
+  # A Go `//go:generate` that names `@v` resolves in a throwaway module context,
+  # and a gate that fetches it on demand cannot run where the cache is cold. Two
+  # legitimate shapes exist and the guard must tell them apart:
+  #
+  #   1. DECLARED (applications): tools.go with `//go:build tools` declares the
+  #      tool, `go mod tidy` records its graph, `go mod download` fills the cache,
+  #      and the `//go:generate` line runs as `go run <module>` with no `@v`.
+  #   2. WARMED OUT OF BAND (libraries): the service is a library and a `require`
+  #      would pollute every consumer's graph (identity/client). The `//go:generate`
+  #      line keeps `@v`, and the gate warms the cache out of band: it reads the
+  #      module@version from the generate line (never retyped), creates a throwaway
+  #      module that requires it, runs `go mod download all`, and discards the temp
+  #      dir. GOMODCACHE is shared so `go run @v` hits the cache offline.
+  #
+  # The fleet-wide check lives in two places:
   #   - ci.reusable.yml's Go job (`no generate version pin` step) — the CI
-  #     enforcement every Go service inherits by calling the reusable workflow.
-  #   - templates/bin-prime/go.sh (`no Go generate line pins...` step) — the
-  #     local `bin/prime` enforcement for the same rule.
-  # Both are asserted here; a service that copies an old template or a
-  # workflow that loses the step is a fleet regression that must go red.
-  # The grep itself is also proven red/green on fixtures, so the pattern is
-  # not vacuous.
+  #     enforcement every Go service inherits.
+  #   - templates/bin-prime/go.sh (`no Go generate line pins...` step) — the local
+  #     `bin/prime` enforcement.
+  # Both are asserted here; a service that copies an old template or a workflow
+  # that loses the step is a fleet regression that must go red. The guard itself
+  # is proven on three fixtures: declared (green), warmed out of band (green),
+  # neither (red).
   check 'ci.reusable.yml Go job has no-generate-version guard' bash -c '
     set -euo pipefail
     f="$1/.github/workflows/ci.reusable.yml"
-    # The step name and the grep pattern must both be present in the Go job;
-    # a step that was renamed or a pattern that was softened is a failure.
     if ! grep -q "no generate version pin" "$f"; then
       echo "ci.reusable.yml Go job has no \"no generate version pin\" step" >&2
       exit 1
     fi
     if ! grep -q "go:generate.*@v" "$f"; then
       echo "ci.reusable.yml Go job has no grep for go:generate.*@v" >&2
+      exit 1
+    fi
+    if ! grep -q "GOMODCACHE" "$f"; then
+      echo "ci.reusable.yml Go job has no GOMODCACHE warming marker — it cannot discriminate library shape" >&2
       exit 1
     fi
   ' -- "$ROOT"
@@ -2032,28 +2046,70 @@ json.loads("".join(out))
       echo "templates/bin-prime/go.sh has no grep for go:generate.*@v" >&2
       exit 1
     fi
+    if ! grep -q "GOMODCACHE" "$f"; then
+      echo "templates/bin-prime/go.sh has no GOMODCACHE warming marker — it cannot discriminate library shape" >&2
+      exit 1
+    fi
   ' -- "$ROOT"
-  check 'generate-version guard discriminates (red on @v, green without)' bash -c '
+  check 'generate-version guard discriminates (declared green, warmed green, neither red)' bash -c '
     set -euo pipefail
+
+    # The guard logic under test: a //go:generate @v is allowed ONLY if the gate
+    # warms the cache out of band (GOMODCACHE / go mod download all in bin/prime
+    # or ci.yml). Without that it must fail. Extracted here so the test does not
+    # just grep for the pattern but exercises the discrimination.
+    guard_passes() {
+      local dir="$1"
+      if grep -rq "^//go:generate.*@v" --include="*.go" "$dir" >/dev/null; then
+        if grep -q "GOMODCACHE\|go mod download all" "$dir/bin/prime" 2>/dev/null || grep -q "GOMODCACHE\|go mod download all" "$dir/.github/workflows/ci.yml" 2>/dev/null; then
+          return 0
+        else
+          return 1
+        fi
+      else
+        return 0
+      fi
+    }
+
     tmp="$(mktemp -d)"
     trap '\''rm -rf "$tmp"'\'' EXIT
-    # RED fixture: a Go file that pins a version must be caught.
-    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml\n" > "$tmp/red.go"
-    if ! grep -q "^//go:generate.*@v" "$tmp/red.go"; then
-      echo "fixture red.go not matched by pattern — guard is vacuous" >&2
+
+    # 1. DECLARED shape: tools.go present, no @v — the application shape (gateway). Must pass.
+    mkdir -p "$tmp/declared"
+    printf "//go:build tools\npackage tools\nimport _ \"github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen\"\n" > "$tmp/declared/tools.go"
+    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen --config oapi-codegen.yaml\n" > "$tmp/declared/gen.go"
+    mkdir -p "$tmp/declared/bin"
+    printf "# no warming needed\n" > "$tmp/declared/bin/prime"
+    if ! guard_passes "$tmp/declared"; then
+      echo "generate-version guard failed on declared fixture — false positive (should be green)" >&2
       exit 1
     fi
-    if grep -rn --include="*.go" "^//go:generate.*@v" "$tmp" >/dev/null; then
-      : # red correctly goes red
-    else
-      echo "generate-version guard did not fire on red fixture" >&2
+
+    # 2. WARMED OUT OF BAND shape: @v present plus warming step — the library shape (identity). Must pass.
+    mkdir -p "$tmp/warmed/bin" "$tmp/warmed/.github/workflows"
+    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml\n" > "$tmp/warmed/gen.go"
+    printf "# WARM THE GENERATOR — GOMODCACHE is shared\n# go mod download all\n" > "$tmp/warmed/bin/prime"
+    printf "warming: GOMODCACHE\n" > "$tmp/warmed/.github/workflows/ci.yml"
+    if ! guard_passes "$tmp/warmed"; then
+      echo "generate-version guard failed on warmed fixture — false positive (should be green)" >&2
       exit 1
     fi
-    # GREEN fixture: a Go file without version must pass.
-    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen --config oapi-codegen.yaml\n" > "$tmp/green.go"
-    rm "$tmp/red.go"
-    if grep -rn --include="*.go" "^//go:generate.*@v" "$tmp" >/dev/null; then
-      echo "generate-version guard fired on green fixture — false positive" >&2
+
+    # 3. NEITHER shape: @v present with no warming and no tools.go — must fail (the defect the guard exists for).
+    mkdir -p "$tmp/neither"
+    printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml\n" > "$tmp/neither/gen.go"
+    if guard_passes "$tmp/neither"; then
+      echo "generate-version guard passed on neither fixture — false negative (should be red)" >&2
+      exit 1
+    fi
+
+    # Sanity: plain grep still discriminates @v vs no @v
+    if ! grep -q "^//go:generate.*@v" "$tmp/warmed/gen.go"; then
+      echo "warmed fixture not matched by @v pattern — vacuous" >&2
+      exit 1
+    fi
+    if grep -q "^//go:generate.*@v" "$tmp/declared/gen.go"; then
+      echo "declared fixture incorrectly matched @v pattern" >&2
       exit 1
     fi
   '
