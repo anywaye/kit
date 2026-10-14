@@ -2,6 +2,60 @@
 
 ### Substrate
 
+- **`KIT_SUBSTRATE_KUBECONFIG`: the substrate installs into a cluster that is
+  already there.** One environment variable names a kubeconfig for a cluster that
+  already exists, and the substrate runs against it: no k3s is installed on the
+  machine the script runs on, and steps 1-3 ask the **cluster** whether the
+  component is there rather than asking the host whether `/usr/local/bin/k3s` is
+  — the one host probe in the guard set, and the reason a macOS workstation could
+  not run the substrate at all (it answered "absent" and the step went off to
+  install a Linux host's k3s on a Mac). One input, one derivation
+  (`CLUSTER_SUPPLIED`), one code path: the guards, the other ten steps, the
+  refusals, the per-step timing events, the receipt and the JSONL are the same
+  code. The preflight's split is by what each check is a fact ABOUT — root,
+  Linux, arch and memory are the host's and are refusals only when this script
+  installs k3s on it; curl, jq, openssl and ghcr.io are the run's and hold in
+  both shapes — and a supplied cluster with no Node refuses naming the input
+  rather than provisioning the host. Unset is the product: a fresh Linux box is
+  provisioned exactly as before, every host probe included. Env var, not a flag,
+  on the two precedents already in the file (`KIT_SUBSTRATE_RECEIPT` is
+  path-valued, `DRY_RUN` is a runtime switch), and deliberately not the ambient
+  `KUBECONFIG`. This is the entry a developer's k3d cluster needs and it is the
+  same entry a customer with their own Kubernetes needs — theirs is not a fresh
+  box either. Proved by `tests/substrate_test.sh` §16, with the packet's own red
+  control beside it: with the input unset this workstation still refuses
+  (`must run as root — k3s installs to /usr/local and writes the kubeconfig`),
+  because the host probe is still what decides.
+- **Headless stdout is a CHANNEL, and the way that is true is a file descriptor
+  rather than a policy.** Measured on a local k3d cycle: a headless run's stdout
+  carried 26 lines of `kubectl apply`'s own output between step 3's start and done
+  events, and the first consumer to read the stream — `jq` over the file — died
+  with `parse error: Invalid numeric literal at line 7, column 22`. The events
+  around the garbage were correct, so the install looked healthy; the stream
+  itself was unreadable, and the box's own `caf box apply` reads it. The static
+  check already refuses an `echo` or a `printf` outside the two writers, so the
+  only way to break the channel is a command this file **spawns**, and no audit of
+  its own statements can see those: `main` saves the real stdout on fd 3 in
+  headless mode (`exec 3>&1 1>&2`) and the two event writers target fd 3, so
+  every tool's progress line lands beside the operator's output instead of inside
+  the event stream.
+- **`templates/substrate/local-cycle.sh` — the substrate on a cluster that is
+  already on this machine, in one command.** Reuses (or creates) a k3d cluster,
+  writes that cluster's kubeconfig with `k3d kubeconfig get` to scratch keyed to
+  the worktree — touching neither the ambient `~/.kube/config` nor a second git
+  repository nested in a checkout — runs the same installer `--headless` against
+  it, and prints the per-step table read back out of the same JSONL a box emits,
+  the wall clock, the receipt and `kubectl -n argocd get applications`. Measured:
+  a warm cycle is 2 s, a cold one (cluster created, the three operators applied
+  and waited on) is 274 s of substrate work and 316 s end to end, against the
+  ~10-minute VPS cycle it replaces. k3d lives in that script and nowhere else —
+  the installer needs a kubeconfig, which is what a customer with their own
+  Kubernetes has too. Its cluster probe reads a variable rather than a pipe:
+  `k3d cluster list -o json | grep -q name` under `set -o pipefail` reported an
+  existing cluster as absent on one of five identical probes, because `grep -q`
+  exits on its first match, k3d dies of SIGPIPE mid-document, and pipefail
+  promotes 141 — and the next line was `k3d cluster create`, which FATALs on a
+  name that is taken.
 - **The readiness preflight reads INGRESS hosts, so the box reports every
   condition it has.** The live box's readiness event named 2 pending hosts
   (`app.cafaye.com`, `auth.cafaye.com`) while `kubectl get ingress -A` on the
