@@ -4494,8 +4494,9 @@ mint_loop_ec=0
   mock_seed identity deploy-identity ready yes
   export KIT_SUBSTRATE_IDENTITY_LOCAL_PORT="$mint_port"
   # The CONFIGURED mail path: with the public origin set, identity's pair and its
-  # five link templates land together, so the assertions below are about a
-  # complete block. The UNCONFIGURED path is proven separately in §18c.
+  # four link templates land together (and the legacy default is deleted), so
+  # the assertions below are about a complete block. The UNCONFIGURED path is
+  # proven separately in §18c.
   export KIT_SUBSTRATE_APP_BASE_URL="$APP_BASE_URL"
   # shellcheck source=/dev/null
   . "$fixture_sourced"
@@ -6506,6 +6507,18 @@ mint_step() {
         'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
         'mock_seed identity identity-secrets INVITATION_LINK_TEMPLATE "https://app.cafaye.com/invitations/{token}"'
     fi
+    # MINT_SEED_LEGACY_RECOVERY=1 is the default, not a flag: every set-branch
+    # run plants the pre-fix box state — a RECOVERY_LINK_TEMPLATE an older
+    # installer wrote beside the per-purpose templates — so the rewrite must
+    # delete it in the same patch. A green run that never planted it would
+    # prove nothing about the deletion; the unset-branch runs sweep it as an
+    # orphan the same way (it is in IDENTITY_COURIER_KEYS).
+    # MINT_SEED_COMPLETE=1 already plants its own RECOVERY (the live box's), so
+    # the legacy seed below skips that shape — every other run gets it.
+    if [ "${MINT_SEED_COMPLETE:-}" != "1" ]; then
+      printf '%s\n' \
+        'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://old.example.com/verify-email/confirm?token={token}"'
+    fi
     # The 4th argument is `wrap` to call the mint from inside a FUNCTION, the
     # way `main` calls it. The distinction is the whole defect B control: a
     # `RETURN` trap is global, so it fires at the CALLER's return too, where
@@ -6789,24 +6802,27 @@ fi
 # of that mirror — "all three absent" — is a SUPPORTED deployment with no mail
 # path (`loadCourier`'s `present == 0` branch).
 #
-# THE FIX. The five templates are derived from the ONE public origin
-# (KIT_SUBSTRATE_APP_BASE_URL) and written in the SAME patch as the pair, or no
-# identity courier key is written at all. `check_mint_mail_path` applies
-# identity's own all-or-nothing rule to what landed in identity-secrets, so this
-# is the matrix in executable form rather than a shape check.
+# THE FIX. The four templates are derived from the ONE public origin
+# (KIT_SUBSTRATE_APP_BASE_URL) and written in the SAME patch as the pair —
+# and the legacy RECOVERY_LINK_TEMPLATE an older installer wrote is deleted
+# in that same patch — or no identity courier key is written at all.
+# `check_mint_mail_path` applies identity's own all-or-nothing rule to what
+# landed in identity-secrets, so this is the matrix in executable form rather
+# than a shape check.
 #
 # THE PATHS ARE PARLOR'S SERVED ROUTES, the launch stack's own spellings
 # (`launch/docker-compose.launch.yml`): reset-password, verify-email/confirm
-# (which is also the honest target for an address change, as the launch file
-# argues at length), and invitations/{token}. A template without `{token}` is
-# refused by identity (`resolveLinkTemplates`), so every recovery template
-# carries it.
+# (which is also the substitution for an address change — parlor serves no
+# email-change screen, so the installer documents the shared screen rather
+# than invent one — and the reason the legacy default must go: identity's
+# warning compares VALUES, so a default equal to either purpose re-fires it),
+# and invitations/{token}. A template without `{token}` is refused by
+# identity (`resolveLinkTemplates`), so every recovery template carries it.
 identity_expected_template() {
   case "$1" in
     PASSWORD_RESET_LINK_TEMPLATE)      printf '%s/reset-password?token={token}' "$APP_BASE_URL" ;;
     EMAIL_VERIFICATION_LINK_TEMPLATE)  printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
     EMAIL_CHANGE_LINK_TEMPLATE)        printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
-    RECOVERY_LINK_TEMPLATE)            printf '%s/verify-email/confirm?token={token}' "$APP_BASE_URL" ;;
     INVITATION_LINK_TEMPLATE)          printf '%s/invitations/{token}' "$APP_BASE_URL" ;;
     *) return 1 ;;
   esac
@@ -6840,13 +6856,39 @@ check_mint_mail_path() {
       "${base:-<none>}" "${token:-<none>}"
     return 1
   fi
-  for k in PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+  for k in PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
     want="$(identity_expected_template "$k")"
     got="$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)"
     [ "$got" = "$want" ] || bad="${bad} ${k}=${got:-<missing>};"
   done
   if [ -n "$bad" ]; then
     printf 'a base URL and a token with no (valid) link template — identity would refuse (ErrInvalidCourier):%s\n' "$bad"
+    return 1
+  fi
+  # THE LEGACY DEFAULT IS GONE. mint_step plants a pre-fix RECOVERY_LINK_TEMPLATE
+  # on every run, so reaching here with one still stored means the rewrite did
+  # not delete it — and identity's shared-default warning compares VALUES
+  # (`LinkPurposesUsingTheDefault`: any purpose resolving to the default is
+  # reported, even one with a variable of its own), so a surviving default
+  # equal to either purpose re-fires the live-box warning on a configured box.
+  if [ -n "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" ]; then
+    printf 'RECOVERY_LINK_TEMPLATE survived the rewrite with value %s — identity would warn that %s\n' \
+      "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE")" \
+      "email_change and verify_email resolve to the shared default"
+    return 1
+  fi
+  # TWO PURPOSES, ONE SCREEN — named, not just unequal. EMAIL_CHANGE shares
+  # /verify-email/confirm with EMAIL_VERIFICATION because parlor serves no
+  # email-change screen (both route trees and routeTree.gen.ts agree); the
+  # reset and invitation screens are pairwise distinct from it and each other.
+  # A check that only counted distinct strings would bless any four different
+  # wrong paths, so the screen each purpose lands on is asserted literally.
+  if [ "$(cat "$store/identity/identity-secrets/EMAIL_CHANGE_LINK_TEMPLATE")" != "$(cat "$store/identity/identity-secrets/EMAIL_VERIFICATION_LINK_TEMPLATE")" ]; then
+    printf 'EMAIL_CHANGE_LINK_TEMPLATE is not the documented shared screen /verify-email/confirm — parlor serves no email-change screen of its own\n'
+    return 1
+  fi
+  if [ "$(cat "$store/identity/identity-secrets/PASSWORD_RESET_LINK_TEMPLATE")" = "$(cat "$store/identity/identity-secrets/EMAIL_VERIFICATION_LINK_TEMPLATE")" ]; then
+    printf 'the reset link and the verification link are one string — two purposes sharing one screen they do not both redeem\n'
     return 1
   fi
   # The installer's OWN report must say which mail path the box has, or the
@@ -6856,11 +6898,95 @@ check_mint_mail_path() {
       "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
-  printf 'identity mail path: CONFIGURED — the pair and five templates written together, each on parlor'"'"'s served route'
+  printf 'identity mail path: CONFIGURED — the pair and four templates written together with the legacy default deleted, each on parlor'"'"'s served route'
 }
 
-run 'step 11 writes identity'"'"'s courier pair AND its five link templates when KIT_SUBSTRATE_APP_BASE_URL is set' green \
+run 'step 11 writes identity'"'"'s courier pair AND its four link templates when KIT_SUBSTRATE_APP_BASE_URL is set, deleting the legacy default' green \
   check_mint_mail_path "$mint_fixed"
+
+# THE RED CONTROL is the derivation as it stands on master: the legacy default
+# written beside the per-purpose templates as a third identical string. The
+# fixture is the real tree with the pre-fix shape restored — recovery derived
+# from the same value and patched beside the others — so the control tracks
+# future edits to the derivation. Its premise is asserted first: the fixture
+# really carries three identical strings. If the mail-path check passed
+# against it, the check discriminates nothing, and the box's own warning is
+# the red proof it must reproduce.
+fixture_master_shape="$WORK/install-mint-master-shape.sh"
+cp "$mint_fixed" "$fixture_master_shape"
+"$PY" - "$fixture_master_shape" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+old = '''      --arg reset "$reset" --arg verify "$verify" --arg change "$change" \\
+      --arg invite "$invite" \\'''
+new = '''      --arg reset "$reset" --arg verify "$verify" --arg change "$change" \\
+      --arg recovery "$verify" --arg invite "$invite" \\'''
+assert old in src, "the --arg derivation site moved"
+src = src.replace(old, new)
+old2 = '''        "EMAIL_CHANGE_LINK_TEMPLATE":$change,
+        "INVITATION_LINK_TEMPLATE":$invite'''
+new2 = '''        "EMAIL_CHANGE_LINK_TEMPLATE":$change,
+        "RECOVERY_LINK_TEMPLATE":$recovery,
+        "INVITATION_LINK_TEMPLATE":$invite'''
+assert old2 in src, "the patch body site moved"
+src = src.replace(old2, new2)
+# The master shape never deleted the legacy default: drop the `data`-null the
+# real tree carries, or the fixture's own deletion wipes the re-added default
+# and the control passes for the opposite reason.
+old3 = '''      },"data":{
+        "RECOVERY_LINK_TEMPLATE":null
+      }}')'''
+new3 = '''      }}')'''
+assert old3 in src, "the legacy-deletion site moved"
+src = src.replace(old3, new3)
+open(path, "w", encoding="utf-8").write(src)
+PY
+if ! grep -q '"RECOVERY_LINK_TEMPLATE":\$recovery' "$fixture_master_shape" \
+  || ! grep -q -- '--arg recovery "\$verify"' "$fixture_master_shape" \
+  || grep -q '"RECOVERY_LINK_TEMPLATE":null' "$fixture_master_shape"; then
+  fail 'control fixture: the master derivation writes three identical strings' \
+    "the pre-fix shape did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  msp_out=""; msp_ec=0
+  msp_out="$(check_mint_mail_path "$fixture_master_shape" 2>&1)" || msp_ec=$?
+  if [ "$msp_ec" -eq 0 ]; then
+    fail 'control: the master three-identical-strings derivation goes red, naming the shared default' \
+      "exit 0 — the shipped shape passed the check"
+  elif case "$msp_out" in *RECOVERY_LINK_TEMPLATE*) true ;; *) false ;; esac; then
+    pass 'control: the master three-identical-strings derivation goes red, naming the shared default'
+  else
+    fail 'control: the master three-identical-strings derivation goes red, naming the shared default' "$msp_out"
+  fi
+fi
+
+# THE SECOND RED CONTROL is a fixture whose EMAIL_CHANGE_LINK_TEMPLATE points
+# at a path parlor does not serve. Parlor's route table (src/app and
+# src/routes, with routeTree.gen.ts) serves /reset-password,
+# /verify-email/confirm and /invitations/[token] and nothing for an address
+# change — not /email-change/confirm, which is identity's own compose spelling
+# for a screen the front door never mounted. A derivation the check cannot see
+# inventing that path is not a check. Its premise is asserted first too.
+fixture_unserved_change="$WORK/install-mint-unserved-change.sh"
+sed 's|change="\$verify"|change="${base}/email-change/confirm?token={token}"|' \
+  "$mint_fixed" >"$fixture_unserved_change"
+if ! grep -q 'email-change/confirm' "$fixture_unserved_change"; then
+  fail 'control fixture: EMAIL_CHANGE points at an unserved path' \
+    "the unserved-path substitution did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  ucp_out=""; ucp_ec=0
+  ucp_out="$(check_mint_mail_path "$fixture_unserved_change" 2>&1)" || ucp_ec=$?
+  if [ "$ucp_ec" -eq 0 ]; then
+    fail 'control: EMAIL_CHANGE at an unserved path goes red' \
+      "exit 0 — the check blessed a link that answers 404"
+  elif case "$ucp_out" in *EMAIL_CHANGE_LINK_TEMPLATE*) true ;; *) false ;; esac; then
+    pass 'control: EMAIL_CHANGE at an unserved path goes red'
+  else
+    fail 'control: EMAIL_CHANGE at an unserved path goes red' "$ucp_out"
+  fi
+fi
 
 # THE RED CONTROL is the pre-fix shape this packet exists for: the pair is
 # written and the templates are not, which is a restarted identity that refuses
@@ -7050,12 +7176,22 @@ check_mint_keeps_complete_pair() {
     return 1
   fi
   local store="$ROLLOUT_DIR/store" k
-  for k in COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+  for k in COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
     if [ -z "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
       printf 'the sweep deleted %s from a working mail path — the box went from sending mail to 503s\n' "$k"
       return 1
     fi
   done
+  # The legacy default this box still carries is kept too: the keep path
+  # deletes nothing, and a sweep that dropped it would rewrite the box's links
+  # without the rewriting variable being set. (A box written by the new
+  # installer carries no RECOVERY at all — the required set above is six keys,
+  # and absence there is the proved end-state, not a deletion.)
+  if [ "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" != "https://app.cafaye.com/verify-email/confirm?token={token}" ]; then
+    printf 'the sweep touched the legacy default on a kept mail path — keep means keep: %s\n' \
+      "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || echo '<missing>')"
+    return 1
+  fi
   if [ "$(cat "$store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)" != "live-box-working-token" ]; then
     printf 'the working token was rewritten by a run with no base URL to rewrite it with\n'
     return 1
