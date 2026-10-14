@@ -66,19 +66,36 @@ command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH"
 # twenty times a day and the one whose wall clock has to be small. `create` is
 # only reached when the cluster is absent, and `--wait` means the create
 # returns with a Ready node rather than a shell prompt and a race.
-if k3d cluster list -o json 2>/dev/null | grep -q "\"name\":\"${CLUSTER}\""; then
-  printf 'local-cycle: reusing cluster %s (delete it with: k3d cluster delete %s)\n' "$CLUSTER" "$CLUSTER"
-else
-  printf 'local-cycle: creating cluster %s\n' "$CLUSTER"
-  k3d cluster create "$CLUSTER" --wait
-fi
+#
+# THE PRESENCE PROBE IS NOT A PIPE. `k3d cluster list -o json | grep -q name`
+# is the broken-pipe shape this repository has already been bitten by: `grep -q`
+# exits on its first match, k3d is still writing a multi-kilobyte document into
+# the pipe, it dies of SIGPIPE, and under `set -o pipefail` the PIPELINE reports
+# 141 — so an existing cluster reads as absent. Measured here, five identical
+# probes over a cluster that was there the whole time: one said CREATE. The
+# verdict is therefore read off a variable already in memory, and the cluster is
+# named by k3d's own JSON key rather than by a substring that could match a
+# network or an image volume.
+CLUSTER_JSON="$(k3d cluster list -o json 2>/dev/null || true)"
+case "$CLUSTER_JSON" in
+  *"\"name\":\"${CLUSTER}\""*)
+    printf 'local-cycle: reusing cluster %s (delete it with: k3d cluster delete %s)\n' "$CLUSTER" "$CLUSTER"
+    ;;
+  *)
+    printf 'local-cycle: creating cluster %s\n' "$CLUSTER"
+    k3d cluster create "$CLUSTER" --wait
+    ;;
+esac
 
 # --- 2. the kubeconfig ------------------------------------------------------
-# Written from THIS cluster, by name. Never the ambient ~/.kube/config: a
-# developer's current context is theirs, and a cycle that changed it would be a
-# cycle with a side effect nobody asked for.
+# `k3d kubeconfig get` prints that cluster's kubeconfig on stdout and touches
+# nothing: never the ambient ~/.kube/config, whose current context is the
+# developer's and whose mutation would be a side effect nobody asked for, and
+# never a second git repository nested in a checkout, which is not how anybody
+# gets a cluster either. The file this writes is scratch, keyed to this
+# worktree, and is removed when the machine tidies its temporary directory.
 KUBECONFIG_FILE="$WORK/kubeconfig.yaml"
-kubectl config view --minify --raw --context="k3d-${CLUSTER}" >"$KUBECONFIG_FILE"
+k3d kubeconfig get "$CLUSTER" >"$KUBECONFIG_FILE"
 SERVER="$(kubectl --kubeconfig="$KUBECONFIG_FILE" config view -o jsonpath='{.clusters[0].cluster.server}')"
 printf 'local-cycle: kubeconfig %s -> %s\n' "$KUBECONFIG_FILE" "$SERVER"
 
@@ -110,11 +127,7 @@ ELAPSED=$(( $(date +%s) - START_MS ))
 printf '\nlocal-cycle: %d seconds, exit %d\n' "$ELAPSED" "$EXIT_CODE"
 if grep -q '"event":"install.done"' "$JSONL"; then
   printf 'local-cycle: the substrate reached install.done on this cluster\n'
-  jq -r 'select(.event == "install.done") | .steps[] | "  \(.step)  \(.phase)"' "$JSONL" |
-    while read -r step phase; do
-      seconds="$(jq -r --arg p "$phase" 'select(.event == "install.done") | .steps[] | select(.phase == $p) | .seconds' "$JSONL" | head -1)"
-      printf '  %2s  %-20s %ss\n' "$step" "$phase" "$seconds"
-    done
+  jq -r 'select(.event == "install.done") | .steps[] | "  \(.step)  \(.phase)  \(.seconds)s"' "$JSONL"
   printf '  total: %ss\n' "$(jq -r 'select(.event == "install.done") | .seconds' "$JSONL")"
 else
   printf 'local-cycle: the substrate did NOT reach install.done\n'
