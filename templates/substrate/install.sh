@@ -945,6 +945,83 @@ kit_substrate_await_list() {
   done
 }
 
+# kit_substrate_await_pods_running <namespace> <prefix> <budget> — wait until
+# the operator's pods are past their image pull. The grouped wait conflated
+# "image to arrive" and "controller Available" inside one 180s bound; a cold
+# pull alone is 3m17s, so the wait expired 18s before Available. This helper
+# is the first half of the split: it polls the pods in <namespace> whose name
+# starts with <prefix> (empty means all pods in the namespace) until at least
+# one container is Running and none is still waiting with
+# ContainerCreating/ErrImagePull/ImagePullBackOff, reporting progress every
+# 30s so "cnpg-controller-manager is pulling; 3m17s so far" is visible rather
+# than a silent timeout. It is bounded by OPERATOR_IMAGE_PULL_TIMEOUT and does
+# not itself fail on expiry — the second half (the Available wait) is the bound
+# that catches a genuinely stuck controller, so a slow pull does not become a
+# hung install.
+kit_substrate_await_pods_running() {
+  local ns="$1" prefix="$2" budget="$3"
+  # DRY_RUN never reaches the grouped wait (PENDING_WAITS is empty), but a
+  # direct call must be a no-op.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 0
+  fi
+  # No kubectl yet (e.g. unit test) — treat as success so the Available wait is
+  # still the bound.
+  if ! command -v kubectl >/dev/null 2>&1; then
+    return 0
+  fi
+  local start deadline elapsed
+  start="$(date +%s)"
+  deadline=$(( start + budget ))
+  while :; do
+    local pods_json pod_count running pulling
+    pods_json="$(kubectl --kubeconfig="$KUBECONFIG" get pods -n "$ns" -o json 2>/dev/null || echo '{"items":[]}')"
+    if [ -n "$prefix" ]; then
+      pod_count="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p))] | length' 2>/dev/null || echo 0)"
+      running="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p)) | .status.containerStatuses[]? | select(.state.running != null)] | length' 2>/dev/null || echo 0)"
+      pulling="$(printf '%s' "$pods_json" | jq -r --arg p "$prefix" '[.items[] | select(.metadata.name | startswith($p)) | .status.containerStatuses[]? | select(.state.waiting.reason == "ContainerCreating" or .state.waiting.reason == "ErrImagePull" or .state.waiting.reason == "ImagePullBackOff")] | length' 2>/dev/null || echo 0)"
+    else
+      pod_count="$(printf '%s' "$pods_json" | jq -r '.items | length' 2>/dev/null || echo 0)"
+      running="$(printf '%s' "$pods_json" | jq -r '[.items[] | .status.containerStatuses[]? | select(.state.running != null)] | length' 2>/dev/null || echo 0)"
+      pulling="$(printf '%s' "$pods_json" | jq -r '[.items[] | .status.containerStatuses[]? | select(.state.waiting.reason == "ContainerCreating" or .state.waiting.reason == "ErrImagePull" or .state.waiting.reason == "ImagePullBackOff")] | length' 2>/dev/null || echo 0)"
+    fi
+    # Success: image pull is done — at least one pod exists and none is still
+    # waiting for ContainerCreating/ErrImagePull/ImagePullBackOff. A CrashLoopBackOff
+    # pod has no Running container but also no pulling wait, so it is not a pull
+    # — the Available wait that follows is the bound that catches a genuinely stuck
+    # controller, rather than this loop adding 300s before reporting it.
+    if [ "$pod_count" -gt 0 ] && [ "$pulling" -eq 0 ]; then
+      return 0
+    fi
+    elapsed=$(( $(date +%s) - start ))
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      if [ "$pulling" -gt 0 ]; then
+        kit_substrate_out "      $ns/${prefix:-all} still pulling after ${elapsed}s (budget ${budget}s); continuing to readiness wait"
+      fi
+      return 0
+    fi
+    if [ "$elapsed" -gt 0 ] && [ $((elapsed % 30)) -eq 0 ]; then
+      local msg_prefix
+      if [ -n "$prefix" ]; then
+        msg_prefix="$ns/$prefix"
+      else
+        msg_prefix="$ns (all)"
+      fi
+      if [ "$pod_count" -eq 0 ]; then
+        kit_substrate_out "      $msg_prefix — no pods yet; ${elapsed}s so far (image pull budget ${budget}s)"
+      elif [ "$pulling" -gt 0 ]; then
+        kit_substrate_out "      $msg_prefix is pulling; ${elapsed}s so far (budget ${budget}s)"
+      else
+        kit_substrate_out "      $msg_prefix — waiting for pods to be Running; ${elapsed}s so far"
+      fi
+      # Avoid spamming the same second twice (sleep 5, but elapsed may stay same 30 across two polls)
+      sleep 5
+    else
+      sleep 2
+    fi
+  done
+}
+
 # kit_substrate_await_port <port> <budget> — wait until a LOCAL TCP port accepts
 # a connection. The companion of kit_substrate_await_list, for the one thing a
 # `kubectl port-forward` needs and a `kubectl get` does not: the listener is
@@ -1740,6 +1817,23 @@ preflight() {
 # suite can shorten them — the rule is the split, not the numbers.
 : "${NODE_REGISTER_TIMEOUT:=90}"
 : "${NODE_READY_TIMEOUT:=30}"
+# --- operator waits: pull + ready, split because a cold image pull is 3m17s ---
+# The grouped operator wait (steps 2-4) conflated two things — waiting for the
+# image to arrive and waiting for the controller to be Ready — inside one 180s
+# bound. Measured on a cold k3d cycle (roll-c5-local-cycle §3.2): the cnpg
+# Deployment was Available 3m18s after the wait began, the wait expired after
+# 180s, 18s before Available. A longer single bound (180→300) would be the wrong
+# fix: it makes a hung install slower to report, which is what the bound is for.
+# So the wait is split: OPERATOR_IMAGE_PULL_TIMEOUT (300s) for the image to
+# arrive, and a per-operator READY timeout (180s/300s) for the controller to be
+# Available. The sum is larger than 180, and deliberately so — the image pull is
+# an external variable (registry, layer cache) whose worst case is not the
+# controller's. See tests/substrate_test.sh wait_lists_audit for the amended
+# rule.
+: "${OPERATOR_IMAGE_PULL_TIMEOUT:=300}"
+: "${CERT_MANAGER_READY_TIMEOUT:=180}"
+: "${CNPG_READY_TIMEOUT:=180}"
+: "${ARGOCD_READY_TIMEOUT:=300}"
 install_k3s() {
   log_step "k3s ${K3S_VERSION} — single node, sqlite datastore"
   if kit_substrate_guard k3s; then
@@ -1911,15 +2005,18 @@ install_argocd() {
   for pending in $PENDING_WAITS; do
     case "$pending" in
       cert-manager)
-        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s
+        kit_substrate_await_pods_running "cert-manager" "" "$OPERATOR_IMAGE_PULL_TIMEOUT"
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout="${CERT_MANAGER_READY_TIMEOUT}s"
         waited=1
         ;;
       cnpg)
-        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager --timeout=180s
+        kit_substrate_await_pods_running "cnpg-system" "cnpg-controller-manager" "$OPERATOR_IMAGE_PULL_TIMEOUT"
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager --timeout="${CNPG_READY_TIMEOUT}s"
         waited=1
         ;;
       argocd)
-        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=300s
+        kit_substrate_await_pods_running "argocd" "" "$OPERATOR_IMAGE_PULL_TIMEOUT"
+        kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout="${ARGOCD_READY_TIMEOUT}s"
         waited=1
         ;;
     esac
