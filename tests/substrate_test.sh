@@ -137,20 +137,20 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The twelve steps, in order. The markers are `[1/12]` … `[12/12]`; the check
+# The thirteen steps, in order. The markers are `[1/13]` … `[13/13]`; the check
 # reads them out of the output in the order they appear and compares against
 # the expected sequence, so a script that printed them out of order — or
 # skipped one — would go red here rather than passing on the presence of all
-# twelve. The `|| true` is load-bearing: with no `[n/12]` markers printed yet,
+# thirteen. The `|| true` is load-bearing: with no `[n/13]` markers printed yet,
 # grep exits 1, and under `set -o pipefail` a failing command substitution
 # would take the harness down before the status is ever read — the same shape
 # the `run` helper's comment describes four lines below.
-found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/12\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
+found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/13\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
-if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12" ]; then
-  pass 'DRY_RUN prints the twelve steps in order'
+if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12 13" ]; then
+  pass 'DRY_RUN prints the thirteen steps in order'
 else
-  fail 'DRY_RUN prints the twelve steps in order' "found step sequence: '${found}'"
+  fail 'DRY_RUN prints the thirteen steps in order' "found step sequence: '${found}'"
 fi
 
 # Each step must say what it would do. A DRY_RUN that printed only the headers
@@ -1540,7 +1540,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=12", "TOTAL is not 12 — step 10 (the services' schemas), step 11 (NATS) and step 12 (the courier credential minted on this box) widen the plan and the DRY_RUN order check with it")
+need("TOTAL=13", "TOTAL is not 13 — step 10 (the services' schemas), step 11 (NATS), step 12 (the courier credential minted on this box) and step 13 (the residual ReplicaSets) widen the plan and the DRY_RUN order check with it")
 need('NATS_VERSION="2.10.24-alpine"', "no exact NATS_VERSION pin beside the other pins")
 need('NATS_BOX_VERSION="0.20.0"', "no exact NATS_BOX_VERSION pin for the stream-init image")
 if not re.search(r"(?m)^install_nats\(\)", code):
@@ -4752,7 +4752,7 @@ def need(sub, msg):
         problems.append(msg)
 
 
-need("TOTAL=12", "TOTAL is not 12")
+need("TOTAL=13", "TOTAL is not 13")
 if not re.search(r"(?m)^install_migrations\(\)", code):
     problems.append("no install_migrations step")
 if not re.search(r"(?m)^  install_migrations$", code):
@@ -8295,11 +8295,11 @@ KIT_SUBSTRATE_RECEIPT="$WORK/timing-receipt.json" KIT_SUBSTRATE_DATABASES="$DBS"
 
 timing_starts="$(grep -c '"event":"step.start"' "$timing_jsonl" || true)"
 timing_dones="$(grep -c '"event":"step.done"' "$timing_jsonl" || true)"
-if [ "$timing_starts" -eq 12 ] && [ "$timing_dones" -eq 12 ]; then
+if [ "$timing_starts" -eq 13 ] && [ "$timing_dones" -eq 13 ]; then
   pass 'every step emits a start and a done event'
 else
   fail 'every step emits a start and a done event' \
-    "${timing_starts} start(s), ${timing_dones} done(s) — expected 12 and 12"
+    "${timing_starts} start(s), ${timing_dones} done(s) — expected 13 and 13"
 fi
 
 run 'the step timings are present and the total covers the steps' green check_timing "$timing_jsonl"

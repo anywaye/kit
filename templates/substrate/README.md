@@ -362,7 +362,7 @@ bash templates/substrate/install.sh --headless          # or HEADLESS=1
 a **stream of JSONL progress events, one object per line, and nothing else**:
 
 ```
-{"event":"install.start","step":0,"phase":"install","message":"install begins: 12 steps, receipt at /var/lib/kit/substrate-receipt.json"}
+{"event":"install.start","step":0,"phase":"install","message":"install begins: 13 steps, receipt at /var/lib/kit/substrate-receipt.json"}
 {"event":"step.start","step":1,"phase":"k3s","message":"k3s v1.37.1+k3s1 — single node, sqlite datastore","seconds":0.052}
 {"event":"step.done","step":1,"phase":"k3s","message":"k3s: 4.180s","seconds":4.180}
 {"event":"refusal","step":8,"phase":"cluster-issuers","input_needed":"KIT_SUBSTRATE_ACME_EMAIL","human":"export … on the box and re-run","message":"…"}
@@ -862,7 +862,7 @@ is an operator action, and the URL works only when observed.
 
 - `install.sh` parses (`bash -n`) and is shellcheck-clean.
 - `DRY_RUN=1` runs to completion with the database list set,
-  printing the twelve steps in order, each with an action.
+  printing the thirteen steps in order, each with an action.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
