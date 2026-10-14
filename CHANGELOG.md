@@ -2,6 +2,40 @@
 
 ### Substrate
 
+- **Publish writes the image's DIGEST into the chart it pushes, so a new build
+  is a textual diff Argo rolls.** Measured on the live box: the registry's
+  `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165` (the merged Redis
+  AUTH fix) while the node ran `sha256:8e60…e79b`, six hours older. Both
+  reasons nothing closed the gap were structural: the `0.1.0` tag is
+  overwritten on every master push (it is this path's own `appVersion`
+  hand-off), and charts pinned the image by that tag, so the rendered
+  Deployment was textually IDENTICAL before and after a build — Argo's diff
+  reported `Synced` with no rollout and `imagePullPolicy: IfNotPresent`
+  re-served the stale copy on every restart. `publish.reusable.yml` now hands
+  the image job's build output (`needs.image.outputs.digest`) to the chart
+  job, whose new `pin the image by digest` step writes it into the chart's
+  `values.yaml` as `image.digest` BEFORE `helm package` — a package is a
+  tarball of the directory, so an edit afterwards would pin nothing. The
+  pushed chart therefore names the bytes the registry holds beside it, and
+  the chart VERSION is unchanged, so the substrate Applications'
+  `targetRevision: 0.1.0` still resolves — the chart's CONTENT changes under
+  a fixed tag and the diff fires. The step refuses a digest that is not
+  `sha256:<64 hex>`, replaces a committed `digest:` line (refusing a file
+  with two), inserts one for a chart that has not adopted the field, and
+  notes-and-skips a chart with no `image:` block. An empty input — a direct
+  caller, or a `push: false` run, where the image workflow's digest output is
+  empty because nothing was pushed — packages the chart as committed, which
+  is why every service keeps a committed digest. Residue, stated: the OCI tag
+  `0.1.0` is still overwritten per push; the Application notices because the
+  chart content changes and a refresh re-resolves it. Assigned, not asserted
+  by eye: `tests/publish_seam_check.sh` now proves the seam and adds five red
+  controls — the image workflow's `digest` output deleted, the chart job's
+  `needs.image.outputs.digest` hand-off removed, the writing step deleted, the
+  writing step moved after `helm package`, and its `sha256:<64 hex>` refusal
+  weakened — each of which must go RED under the same assertions the real tree
+  passes. The previous attempt left the step reachable only by review; a check
+  that passes because the field is absent is worse than no check.
+
 - **A long-lived box accumulates ReplicaSets its Deployments no longer name.**
   The gateway namespace on Contabo held five ReplicaSets for one Deployment
   at `spec.replicas: 1` — two of them live, the older on an image nobody

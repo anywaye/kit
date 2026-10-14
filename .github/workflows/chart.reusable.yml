@@ -55,6 +55,26 @@
 #      copies into its own repo, and a copied string drifts from the chart it
 #      names.
 #
+#   3. THE IMAGE DIGEST — THE ONE THAT REACHES THE POD, AND THE ONE THAT WAS
+#      MEASURED MISSING. The `appVersion` tag is overwritten on every push
+#      (it is this workflow's own hand-off, re-published per master push),
+#      and charts pinned the image by that tag: the rendered Deployment was
+#      textually IDENTICAL before and after a build, so Argo's diff reported
+#      `Synced`, rolled nothing, and the box sat on the old image while the
+#      registry held the new one. Measured (roll-c5-image-digest): the
+#      registry's `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165`
+#      while the node ran `sha256:8e60…e79b`, six hours after the fix was
+#      merged and published; a refresh reported `Synced` with no diff and
+#      `imagePullPolicy: IfNotPresent` re-served the stale copy on every pod
+#      restart. A DIGEST cannot move, so this workflow writes the digest of
+#      the image the compose run just built into the chart's `values.yaml`
+#      (`image.digest`) BEFORE `helm package`: the chart that lands in the
+#      OCI registry names the bytes the registry holds beside it, a new build
+#      is a textual diff Argo rolls, and the chart VERSION (seam 2) does not
+#      move — the substrate Application's targetRevision is untouched. The
+#      composer hands the digest down; see `publish.reusable.yml`, the only
+#      party that knows both ends.
+#
 # WHY A REUSABLE WORKFLOW AND NOT EIGHT COPIES. The same argument
 # `image.reusable.yml` makes: a fix to how a chart is published has to reach
 # every service without a per-repo pull request, or it reaches none of them.
@@ -86,7 +106,13 @@
 #   - The chart the repo declares is the chart that is pushed. `version` and
 #     `appVersion` are never rewritten from git, and no `latest` tag is added.
 #     The chart's identity is the repo's statement; a publish step that
-#     overrides it is a second author.
+#     overrides it is a second author. THE ONE EXCEPTION IS `image.digest`,
+#     and it is an exception because the field's whole job is to name what
+#     THIS run just built: the committed value pins the last published
+#     image, and a publish that left it in place would push a chart naming
+#     the previous build — the measured two-digest gap this workflow closed.
+#     The digest is DERIVED from the image job's output, never typed, and
+#     refused when malformed, so the override is a hand-off and not an edit.
 #   - No `secrets:` are consumed beyond `GITHUB_TOKEN`, so a service adopting
 #     this needs no secret configured, and nothing here is worth rotating.
 name: chart
@@ -122,6 +148,24 @@ on:
         required: false
         type: string
         default: 'chart/'
+      image-digest:
+        description: >-
+          The sha256 digest of the image THIS publish just built, handed down
+          by publish.reusable.yml from the image job's build output. Written
+          into the chart's values.yaml as `image.digest` before `helm
+          package`, so the chart that lands in the OCI registry names the
+          exact bytes the registry holds beside it — a digest cannot move,
+          while the tag can, and a chart pinned by tag rendered an identical
+          Deployment after every build (measured: the registry and the node
+          held different digests under one tag, six hours apart, with Argo
+          reporting Synced). EMPTY by default: a direct caller of this
+          workflow, or a `push: false` run — where the image workflow's
+          digest output is empty because nothing was pushed — packages the
+          chart with the digest values.yaml COMMITS, which is why a service
+          keeps one committed rather than a placeholder.
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -230,6 +274,90 @@ jobs:
           echo "name=$name" >>"$GITHUB_OUTPUT"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
+      # PIN THE IMAGE BY DIGEST — the step that makes a new build a change
+      # Argo can SEE. THE MEASURED DEFECT (roll-c5-image-digest, gateway):
+      # the registry's `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165`
+      # (the merged Redis AUTH fix) while the node ran `sha256:8e60…e79b`,
+      # six hours older. The chart pinned the image by TAG, the tag is
+      # overwritten on every master push, so the rendered Deployment was
+      # textually identical before and after the build: Argo's diff reported
+      # `Synced`, rolled nothing, and `IfNotPresent` re-served the node's
+      # stale copy on every restart. The digest is the one image name that
+      # cannot move, so it is written into the chart BEFORE the chart is
+      # packaged — a package is a tarball of the directory, so an edit after
+      # `helm package` would pin nothing.
+      #
+      # WHO SUPPLIES THE VALUE: the composer, from the image job's build
+      # output (`needs.image.outputs.digest`) — derived, never typed, the
+      # same rule the appVersion hand-off states. An EMPTY input (a direct
+      # caller; or `push: false`, where nothing was pushed and there is no
+      # digest to read) skips this step and packages the chart as committed,
+      # which is what the committed digest in values.yaml is for.
+      #
+      # IT REFUSES RATHER THAN WRITES A MALFORMED DIGEST: a value that is
+      # not `sha256:<64 hex>` would render `repository@nonsense`, which
+      # looks like a pin and fails at image-pull with nothing naming this
+      # step. `sha256:` plus 64 lowercase hex is the registry's own manifest
+      # digest grammar, the same shape gateway's own gate asserts
+      # (`bin/prime-go`) at the chart end.
+      - name: pin the image by digest
+        if: inputs.image-digest != ''
+        env:
+          CHART_DIR: ${{ inputs.chart-dir }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
+        run: |
+          set -euo pipefail
+          values="$CHART_DIR/values.yaml"
+          if [ ! -f "$values" ]; then
+            echo "chart: no values.yaml at $values — nothing to pin an image digest in" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$IMAGE_DIGEST" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "chart: image-digest is '$IMAGE_DIGEST', not sha256:<64 hex>." >&2
+            echo "chart: the image job's build output is the only source for this" >&2
+            echo "chart: field — a literal a human pasted is a digest nobody built," >&2
+            echo "chart: and a malformed one fails at image-pull with nothing here" >&2
+            echo "chart: to correlate it to." >&2
+            exit 1
+          fi
+          if ! grep -qE '^image:[[:space:]]*$' "$values"; then
+            {
+              echo '### chart carries no image: block'
+              echo
+              echo "\`$values\` names no \`image:\` key, so there is no"
+              echo "\`image.digest\` to pin and no fleet image for this chart to"
+              echo "name. The chart is packaged as committed."
+            } >>"$GITHUB_STEP_SUMMARY"
+            echo "chart: $values has no image: block — nothing to pin, packaging as committed"
+            exit 0
+          fi
+          if grep -qE '^  digest:' "$values"; then
+            # REPLACE the committed digest. One line at the image block's
+            # own indent; a second occurrence would be invalid YAML (two
+            # values for one key), so the count is checked rather than
+            # assumed before one `sed` rewrites the file.
+            count="$(grep -cE '^  digest:' "$values")"
+            if [ "$count" -ne 1 ]; then
+              echo "chart: $values has $count 'digest:' lines at the image block's" >&2
+              echo "chart: indent — a values file with two is a parse error, and a" >&2
+              echo "chart: blind rewrite would edit both." >&2
+              exit 1
+            fi
+            sed "s|^  digest:.*|  digest: \"$IMAGE_DIGEST\"|" "$values" >"$values.new"
+            mv "$values.new" "$values"
+          else
+            # INSERT it, for a chart that has not adopted the field yet: the
+            # publish pins what the template can read, and a deployment that
+            # does not render image.digest ignores a value it never reads.
+            awk -v d="$IMAGE_DIGEST" '
+              /^image:[[:space:]]*$/ { print; print "  digest: \"" d "\""; next }
+              { print }
+            ' "$values" >"$values.new"
+            mv "$values.new" "$values"
+          fi
+          echo "chart: $values pins image.digest $IMAGE_DIGEST"
+          grep -nE '^  (repository|tag|digest):' "$values" | sed 's/^/chart:   /'
+
       # PACKAGE, ALWAYS. `push: false` means "check the chart still packages",
       # exactly as the image workflow's `push: false` means "check the image
       # still builds". The package step is what makes that check real.
@@ -290,19 +418,29 @@ jobs:
           echo "pushed $REGISTRY/$NAME:$VERSION"
 
       # SAY WHAT LANDED. The full OCI reference and the tag, because a log line
-      # is the only place a person can copy it from.
+      # is the only place a person can copy it from — and, since this packet,
+      # the image digest the chart now pins, because THAT is the number the
+      # box's Deployment renders and the number an operator compares against
+      # `docker manifest inspect ghcr.io/<org>/<repo>:<appVersion>`. Empty
+      # (a `push: false` run, a direct caller) prints no digest line rather
+      # than a blank one.
       - name: say what landed
         if: inputs.push && github.event_name != 'pull_request'
         env:
           REGISTRY: ${{ inputs.registry }}
           NAME: ${{ steps.chart.outputs.name }}
           VERSION: ${{ steps.chart.outputs.version }}
+          IMAGE_DIGEST: ${{ inputs.image-digest }}
         run: |
           set -euo pipefail
           {
             echo '### chart published'
             echo
             echo "chart: \`$REGISTRY/$NAME:$VERSION\`"
+            if [ -n "$IMAGE_DIGEST" ]; then
+              echo
+              echo "image.digest pinned: \`$IMAGE_DIGEST\`"
+            fi
             echo
             echo "The OCI tag is the chart's version. An Argo CD Application pulls"
             echo "this chart with repoURL: $REGISTRY/$NAME, chart: $NAME, targetRevision:"
