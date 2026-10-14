@@ -6440,16 +6440,20 @@ check_mint_converges_orphan() {
 run 'step 11 converges an orphaned identity courier block when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
   check_mint_converges_orphan "$mint_fixed"
 
-# THE RED CONTROL is the step as it stands on master: write-forward, no sweep.
-# The fixture is install.sh at HEAD — the sweep exists only in the working
-# tree, so the control is literally the shipped shape rather than a hand-edited
-# approximation. Its premise is asserted first: no converge function there. If
-# the orphan-removal check passed against it, the check would be worthless.
+# THE RED CONTROL is the write-forward shape: the sweep scans nothing, so it
+# removes nothing and the orphan survives. The fixture is the real tree with
+# the key list emptied — functionally the step as it stands on master, which
+# knows no key to delete — rather than a hand-edited approximation, so the
+# control tracks future edits to the sweep body. Its premise is asserted
+# first: the list is really empty. If the orphan-removal check passed against
+# it, the check would be worthless.
 mint_prefix_converge="$WORK/install-mint-prefix-converge.sh"
-git -C "$ROOT" show "HEAD:templates/substrate/install.sh" | sed '/^main "$@"/d' >"$mint_prefix_converge"
-if grep -q 'converge_identity_courier_block' "$mint_prefix_converge"; then
-  fail 'control fixture: HEAD is already the converging shape' \
-    "the sweep is committed, so HEAD cannot serve as the pre-fix control"
+sed -e '/^main "$@"/d' -e 's/^IDENTITY_COURIER_KEYS=(.*$/IDENTITY_COURIER_KEYS=()/' \
+  "$SUBSTRATE/install.sh" >"$mint_prefix_converge"
+if ! grep -q '^IDENTITY_COURIER_KEYS=()$' "$mint_prefix_converge" \
+  || grep -q '^IDENTITY_COURIER_KEYS=(COURIER_BASE_URL' "$mint_prefix_converge"; then
+  fail 'control fixture: the sweep scans nothing' \
+    "the key-list emptying did not apply, so the control would prove nothing"
   failures=$((failures + 1))
 else
   cco_out=""; cco_ec=0
