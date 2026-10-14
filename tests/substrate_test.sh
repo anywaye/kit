@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1090,SC2034
 #
 # kit's proof that the substrate install is real, and that its pins are exact.
 #
@@ -4862,7 +4863,7 @@ VALUE_PRODUCERS = {
     "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
     "kit_substrate_url_host", "kit_substrate_intended_hosts",
     "kit_substrate_readiness_pending_count", "kit_substrate_readiness_summary",
-    "kit_substrate_readiness_json",
+    "kit_substrate_readiness_json", "kit_substrate_log_store",
 }
 
 # Every variable in install.sh that HOLDS secret material, by name. This is a
@@ -9680,6 +9681,261 @@ case "$(cat "$fixture_rs_inverted")" in
       'the sed matched nothing — this control would prove nothing'
     ;;
 esac
+
+# ===========================================================================
+# 27. Loki: the Application Argo could not render is gone, and install.done is
+#     honest about where logs go
+# ===========================================================================
+# THE EVIDENCE, FROM THE LIVE BOX (this packet's seam):
+#
+#   kubectl -n argocd get applications
+#   alloy        OutOfSync     Healthy
+#   courier      Synced        Healthy
+#   gateway      Synced        Healthy
+#   grafana      OutOfSync     Healthy
+#   identity     Synced        Healthy
+#   loki         Unknown       Healthy   <-- ComparisonError, never Synced
+#   parlor       Synced        Healthy
+#   prometheus   OutOfSync     Healthy
+#
+#   ComparisonError=Failed to load target state: failed to generate manifest
+#   for source 1 of 1: rpc error: code = Unknown desc = Manifest generation
+#   error (cached): failed to execute helm template command:
+#   failed running helm: `helm template . --name-template loki --namespace
+#   observability ...` failed exit status 1: Error: execution error at
+#   (loki/templates/write/statefulset-write.yaml:50:28):
+#   Please define loki.storage.bucketNames.chunks
+#
+# The upstream loki chart 7.3.0 in SimpleScalable mode requires
+# loki.storage.bucketNames.{chunks,ruler,admin} and an object-storage backend
+# (endpoint/bucket/access_key/secret_key). This substrate provisions no object
+# store (no S3/MinIO), so an Application whose chart this substrate cannot
+# satisfy is a claim it cannot keep. Inventing bucket names to make the render
+# pass is a log pipeline that stores nothing — worse than honestly saying it
+# is not installed.
+#
+# THE FIX, AND WHY IT IS REMOVAL RATHER THAN A VALUES PATCH:
+#   * SingleBinary with filesystem would render (and was measured with
+#     `helm template --set deploymentMode=SingleBinary --set
+#     loki.storage.type=filesystem ...` → 1207 lines), but it is a single
+#     replica on emptyDir/local PVC, untuned, and unproven on this box. It
+#     trades a render error for a persistence and sizing decision nobody asked
+#     for.
+#   * Object-storage with invented bucket names plus a missing endpoint is the
+#     half-config defect the second red control proves.
+#   * Removing the Application is honest: logs remain in journald / kubectl
+#     logs (kubectl -n <ns> logs <pod>), Alloy still runs but ships nowhere
+#     centrally, and the install report says so beside the TLS/OIDC verdict —
+#     the same seam roll-c5-honest-done opened. If a future substrate
+#     provisions an object store, the Application returns with its full storage
+#     block.
+#
+# THE CHECK IS EXECUTED, NOT STATIC. A static list of Applications is a list,
+# not a proof. The green case asserts the file is gone AND the report is
+# present (human + headless JSON); a file re-added without a report is not
+# green. The red controls re-add the broken shape (no bucketNames) and the
+# half-config shape (bucketNames without endpoint/bucket/keys) and require the
+# same check to go red — a control that passes on the broken tree is the
+# defect.
+check_loki_honest() {
+  local apps_dir="$1" install_sh="$2"
+  local problems=""
+  # Vacuity guard: a check that passes against an empty directory is not a check.
+  local count
+  count="$(ls -1 "$apps_dir"/*.yaml 2>/dev/null | wc -l)"
+  if [ "$count" -lt 7 ]; then
+    printf 'apps_dir has %s manifest(s), expected 7 (empty or partial directory proves nothing)\n' "$count"
+    return 1
+  fi
+  # 1. The Application is gone
+  if [ -f "$apps_dir/loki.yaml" ]; then
+    # If it exists, it must be a valid, renderable loki — validate its helm values.
+    # This is the "every Application renders" branch; removal is the other branch.
+    "$PY" - "$apps_dir/loki.yaml" <<'PY'
+import sys
+import yaml
+path = sys.argv[1]
+doc = yaml.safe_load(open(path, encoding="utf-8"))
+src = (doc.get("spec") or {}).get("source") or {}
+helm = src.get("helm") or {}
+values = helm.get("values") or ""
+if not isinstance(values, str) or not values.strip():
+    print("loki.yaml has no helm.values — chart requires loki.storage.bucketNames.chunks")
+    sys.exit(1)
+try:
+    v = yaml.safe_load(values)
+except Exception as e:
+    print(f"loki helm.values does not parse: {e}")
+    sys.exit(1)
+if not isinstance(v, dict):
+    print("loki helm.values is not a mapping")
+    sys.exit(1)
+loki = v.get("loki") or {}
+storage = loki.get("storage") or {}
+bucketNames = storage.get("bucketNames") or {}
+# Accept either the removed case (no file) is the expected path; if file exists we require a complete config.
+# For this packet the green case is removal, so any present file must be complete S3 or SingleBinary filesystem.
+# Check bucketNames present for S3 mode, or filesystem for SingleBinary.
+deploymentMode = v.get("deploymentMode") or "SimpleScalable"
+storage_type = storage.get("type") or "s3"
+if storage_type == "filesystem":
+    if deploymentMode != "SingleBinary":
+        print(f"filesystem storage requires deploymentMode SingleBinary, not {deploymentMode}")
+        sys.exit(1)
+    # also need singleBinary.replicas and loki.useTestSchema or schemaConfig
+    if v.get("singleBinary", {}).get("replicas", 0) == 0:
+        print("filesystem SingleBinary requires singleBinary.replicas > 0")
+        sys.exit(1)
+else:
+    # s3 path: require bucketNames chunks/ruler/admin and endpoint/bucket/credentials
+    for k in ("chunks", "ruler", "admin"):
+        if not bucketNames.get(k):
+            print(f"loki.storage.bucketNames.{k} is missing — chart fails at write statefulset with 'Please define loki.storage.bucketNames.{k}'")
+            sys.exit(1)
+    s3 = storage.get("s3") or {}
+    # endpoint, bucket-equivalent (bucketNames already), access/secret
+    # The chart's s3 block needs endpoint/region/accessKeyId/secretAccessKey or the hosted storage will store nowhere.
+    missing = []
+    if not s3.get("endpoint"):
+        missing.append("endpoint")
+    if not s3.get("accessKeyId"):
+        missing.append("accessKeyId")
+    if not s3.get("secretAccessKey"):
+        missing.append("secretAccessKey")
+    # bucket is via bucketNames, but s3 bucket is also needed via storage config object_store or s3 bucketNames mapping.
+    # For the test we require at least endpoint + keys; half-config fails here.
+    if missing:
+        print(f"half object-storage config: missing {', '.join(missing)} — bucketNames alone stores nothing (ComparisonError would persist as a runtime error)")
+        sys.exit(1)
+print("loki present with complete storage config")
+PY
+    ec=$?
+    if [ "$ec" -ne 0 ]; then
+      return 1
+    fi
+    # Present and valid — also require install.sh to report loki
+    local out
+    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+    case "$out" in
+      *"logs: centralized Loki installed"*) ;;
+      *) printf 'loki present but install.sh does not report "centralized Loki installed"\n'; return 1 ;;
+    esac
+    return 0
+  fi
+  # 2. Not present — require the honest report (human + headless JSON)
+  local out
+  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+  case "$out" in
+    *"centralized Loki not installed"* ) ;;
+    *) printf 'install.sh does not report "centralized Loki not installed"\n%s\n' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *"loki.storage.bucketNames.chunks"* ) ;;
+    *) printf 'install.sh log report does not name loki.storage.bucketNames.chunks (the ComparisonError evidence)\n'; return 1 ;;
+  esac
+  case "$out" in
+    *"journald"* ) ;;
+    *) printf 'install.sh log report does not name journald/kubectl logs (what replaces Loki)\n'; return 1 ;;
+  esac
+  # 3. Headless JSON carries log_store journald beside the existing readiness fields
+  local jsonl="$WORK/loki-headless.jsonl"
+  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
+  if ! grep -q '"event":"readiness"' "$jsonl"; then
+    printf 'headless stream has no readiness event\n'; return 1
+  fi
+  if ! grep -q '"log_store":"journald"' "$jsonl"; then
+    printf 'readiness event missing "log_store":"journald"\n'; cat "$jsonl"; return 1
+  fi
+  if ! grep -q '"tls_pending_hosts"' "$jsonl"; then
+    printf 'readiness event lost tls_pending_hosts after log_store addition\n'; return 1
+  fi
+  if ! grep -q '"oidc_configured"' "$jsonl"; then
+    printf 'readiness event lost oidc_configured after log_store addition\n'; return 1
+  fi
+  printf 'loki absent, install.done honest: journald + bucketNames evidence, headless log_store journald\n'
+}
+
+run 'loki Application absent and install.done reports journald + bucketNames evidence (headless log_store journald)' green \
+  check_loki_honest "$MANIFESTS" "$SUBSTRATE/install.sh"
+
+# Red control 1: the values as they stand on master (no bucketNames) fail the render check.
+# Re-add the broken loki.yaml (the exact file master carried) into a fixture and require red.
+fixture_loki_broken="$WORK/loki-broken"
+mkdir -p "$fixture_loki_broken"
+cp "$MANIFESTS"/*.yaml "$fixture_loki_broken"/ 2>/dev/null || true
+cat >"$fixture_loki_broken/loki.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    targetRevision: 7.3.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+YAML
+run 'control: the broken loki values (no bucketNames) go red' red \
+  check_loki_honest "$fixture_loki_broken" "$SUBSTRATE/install.sh"
+# Premise guard: the fixture really is the broken shape (no helm.values at all, which is what master carried)
+if grep -q "bucketNames" "$fixture_loki_broken/loki.yaml"; then
+  fail 'control fixture premise: broken loki must carry no bucketNames' 'fixture has bucketNames, so it would not test the master shape'
+else
+  pass 'control fixture premise: broken loki carries no bucketNames (master shape)'
+fi
+
+# Red control 2: bucketNames without storage backend endpoint/bucket/access_key/secret_key — half config.
+fixture_loki_half="$WORK/loki-half"
+mkdir -p "$fixture_loki_half"
+cp "$MANIFESTS"/*.yaml "$fixture_loki_half"/ 2>/dev/null || true
+cat >"$fixture_loki_half/loki.yaml" <<'YAML'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    targetRevision: 7.3.0
+    helm:
+      values: |
+        loki:
+          storage:
+            type: s3
+            bucketNames:
+              chunks: chunks
+              ruler: ruler
+              admin: admin
+            s3:
+              region: us-east-1
+              # endpoint, accessKeyId, secretAccessKey deliberately absent — half an object-storage config
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+YAML
+run 'control: half object-storage config (bucketNames without endpoint/keys) goes red' red \
+  check_loki_honest "$fixture_loki_half" "$SUBSTRATE/install.sh"
+
+# Empty-directory vacuity guard: a check that passes against an empty directory is not a check.
+empty_apps="$WORK/empty-apps"
+mkdir -p "$empty_apps"
+run 'control: empty apps directory goes red (vacuity guard)' red \
+  check_loki_honest "$empty_apps" "$SUBSTRATE/install.sh"
 
 # ===========================================================================
 # Summary

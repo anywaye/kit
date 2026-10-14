@@ -281,7 +281,7 @@ IDENTITY_COURIER_KEYS=(COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLA
 # --- the services' telemetry on a box: DELIBERATELY OFF ---------------------
 # THE BOX DEPLOYS NO OTLP ENDPOINT, SO THE SERVICES MUST NOT TRY TO REACH ONE.
 #
-# Measured, not assumed. The observability set is alloy + loki + grafana +
+# Measured, not assumed. The observability set is alloy + grafana +
 # prometheus (`manifests/applications/`), and alloy is pinned at chart 1.13.0
 # with NO values: the chart's default config is `config/example.alloy` — a
 # `logging` block and `discovery.kubernetes` components, and no
@@ -1165,6 +1165,28 @@ EOF
   else
     kit_substrate_out "  OIDC: issuer is set — identity serves its JWKS route"
   fi
+  local store
+  store="$(kit_substrate_log_store)"
+  if [ "$store" = "journald" ]; then
+    kit_substrate_out "  logs: centralized Loki not installed — logs in journald / kubectl logs; Alloy runs but ships nowhere centrally"
+  else
+    kit_substrate_out "  logs: centralized Loki installed — query via Grafana Explore / Loki API"
+  fi
+}
+
+# kit_substrate_log_store — where logs land on this substrate. Loki's
+# upstream chart 7.3.0 in SimpleScalable mode requires object storage
+# (loki.storage.bucketNames.chunks and a backend endpoint/bucket/keys); this
+# single-box substrate provisions no object store, so the Application is not
+# installed and logs remain in journald / kubectl logs. Alloy still runs but
+# ships nowhere centrally. If a future substrate provisions an object store,
+# this function and the Application return together — the report is the proof.
+kit_substrate_log_store() {
+  if [ -f "$MANIFEST_DIR/loki.yaml" ]; then
+    printf 'loki'
+  else
+    printf 'journald'
+  fi
 }
 
 # kit_substrate_readiness_final — the done-report half: the shape of the box,
@@ -1188,6 +1210,18 @@ EOF
   if [ -z "$READINESS_TLS_PENDING" ] && [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    (none — every intended host resolves and the OIDC issuer is set)"
   fi
+  # Log store is not a readiness condition but a shape statement: what the
+  # installer DID NOT install, and where to find the logs it does not centralize.
+  # The loki Application's render failure (ComparisonError at
+  # loki/storage.bucketNames.chunks) is the evidence; the absence is the fix.
+  local store
+  store="$(kit_substrate_log_store)"
+  if [ "$store" = "journald" ]; then
+    kit_substrate_out "  logs: centralized Loki not installed — logs remain in journald / kubectl logs (kubectl -n <ns> logs <pod>); Alloy runs but ships nowhere centrally"
+    kit_substrate_out "    reason: loki chart 7.3.0 SimpleScalable requires loki.storage.bucketNames.chunks and an object-storage backend (endpoint/bucket/access_key/secret_key); this substrate provisions no object store"
+  else
+    kit_substrate_out "  logs: centralized Loki installed — query via Grafana Explore / Loki API"
+  fi
 }
 
 # kit_substrate_readiness_summary — the one-line verdict the JSONL event and
@@ -1204,15 +1238,16 @@ kit_substrate_readiness_summary() {
 
 # kit_substrate_readiness_json — the machine half of the same verdict: the
 # field is `tls_pending_hosts` (every intended host that does not resolve)
-# beside `oidc_configured`. Leading comma included, for kit_substrate_emit's
-# <extra-json> slot; the existing events are untouched.
+# beside `oidc_configured` and `log_store`. Leading comma included, for
+# kit_substrate_emit's <extra-json> slot; the existing events are untouched.
 kit_substrate_readiness_json() {
-  local hosts_json oidc="false"
+  local hosts_json oidc="false" store
   hosts_json="$(printf '%s' "$READINESS_TLS_PENDING" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
   if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     oidc="true"
   fi
-  printf ',"tls_pending_hosts":%s,"oidc_configured":%s' "$hosts_json" "$oidc"
+  store="$(kit_substrate_log_store)"
+  printf ',"tls_pending_hosts":%s,"oidc_configured":%s,"log_store":"%s"' "$hosts_json" "$oidc" "$store"
 }
 # --- honest-done END
 
@@ -1501,7 +1536,7 @@ install_argocd() {
   # small to guard; what it needs is to be re-applied.
   #
   # AND RE-APPLYING IS ALREADY THIS INSTALLER'S OWN CONVERGENCE MECHANISM. Step
-  # 6 carries no guard either: it applies the eight Applications on every run,
+  # 6 carries no guard either: it applies the seven Applications on every run,
   # because `kubectl apply` of an unchanged object is one no-op API round trip
   # and the convergence is worth more than the round trip. The AppProject is
   # smaller than any one of those and the argument holds with more force. So
