@@ -927,6 +927,38 @@ jobs:
     # `bundle install`, rubocop, the suite and rake coverage. 30 covers a cold
     # gem install and caps a hung test.
     timeout-minutes: 30
+    # THE DATABASE A RAILS SUITE NEEDS, and its absence is what made box the
+    # first caller to find out. `bundle exec rake` boots the app, and a Rails
+    # app whose models talk to Postgres cannot boot without one:
+    #
+    #   connection to server on socket "/run/postgresql/.s.PGSQL.5432" failed:
+    #   No such file or directory
+    #
+    # The `none` job above has carried this service since it was written; the
+    # ruby job never did, because until `cafaye/box` adopted it every Ruby
+    # repository in the fleet was Elixir or Node (`courier` is Elixir,
+    # `parlor` is Node) and no caller needed it. box's own gate provisions its
+    # own Postgres — which is why `bin/ci` is green while this job was red on a
+    # missing socket.
+    #
+    # The shape is the `none` job's, unchanged: `postgres:17-alpine` with the
+    # default superuser, on 5432, with a health check so the suite cannot start
+    # against a server still initialising. A caller supplies `DATABASE_URL`
+    # itself — kit does not guess a database name or a credentials shape for a
+    # repository it has not read.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 5s
     steps:
       - uses: actions/checkout@v7
         with:
