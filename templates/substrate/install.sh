@@ -3185,21 +3185,34 @@ validate_app_base_url() {
   esac
 }
 
-# converge_identity_courier_block — remove identity's courier keys when the box
-# declares no public origin. A box installed by an older installer may already
-# carry COURIER_TOKEN without COURIER_BASE_URL (or templates pointing at a base
-# this box no longer declares); identity's own loader refuses exactly that
-# half-pair (`loadCourier`: "must both be set, or neither of them"), so the
-# orphan crashloops identity and a re-run that only writes the happy path never
-# clears it. The intended state with KIT_SUBSTRATE_APP_BASE_URL unset is NO
-# courier keys at all (`present == 0`, the supported no-mail state), so the
-# sweep deletes whichever of the seven keys are present — one merge patch with
-# `"key":null` under `data`, which removes the named keys and touches nothing
-# else — prints what it removed and why, restarts identity so the change
-# reaches the pod, and re-reads the secret to prove the block is empty. A
-# patch that silently did nothing is the defect this function exists to end, so
-# a read-back that still carries a courier key fails the step naming the
-# leftover.
+# converge_identity_courier_block — converge identity's courier keys when the box
+# declares no public origin. TWO shapes reach this branch and they are not the
+# same thing, so the function CLASSIFIES before it deletes — mirroring
+# identity's own `loadCourier` rule (`present != 2` refuses):
+#
+# * HALF-PAIR or STRAY TEMPLATE — COURIER_BASE_URL xor COURIER_TOKEN present,
+#   or a lone template key. This is the state the sweep was written for: an
+#   older installer wrote COURIER_TOKEN without COURIER_BASE_URL (or templates
+#   pointing at a base this box no longer declares), identity's loader refuses
+#   exactly that half-pair, so the orphan crashloops identity and a re-run
+#   that only writes the happy path never clears it. These keys are orphans:
+#   deleted in one merge patch, reported key by key, identity restarted, and
+#   the block re-read to prove it converged.
+# * COMPLETE PAIR — COURIER_BASE_URL AND COURIER_TOKEN both present, with or
+#   without templates. This is NOT an orphan: it is a WORKING mail path the
+#   operator configured (a run where KIT_SUBSTRATE_APP_BASE_URL was set, or a
+#   hand patch), identity boots on it and every recovery route answers. A step
+#   that cannot write the correct value must not delete the correct value that
+#   is already there, so the pair STAYS: nothing is deleted, nothing is
+#   restarted, and the report says plainly that the box keeps a working mail
+#   path and names KIT_SUBSTRATE_APP_BASE_URL as the variable that would
+#   rewrite it. Deleting it here and calling it "leftovers" turned a working
+#   box into 503s on every recovery route with no line in the run saying so.
+#
+# The intended state with KIT_SUBSTRATE_APP_BASE_URL unset is NO courier keys
+# at all (`present == 0`, the supported no-mail state) — and a box that
+# carries none says so, naming that nothing was removed. But "intended" is
+# not "present": the sweep heals what is broken and leaves what works.
 #
 # The nulls go under `data` and NOT under `stringData` on purpose: stringData
 # is write-only and is never persisted, so a null there merges into a field
@@ -3213,14 +3226,25 @@ validate_app_base_url() {
 # COURIER_IDENTITY_TOKEN is required by courier's runtime regardless.
 converge_identity_courier_block() {
   local k v orphans=""
+  IDENTITY_MAIL_PATH_KEPT=""
+  local base_present="" token_present=""
   for k in ${IDENTITY_COURIER_KEYS[@]+"${IDENTITY_COURIER_KEYS[@]}"}; do
     v="$(read_secret_key identity identity-secrets "$k")"
     if [ -n "$v" ]; then
       orphans="${orphans:+$orphans }$k"
+      case "$k" in
+        COURIER_BASE_URL) base_present=1 ;;
+        COURIER_TOKEN) token_present=1 ;;
+      esac
     fi
   done
+  if [ -n "$base_present" ] && [ -n "$token_present" ]; then # SWEEP-HONEST-CLASSIFY
+    kit_substrate_out "      identity carries a working mail path (COURIER_BASE_URL and COURIER_TOKEN are both present): this run has no KIT_SUBSTRATE_APP_BASE_URL to rewrite it with, so the mail path stays, nothing removed, and every recovery route keeps answering — set KIT_SUBSTRATE_APP_BASE_URL to rewrite the pair and its link templates on a later run"
+    IDENTITY_MAIL_PATH_KEPT=1
+    return 0
+  fi
   if [ -z "$orphans" ]; then
-    kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): no identity courier keys written, so identity boots into its supported no-mail state and every recovery route answers 503"
+    kit_substrate_out "      identity's mail path is NOT configured (KIT_SUBSTRATE_APP_BASE_URL unset): no identity courier keys written, nothing removed, so identity boots into its supported no-mail state and every recovery route answers 503"
     return 0
   fi
   local orphan_patch
@@ -3422,10 +3446,11 @@ mint_courier_identity_token() {
   #     template is a refusal at boot, and deriving all five from the one origin
   #     is what keeps two of them from drifting.
   #   * KIT_SUBSTRATE_APP_BASE_URL UNSET — identity's courier block is CONVERGED
-  #     to absent: whatever of the seven keys a previous installer left behind
-  #     is removed (converge_identity_courier_block, one `"key":null` merge
-  #     patch, verified by re-read), and no new identity courier key is written.
-  #     identity's own loader treats "everything absent" as a supported
+  #     (converge_identity_courier_block, one `"key":null` merge patch for a
+  #     half-pair or stray template, verified by re-read): a COMPLETE pair the
+  #     box already carries is left in place and keeps answering, and no new
+  #     identity courier key is written. identity's own loader treats
+  #     "everything absent" as a supported deployment with no mail path
   #     deployment with no mail path (`loadCourier`'s `present == 0` branch: "all three absent is a deployment
   #     with no mail path, and is supported"), so it BOOTS and every recovery
   #     route answers 503 — the honest state — instead of a rollout that never
@@ -3480,6 +3505,8 @@ mint_courier_identity_token() {
   kubectl --kubeconfig="$KUBECONFIG" -n courier rollout restart deployment/courier
   if [ -n "$KIT_SUBSTRATE_APP_BASE_URL" ]; then
     kit_substrate_out "      credential minted on this box; identity has a TRUE mail path (five link templates derived from ${KIT_SUBSTRATE_APP_BASE_URL}) and courier holds the same credential, both deployments restarted"
+  elif [ -n "${IDENTITY_MAIL_PATH_KEPT:-}" ]; then
+    kit_substrate_out "      credential minted on this box; courier holds it, identity KEEPS its working mail path (this run had no KIT_SUBSTRATE_APP_BASE_URL to rewrite it with, so nothing was rewritten) — every recovery route keeps answering; courier restarted"
   else
     kit_substrate_out "      credential minted on this box; courier holds it, identity's mail path is OFF BY DESIGN (set KIT_SUBSTRATE_APP_BASE_URL to turn it on), courier restarted"
   fi
