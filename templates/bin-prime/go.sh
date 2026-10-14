@@ -59,18 +59,46 @@ require git
 step "go mod download"
 go mod download
 
-step "no Go generate line pins a module version"
-# A Go service's `//go:generate` must not name a module version (`@v…`),
-# because a gate that fetches a module on demand is a gate that cannot run
-# where the module cache is cold. See ci.reusable.yml's `no generate version
-# pin` step and gateway/tools.go for the pattern. The fix is to declare the
-# tool as a dependency (a blank import in tools.go with `//go:build tools`)
-# and run it as `go run <module>` with no `@<version>`.
-if grep -rn --include='*.go' '^//go:generate.*@v' .; then
-  echo "bin/prime: a //go:generate line pins a module version with @v — remove the @<version>" >&2
-  echo "  so the tool resolves inside this module rather than in a throwaway one." >&2
-  echo "  The version lives once, in go.mod's require (through tools.go)." >&2
-  exit 1
+step "no Go generate line pins a module version without a declared shape"
+# A Go `//go:generate` that names a module version (`@v…`) resolves in a throwaway
+# module context whose transitive graph lives nowhere in this tree, so a gate that
+# fetches it on demand cannot run where the cache is cold. Two legitimate shapes
+# exist, and the guard must tell them apart:
+#
+#   1. DECLARED (applications): the tool is a blank import in tools.go with
+#      `//go:build tools`, `go mod tidy` records its graph, `go mod download`
+#      fills the cache, and the `//go:generate` line runs as `go run <module>`
+#      with no `@<version>`. See gateway/tools.go. The version lives once, in
+#      go.mod's require through tools.go.
+#
+#   2. WARMED OUT OF BAND (libraries): the service is a library — consumers import
+#      it and a `require` would pollute their graph (identity/client,
+#      TestTheGeneratorIsNotAModuleDependency). The `//go:generate` line keeps
+#      `@v`, and the gate warms the cache out of band: it reads the module@version
+#      from the generate line (never retyped), creates a throwaway module that
+#      requires it, runs `go mod download all`, and discards the temp dir.
+#      GOMODCACHE is shared so `go run <module>@<version>` hits the cache offline.
+#      See identity/bin/prime. A library takes the second because the first would
+#      ship ten thousand lines of generator into every consumer.
+#
+# A `//go:generate` may name `@v` ONLY if the gate warms the cache (shape 2), and
+# must NOT name it when the tool is a declared dependency (shape 1). The check
+# fails when neither shape is present — the defect the guard exists for.
+if grep -rn --include='*.go' '^//go:generate.*@v' . >/dev/null; then
+  # Has @v — library shape requires warming evidence somewhere the gate runs.
+  # Warming is a throwaway module that reads the version from the generate line
+  # and runs `go mod download all` out of band, so we look for that pattern in
+  # the gate itself (bin/prime) or in the CI workflow. GOMODCACHE is the marker
+  # that the cache is shared between the throwaway module and `go run`.
+  if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' .github/workflows/ci.yml 2>/dev/null; then
+    : # warmed out of band — library shape, allowed
+  else
+    echo "bin/prime: a //go:generate line pins @v but no cache-warming step was found" >&2
+    echo "  A library must warm the generator's graph out of band (throwaway module, GOMODCACHE is shared)" >&2
+    echo "  or an application must declare the tool in tools.go and run as go run <module> without @v." >&2
+    echo "  See identity/bin/prime for the library shape and gateway/tools.go for the declared shape." >&2
+    exit 1
+  fi
 fi
 
 step "go build ./..."
