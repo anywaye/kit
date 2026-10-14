@@ -965,12 +965,249 @@ kit_substrate_refuse() {
   exit 1
 }
 
+# --- readiness honesty -------------------------------------------------------
+# THE BOX THAT CANNOT SERVE MUST SAY SO. Measured on the live Contabo box
+# (2026-10): the install ran to completion and exited 0 while
+# `kubectl get applications -n argocd` showed gateway `Degraded` and
+# `kubectl -n gateway get pods` showed `Readiness probe failed: HTTP probe
+# failed with statuscode: 503` 1564 times over four hours. Two independent
+# causes, both invisible in the installer's output:
+#
+#   1. ACME could never complete: `kubectl get challenges -n gateway` showed
+#      `Waiting for HTTP-01 challenge propagation: failed to perform self
+#      check ... dial tcp: lookup api.cafaye.com on 10.43.0.10:53: no such
+#      host`. The operator never pointed DNS at the box; the installer
+#      created the Certificates, waited for nothing, and finished.
+#   2. gateway could never be Ready: its /readyz probes identity's JWKS, and
+#      identity serves that route only when OIDC is configured. The box's
+#      identity-secrets held no OIDC keys (the installer writes them only
+#      when KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set), so identity answered
+#      404 and gateway's readiness failed forever.
+#
+# Both are operator inputs the installer correctly refuses to guess (a
+# localhost default "mails every reader to a screen that is not theirs"), so
+# neither is a refusal here. THE DEFECT WAS SILENCE: a run over them reported
+# the same successful install.done as a run over a fully-ready box. What
+# follows is a REPORT — in preflight (before anything is created) and in the
+# final report beside the step times — plus the same verdict as a `readiness`
+# JSONL event for the headless caller. A box with no public DNS is a
+# legitimate target behind a firewall; the operator must be told which state
+# they chose. No KIT_SUBSTRATE_* variable here guesses a hostname, a URL or
+# an issuer: every host below is read out of what the installer is about to
+# write (the operator's two URLs, plus any public host in the Applications'
+# helm.values), never out of a second hard-coded list.
+# --- honest-done BEGIN
+READINESS_TLS_PENDING=""
+
+# kit_substrate_url_host <url> — the hostname inside a URL. Scheme, path,
+# query, fragment and port are stripped; what is left is what DNS must
+# resolve. Prints empty for an empty input.
+kit_substrate_url_host() {
+  local rest="${1:-}"
+  case "$rest" in
+    *://*) rest="${rest#*://}" ;;
+  esac
+  rest="${rest%%/*}"
+  rest="${rest%%:*}"
+  printf '%s' "$rest"
+}
+
+# kit_substrate_is_checkable_host <host> — is this a name public DNS must
+# resolve? In-cluster names (anything under .svc, .local, bare localhost or a
+# single label) are answered by the cluster or the box itself, so resolving
+# them here would prove nothing about ACME.
+kit_substrate_is_checkable_host() {
+  case "$1" in
+    "") return 1 ;;
+    localhost | *.svc.cluster.local | *.svc | *.local) return 1 ;;
+  esac
+  case "$1" in
+    *.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# kit_substrate_host_resolves <host> — does this box resolve the name?
+# getent on Linux (the box); dscacheutil on macOS (a developer DRY_RUN);
+# python3's resolver as the last fallback. A missing resolver is "cannot
+# tell", reported as unresolving with the reason in the report — never a
+# refusal, and never silence.
+kit_substrate_host_resolves() {
+  local host="$1"
+  [ -n "$host" ] || return 1
+  if command -v getent >/dev/null 2>&1; then
+    getent hosts "$host" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v dscacheutil >/dev/null 2>&1; then
+    dscacheutil -q host -a name "$host" 2>/dev/null | grep -q 'ip_address:'
+    return $?
+  fi
+  python3 -c 'import socket,sys; socket.getaddrinfo(sys.argv[1], None)' "$host" >/dev/null 2>&1
+  return $?
+}
+
+# kit_substrate_intended_hosts [manifest_dir] — every public hostname the
+# install is about to serve, one per line, deduplicated. Two sources, both
+# read rather than listed: the operator's two URLs (APP_BASE_URL becomes
+# identity's link templates, OIDC_ISSUER becomes identity's issuer — both
+# written by this installer), and any public https host in the Applications'
+# helm.values. Comments are stripped before the scan so a URL mentioned in
+# prose (e.g. a chart default deliberately NOT set) is not reported as
+# intended. In-cluster names are dropped by kit_substrate_is_checkable_host.
+kit_substrate_intended_hosts() {
+  local dir="${1:-$MANIFEST_DIR}" hosts="" url h found
+  for url in "$KIT_SUBSTRATE_APP_BASE_URL" "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER"; do
+    [ -n "$url" ] || continue
+    h="$(kit_substrate_url_host "$url")"
+    if kit_substrate_is_checkable_host "$h"; then
+      hosts="${hosts}${h}
+"
+    fi
+  done
+  if [ -d "$dir" ]; then
+    # The Application's FETCH coordinates are not served names: repoURL is
+    # where Argo pulls the chart from and destination.server is the API
+    # server Argo talks to, so neither gets a Certificate and neither is
+    # resolved here. What is left after dropping those two keys (and the
+    # comments) is the helm.values the installer applies — the served
+    # surface, which today is in-cluster http only.
+    found="$(sed 's/#.*//' "$dir"/*.yaml 2>/dev/null | grep -vE 'repoURL:|destination:|server: https://' | grep -oE 'https?://[^"'"'"' <>]+' 2>/dev/null || true)"
+    while IFS= read -r url; do
+      [ -n "$url" ] || continue
+      h="$(kit_substrate_url_host "$url")"
+      if kit_substrate_is_checkable_host "$h"; then
+        hosts="${hosts}${h}
+"
+      fi
+    done <<EOF
+$found
+EOF
+  fi
+  printf '%s' "$hosts" | awk 'NF && !seen[$0]++'
+}
+
+# kit_substrate_compute_readiness — resolve every intended host now and store
+# the ones that do not. Run once, in preflight (before anything is created);
+# the final report and the JSONL event read READINESS_TLS_PENDING back. The
+# OIDC half needs no probe: unset issuer means no JWKS route by construction.
+kit_substrate_compute_readiness() {
+  READINESS_TLS_PENDING=""
+  local h all pending=""
+  all="$(kit_substrate_intended_hosts)"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if ! kit_substrate_host_resolves "$h"; then
+      pending="${pending}${h}
+"
+    fi
+  done <<EOF
+$all
+EOF
+  READINESS_TLS_PENDING="$pending"
+}
+
+# kit_substrate_readiness_pending_count — conditions keeping the box from
+# fully serving: one per unresolving host, plus one when the OIDC issuer is
+# unset. A number, for the human summary and the JSONL message.
+kit_substrate_readiness_pending_count() {
+  local n=0 h
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    n=$((n + 1))
+  done <<EOF
+$READINESS_TLS_PENDING
+EOF
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    n=$((n + 1))
+  fi
+  printf '%s' "$n"
+}
+
+# kit_substrate_readiness_preflight — the preflight half of the report: which
+# intended hosts do not resolve and what that means, and the OIDC consequence
+# with the one export that turns it on. A report, not a refusal.
+kit_substrate_readiness_preflight() {
+  kit_substrate_compute_readiness
+  local h all
+  all="$(kit_substrate_intended_hosts)"
+  kit_substrate_out "  readiness preflight: resolving the intended public hosts on this box"
+  if [ -z "$all" ]; then
+    kit_substrate_out "    no checkable public host to resolve (unset or local/in-cluster URLs need no public DNS)"
+  elif [ -z "$READINESS_TLS_PENDING" ]; then
+    kit_substrate_out "    every intended host resolves"
+  else
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      kit_substrate_out "    ${h}: DOES NOT RESOLVE — the ACME HTTP-01 self check will fail, the Certificate will sit pending, and the Ingress will keep serving plaintext on port 80"
+    done <<EOF
+$READINESS_TLS_PENDING
+EOF
+  fi
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    kit_substrate_out "  OIDC: KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is unset — identity serves no JWKS route, so gateway's /readyz fails and its Deployment never becomes Ready"
+    kit_substrate_out "    turn it on with: export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://<your-issuer>'"
+  else
+    kit_substrate_out "  OIDC: issuer is set — identity serves its JWKS route"
+  fi
+}
+
+# kit_substrate_readiness_final — the done-report half: the shape of the box,
+# not just the step times. Each unready condition with its exact remedy; the
+# header is unconditional so a run with nothing pending still names the
+# verdict rather than going quiet (quiet is the defect this ends).
+kit_substrate_readiness_final() {
+  local h
+  kit_substrate_out "  THIS BOX WILL NOT FULLY SERVE UNTIL:"
+  if [ -n "$READINESS_TLS_PENDING" ]; then
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      kit_substrate_out "    - ${h} resolves (point ${h} at this box) — until then the ACME HTTP-01 self check fails, the Certificate sits pending, and the Ingress serves plaintext on port 80"
+    done <<EOF
+$READINESS_TLS_PENDING
+EOF
+  fi
+  if [ -z "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    kit_substrate_out "    - KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set (export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER='https://<your-issuer>') — until then identity serves no JWKS route, so gateway's /readyz fails and its Deployment never becomes Ready"
+  fi
+  if [ -z "$READINESS_TLS_PENDING" ] && [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    kit_substrate_out "    (none — every intended host resolves and the OIDC issuer is set)"
+  fi
+}
+
+# kit_substrate_readiness_summary — the one-line verdict the JSONL event and
+# the human report share.
+kit_substrate_readiness_summary() {
+  local n
+  n="$(kit_substrate_readiness_pending_count)"
+  if [ "$n" -eq 0 ]; then
+    printf 'readiness: no known unready condition'
+  else
+    printf 'readiness: %s condition(s) keep this box from fully serving' "$n"
+  fi
+}
+
+# kit_substrate_readiness_json — the machine half of the same verdict: the
+# field is `tls_pending_hosts` (every intended host that does not resolve)
+# beside `oidc_configured`. Leading comma included, for kit_substrate_emit's
+# <extra-json> slot; the existing events are untouched.
+kit_substrate_readiness_json() {
+  local hosts_json oidc="false"
+  hosts_json="$(printf '%s' "$READINESS_TLS_PENDING" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+  if [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
+    oidc="true"
+  fi
+  printf ',"tls_pending_hosts":%s,"oidc_configured":%s' "$hosts_json" "$oidc"
+}
+# --- honest-done END
+
 # --- preflight --------------------------------------------------------------
 # Every check here is a refusal, not a warning: a half-installed substrate is
 # worse than no substrate, because it looks like it works.
 preflight() {
   if [ "$DRY_RUN" -eq 1 ]; then
     kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
+    kit_substrate_readiness_preflight # honest-done
     return 0
   fi
 
@@ -1024,6 +1261,12 @@ preflight() {
   if ! curl -s --max-time 10 -o /dev/null https://ghcr.io/v2/; then
     kit_substrate_refuse "" "check network access to ghcr.io — the pull secret and charts come from there" "ghcr.io is unreachable — the pull secret and charts come from there"
   fi
+  # The readiness verdict is a REPORT, not a refusal: a box with no public DNS
+  # is a legitimate target behind a firewall, and an unset OIDC issuer is a
+  # supported reduced surface. Both run here — before anything is created — so
+  # the operator learns which state they chose while there is still nothing to
+  # undo. DRY_RUN reports it too, through the early return above.
+  kit_substrate_readiness_preflight # honest-done
 }
 
 # --- step 1: k3s ------------------------------------------------------------
@@ -3159,6 +3402,7 @@ main() {
   R_MESSAGE="substrate is up: k3s ${K3S_VERSION}, cert-manager ${CERT_MANAGER_VERSION}, CloudNativePG ${CNPG_VERSION}, Argo CD ${ARGOCD_VERSION}"
   kit_substrate_write_receipt
   if [ "$HEADLESS" -eq 1 ]; then
+    kit_substrate_emit readiness "$(kit_substrate_readiness_summary)" "$(kit_substrate_readiness_json)" # honest-done
     kit_substrate_emit install.done "$R_MESSAGE" \
       ",\"seconds\":${total_seconds},\"steps\":$(kit_substrate_steps_json)"
   else
@@ -3167,6 +3411,7 @@ main() {
     kit_substrate_out "Argo CD state:  kubectl -n argocd get applications"
     kit_substrate_out ""
     kit_substrate_print_table "$total_seconds"
+    kit_substrate_readiness_final # honest-done
   fi
 }
 

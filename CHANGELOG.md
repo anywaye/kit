@@ -35,7 +35,27 @@
   box that already minted still heals. `tests/substrate_test.sh` §18d proves
   green removal (unrelated keys kept, courier pair written, restart issued)
   with a neutered-list red control, and the patch-convention check pins the
-  data/stringData distinction for both mocks.
+  data/stringData distinction for both mocks.=======
+- **`install.done` no longer claims success on a box that cannot become
+  Ready.** The live Contabo box finished the install with exit 0 while Argo
+  showed gateway Synced/Degraded and its pods logged `Readiness probe
+  failed ... 503` 1564 times over four hours — two silent causes: ACME
+  HTTP-01 could never self-check (`lookup api.cafaye.com ...: no such host`,
+  DNS never pointed at the box) and gateway's `/readyz` could never pass
+  (identity serves its JWKS route only when
+  `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` is set, and it was not). Neither is
+  refused — a firewalled box is legitimate and an issuer must not be guessed
+  — so the installer now REPORTS: preflight resolves the intended hosts read
+  out of what it writes (the two operator URLs plus public hosts in the
+  Applications' `helm.values`, never a second list) and names each
+  unresolving host with its consequence; the done report carries a `THIS BOX
+  WILL NOT FULLY SERVE UNTIL` section beside the step times; and headless
+  stdout gains a `readiness` event with the named field
+  `tls_pending_hosts` beside `oidc_configured`. `tests/substrate_test.sh`
+  §25 proves it with three green checks, the headless event check, the
+  resolving-host no-warn control, the intended-hosts unit, and four red
+  controls against the master-shaped fixture. See
+  `REPORT-roll-c5-honest-done.md`.
 - **The AppProject permitted the registry ROOT while every Application named
   its own chart's PATH, so the controller refused all eight Applications.**
   A sibling packet moved each Application's OCI `source.repoURL` from
