@@ -2,6 +2,31 @@
 
 ### Substrate
 
+- **The orphan sweep deleted a WORKING mail path and called it leftovers.**
+  The live Contabo box carries a complete seven-key courier block
+  (`COURIER_BASE_URL` and `COURIER_TOKEN` both present, five link templates
+  derived from `https://app.cafaye.com`) and identity boots reporting
+  "account recovery can send all four messages through courier". With
+  `KIT_SUBSTRATE_APP_BASE_URL` unset the sweep collected all seven keys and
+  deleted them as "leftovers from an installer that wrote half a pair" —
+  a provenance it never checked — with no line saying the box went from a
+  working mail path to 503 on every recovery route. `converge_identity_courier_block`
+  now classifies first, mirroring `loadCourier`'s
+  `present != 2` rule: a half-pair or stray template is swept exactly as
+  before (deleted key by key, restart, read-back still fails the step naming
+  leftovers); a complete pair STAYS — nothing deleted, identity not
+  restarted — and the run reports the kept working mail path, names
+  `KIT_SUBSTRATE_APP_BASE_URL` as the variable that would rewrite it, and
+  says nothing was removed. The mint's closing line follows the same split
+  (kept path vs off-by-design). `tests/substrate_test.sh` §18e proves it:
+  half-pair still swept with only removed keys named, complete pair kept
+  with the rewriting variable named, empty run says nothing removed, and two
+  red controls (classification disabled deletes the pair; orphan sentence
+  planted on a kept path). The OIDC three-key control's fixture no longer
+  reads `HEAD~1` — the first commit after the oidc-four merge shifted the
+  parent onto the four-key tree and turned it red — it locates the commit
+  that wired `OIDC_LOGIN_UI_URL` and reads that commit's parent. See
+  `REPORT-roll-c5-sweep-honest.md`.
 - **The glob-fixed AppProject never reached a box that already had Argo CD, so
   every Application stayed `Unknown: repo … is not permitted in project
   'default'`.** `install.sh` step 4's guard answers *is the operator installed*

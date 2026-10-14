@@ -4198,14 +4198,21 @@ run 'oidc four: login UI alone is refused, naming the missing issuer' green oidc
 # RED control: the installer as it stands on master (three keys, no refusal)
 # passes the issuer-alone shape through without complaint — i.e. the refusal
 # check actually discriminates. Revert the new code and the check must go red;
-# if it does not, the check is worthless. The fixture is the PARENT commit's
-# install.sh — the pre-fix, three-key installer. It must NOT be HEAD: this
-# branch's own commit IS the four-key installer, so a fixture taken from HEAD
-# carries the new variable reference, and `set -u` then trips it as an
-# "unbound variable" instead of showing the pass-through this control is about.
+# if it does not, the check is worthless. The fixture is the tree as it stood
+# BEFORE the commit that wired OIDC_LOGIN_UI_URL (that commit's parent) — the
+# pre-fix, three-key installer. It must NOT be HEAD~1: every commit this branch
+# lands after the four-key merge shifts the parent onto the four-key tree, so
+# a fixture taken from HEAD~1 silently becomes the new installer and `set -u`
+# trips its new variable reference as an "unbound variable" instead of showing
+# the pass-through this control is about (measured: the first commit after the
+# oidc-four merge turned this control red for exactly that reason, exit 1 with
+# KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL unbound).
 fixture_oidc_three_orig="$WORK/install-oidc-three-orig.sh"
-if ! git -C "$ROOT" show HEAD~1:templates/substrate/install.sh >"$fixture_oidc_three_orig" 2>/dev/null; then
-  fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "git show HEAD:templates/substrate/install.sh failed"
+oidc_three_base="$(git -C "$ROOT" log --format=%H -S 'KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL' -- templates/substrate/install.sh | tail -1)"
+if [ -z "${oidc_three_base:-}" ] \
+  || ! git -C "$ROOT" show "${oidc_three_base}^:templates/substrate/install.sh" >"$fixture_oidc_three_orig" 2>/dev/null \
+  || grep -q "OIDC_LOGIN_UI_URL" "$fixture_oidc_three_orig"; then
+  fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "no three-key tree found (base=${oidc_three_base:-<none>})"
 else
   sed '/^main "$@"/d' "$fixture_oidc_three_orig" >"$WORK/install-oidc-three-sourced.sh"
   MOCK_ROOT="$WORK/oidc-three-control"
@@ -6238,6 +6245,21 @@ mint_step() {
         'mock_seed identity identity-secrets OIDC_SIGNING_KEY "old-oidc-key"' \
         'mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "old-oidc-kid"'
     fi
+    # MINT_SEED_COMPLETE=1 plants the live-box state: a COMPLETE seven-key
+    # block — the pair plus all five link templates derived from
+    # https://app.cafaye.com, the box that boots and sends all four recovery
+    # messages. With no base URL this run cannot rewrite it, so the sweep
+    # must leave every key in place and say so.
+    if [ "${MINT_SEED_COMPLETE:-}" = "1" ]; then
+      printf '%s\n' \
+        'mock_seed identity identity-secrets COURIER_BASE_URL "http://courier.courier.svc.cluster.local:4000"' \
+        'mock_seed identity identity-secrets COURIER_TOKEN "live-box-working-token"' \
+        'mock_seed identity identity-secrets PASSWORD_RESET_LINK_TEMPLATE "https://app.cafaye.com/reset-password?token={token}"' \
+        'mock_seed identity identity-secrets EMAIL_VERIFICATION_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets EMAIL_CHANGE_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets INVITATION_LINK_TEMPLATE "https://app.cafaye.com/invitations/{token}"'
+    fi
     # The 4th argument is `wrap` to call the mint from inside a FUNCTION, the
     # way `main` calls it. The distinction is the whole defect B control: a
     # `RETURN` trap is global, so it fires at the CALLER's return too, where
@@ -6647,8 +6669,10 @@ check_mint_mail_path_unset() {
     return 1
   fi
   # The installer must SAY the mail path is off, so the operator learns the box
-  # boots without one from the install output rather than from a 503 later.
-  if ! grep -q 'mail path is NOT configured' "$ROLLOUT_DIR/run.log"; then
+  # boots without one from the install output rather than from a 503 later —
+  # and a run that removed nothing says so.
+  if ! grep -q 'mail path is NOT configured' "$ROLLOUT_DIR/run.log" \
+    || ! grep -q 'nothing removed' "$ROLLOUT_DIR/run.log"; then
     printf 'the mint did not report the no-mail path on its own channel\n%s\n' \
       "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
@@ -6702,10 +6726,16 @@ check_mint_converges_orphan() {
     printf 'courier-secrets lost its required pair while identity converged\n'
     return 1
   fi
-  # The operator must SEE the edit: the log names the removed keys and why.
+  # The operator must SEE the edit: the log names the removed keys and why —
+  # each removed key by name, and no key that was not removed.
   if ! grep -q 'orphaned courier key' "$ROLLOUT_DIR/run.log" \
-    || ! grep -q 'COURIER_TOKEN' "$ROLLOUT_DIR/run.log"; then
+    || ! grep -q 'COURIER_TOKEN' "$ROLLOUT_DIR/run.log" \
+    || ! grep -q 'EMAIL_CHANGE_LINK_TEMPLATE' "$ROLLOUT_DIR/run.log"; then
     printf 'the sweep did not report which keys it removed\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  if grep -q 'NATS_URL' "$ROLLOUT_DIR/run.log"; then
+    printf 'the sweep report names a key it did not remove (NATS_URL was kept)\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
   # And the change must REACH the pod: identity is restarted.
@@ -6743,6 +6773,134 @@ else
     pass 'control: the write-forward step leaves the orphan, failing the check'
   else
     fail 'control: the write-forward step leaves the orphan, failing the check' "$cco_out"
+  fi
+fi
+
+# ===========================================================================
+# 18e. the unset branch KEEPS a complete pair: a working mail path is not an
+#      orphan, and the sweep must say so
+# ===========================================================================
+#
+# THE LIVE DEFECT. The Contabo box carries a COMPLETE seven-key courier block
+# — COURIER_BASE_URL and COURIER_TOKEN both present, five link templates
+# derived from https://app.cafaye.com — and identity boots and reports
+# "account recovery can send all four messages through courier". The sweep as
+# it stood collected all seven keys into `orphans` and deleted them, printing
+# "leftovers from an installer that wrote half a pair": a provenance the
+# installer never checked, and a "removed" with no mention that the box went
+# from a working mail path to 503 on every recovery route.
+#
+# THE FIX. converge_identity_courier_block classifies first, mirroring
+# identity's own loadCourier rule: both halves present means a working mail
+# path, which stays — nothing deleted, identity not restarted — and the report
+# says the mail path stays and names KIT_SUBSTRATE_APP_BASE_URL as the
+# variable that would rewrite it. The half-pair sweep is unchanged.
+check_mint_keeps_complete_pair() {
+  local saved_base="${MINT_APP_BASE_URL:-}" saved_complete="${MINT_SEED_COMPLETE:-}"
+  MINT_APP_BASE_URL=__UNSET__ MINT_SEED_COMPLETE=1 mint_step "$1" 2 5
+  MINT_APP_BASE_URL="$saved_base" MINT_SEED_COMPLETE="$saved_complete"
+  if [ "$mint_ec" -ne 0 ]; then
+    printf 'the mint exited %s on a box with a working mail path and no base URL\n%s\n' "$mint_ec" "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  local store="$ROLLOUT_DIR/store" k
+  for k in COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
+    if [ -z "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
+      printf 'the sweep deleted %s from a working mail path — the box went from sending mail to 503s\n' "$k"
+      return 1
+    fi
+  done
+  if [ "$(cat "$store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)" != "live-box-working-token" ]; then
+    printf 'the working token was rewritten by a run with no base URL to rewrite it with\n'
+    return 1
+  fi
+  # Keeping identity's path must not starve courier's: courier still gets its
+  # required pair, and the mint still completes (courier restarted).
+  if [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ] \
+    || [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_URL" 2>/dev/null || true)" != "$IDENTITY_BASE_URL_EXPECTED" ]; then
+    printf 'courier-secrets lost its required pair while identity kept its mail path\n'
+    return 1
+  fi
+  if ! grep -q 'rollout restart deployment/courier' "$ROLLOUT_DIR/argv"; then
+    printf 'courier was not restarted after its secret changed\n'
+    return 1
+  fi
+  # The report must say the box KEEPS a working mail path and name the
+  # variable that would rewrite it — and a run that removed nothing says so.
+  if ! grep -q 'working mail path' "$ROLLOUT_DIR/run.log" \
+    || ! grep -q 'KIT_SUBSTRATE_APP_BASE_URL' "$ROLLOUT_DIR/run.log" \
+    || ! grep -q 'nothing removed' "$ROLLOUT_DIR/run.log"; then
+    printf 'the run kept the mail path without saying so and naming the variable\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  # And the kept path must NOT be described with the orphan's sentence.
+  if grep -q 'leftovers' "$ROLLOUT_DIR/run.log" \
+    || grep -q 'orphaned courier key' "$ROLLOUT_DIR/run.log"; then
+    printf 'a kept mail path was described with the orphan sentence\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
+    return 1
+  fi
+  # Nothing changed in identity-secrets, so identity must NOT have restarted.
+  if grep -q 'rollout restart deployment/identity' "$ROLLOUT_DIR/argv"; then
+    printf 'identity was restarted although its secret was left untouched\n'
+    return 1
+  fi
+  printf 'complete pair with templates left in place, working mail path reported with the rewriting variable named, no orphan sentence, identity not restarted, courier pair written'
+}
+run 'step 11 keeps a complete identity courier block when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
+  check_mint_keeps_complete_pair "$mint_fixed"
+
+# RED CONTROL 1: the sweep as it stands on master deletes a complete pair.
+# The fixture is the real tree with the classification disabled — the
+# SWEEP-HONEST-CLASSIFY branch forced false — so the control tracks future
+# edits to the sweep body. Its premise is asserted first: the branch is really
+# gone. If the keep-check passed against it, the check discriminates nothing.
+mint_noclassify="$WORK/install-mint-no-classify.sh"
+sed -e '/^main "$@"/d' \
+  -e 's/if \[ -n "\$base_present" \] && \[ -n "\$token_present" \]; then # SWEEP-HONEST-CLASSIFY/if false; then # SWEEP-HONEST-CLASSIFY/' \
+  "$SUBSTRATE/install.sh" >"$mint_noclassify"
+if ! grep -qF 'if false; then # SWEEP-HONEST-CLASSIFY' "$mint_noclassify" \
+  || grep -qF '"$base_present"' "$mint_noclassify"; then
+  fail 'control fixture: the classification is disabled' \
+    "the branch-forcing did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  knc_out=""; knc_ec=0
+  knc_out="$(check_mint_keeps_complete_pair "$mint_noclassify" 2>&1)" || knc_ec=$?
+  if [ "$knc_ec" -eq 0 ]; then
+    fail 'control: a sweep with no classification deletes the pair, failing the check' \
+      "exit 0 — the check passed against a sweep that deletes a working mail path, so it discriminates nothing"
+  elif case "$knc_out" in *went*from*sending*mail*) true ;; *) false ;; esac; then
+    pass 'control: a sweep with no classification deletes the pair, failing the check'
+  else
+    fail 'control: a sweep with no classification deletes the pair, failing the check' "$knc_out"
+  fi
+fi
+
+# RED CONTROL 2: the orphan's sentence must not appear on a complete-pair run.
+# The fixture is the real tree with the keep-branch report rewritten to use
+# the orphan's word — the keys are still kept, so only the message assertion
+# can fire. Its premise is asserted first: the word is really in the
+# keep-branch and the classification itself is intact.
+mint_badword="$WORK/install-mint-badword.sh"
+sed -e '/^main "$@"/d' \
+  -e 's/so the mail path stays, nothing removed,/so the mail path stays, nothing removed -- leftovers from an installer that wrote half a pair,/' \
+  "$SUBSTRATE/install.sh" >"$mint_badword"
+if ! grep -qF 'mail path stays, nothing removed' "$mint_badword" \
+  || ! grep -qF 'leftovers from an installer that wrote half a pair' "$mint_badword" \
+  || ! grep -qF '# SWEEP-HONEST-CLASSIFY' "$mint_badword"; then
+  fail 'control fixture: the keep-branch speaks the orphan sentence' \
+    "the word-plant did not apply, so the control would prove nothing"
+  failures=$((failures + 1))
+else
+  kbw_out=""; kbw_ec=0
+  kbw_out="$(check_mint_keeps_complete_pair "$mint_badword" 2>&1)" || kbw_ec=$?
+  if [ "$kbw_ec" -eq 0 ]; then
+    fail 'control: the orphan sentence on a complete-pair run fails the check' \
+      "exit 0 — the check passed against a kept path called leftovers, so it discriminates nothing"
+  elif case "$kbw_out" in *orphan*sentence*) true ;; *) false ;; esac; then
+    pass 'control: the orphan sentence on a complete-pair run fails the check'
+  else
+    fail 'control: the orphan sentence on a complete-pair run fails the check' "$kbw_out"
   fi
 fi
 
