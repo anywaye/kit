@@ -113,8 +113,57 @@ before, it does still — the fetch is skipped and the sibling tree is used.
 
 ## Gates
 
-- `bash tests/substrate_test.sh` — see the committed output below.
-- `bash tests/validate.sh --static-only` — see below.
+`bash tests/substrate_test.sh` (narrow gate, **green** — the eight new checks are
+the first eight lines after the pin checks):
+
+```
+-- substrate_test: the install is real, and the pins are exact
+      PASS substrate_test: the served-manifests pin is an exact sha that tracks the manifests on disk
+      PASS substrate_test: control: a floating manifest ref goes red under the same pin check
+      PASS substrate_test: control: a pinned ref whose manifests differ goes red (the pin is a tie)
+      PASS substrate_test: the served-script read of BASH_SOURCE carries an explicit empty fallback
+      PASS substrate_test: control: the pre-fix BASH_SOURCE read goes red under the fallback check
+      PASS substrate_test: control: the pre-fix shape crashes on BASH_SOURCE[0] under a pipe
+      PASS substrate_test: a served install fetches the pinned manifests and plans all thirteen steps
+      PASS substrate_test: a manifest set that cannot be fetched is refused by name, before step 5
+      …
+-- substrate_test: 424 passed, 0 failed, 0 skipped
+PASS: 424 passed, 0 failed, 0 skipped
+```
+
+`bash tests/validate.sh --static-only` (green; full validate is the manager's at
+merge):
+
+```
+-- static: templates/substrate — the install is real, and its pins are exact
+PASS tests/substrate_test.sh  (install.sh parses, DRY_RUN runs, pins are exact, manifests parse, every CRD field is declared by the pinned operator CRD, no :latest, no inline secret, NATS broker + stream + local/substrate drift, remote-URL applies server-side with force-conflicts and local applies client-side)
+       -- substrate_test: 424 passed, 0 failed, 0 skipped
+       PASS: 424 passed, 0 failed, 0 skipped
+…
+PASS: every check passed.
+note: 9 check(s) skipped — reported above, never hidden.
+note: 1 tier(s) ran under a time bound; none was reached.
+```
+
+### One pre-existing red this packet had to clear
+
+The **first** `--static-only` run of this worktree was **red**, on a check this
+packet does not touch: `obs chart sources`. It failed closed on
+`templates/substrate/manifests/applications/billing.yaml` —
+`'billing' is neither a service chart nor a pinned observability chart` — because
+`SERVICE_APPS` in `tests/validate.sh` still named the four launch services.
+`billing.yaml` arrived in the branch's parent commit (`ecb2fc9`, "billing's
+Application, and the three fixtures it broke by arriving"); this is a fourth
+fixture that commit broke and did not extend. It is **not** caused by the
+front-door fix.
+
+The classification is not a judgement call: `billing.yaml` resolves to
+`oci://ghcr.io/cafaye/charts/billing` / `billing` / `0.1.0` — the service-chart
+triple exactly. It is fixed in its own commit
+(`fix(validate): classify billing's Application as a service chart`) so a reader
+can see it is not part of the front-door change. It **does not weaken** the
+check — the fail-closed branch is unchanged and both red controls still go red —
+and it is why the rule "if a check is wrong, fix the check and say so" exists.
 
 ## The manager's acceptance
 
@@ -124,9 +173,16 @@ Run the real front door on the test box, from a fresh state:
 curl -fsSL https://cafaye.com/box/install | sudo bash
 ```
 
-Device the argument in this report: the **served bytes must include this fix**
-(deploy the Worker) and the pinned commit (`ecb2fc9…`) must be reachable on
-GitHub. If the fetch works, step 5 prints its per-artifact probe lines — `public:
-cafaye/charts/… (anonymous fetch)` for the public charts — **without** demanding
+Two conditions ride on this fix being deployed:
+
+1. **The served bytes must include this fix** — deploy the Worker so
+   `cafaye.com/box/install` serves this `install.sh`.
+2. **The pinned commit (`ecb2fc9…`) must be reachable on GitHub** — it is this
+   branch's parent, so a normal merge/fast-forward preserves it; a squash would
+   orphan it and the run would refuse (see "The pin" above).
+
+If the fetch works, step 5 prints its per-artifact probe lines — `public:
+cafaye/charts/… (anonymous fetch)` for the all-public set — **without** demanding
 `KIT_SUBSTRATE_BOX_ID`; if the fetch cannot complete, the run refuses by name and
 never reaches step 5.
+
