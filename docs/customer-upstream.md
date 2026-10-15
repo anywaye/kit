@@ -182,7 +182,7 @@ App owners change Kit the same way Jumpstart contributors do — a fork,
 a branch, a pull request to canonical Kit:
 
 ```sh
-git clone https://github.com/<you>/kit.git
+git clone https://github.com/your-handle/kit.git
 cd kit
 git remote add canonical https://github.com/cafaye/kit.git
 git checkout -b docs-update-the-pin
