@@ -1205,6 +1205,17 @@ EOF
 
 # --- honest-done BEGIN
 READINESS_TLS_PENDING=""
+# Whether THIS RUN restarted identity and watched its JWKS route answer. Set
+# only by reconcile_oidc_identity_secrets' route check; the final report reads
+# it so a set issuer is never reported as a verified route the run did not
+# verify (the stale-pod gap this packet closes — see the route check's comment).
+OIDC_ROUTE_VERIFIED=""
+# Whether THIS RUN patched identity-secrets' OIDC surface. Set only by
+# reconcile_oidc_identity_secrets' patch path; the final report reads it
+# beside OIDC_ROUTE_VERIFIED so a patch the run could not follow with a
+# rollout (no Deployment yet) is reported as patched-but-unverified rather
+# than as serving.
+OIDC_SECRET_PATCHED=""
 
 # kit_substrate_url_host <url> — the hostname inside a URL. Scheme, path,
 # query, fragment and port are stripped; what is left is what DNS must
@@ -1666,6 +1677,18 @@ EOF
   if [ -z "$READINESS_TLS_PENDING" ] && [ -n "$KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" ]; then
     kit_substrate_out "    (none — every intended host resolves and the OIDC issuer is set)"
     kit_substrate_out "    cluster DNS (CoreDNS at 10.43.0.10:53) agrees with node DNS for every host"
+    # The OIDC verdict: "issuer is set" is configuration, not serving. A run
+    # that patched the secret, restarted identity and watched its JWKS route
+    # answer 2xx says so; any other run names what it did not verify, so the
+    # report never promises a route it did not watch (the stale-pod gap: the
+    # keys round-tripped while the pod served identity_jwks=404).
+    if [ -n "$OIDC_ROUTE_VERIFIED" ]; then
+      kit_substrate_out "    OIDC: this run patched identity-secrets, restarted deployment/identity and watched its JWKS route answer 2xx — the patched surface is serving"
+    elif [ -n "$OIDC_SECRET_PATCHED" ]; then
+      kit_substrate_out "    OIDC: this run patched identity-secrets but the identity Deployment was not present, so no rollout was watched and the JWKS route is unverified — the next sync boots with the patched secret"
+    else
+      kit_substrate_out "    OIDC: this run did not verify identity's JWKS route (the secret already carried the OIDC surface, or was freshly created with it) — the issuer is set, but serving was not watched this run"
+    fi
   fi
   # Log store is not a readiness condition but a shape statement: what the
   # installer DID NOT install, and where to find the logs it does not centralize.
@@ -3232,6 +3255,79 @@ reconcile_oidc_identity_secrets() {
     echo "error: identity-secrets patch did not round-trip — OIDC keys not readable" >&2
     exit 1
   fi
+  OIDC_SECRET_PATCHED=1
+  # THE POD HOLDS THE OLD ENVIRONMENT. identity reads its OIDC surface from
+  # env (envFrom: secretRef identity-secrets), which the kubelet resolves AT
+  # POD START — a patched secret reaches no running process. Measured live
+  # 2026-10-14: all four keys round-tripped while the pod (started 28s BEFORE
+  # the secret) served no JWKS route (identity_jwks=404), OIDCEnabled() false
+  # in that process, gateway /readyz 503 x61 over 10m. So the patch path
+  # restarts identity the way step 12's mint patch does. Only the patch path:
+  # the creation path has no running pod to restart, and the guard above
+  # returns early when both keys are already stored, so a converged re-run
+  # restarts nothing.
+  if kubectl --kubeconfig="$KUBECONFIG" get deployment identity -n identity >/dev/null 2>&1; then
+    kubectl --kubeconfig="$KUBECONFIG" -n identity rollout restart deployment/identity
+    kit_substrate_out "      restarted deployment/identity so the patched OIDC surface reaches the pod (envFrom is read at pod start)"
+    # EXISTENCE, THEN WAIT: `rollout status` on a missing object is NotFound,
+    # not a wait, so the Deployment the restart just kicked is re-proven
+    # first — the same two-waits shape step 12 uses, and the shape the
+    # wait-lists audit demands. Returns at once while the list is non-empty;
+    # only a Deployment deleted mid-restart polls to the bound and refuses
+    # naming it.
+    kit_substrate_await_list "$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity
+    # A restart that is not waited for is a step reporting success over a pod
+    # still coming up, so the rollout is watched with the same bound the
+    # file's other identity rollouts use — and a stuck rollout is fatal here,
+    # never forgiven: a wait that forgives it reports success over a box
+    # still serving no route. Explicit if, not bare under set -e: callers
+    # below run with errexit disabled, where a bare failure would march on.
+    if ! kubectl --kubeconfig="$KUBECONFIG" -n identity rollout status deployment/identity --timeout="$((IDENTITY_ROLLOUT_TIMEOUT))s"; then
+      echo "error: deployment/identity did not roll out after the OIDC patch — the JWKS route is unverified, re-run once the Deployment is healthy" >&2
+      exit 1
+    fi
+    verify_oidc_jwks_route || exit 1
+  else
+    kit_substrate_out "      identity Deployment not present — restart skipped (the secret is already converged; the next sync boots with the patched secret, and the JWKS route is unverified by this run)"
+  fi
+}
+
+# verify_oidc_jwks_route — after the OIDC patch and its restart, prove
+# identity SERVES its JWKS route rather than merely holding readable keys.
+# The round-trip above proves the secret; what the box needs is the route:
+# gateway's /readyz probes it, and a secret that round-trips while the
+# service serves no route is the gap this packet exists to close. Same
+# mechanism as step 12's mint (port-forward to svc/identity on the box, curl
+# the loopback) — GET /.well-known/jwks.json must answer 2xx, anything else
+# is fatal, and a connect failure names the forward rather than identity.
+verify_oidc_jwks_route() {
+  local forward_port="${KIT_SUBSTRATE_IDENTITY_LOCAL_PORT:-18080}"
+  kubectl --kubeconfig="$KUBECONFIG" -n identity port-forward "svc/identity" "${forward_port}:8080" >/dev/null 2>&1 &
+  local forward_pid=$!
+  # THE TRAP REMOVES ITSELF, for the same reason as step 12's: a RETURN trap
+  # is global and fires at the CALLER's return too, where forward_pid has
+  # left scope and set -u turns the reference into the install's exit status.
+  trap 'kill "$forward_pid" 2>/dev/null || true; trap - RETURN' RETURN
+  if ! kit_substrate_await_port "$forward_port" 30; then
+    echo "error: the port-forward to svc/identity never accepted a connection on 127.0.0.1:${forward_port} — the forward itself failed, not identity" >&2
+    return 1
+  fi
+  local code=""
+  if ! code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "http://127.0.0.1:${forward_port}/.well-known/jwks.json" 2>/dev/null)"; then
+    echo "error: identity's JWKS route is unreachable after the OIDC restart — curl could not complete against the forwarded svc/identity" >&2
+    return 1
+  fi
+  case "$code" in
+    2*)
+      OIDC_ROUTE_VERIFIED=1
+      kit_substrate_out "      identity's JWKS route answers ${code} after the OIDC restart — the patched surface is serving"
+      return 0
+      ;;
+    *)
+      echo "error: identity's JWKS route answers ${code} after the OIDC restart — expected 2xx; the patched surface is not serving" >&2
+      return 1
+      ;;
+  esac
 }
 
 # validate_mfa_override — the operator-supplied MFA key, when set, must be
