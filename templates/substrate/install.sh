@@ -1164,7 +1164,12 @@ READINESS_DNS_STATUS=""
 : "${KIT_SUBSTRATE_RESOLVED_CONF:=/etc/systemd/resolved.conf.d/99-cafaye.conf}"
 kit_substrate_ensure_public_resolver() {
   local hosts
-  hosts="$(kit_substrate_intended_hosts)"
+  # The manifest dir is passed explicitly rather than left to the default:
+  # SC2120 (ShellCheck) flags a function that references `$1` with no caller
+  # ever passing one, and the two in-file callers relied on the default — the
+  # CI runner's ShellCheck (≤0.10) flags it while 0.11.0 stays silent, so the
+  # call sites now pass what the default meant.
+  hosts="$(kit_substrate_intended_hosts "$MANIFEST_DIR")"
   if [ -z "$hosts" ]; then
     return 0
   fi
@@ -1503,7 +1508,7 @@ kit_substrate_compute_readiness() {
   READINESS_DNS_SPLIT=""
   READINESS_DNS_STATUS=""
   local h all pending="" split="" status=""
-  all="$(kit_substrate_intended_hosts)"
+  all="$(kit_substrate_intended_hosts "$MANIFEST_DIR")"
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     local node_ok=0 cluster_ok=0

@@ -13500,7 +13500,7 @@ old = '''kit_substrate_compute_readiness() {
   READINESS_DNS_SPLIT=""
   READINESS_DNS_STATUS=""
   local h all pending="" split="" status=""
-  all="$(kit_substrate_intended_hosts)"
+  all="$(kit_substrate_intended_hosts "$MANIFEST_DIR")"
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     local node_ok=0 cluster_ok=0
