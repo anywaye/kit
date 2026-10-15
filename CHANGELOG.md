@@ -2,6 +2,30 @@
 
 ### Substrate
 
+- **The front door installs: a served run fetches its own manifests, and a pipe
+  is not an unbound-variable crash.** `curl https://cafaye.com/box/install | sh`
+  — the command the website, `cafe box init` and every doc print — could not
+  install a box, measured live 2026-10-15. `SCRIPT_DIR="$(cd "$(dirname
+  "${BASH_SOURCE[0]}")" && pwd)"` read `BASH_SOURCE[0]` unguarded: under a pipe
+  it is unset (a fatal `BASH_SOURCE[0]: unbound variable` under `set -u`) or
+  empty (`SCRIPT_DIR` becomes the caller's CWD), so `MANIFEST_DIR` did not
+  exist, step 5's probe derived ZERO artifacts and demanded a registry
+  capability for artifacts that are all public — `error: KIT_SUBSTRATE_BOX_ID is
+  not set` — and steps 6+ had no manifests to apply. Nobody saw it because every
+  cycle ran `bash /tmp/kit/templates/substrate/install.sh` from a clone, where
+  `manifests/` is the script's own sibling. The fix: the source path is read
+  with an explicit empty fallback, and a served run (no sibling `manifests/`)
+  fetches the manifest set as a tarball from kit's public repository at
+  `KIT_SUBSTRATE_MANIFESTS_REF`, a 40-character commit sha pinned like every
+  version in the file. **A fetch that cannot complete is a refusal naming the
+  fetch, before step 5** — never a run that limps into a credential demand. From
+  a checkout nothing changes: the sibling tree is used and the fetch is skipped,
+  and a cleanup trap removes only the fetched temp tree. `tests/substrate_test.sh`
+  exercises the piped form with the fetch stubbed (success plans all thirteen
+  steps; failure refuses by name), restores the pre-fix `BASH_SOURCE` read as a
+  red control, and asserts the pin is exact, resolves, and equals the manifests
+  on disk.
+
 - **The preflight verifies the box's TLS trust chain against the system
   store, and refreshes it if it cannot.** Measured on the Contabo dogfood box
   (2026-10-15): `/etc/ssl/certs/ca-certificates.crt` held 122 certificates and

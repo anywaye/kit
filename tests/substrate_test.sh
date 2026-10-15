@@ -234,6 +234,229 @@ sed 's/^NATS_VERSION="2.10.24-alpine"/NATS_VERSION="latest"/' \
 run 'control: a latest NATS pin goes red under the same check' red check_pins "$fixture_latest_nats"
 
 # ===========================================================================
+# 3b. The front door: a SERVED install fetches its manifests, and a pipe is
+#     not an unbound-variable crash
+# ===========================================================================
+#
+# THE DEFECT THIS SECTION ENDS. `curl https://cafaye.com/box/install | sh` is
+# the command the website, `cafe box init` and every document print, and it was
+# never exercised end to end: every cycle ran `bash /tmp/kit/…/install.sh` from
+# a git clone, where `manifests/` is the script's own sibling. Served, the
+# script is read from a pipe, so `BASH_SOURCE[0]` is UNSET — and `set -u` turns
+# `${BASH_SOURCE[0]}` into a fatal unbound variable (measured: `bash: line 433:
+# BASH_SOURCE[0]: unbound variable`) — or empty, in which case SCRIPT_DIR
+# becomes the caller's CWD, the manifest directory does not exist, step 5's
+# probe derives ZERO artifacts and demands a registry capability for artifacts
+# that are all public.
+#
+# THE FIX these checks are about: SCRIPT_DIR is read with an explicit empty
+# fallback, and a served run (no sibling `manifests/`) FETCHES the manifest set
+# from kit's public repository at the sha pinned in `KIT_SUBSTRATE_MANIFESTS_REF`.
+# A fetch that cannot complete is a REFUSAL naming the fetch — never a run that
+# limps into a credential demand.
+
+# --- (a) the pin is exact, and it is a TIE to the manifests, not a number ----
+check_manifests_pin() {
+  "$PY" - "$1" "$2" <<'PY'
+import re
+import subprocess
+import sys
+
+installer, repo = sys.argv[1], sys.argv[2]
+src = open(installer, encoding="utf-8").read()
+m = re.search(r'^KIT_SUBSTRATE_MANIFESTS_REF="([0-9a-fA-F]+)"$', src, re.M)
+if not m:
+    print("KIT_SUBSTRATE_MANIFESTS_REF is not set to a bare hex ref")
+    sys.exit(1)
+ref = m.group(1)
+if not re.fullmatch(r"[0-9a-f]{40}", ref):
+    print(f"KIT_SUBSTRATE_MANIFESTS_REF={ref!r} is not a 40-character commit sha — a branch or a tag floats")
+    sys.exit(1)
+
+
+def git(*args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+
+
+if git("cat-file", "-e", ref + "^{commit}").returncode != 0:
+    print(f"KIT_SUBSTRATE_MANIFESTS_REF={ref} does not resolve to a commit in this repository")
+    sys.exit(1)
+if git("diff", "--quiet", ref, "--", "templates/substrate/manifests").returncode != 0:
+    print(
+        f"the manifests at {ref} differ from the working tree — bump"
+        " KIT_SUBSTRATE_MANIFESTS_REF so a served run installs the tree it ships with"
+    )
+    sys.exit(1)
+print(f"the served-manifests pin {ref[:12]} is exact and matches the manifests on disk")
+PY
+}
+run 'the served-manifests pin is an exact sha that tracks the manifests on disk' green \
+  check_manifests_pin "$SUBSTRATE/install.sh" "$ROOT"
+
+# Control 1: a floating ref. Must go red — a fetch at `master` installs
+# different manifests on two runs of the same served bytes.
+fixture_manifest_float="$WORK/install-manifest-float.sh"
+sed 's/^KIT_SUBSTRATE_MANIFESTS_REF="[0-9a-f]*"/KIT_SUBSTRATE_MANIFESTS_REF="master"/' \
+  "$SUBSTRATE/install.sh" >"$fixture_manifest_float"
+run 'control: a floating manifest ref goes red under the same pin check' red \
+  check_manifests_pin "$fixture_manifest_float" "$ROOT"
+
+# Control 2: a ref that RESOLVES but whose manifest tree differs from the one on
+# disk. This is the half that makes the pin a tie rather than a number: it must
+# name a commit that really carries these manifests. The repository's root
+# commit predates `templates/substrate/manifests`, so the diff is non-empty.
+manifest_root_commit="$(git -C "$ROOT" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1 || true)"
+if [ -n "$manifest_root_commit" ]; then
+  fixture_manifest_stale="$WORK/install-manifest-stale.sh"
+  sed "s/^KIT_SUBSTRATE_MANIFESTS_REF=\"[0-9a-f]*\"/KIT_SUBSTRATE_MANIFESTS_REF=\"$manifest_root_commit\"/" \
+    "$SUBSTRATE/install.sh" >"$fixture_manifest_stale"
+  if [ "$(grep -c "KIT_SUBSTRATE_MANIFESTS_REF=\"$manifest_root_commit\"" "$fixture_manifest_stale" || true)" -eq 1 ]; then
+    run 'control: a pinned ref whose manifests differ goes red (the pin is a tie)' red \
+      check_manifests_pin "$fixture_manifest_stale" "$ROOT"
+  else
+    fail 'control: a pinned ref whose manifests differ goes red (the pin is a tie)' \
+      'the sed did not substitute the ref — the control would prove nothing'
+  fi
+else
+  skip 'control: a pinned ref whose manifests differ goes red (the pin is a tie)' \
+    'no root commit resolved in this checkout'
+fi
+
+# --- (b) the pipe: no unbound-variable read, fetch or REFUSE ----------------
+# A fake `curl` stands in for GitHub so these checks are offline and
+# deterministic, the way the trust-preflight checks stub openssl and apt. The
+# success stub answers the pinned tarball URL with a tarball built from THIS
+# tree's manifests (root dir `kit-fixture/`, which the resolver FINDS rather
+# than assumes); the failure stub refuses every call.
+served_fetch_bin="$WORK/served-fetch-bin"
+served_tarball="$WORK/served/manifests.tgz"
+mkdir -p "$served_fetch_bin" "$WORK/served/src/kit-fixture/templates/substrate"
+cp -R "$SUBSTRATE/manifests" "$WORK/served/src/kit-fixture/templates/substrate/manifests"
+tar czf "$served_tarball" -C "$WORK/served/src" kit-fixture
+cat >"$served_fetch_bin/curl" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *codeload.github.com/cafaye/kit*) exec cat "$served_tarball" ;;
+  *) printf 'fake-curl: unexpected call: %s\n' "\$*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$served_fetch_bin/curl"
+
+served_fail_bin="$WORK/served-fail-bin"
+mkdir -p "$served_fail_bin"
+printf '#!/usr/bin/env bash\nexit 22\n' >"$served_fail_bin/curl"
+chmod +x "$served_fail_bin/curl"
+
+# served_run <fakebin> — run install.sh through a PIPE, exactly the front-door
+# shape; print its output and return the script's own exit status.
+served_run() {
+  local fakebin="$1" out ec=0
+  out="$(env PATH="$fakebin:$PATH" KIT_SUBSTRATE_RECEIPT="$WORK/served-receipt.json" \
+    KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash -s <"$SUBSTRATE/install.sh" 2>&1)" || ec=$?
+  printf '%s' "$out"
+  return "$ec"
+}
+
+# The static half: the read must carry the empty fallback in CODE, with comments
+# stripped — a check a comment can satisfy is not a check (the comment above
+# quotes the bare `${BASH_SOURCE[0]}` while explaining the crash).
+check_bash_source_fallback() {
+  "$PY" - "$1" <<'PY'
+import re
+import sys
+
+src = open(sys.argv[1], encoding="utf-8").read()
+code = re.sub(r"(?m)^[ \t]*#.*$", "", src)
+if 'KIT_SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"' not in code:
+    print(
+        "the served-script read of BASH_SOURCE has no `:-` empty fallback — under a"
+        " pipe `set -u` makes `${BASH_SOURCE[0]}` fatal"
+    )
+    sys.exit(1)
+rest = code.replace('KIT_SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"', "")
+if re.search(r"BASH_SOURCE\[0\]", rest):
+    print("BASH_SOURCE[0] is read somewhere without the `:-` empty fallback")
+    sys.exit(1)
+print("BASH_SOURCE[0] is read with an explicit empty fallback")
+PY
+}
+run 'the served-script read of BASH_SOURCE carries an explicit empty fallback' green \
+  check_bash_source_fallback "$SUBSTRATE/install.sh"
+
+# The red control: the fallback REMOVED, which is the pre-fix line. Under a pipe
+# this is the unbound-variable crash the packet measured, and a check that
+# cannot go red here is a check that would have shipped the defect.
+served_unsafe="$WORK/served-unsafe.sh"
+sed 's|KIT_SCRIPT_SOURCE="${BASH_SOURCE\[0\]:-}"|KIT_SCRIPT_SOURCE="${BASH_SOURCE[0]}"|' \
+  "$SUBSTRATE/install.sh" >"$served_unsafe"
+if grep -q '^KIT_SCRIPT_SOURCE="${BASH_SOURCE\[0\]}"$' "$served_unsafe" \
+  && bash -n "$served_unsafe"; then
+  run 'control: the pre-fix BASH_SOURCE read goes red under the fallback check' red \
+    check_bash_source_fallback "$served_unsafe"
+  unsafe_ec=0
+  unsafe_out="$(env PATH="$served_fail_bin:$PATH" KIT_SUBSTRATE_RECEIPT="$WORK/served-receipt.json" \
+    KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash -s <"$served_unsafe" 2>&1)" || unsafe_ec=$?
+  case "$unsafe_ec:${unsafe_out}" in
+    0:*)
+      fail 'control: the pre-fix shape crashes on BASH_SOURCE[0] under a pipe' \
+        "exit 0 — the unguarded read did not crash: ${unsafe_out}"
+      ;;
+    *'BASH_SOURCE[0]: unbound variable'*)
+      pass 'control: the pre-fix shape crashes on BASH_SOURCE[0] under a pipe'
+      ;;
+    *)
+      fail 'control: the pre-fix shape crashes on BASH_SOURCE[0] under a pipe' \
+        "exit ${unsafe_ec}, but not on BASH_SOURCE: ${unsafe_out}"
+      ;;
+  esac
+else
+  fail 'control fixture: the fallback delete did not apply' \
+    'the sed did not restore the unguarded read, so the control would prove nothing'
+fi
+
+# GREEN 1: a served run fetches the pinned manifest set and plans all thirteen
+# steps — the front door works offline, from a pipe, with no checkout.
+served_ok_out="$(served_run "$served_fetch_bin")" && served_ok_ec=0 || served_ok_ec=$?
+served_ok=0
+case "$served_ok_out" in
+  *"fetching the manifests at"*)
+    case "$served_ok_out" in
+      *"[1/13]"*"[13/13]"*) served_ok=1 ;;
+    esac
+    ;;
+esac
+if [ "$served_ok_ec" -eq 0 ] && [ "$served_ok" -eq 1 ]; then
+  pass 'a served install fetches the pinned manifests and plans all thirteen steps'
+else
+  fail 'a served install fetches the pinned manifests and plans all thirteen steps' \
+    "exit=${served_ok_ec}: $(printf '%s\n' "$served_ok_out" | head -6)"
+fi
+
+# GREEN 2: a fetch that cannot complete is a REFUSAL naming the fetch, BEFORE
+# step 5 — not a run that limps on to demand a registry capability for public
+# artifacts.
+served_fail_out="$(served_run "$served_fail_bin")" && served_fail_ec=0 || served_fail_ec=$?
+served_refusal_ok=0
+if [ "$served_fail_ec" -ne 0 ]; then
+  case "$served_fail_out" in
+    *"could not be fetched from https://codeload.github.com/cafaye/kit/tar.gz/"*)
+      case "$served_fail_out" in
+        *KIT_SUBSTRATE_BOX_ID*) ;;
+        *"[5/13]"*) ;;
+        *"unbound variable"*) ;;
+        *) served_refusal_ok=1 ;;
+      esac
+      ;;
+  esac
+fi
+if [ "$served_refusal_ok" -eq 1 ]; then
+  pass 'a manifest set that cannot be fetched is refused by name, before step 5'
+else
+  fail 'a manifest set that cannot be fetched is refused by name, before step 5' \
+    "exit=${served_fail_ec}: $(printf '%s\n' "$served_fail_out" | head -6)"
+fi
+
+# ===========================================================================
 # 4. Every manifest parses, and the Applications carry the fields Argo needs
 # ===========================================================================
 #

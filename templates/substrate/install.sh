@@ -257,6 +257,28 @@ NATS_BOX_VERSION="0.20.0"
 # limited to the caller's, and `svc.<namespace>.svc.cluster.local` crosses it.
 NATS_URL="nats://nats.data.svc.cluster.local:4222"
 
+# THE MANIFEST SET A SERVED RUN FETCHES, AND THE REF IT IS FETCHED AT.
+#
+# This script runs two ways — from a checkout, where `manifests/` is its own
+# sibling, and SERVED, where it is read from a pipe and has no directory at all
+# (see `kit_substrate_resolve_manifests`). The served shape needs the manifest
+# set from somewhere, and it is fetched from kit's own public repository at the
+# ref pinned here.
+#
+# A PIN, AND THE SAME RULE AS EVERY VERSION ABOVE: a 40-character commit sha,
+# never a branch. The ref decides which Applications, ClusterIssuers and data
+# manifests a customer's box installs; a branch here would change what two runs
+# of the same served bytes install, which is the defect this whole file's pin
+# discipline exists to refuse. `tests/substrate_test.sh` asserts the sha is
+# exact, that it resolves locally, and that the manifests at that commit equal
+# the ones on disk — so a manifest change without a matching bump of this line
+# is a red gate rather than a served run that installs yesterday's tree.
+KIT_SUBSTRATE_MANIFESTS_REF="ecb2fc998186dd82c3ea6da5e3f2d9fd2cd24a8a"
+# The canonical source, by host and by the tarball route GitHub serves for a
+# public repository with no credentials. No token, no `git`, no account: the
+# repository is public and a box that can reach ghcr.io can reach this.
+KIT_SUBSTRATE_MANIFESTS_URL="https://codeload.github.com/cafaye/kit/tar.gz"
+
 # TWO SERVICE URLs, and each is the OTHER service's in-cluster Service. They
 # are constants here for the same reason NATS_URL is — one fact, one line —
 # and they are here rather than in a secret record because they are not
@@ -473,13 +495,118 @@ HEADLESS="${HEADLESS:-0}"
 # crashed install leaves one naming where it stopped.
 RECEIPT_PATH="${KIT_SUBSTRATE_RECEIPT:-/var/lib/kit/substrate-receipt.json}"
 
-# Where this script lives, so the manifests are found from a checkout and from
-# a served copy alike.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST_DIR="$SCRIPT_DIR/manifests/applications"
-TLS_DIR="$SCRIPT_DIR/manifests/tls"
-DATA_DIR="$SCRIPT_DIR/manifests/data"
-ARGOCD_MANIFEST_DIR="$SCRIPT_DIR/manifests/argocd"
+# --- where this script lives, and where its manifests are --------------------
+# TWO SHAPES, AND THE PIPE IS THE ONE THAT BROKE.
+#
+#   a file — `bash templates/substrate/install.sh` from a checkout, or any copy
+#            of it: `manifests/` is this script's own sibling, and SCRIPT_DIR is
+#            the directory holding it.
+#   a pipe — `curl https://cafaye.com/box/install | sh`, the front door and the
+#            only shape most customers ever run. Under a pipe BASH_SOURCE[0] is
+#            UNSET, and `set -u` turns `${BASH_SOURCE[0]}` into a fatal unbound
+#            variable — measured, `bash: line 433: BASH_SOURCE[0]: unbound
+#            variable` — while a bash that left it set-but-empty makes `dirname`
+#            answer `.` and SCRIPT_DIR the caller's CWD. Either way there is no
+#            file behind this script and no directory to take a sibling from.
+#
+# So the source path is read with an EXPLICIT EMPTY FALLBACK and SCRIPT_DIR is
+# left empty when nothing is behind this script. Nothing below may assume it is
+# set: the four manifest directories are derived from it only when it is, and a
+# served run gets them from kit_substrate_resolve_manifests instead.
+KIT_SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+SCRIPT_DIR=""
+if [ -n "$KIT_SCRIPT_SOURCE" ] && [ -f "$KIT_SCRIPT_SOURCE" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$KIT_SCRIPT_SOURCE")" && pwd)"
+fi
+
+# The four directories the steps read. From a checkout they are the sibling
+# `manifests/` tree, exactly as they always were. From a pipe they are EMPTY
+# here and kit_substrate_resolve_manifests fills them — from the pinned fetch —
+# before `main` reaches the first step that reads one. A half-resolved path is
+# never left behind, because the resolver either points all four at one tree or
+# refuses.
+MANIFEST_DIR=""
+TLS_DIR=""
+DATA_DIR=""
+ARGOCD_MANIFEST_DIR=""
+SUBSTRATE_MANIFEST_ROOT=""
+# The temp tree a served run fetched, and ONLY that: the cleanup trap below
+# removes this and never the sibling `manifests/` a checkout owns.
+SUBSTRATE_FETCHED_MANIFESTS_DIR=""
+if [ -n "$SCRIPT_DIR" ]; then
+  SUBSTRATE_MANIFEST_ROOT="$SCRIPT_DIR/manifests"
+  MANIFEST_DIR="$SUBSTRATE_MANIFEST_ROOT/applications"
+  TLS_DIR="$SUBSTRATE_MANIFEST_ROOT/tls"
+  DATA_DIR="$SUBSTRATE_MANIFEST_ROOT/data"
+  ARGOCD_MANIFEST_DIR="$SUBSTRATE_MANIFEST_ROOT/argocd"
+fi
+
+# kit_substrate_point_manifests_at <root> — the ONE place the four directories
+# are set from a manifest root, so the sibling tree and the fetched tree cannot
+# be pointed at by two spellings that drift.
+kit_substrate_point_manifests_at() {
+  SUBSTRATE_MANIFEST_ROOT="$1"
+  MANIFEST_DIR="$1/applications"
+  TLS_DIR="$1/tls"
+  DATA_DIR="$1/data"
+  ARGOCD_MANIFEST_DIR="$1/argocd"
+}
+
+# kit_substrate_cleanup_manifests — remove the FETCHED tree, never the sibling
+# one. Registered as an EXIT trap by the resolver; a checkout installs no trap
+# and cleans up nothing.
+kit_substrate_cleanup_manifests() {
+  if [ -n "${SUBSTRATE_FETCHED_MANIFESTS_DIR:-}" ]; then
+    rm -rf "$SUBSTRATE_FETCHED_MANIFESTS_DIR"
+  fi
+  return 0
+}
+
+# kit_substrate_resolve_manifests — make MANIFEST_DIR / TLS_DIR / DATA_DIR /
+# ARGOCD_MANIFEST_DIR point at a real manifest root, or REFUSE, naming the
+# fetch. Called once by `main`, before preflight, so a served run that cannot
+# obtain its manifest set stops BEFORE it does anything — and, in particular,
+# before step 5 would otherwise derive an empty artifact list and reach for a
+# registry credential for a pull that needs none.
+#
+# THE REFUSAL IS THE POINT. The defect this ends was not a crash: a served run
+# whose manifest directory was missing derived ZERO artifacts at step 5 and
+# concluded "everything is private", demanding a box id and a capability for
+# artifacts that are all public. A fetch that cannot complete is therefore a
+# named refusal here, with the URL and the ref in the message, and not a run
+# that limps on to a credential demand three steps later.
+kit_substrate_resolve_manifests() {
+  # From a checkout: the sibling tree, and the pinned fetch is never touched.
+  if [ -n "$SUBSTRATE_MANIFEST_ROOT" ] && [ -d "$MANIFEST_DIR" ]; then
+    return 0
+  fi
+
+  # Served: fetch the pinned manifest set into a temp dir and use it.
+  local mkdir_ok=0 tmp root
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/kit-substrate-manifests.XXXXXX" 2>/dev/null)" || mkdir_ok=1
+  if [ "$mkdir_ok" -eq 0 ]; then
+    kit_substrate_out "      this script was served, not run from a checkout — fetching the manifests at ${KIT_SUBSTRATE_MANIFESTS_REF}"
+    # A TARBALL, NOT A CLONE. A fresh box has curl (a hard requirement) but is
+    # not promised `git`, and the tarball route is the one GitHub serves for a
+    # public repository with no credentials. The root directory inside the
+    # archive is named after the ref, so it is FOUND rather than assumed.
+    if curl -fsSL "${KIT_SUBSTRATE_MANIFESTS_URL}/${KIT_SUBSTRATE_MANIFESTS_REF}" 2>/dev/null | tar -xz -C "$tmp" 2>/dev/null; then
+      root="$(find "$tmp" -maxdepth 4 -type d -path '*/templates/substrate/manifests' -print -quit 2>/dev/null)"
+      if [ -n "$root" ] && [ -d "$root/applications" ]; then
+        SUBSTRATE_FETCHED_MANIFESTS_DIR="$tmp"
+        trap kit_substrate_cleanup_manifests EXIT
+        kit_substrate_point_manifests_at "$root"
+        kit_substrate_out "      fetched ${KIT_SUBSTRATE_MANIFESTS_REF} into ${root}"
+        return 0
+      fi
+    fi
+    rm -rf "$tmp"
+  fi
+
+  kit_substrate_refuse "" \
+    "check that this box can reach ${KIT_SUBSTRATE_MANIFESTS_URL} and re-run — a served install fetches its manifest set, so the fetch is the first thing that must work" \
+    "the manifest set could not be fetched from ${KIT_SUBSTRATE_MANIFESTS_URL}/${KIT_SUBSTRATE_MANIFESTS_REF}, and no manifests/ directory exists beside this script (it was served, not run from a checkout)"
+}
 
 # --- timing -----------------------------------------------------------------
 # EVERY RUN REPORTS ITS OWN SPEED. Before this, the JSONL carried no timestamps
@@ -4956,6 +5083,15 @@ main() {
   # The clock starts before preflight, so the total is the install's
   # start-to-done and not just the steps'.
   INSTALL_START_MS="$(kit_substrate_now)"
+
+  # THE MANIFESTS BEFORE ANYTHING ELSE, and the order is the fix. A checkout
+  # already has them beside this script, so this is a no-op; a SERVED run has
+  # none, so this fetches the pinned set into a temp tree — or refuses, naming
+  # the fetch. It runs here, before preflight and long before step 5, so a run
+  # that cannot obtain its manifests stops with a fetch it can act on rather
+  # than deriving an empty artifact list at step 5 and demanding a registry
+  # capability for artifacts that are all public.
+  kit_substrate_resolve_manifests
 
   # The receipt opens the install: it names the phase, the next step and the
   # (empty) input needed, so a reader — human or agent — knows what this run

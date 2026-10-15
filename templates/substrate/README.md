@@ -273,10 +273,15 @@ bash templates/substrate/install.sh
 
 ### Shipping the tree to a box from a macOS workstation
 
-The script reads `manifests/` from beside itself, so a box that runs it from a
-checkout needs the whole tree there. **A macOS `tar` leaves AppleDouble
-sidecars** — `._identity.yaml` beside every Application — and `kubectl apply -f
-<dir>` reads dotfiles, which is how a Mac-shipped tree died at step 6:
+**A served install needs no tree.** `curl https://cafaye.com/box/install | sh`
+fetches the manifest set itself, from kit's public repository at the ref pinned
+in `install.sh` (`KIT_SUBSTRATE_MANIFESTS_REF`), and a fetch that cannot
+complete is refused by name before anything runs. The rest of this section is
+for the OTHER shape: running the script **from a checkout**, where it reads
+`manifests/` from beside itself and a box that runs it needs the whole tree
+there. **A macOS `tar` leaves AppleDouble sidecars** — `._identity.yaml` beside
+every Application — and `kubectl apply -f <dir>` reads dotfiles, which is how a
+Mac-shipped tree died at step 6:
 
 ```
 error parsing …/manifests/applications/._identity.yaml:
@@ -975,6 +980,20 @@ red. The Worker holds no secret: `install.sh` reads the box id and the
 capability from the operator's environment at run time, and everything else
 it needs it generates itself.
 
+**A served run fetches its manifests — the front door has no checkout.** The
+script's own directory is empty under a pipe, so `manifests/` is not beside it;
+`kit_substrate_resolve_manifests` fetches the pinned set
+(`KIT_SUBSTRATE_MANIFESTS_REF`, a 40-character commit sha) as a tarball from
+kit's public repository (`codeload.github.com/cafaye/kit`) and points the four
+manifest directories at it. A fetch that cannot complete is a **refusal naming
+the fetch**, before preflight and long before step 5 — never a run that derives
+an empty artifact list and demands a registry capability for artifacts that are
+all public. From a checkout the fetch is skipped and the sibling tree is used,
+exactly as before. The pin is a fact the script carries, like every version
+above it, and the gate asserts it is an exact sha whose manifests equal the ones
+on disk — so a manifest change without a matching bump is red, not a served run
+that installs yesterday's tree.
+
 **The operator step (an action, not a file):** publish the Worker
 (`wrangler deploy` from this directory) and bind the route
 `cafaye.com/box/install` to `kit-install` — a Cloudflare route / custom
@@ -1000,6 +1019,13 @@ is an operator action, and the URL works only when observed.
 - `KIT_SUBSTRATE_DATABASES` unset, empty, or disagreeing with the Cluster
   manifest is refused in DRY_RUN, naming the fix — with the matching list
   accepted as the control.
+- **The served form is exercised, not assumed.** A run through a pipe
+  (`bash -s < install.sh`) with the manifest fetch stubbed either fetches the
+  pinned set and plans all thirteen steps, or — when the fetch cannot complete —
+  refuses by name **before step 5**. The pre-fix `BASH_SOURCE[0]` read is a red
+  control: under a pipe it dies with `BASH_SOURCE[0]: unbound variable`. The pin
+  itself is asserted exact, resolvable, and equal to the manifests on disk — a
+  floating ref and a differing commit are both red controls.
 - **Every manifest directory is read deliberately.** Step 6 applies the
   `*.yaml` manifests it resolves, ignores AppleDouble `._*` sidecars (and names
   them in the output), and refuses any other entry by name; the `tls/` and
@@ -1115,7 +1141,7 @@ this paragraph is unexercised.
 
 The first real run, on a Linux box with 8GB or more:
 
-1. `curl https://cafaye.com/box/install | sh` completes all ten steps.
+1. `curl https://cafaye.com/box/install | sh` completes all thirteen steps.
 2. `kubectl get nodes` shows the node Ready.
 3. `kubectl get applications -n argocd` shows all seven Applications synced.
 4. The observability stack is reachable and retaining.
