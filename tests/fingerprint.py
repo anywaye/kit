@@ -26,7 +26,7 @@ THE SCHEMA, and why each field is in it
 
   schema    int, bumped BY HAND. A record written under a different schema is
             REFUSED BY NAME rather than parsed under rules it was not written
-            under. Same rule, same reason as `caf lock`'s `LockVersion`
+            under. Same rule, same reason as `cafe lock`'s `LockVersion`
             (cafaye/caf/internal/lock/doc.go): "an older lock says so by name
             rather than being parsed under rules it was not written under."
   tool      kit's VERSION file content at write time. A record from another kit
@@ -45,14 +45,14 @@ THE SCHEMA, and why each field is in it
 
 WHY SHA-256 OF BYTES, AND WHY THAT IS NOT A SECOND IMPLEMENTATION
 
-  `caf lock` already made this exact decision in this fleet and wrote down why
+  `cafe lock` already made this exact decision in this fleet and wrote down why
   (cafaye/caf/internal/lock/doc.go, "The hash is of the bytes, and the lock is
   not about git"): no git blob ids, no index hashes, because a pin that can only
   be verified inside a checkout cannot be verified in the tarball a release
   ships or in a Docker build context. This file uses `hashlib.sha256` — the
   stdlib, the same primitive — over raw file bytes, with NO salt of its own and
   NO timestamp in the hashed material. The version discipline is shared; the
-  code cannot be, because `caf lock` is Go in a sibling repository that a kit
+  code cannot be, because `cafe lock` is Go in a sibling repository that a kit
   clone does not contain, and a gate that shells out to a sibling checkout is
   not hermetic. Same algorithm, same rationale, one implementation each language.
 
@@ -62,7 +62,7 @@ WHY SHA-256 OF BYTES, AND WHY THAT IS NOT A SECOND IMPLEMENTATION
 
 NO TIMESTAMP IN THE HASHED MATERIAL
 
-  `caf lock` twice over one tree produces the same bytes, because a timestamp
+  `cafe lock` twice over one tree produces the same bytes, because a timestamp
   would turn a diff between two manifests into a diff between two runs. Same
   rule here: `fingerprint a.json a.json` is stable across runs and machines, and
   `diff` reports a difference in INPUTS, never in time. The record carries

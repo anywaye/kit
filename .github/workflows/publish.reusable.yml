@@ -128,7 +128,7 @@ on:
       chart-dir:
         description: >-
           The directory holding Chart.yaml, relative to the repository root.
-          'chart/' is where `caf gen chart` writes.
+          'chart/' is where `cafe gen chart` writes.
         required: false
         type: string
         default: 'chart/'

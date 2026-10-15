@@ -41,7 +41,7 @@
 # twice, and a service that bumps one and not the other is a service that
 # never deploys.
 #
-# `chart-dir` defaults to `chart/`, where `caf gen chart` writes. A service
+# `chart-dir` defaults to `chart/`, where `cafe gen chart` writes. A service
 # that keeps its chart elsewhere names the directory at the call site —
 # gateway's is `chart-dir: charts/gateway/` — and that is the only input a
 # service's publish.yml has ever needed beyond `push: true`.

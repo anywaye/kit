@@ -58,7 +58,7 @@ that every language kit ships a job for also appears here.
 Where a language has no declaration channel, kit ships one that is **a no-op at
 runtime** — an exported const, a module attribute, a class macro — so the
 collector is a ~15-line adapter rather than a parser. Those adapters are
-`caf gate`'s job, not kit's; see [Who implements what](#who-implements-what).
+`cafe gate`'s job, not kit's; see [Who implements what](#who-implements-what).
 
 ### Rust is the model, with one measured correction
 
@@ -151,7 +151,7 @@ name, the Minitest method name, the Elixir test string. There is no mapping
 table to maintain and therefore no id that can mean two different tests in two
 different languages.
 
-`kit` owns this contract. `caf gate` produces it; a service's own suite can
+`kit` owns this contract. `cafe gate` produces it; a service's own suite can
 produce it directly, and the simplest version is a line printed to stdout.
 
 ## The skip allowlist
@@ -246,11 +246,11 @@ runner honours a flag that turns the demand off, the demand was never a demand.
 allowlist and its rules, the workflow demand, and the checks that a service
 *declares* a tier and a gate variable.
 
-`caf gate` ships the **checker**: the per-language collector adapters, the
+`cafe gate` ships the **checker**: the per-language collector adapters, the
 inventory-vs-run set difference, and the normalised result. It is runtime code
 and it belongs beside the tool, not in a config-only repository — and two
 packets writing one subsystem at once is a merge collision nobody needs.
 
 The check in `tests/validate.sh` applies the unused-entry rule (rule 4) to the
 **templates kit itself ships**, because that is the only inventory kit can see.
-The same rule over a service's real run is `caf gate`'s.
+The same rule over a service's real run is `cafe gate`'s.

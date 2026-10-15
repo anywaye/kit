@@ -36,7 +36,7 @@
 // bun has no tier-declaration channel of its own: nothing in `bun test` reads an
 // exported const. `TIER` below is a no-op at runtime that a ~15-line adapter
 // reads, which is the whole reason it is exported rather than commented. That
-// adapter is `caf gate`'s job, not kit's — see templates/tier/README.md.
+// adapter is `cafe gate`'s job, not kit's — see templates/tier/README.md.
 import { expect, test } from "bun:test";
 
 /** The tier these tests belong to. The value in a normalised result line's

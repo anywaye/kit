@@ -24,7 +24,7 @@
 #
 # A `tier` class macro is the declaration; the adapter that turns a run into the
 # normalised format is a Minitest::Reporter subclass, which is roughly fifteen
-# lines and is `caf gate`'s job, not kit's. The macro below is the half kit owns,
+# lines and is `cafe gate`'s job, not kit's. The macro below is the half kit owns,
 # and it is deliberately a no-op at runtime: declaring a tier changes no test's
 # behaviour and makes no test depend on the declaration.
 #
@@ -44,7 +44,7 @@ module Cafaye
       const_set(:GATE_VARIABLE, :"REQUIRED_#{name.to_s.upcase}")
     end
 
-    # The declared tier, or nil. `caf gate`'s adapter calls this; nothing in a
+    # The declared tier, or nil. `cafe gate`'s adapter calls this; nothing in a
     # normal test run does.
     def declared_tier
       @tier

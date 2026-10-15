@@ -52,7 +52,7 @@ core: ^0.2.0
 # conventions (the same shape `core` takes, and the same reason `caf` gives).
 
 # kit builds on no other cafaye service. It is a dependency OF the fleet, not a
-# consumer: declaring one would tell `caf dev` to start something, and `caf` has
+# consumer: declaring one would tell `cafe dev` to start something, and `caf` has
 # nothing to run here.
 dependencies: []
 

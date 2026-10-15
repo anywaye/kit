@@ -216,7 +216,7 @@ Three facts about that loop, each load-bearing:
   `packages: write`.
 
 **What is still true:** the service charts themselves do not exist yet. Each service
-runs `caf gen chart` and commits `chart/`; until then `targetRevision: 0.1.0`
+runs `cafe gen chart` and commits `chart/`; until then `targetRevision: 0.1.0`
 is a promise, not a published artifact, and the publish workflow has nothing
 to push. That is one packet per service, not this one.
 
@@ -257,7 +257,7 @@ or, from a kit checkout:
 
 ```sh
 export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
-export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
+export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from cafe box enroll>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
 export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
 export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
@@ -461,7 +461,7 @@ run by step 5 itself, so no count is restated here to go stale.
 bash templates/substrate/install.sh --headless          # or HEADLESS=1
 ```
 
-`caf box apply --phase N` runs the installer with this flag and reads stdout as
+`cafe box apply --phase N` runs the installer with this flag and reads stdout as
 a **stream of JSONL progress events, one object per line, and nothing else**:
 
 ```
@@ -508,7 +508,7 @@ timing and a total smaller than its own steps to go red.
 
 **The split between the two writers is the property.** `kit_substrate_emit`
 owns stdout — JSONL, headless only. `kit_substrate_out` owns human text — stdout
-interactively, **stderr** in headless mode, so the operator (and `caf box logs`)
+interactively, **stderr** in headless mode, so the operator (and `cafe box logs`)
 still reads it while stdout stays machine-parseable. Nothing else in the file
 writes to the process stdout; a `printf … | kubectl apply -f -` is a pipe, not a
 stdout write, and that is the good path — the credential travels into kubectl,
@@ -543,7 +543,7 @@ A refusal writes a `refusal` event *and* a receipt with `status: "refused"`, the
 mode: the agent's only touchpoint with a person is the receipt's `human` field,
 and every operator-input refusal — the box id, the capability, the ACME email,
 the database list, courier's relay settings, the MFA override, a step run out of
-order — is routed through it. W5-P4's resumable install reads it; `caf box
+order — is routed through it. W5-P4's resumable install reads it; `cafe box
 apply --phase N` (W2-P6) reads it to know where to resume. It is rewritten on
 every state change, so a crashed install leaves one naming where it stopped.
 Writing it is best-effort and never stops the install: the receipt is a report,
@@ -1063,7 +1063,7 @@ is an operator action, and the URL works only when observed.
   challenges are solved on a customer box with real DNS. Whether the first
   certificate lands is a box-level claim, not a property of these manifests.
 - That the Applications actually sync — **the service charts they point at do not
-  exist yet.** `caf gen chart` (m72) generates them; until then the service
+  exist yet.** `cafe gen chart` (m72) generates them; until then the service
   `targetRevision: 0.1.0` is a promise, not a published artifact. The
   publish path that would push them now exists (kit's `chart.reusable.yml`,
   see [The publication half of the loop](#the-publication-half-of-the-loop));

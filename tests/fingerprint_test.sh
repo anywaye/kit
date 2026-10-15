@@ -338,7 +338,7 @@ expect_exit 1 "5a. a recorded FAILURE is never a HIT" \
 # 6. determinism, and a declaration with a hole in it
 # ---------------------------------------------------------------------------
 # No timestamp in the hashed material: two manifests built minutes apart from
-# the same tree are the same bytes. This is `caf lock`'s rule and the reason a
+# the same tree are the same bytes. This is `cafe lock`'s rule and the reason a
 # diff between two manifests is a diff between two trees.
 manifest_for "$t6" "$cache_a"
 first="$("$PY" "$FP" fingerprint "$t6/manifest.json")"

@@ -17,7 +17,7 @@
 // # THE CONST IS A NO-OP AT RUNTIME
 //
 // It costs nothing to compile in, nothing to run, and no test imports it. It is
-// read by `go list` and by `caf gate`, never by the suite.
+// read by `go list` and by `cafe gate`, never by the suite.
 //
 // THE COLLECTOR THAT ALREADY READS THIS
 //

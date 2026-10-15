@@ -1122,7 +1122,7 @@ See `DECISIONS.md` (MD26, MD27).
   language, the normalised result format, the skip allowlist and its four rules,
   and the `REQUIRED_<TIER>` demand are kit's. The per-language collector
   adapters, the inventory-vs-run set difference, and the production of the
-  normalised format are `caf gate`'s — runtime code, in a runtime repo. If you
+  normalised format are `cafe gate`'s — runtime code, in a runtime repo. If you
   find yourself writing a collector here, you have left your scope.
 - **A test count is not a tier gate, and a floor is not a tier gate.** The
   machinery can prove "41 tests ran"; only an assertion *inside* the test
