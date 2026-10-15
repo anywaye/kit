@@ -12972,11 +12972,25 @@ lc_cycle() {
   local dir="$WORK/lc-$name"
   rm -rf "$dir"
   mkdir -p "$dir"
+  # A fake `openssl` on PATH, because the trust preflight verifies the control
+  # plane's chain with the openssl BINARY — and through the resolved `timeout`
+  # binary, so a shell function cannot intercept it. The fake verifies, so the
+  # preflight reaches step 1; without it this cycle would depend on the real
+  # cafaye hosts and a real trust store, which is neither offline nor
+  # deterministic.
+  mkdir -p "$dir/bin"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "verify return:1\\n"\n'
+    printf 'exit 0\n'
+  } >"$dir/bin/openssl"
+  chmod +x "$dir/bin/openssl"
   local out ec=0
   out="$(
     set +e
     (
       export MOCK_ROOT="$dir"
+      export PATH="$dir/bin:$PATH"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
       export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
       export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
