@@ -443,28 +443,39 @@ docker run -d --name "$CONTROL_C" \
   -v "$CONTROL_V":/var/lib/postgresql/data \
   "kit-isolation-postgres:$IMAGE_TAG" >/dev/null
 
-for _ in $(seq 1 90); do
-  docker exec "$CONTROL_C" pg_isready -q -U cafaye -d cafaye_platform 2>/dev/null \
-    || { sleep 1; continue; }
-  # pg_isready is satisfied by the TEMPORARY server the entrypoint runs during
-  # initdb, so it is only the first half of the wait. The second half is the
-  # database this control needs to have created.
-  if wait_for_provisioning "$CONTROL_C" cafaye "$BETA"; then
-    break
-  fi
-  sleep 1
-done
-
+# The wait is for the EVIDENCE the script produces — wait_for_provisioning, the
+# same wait the main cluster uses — and it is deliberately NOT led by pg_isready.
+# During docker-entrypoint-initdb.d the image runs a TEMPORARY server that
+# answers pg_isready before the first init statement runs, so a readiness-led
+# wait declares the cluster ready too early; the query below then lands in the
+# entrypoint's stop-temporary/start-real restart window and fails with a
+# connection error that reads exactly like a refused control.
 if ! wait_for_provisioning "$CONTROL_C" cafaye "$BETA"; then
   say "FAIL: the control cluster never provisioned a database named $BETA."
   docker logs "$CONTROL_C" 2>&1 | tail -20 | sed 's/^/       /'
   fail "control cluster did not come up"
 fi
 
-ctl_connect="$(docker exec -e PGPASSWORD=cafaye "$CONTROL_C" \
-  psql -U "$ALPHA" -d "$BETA" -tAX -c 'SELECT current_database()' 2>&1)" \
-  && ctl_ec=0 || ctl_ec=$?
+# The CONNECT is retried, and only TRANSIENT failures are. After the provisioning
+# evidence appears the entrypoint still has to stop the temporary server and
+# start the real one, so the first attempts can fail with a missing socket or
+# "the database system is starting up" — neither of which is the boundary. A
+# 'permission denied for database' IS the boundary, so it stops the loop at
+# once: the control is broken and retrying cannot fix it. A control carrying the
+# REVOKE fails every attempt and still fails below, which is what keeps this
+# assertion load-bearing rather than self-fulfilling.
+ctl_connect=""; ctl_ec=1
 say "   \$ psql -U $ALPHA -d $BETA -c 'SELECT current_database()'   (no REVOKE applied)"
+for _ in $(seq 1 30); do
+  ctl_connect="$(docker exec -e PGPASSWORD=cafaye "$CONTROL_C" \
+    psql -U "$ALPHA" -d "$BETA" -tAX -c 'SELECT current_database()' 2>&1)" \
+    && ctl_ec=0 || ctl_ec=$?
+  [ "$ctl_ec" -eq 0 ] && break
+  case "$ctl_connect" in
+    *'permission denied for database'*) break ;;
+  esac
+  sleep 1
+done
 printf '%s\n' "$ctl_connect" | sed 's/^/   /'
 say "   psql exit: $ctl_ec"
 
