@@ -1809,6 +1809,19 @@ fi
 # The verification error of the last failed kit_substrate_tls_verify, read by
 # the refusal below so the operator sees openssl's own words, not a paraphrase.
 TLS_VERIFY_ERROR=""
+# Whether the last kit_substrate_tls_verify got a TLS session at all. "yes"
+# means openssl reported a verify verdict, so the chain was there and the STORE
+# refused it — the live-box failure, and the only one a trust-store refresh can
+# fix. "no" means the origin never answered a handshake, and a refusal claiming
+# the store is stale would be a lie about a network problem. Measured: a
+# refused port and an unresolvable name both exit 1 and print no
+# `Verify return code:` line, while an unverifiable chain exits 1 with
+# `Verify return code: 20 (unable to get local issuer certificate)` after
+# `depth=` and `Certificate chain`.
+TLS_VERIFY_REACHED="no"
+# What the last kit_substrate_refresh_trust_store actually did, in its own
+# words, so a refusal never recommends a remedy that just failed.
+TRUST_REFRESH_NOTE=""
 
 # kit_substrate_run_bounded <seconds> <command...> — run a command under the
 # resolved timeout, or bare when there is none. Its own stdout is the command's,
@@ -1851,11 +1864,26 @@ kit_substrate_tls_verify() {
   out="$(kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT" \
     openssl s_client -verify_return_error -connect "${host}:${port}" \
     -servername "$host" </dev/null 2>&1)" || ec=$?
+  # `Verify return code:` is openssl's own statement that a TLS session was
+  # established and the chain was checked against the store — so it is the
+  # discriminator between "the store refused the chain" (the live-box failure,
+  # and the one a refresh can fix) and "the origin never answered". Measured on
+  # this host: a refused port and an unresolvable name print no such line; an
+  # unverifiable chain prints `Verify return code: 20 (unable to get local
+  # issuer certificate)` after `depth=` and `Certificate chain`.
+  case "$out" in
+    *"Verify return code:"*) TLS_VERIFY_REACHED="yes" ;;
+    *) TLS_VERIFY_REACHED="no" ;;
+  esac
   if [ "$ec" -eq 0 ]; then
     return 0
   fi
-  # openssl's own words, bounded to one line so a refusal stays readable.
-  TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | grep -iE 'verify error|unable to|certificate|error' | head -n1 | cut -c1-200)"
+  # openssl's own words, in the order an operator can act on: the verify verdict
+  # itself, then the per-certificate error, then anything else that carries a
+  # reason. Bounded to one line so a refusal stays readable.
+  TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | sed -n 's/^Verify return code: //p' | head -n1 | cut -c1-200)"
+  [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | sed -n 's/^ *verify error: //p' | head -n1 | cut -c1-200)"
+  [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | grep -iE 'error|refused|no route|nodename|unreachable' | head -n1 | cut -c1-200)"
   [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | grep -m1 . | cut -c1-200)"
   [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="(openssl produced no diagnostic)"
   return 1
@@ -1865,38 +1893,71 @@ kit_substrate_tls_verify() {
 # reinstall the OS CA package and rebuild the bundle. Package-manager aware
 # (apt-get, dnf, apk), each call bounded, and best-effort: the RE-CHECK that
 # follows is the verdict, so a package manager that refuses is reported rather
-# than fatal. Returns 0 when a refresh was attempted (or, in DRY_RUN, planned),
-# 1 when no supported package manager exists. In DRY_RUN it PLANS and runs
-# nothing.
+# than fatal — and TRUST_REFRESH_NOTE carries what it did, so a refusal never
+# recommends a command that has just failed. Returns 0 when a refresh was
+# attempted (or, in DRY_RUN, planned), 1 when no supported package manager
+# exists. In DRY_RUN it PLANS and runs nothing.
 kit_substrate_refresh_trust_store() {
+  local ec=0
+  TRUST_REFRESH_NOTE=""
   if command -v apt-get >/dev/null 2>&1; then
     if dry_run "apt-get update && apt-get install -y --reinstall ca-certificates && update-ca-certificates --fresh"; then
+      TRUST_REFRESH_NOTE="DRY_RUN: would run apt-get update, apt-get install -y --reinstall ca-certificates and update-ca-certificates --fresh"
       return 0
     fi
-    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get update >/dev/null 2>&1 || true
-    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get install -y --reinstall ca-certificates >/dev/null 2>&1 || true
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get update >/dev/null 2>&1 ||
+      ec=$?
+    if [ "$ec" -ne 0 ]; then
+      TRUST_REFRESH_NOTE="apt-get update exited ${ec} — the package lists could not be refreshed (network or apt lock)"
+    fi
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get install -y --reinstall ca-certificates >/dev/null 2>&1 ||
+      ec=$?
+    if [ "$ec" -ne 0 ] && [ -z "$TRUST_REFRESH_NOTE" ]; then
+      TRUST_REFRESH_NOTE="apt-get install -y --reinstall ca-certificates exited ${ec}"
+    fi
     if command -v update-ca-certificates >/dev/null 2>&1; then
-      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-certificates --fresh >/dev/null 2>&1 || true
+      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-certificates --fresh >/dev/null 2>&1 ||
+        ec=$?
+      if [ "$ec" -ne 0 ] && [ -z "$TRUST_REFRESH_NOTE" ]; then
+        TRUST_REFRESH_NOTE="update-ca-certificates --fresh exited ${ec}"
+      fi
+    else
+      TRUST_REFRESH_NOTE="apt-get removed the trust bundle, but update-ca-certificates is not on PATH so no bundle was rebuilt"
     fi
     return 0
   fi
   if command -v dnf >/dev/null 2>&1; then
     if dry_run "dnf -y reinstall ca-certificates && update-ca-trust"; then
+      TRUST_REFRESH_NOTE="DRY_RUN: would run dnf -y reinstall ca-certificates and update-ca-trust"
       return 0
     fi
-    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" dnf -y reinstall ca-certificates >/dev/null 2>&1 || true
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" dnf -y reinstall ca-certificates >/dev/null 2>&1 ||
+      ec=$?
+    if [ "$ec" -ne 0 ]; then
+      TRUST_REFRESH_NOTE="dnf -y reinstall ca-certificates exited ${ec}"
+    fi
     if command -v update-ca-trust >/dev/null 2>&1; then
-      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-trust >/dev/null 2>&1 || true
+      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-trust >/dev/null 2>&1 ||
+        ec=$?
+      if [ "$ec" -ne 0 ] && [ -z "$TRUST_REFRESH_NOTE" ]; then
+        TRUST_REFRESH_NOTE="update-ca-trust exited ${ec}"
+      fi
     fi
     return 0
   fi
   if command -v apk >/dev/null 2>&1; then
     if dry_run "apk add --no-cache ca-certificates"; then
+      TRUST_REFRESH_NOTE="DRY_RUN: would run apk add --no-cache ca-certificates"
       return 0
     fi
-    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apk add --no-cache ca-certificates >/dev/null 2>&1 || true
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apk add --no-cache ca-certificates >/dev/null 2>&1 ||
+      ec=$?
+    if [ "$ec" -ne 0 ]; then
+      TRUST_REFRESH_NOTE="apk add --no-cache ca-certificates exited ${ec}"
+    fi
     return 0
   fi
+  TRUST_REFRESH_NOTE="no package manager on PATH (no apt-get, dnf or apk), so the trust store could not be refreshed"
   return 1
 }
 
@@ -1911,21 +1972,46 @@ kit_substrate_trust_preflight() {
   local url err
   for url in "$KIT_SUBSTRATE_BOX_URL" "$KIT_SUBSTRATE_REGISTRY_URL"; do
     [ -n "$url" ] || continue
+    # An http:// origin carries no chain to verify: a LAN box pointed at a
+    # plaintext control plane would otherwise be refused with openssl's
+    # "wrong version number", which is a statement about the scheme and not
+    # about the store. Say what is not checked instead of guessing.
+    case "$url" in
+      http://*)
+        kit_substrate_out "    ${url} is plaintext http — no TLS chain to verify against the system trust store"
+        continue
+        ;;
+    esac
     if kit_substrate_tls_verify "$url"; then
       kit_substrate_out "    TLS chain verified against the system trust store: ${url}"
       continue
     fi
     err="$TLS_VERIFY_ERROR"
+    # THE ONE CASE THE REMEDY CANNOT REACH. The handshake never completed, so
+    # the store was never consulted: refusing here with "the OS trust store is
+    # stale or trimmed" would be a lie about a network problem, and running
+    # apt-get first would burn the refresh budget on a fix that cannot land.
+    if [ "$TLS_VERIFY_REACHED" != "yes" ]; then
+      kit_substrate_refuse "" \
+        "check ${url} is reachable from this box (name resolves, port answers, no egress firewall), then re-run this installer" \
+        "the box could not complete a TLS handshake with ${url}: ${err} — the origin did not answer, so no certificate chain was verified; this is reachability, not the trust store"
+    fi
     kit_substrate_out "    TLS chain NOT verifiable: ${url} — ${err}"
     kit_substrate_out "    refreshing the system trust store and re-checking (a stale or trimmed store is the live-box failure this ends)"
-    if kit_substrate_refresh_trust_store && kit_substrate_tls_verify "$url"; then
+    kit_substrate_refresh_trust_store || true
+    if kit_substrate_tls_verify "$url"; then
       kit_substrate_out "    trust store refreshed: ${url} now verifies against the system store"
       continue
     fi
     err="$TLS_VERIFY_ERROR"
+    local remedy_note=""
+    # The note is present only when the remedy itself failed: a refresh that ran
+    # clean needs no sentence, and a refusal that invents one is a refusal
+    # nobody believes after the first false alarm.
+    [ -n "$TRUST_REFRESH_NOTE" ] && remedy_note=" The refresh was attempted and did not fix it — ${TRUST_REFRESH_NOTE}."
     kit_substrate_refuse "" \
       "on the box run: apt-get update && apt-get install -y --reinstall ca-certificates && update-ca-certificates --fresh  (dnf: dnf -y reinstall ca-certificates && update-ca-trust), then re-run this installer" \
-      "the box cannot verify the TLS chain of ${url}: ${err} — the OS trust store is stale or trimmed, so every client that uses it (cafe boxd included) fails with 'x509: certificate signed by unknown authority'"
+      "the box cannot verify the TLS chain of ${url}: ${err} — the OS trust store is stale or trimmed, so every client that uses it (cafe boxd included) fails with 'x509: certificate signed by unknown authority'.${remedy_note}"
   done
 }
 # --- trust-preflight END
