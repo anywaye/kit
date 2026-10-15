@@ -575,6 +575,49 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # FULL HISTORY, and it is not tidiness. tests/substrate_test.sh's
+          # three-key red control derives its fixture from history:
+          # `git log -S KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL` finds the
+          # commit that wired the fourth key, and the fixture is that commit's
+          # PARENT. In a depth-1 checkout the search answers with the boundary
+          # commit itself (its diff IS the whole tree), the parent does not
+          # exist, and the control fails with "no three-key tree found
+          # (base=…)" — measured, run 38658518489 job `full / none`, base
+          # 03a7f768. The control cannot say how far back its commit is, so the
+          # depth is not bounded on purpose.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          # The install step below needs a Go new enough for
+          # golangci-lint/v2's module, and `stable` is what the go job falls
+          # back to when a caller names no version — read from the same
+          # expression shape, not a second literal.
+          go-version: stable
+      - name: install the toolchains the lint proofs exec
+        # tests/lint_test.sh FAILS rather than skips when a linter is absent —
+        # "A skipped lint proof is not a proof" — and the gate bootstraps only
+        # its .venv tools (PyYAML, yamllint, hadolint). The go and ruby proofs
+        # exec golangci-lint and rubocop against kit's own configs, and a
+        # runner without them is red on three checks: measured, run 38658518489
+        # job `full / none` (SKIP go ×3, SKIP ruby ×2, then "FAIL: lint_test —
+        # assertion(s) skipped for a missing toolchain").
+        #
+        # golangci-lint at v2.14.0 — THE SAME PIN the go job's lint step names
+        # below, so the two cannot disagree about which linters are enabled (the
+        # measured 37-finding gap that pin's comment records). `go install`
+        # rather than the action, because tests/lint_test.sh EXECs the binary;
+        # it is not a lint step of this job. The module path is assembled from
+        # two words for the same reason identity's gate job assembles it: whole,
+        # it is a long github.com/… run that key-shaped scanners read as a
+        # pasted key.
+        run: |
+          set -euo pipefail
+          host="github.com/golangci"
+          go install "${host}/golangci-lint/v2/cmd/golangci-lint@v2.14.0"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          sudo gem install --no-document rubocop
+          "$(go env GOPATH)/bin/golangci-lint" version
+          rubocop --version
       - name: provision tenancy substrate (alpha, beta)
         # The tenancy proof needs two isolated tenants, and the SHAPE of a tenant
         # is kit's own contract, not this step's: one database and TWO roles per
