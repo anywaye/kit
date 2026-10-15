@@ -4608,7 +4608,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # `targetRevision` — the standard Argo shape — shipped unmodified.
   #
   # WHAT IT ASSERTS, stated once as the single rule: every `Application`
-  # resolves to either a chart the fleet publishes (the four service charts
+  # resolves to either a chart the fleet publishes (the five service charts
   # at the private OCI registry, `targetRevision: 0.1.0`) or a chart a named
   # upstream repository publishes at the pinned version (the four
   # observability charts below) — a chart that resolves to neither is a gate
@@ -4616,9 +4616,9 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #   1. `metadata.name` equals the filename stem — the identity the rule
   #      classifies by. A file whose name and manifest disagree is classified
   #      by neither and fails.
-  #   2. A service name (`identity`, `gateway`, `courier`, `parlor`) carries
-  #      its own name as `chart`, `repoURL: oci://ghcr.io/cafaye/charts/<name>`
-  #      (the registry's PREFIX plus the chart name — Argo resolves the
+  #   2. A service name (`identity`, `gateway`, `courier`, `parlor`, `billing`)
+  #      carries its own name as `chart`, `repoURL: oci://ghcr.io/cafaye/charts/
+  #      <name>` (the registry's PREFIX plus the chart name — Argo resolves the
   #      revision against repoURL itself, so the root is not an artifact), and
   #      `targetRevision: 0.1.0` — the private-OCI ruling, untouched.
   #   3. An observability name carries EXACTLY the (repoURL, chart,
@@ -4669,12 +4669,14 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 #   does not provision, and an Application Argo cannot render is Unknown
 #   (ComparisonError at loki/storage.bucketNames.chunks) — see
 #   REPORT-roll-c5-loki-render.md.
-# The service set follows manifests/applications/: the four services a
-# customer runs. Pantry, box and keyholder ship no Application — all three
-# are Cafaye-operated and reached over HTTPS — so an Application naming one
-# of them is unclassified and still fails closed while the fleet's own
-# charts resolve.
-SERVICE_APPS = {"identity", "gateway", "courier", "parlor"}
+# The service set follows manifests/applications/: the services a customer
+# runs. `billing` joined on 2026-10-15 (it went to charging, and its
+# `publish.yml` pushes the chart the Application pulls) — it resolves to the
+# same private-OCI triple as the four launch services. Pantry, box and
+# keyholder ship no Application — all three are Cafaye-operated and reached
+# over HTTPS — so an Application naming one of them is unclassified and still
+# fails closed while the fleet's own charts resolve.
+SERVICE_APPS = {"identity", "gateway", "courier", "parlor", "billing"}
 EXPECTED = {
     "alloy": (GRAFANA_REPO, "alloy", "1.13.0"),
     "grafana": (GRAFANA_REPO, "grafana", "10.5.15"),
