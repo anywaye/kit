@@ -90,7 +90,7 @@ with:
 ```sh
 $ cat kit.ref
 # the stack this service runs; see bin/dev pin
-<the same 40-char-sha>
+e3a91c0d2f6b48a1c5d7e8f9a0b1c2d3e4f5a6b7
 ```
 
 Three facts about the `# master` comments, all load-bearing:
@@ -185,12 +185,12 @@ a branch, a pull request to canonical Kit:
 git clone https://github.com/<you>/kit.git
 cd kit
 git remote add canonical https://github.com/cafaye/kit.git
-git checkout -b <what-you-are-changing>
+git checkout -b docs-update-the-pin
 # …edit, then verify narrowly:
 git diff --check
 # plus the focused check for what you touched, if one exists —
 # e.g. bash tests/customer_upstream_check.sh after editing this page
-git push -u origin <what-you-are-changing>
+git push -u origin docs-update-the-pin
 # open the PR against cafaye/kit
 ```
 
