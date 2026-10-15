@@ -178,7 +178,7 @@
 #   developer machine is not one.
 #
 # --headless (or HEADLESS=1)
-#   The mode an agent drives. `caf box apply --phase N` runs this script with
+#   The mode an agent drives. `cafe box apply --phase N` runs this script with
 #   the flag and reads stdout as a STREAM OF JSONL EVENTS, one object per
 #   line, and nothing else: `{"event":"step.start","step":1,"phase":"k3s",
 #   "message":"k3s v1.37.1+k3s1 — single node, sqlite datastore","seconds":0.052}`.
@@ -462,7 +462,7 @@ DRY_RUN="${DRY_RUN:-0}"
 # HEADLESS=1 (or the --headless flag) turns stdout into a JSONL event stream —
 # one object per line, machine-parseable — and writes an install receipt naming
 # the phase, the next step, the input needed and where the human goes. This is
-# the mode `caf box apply --phase N` drives: the agent reads the JSONL and the
+# the mode `cafe box apply --phase N` drives: the agent reads the JSONL and the
 # receipt, and the only human touchpoint is the receipt's `human` field. The
 # interactive mode is unchanged — the same calls print the same plain text.
 HEADLESS="${HEADLESS:-0}"
@@ -711,7 +711,7 @@ PENDING_WAITS=""
 #     interactive mode the same call prints exactly what the installer has
 #     always printed, byte for byte.
 #   kit_substrate_out — HUMAN TEXT. stdout in interactive mode; STDERR in
-#     headless mode, so the operator (and `caf box logs`) still reads it while
+#     headless mode, so the operator (and `cafe box logs`) still reads it while
 #     stdout stays a machine-parseable stream.
 #
 # Nothing else in this file writes to the process stdout. `printf … | kubectl`
@@ -1050,7 +1050,7 @@ kit_substrate_await_port() {
 # --- the install receipt ------------------------------------------------------
 # The receipt is the resumable-install contract and the agent's map of the
 # install: it names the phase, the next step, the input needed and where the
-# human goes. `caf box apply --phase N` (W2-P6) reads it to know what to do
+# human goes. `cafe box apply --phase N` (W2-P6) reads it to know what to do
 # next; W5-P4's resumable install is its consumer.
 R_PHASE="install"
 R_NEXT=""
@@ -1891,7 +1891,7 @@ install_k3s() {
   # is typing at — which is not what the input said and, on a macOS
   # workstation, cannot work. Refuse and name the input: the fix is a cluster
   # that has a node, not a sudo prompt. It sits BELOW the dry-run return so a
-  # plan (`caf box apply --phase 1`) still prints this step instead of
+  # plan (`cafe box apply --phase 1`) still prints this step instead of
   # refusing to print a plan.
   if [ "$CLUSTER_SUPPLIED" -eq 1 ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_KUBECONFIG" \
@@ -2326,8 +2326,8 @@ exchange_registry_credential() {
   # the box's own identity, and what the registry capability is bound to${need_line}"
   fi
   if ! registry_capability_shape_ok "$KIT_SUBSTRATE_REGISTRY_CAPABILITY"; then
-    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
-  export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'
+    kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'cafe box enroll' and pass the capability it prints — a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted" "KIT_SUBSTRATE_REGISTRY_CAPABILITY is not a minted capability
+  export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from cafe box enroll>'
   # a dockerconfigjson belongs in the OLD runbook: it is exchanged, not pasted${need_line}"
   fi
   local raw http_status body encoded expires seconds
@@ -2340,15 +2340,15 @@ exchange_registry_credential() {
     -w '\n%{http_code}' \
     "${KIT_SUBSTRATE_REGISTRY_URL}/v1/registry-credentials" 2>/dev/null)" || raw=""
   if [ -z "$raw" ]; then
-    kit_substrate_refuse "" "check that the registry exchange is reachable at ${KIT_SUBSTRATE_REGISTRY_URL} and re-run 'caf box enroll' (the capability lives minutes)" "the registry exchange did not answer — the capability was not spent
-  check ${KIT_SUBSTRATE_REGISTRY_URL} is reachable, and re-run 'caf box enroll' for a fresh capability"
+    kit_substrate_refuse "" "check that the registry exchange is reachable at ${KIT_SUBSTRATE_REGISTRY_URL} and re-run 'cafe box enroll' (the capability lives minutes)" "the registry exchange did not answer — the capability was not spent
+  check ${KIT_SUBSTRATE_REGISTRY_URL} is reachable, and re-run 'cafe box enroll' for a fresh capability"
   fi
   http_status="$(printf '%s' "$raw" | tail -n 1)"
   body="$(printf '%s' "$raw" | sed '$d')"
   # A refusal arrives with box's own code, passed through by the exchange:
   # capability_expired (410), capability_redeemed (409), capability_wrong_box
   # or _purpose (403). Each is a statement about the capability, and the next
-  # step is always a fresh one from 'caf box enroll' — never another value.
+  # step is always a fresh one from 'cafe box enroll' — never another value.
   case "$http_status" in
     2*) ;;
     *)
@@ -2356,9 +2356,9 @@ exchange_registry_credential() {
       refusal_code="$(printf '%s' "$body" | jq -r '.error.code // empty' 2>/dev/null || true)"
       refusal_message="$(printf '%s' "$body" | jq -r '.error.message // empty' 2>/dev/null || true)"
       upstream_status="${refusal_code:-unspecified}"
-      kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'caf box enroll' and pass the capability it prints (it lives minutes) — the exchange refused it with ${upstream_status}" "the registry exchange refused this box's capability (${upstream_status})
+      kit_substrate_refuse "KIT_SUBSTRATE_REGISTRY_CAPABILITY" "re-run 'cafe box enroll' and pass the capability it prints (it lives minutes) — the exchange refused it with ${upstream_status}" "the registry exchange refused this box's capability (${upstream_status})
   ${refusal_message:-no reason given}
-  re-run 'caf box enroll' and pass the capability it prints (it lives minutes)"
+  re-run 'cafe box enroll' and pass the capability it prints (it lives minutes)"
       ;;
   esac
   encoded="$(printf '%s' "$body" | jq -r '.dockerconfigjson // empty' 2>/dev/null || true)"
@@ -2991,7 +2991,7 @@ database_url_for() {
     # secret has not run — so `input_needed` names the step rather than a
     # variable, and `human` says which one to run.
     kit_substrate_refuse "run step 8 (the Postgres Cluster) first" \
-      "re-run 'caf box apply --phase 8' on the box, then this step" \
+      "re-run 'cafe box apply --phase 8' on the box, then this step" \
       "secret postgres-role-$1-app is missing in namespace data"
   fi
   if [ "$1" = "courier" ]; then
@@ -3020,7 +3020,7 @@ owner_database_url_for() {
   pw="$(read_secret_key data "postgres-role-$1" password)"
   if [ -z "$pw" ]; then
     kit_substrate_refuse "run step 8 (the Postgres Cluster) first" \
-      "re-run 'caf box apply --phase 8' on the box, then this step" \
+      "re-run 'cafe box apply --phase 8' on the box, then this step" \
       "secret postgres-role-$1 is missing in namespace data"
   fi
   if [ "$1" = "courier" ]; then
@@ -3843,7 +3843,7 @@ install_migrations() {
   if ! kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout="${CNPG_CLUSTER_READY_TIMEOUT}s"; then
     cluster_phase="$(cnpg_cluster_phase)"
     kit_substrate_refuse "the CNPG Cluster postgres in namespace data" \
-      "re-run 'caf box apply --phase 8' on the box once the Cluster is Ready, then this step" \
+      "re-run 'cafe box apply --phase 8' on the box once the Cluster is Ready, then this step" \
       "the Postgres Cluster is not Ready (phase: '${cluster_phase:-unknown}') — refusing to migrate into a half-ready cluster"
   fi
 
@@ -4612,7 +4612,7 @@ EOF
 main() {
   # --headless is the agent-driven mode: JSONL on stdout, a receipt on disk.
   # The flag and the HEADLESS=1 environment variable are the same switch —
-  # the flag for a human typing it, the variable for `caf box apply`.
+  # the flag for a human typing it, the variable for `cafe box apply`.
   while [ $# -gt 0 ]; do
     case "$1" in
       --headless) HEADLESS=1; shift ;;
@@ -4644,7 +4644,7 @@ main() {
   # reported step 3 complete and step 4 started, so the events around the
   # garbage were correct; the stream itself was unreadable. A JSONL stream no
   # parser can read is an install nobody can drive headlessly, and it dies the
-  # same way wherever the installer runs — the box's own `caf box apply` reads
+  # same way wherever the installer runs — the box's own `cafe box apply` reads
   # this channel.
   #
   # The static check in tests/substrate_test.sh already refuses an `echo` or a

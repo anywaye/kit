@@ -4448,7 +4448,7 @@ master_refusal_pins() {
   out="$(KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID" KIT_SUBSTRATE_REGISTRY_CAPABILITY="" REGISTRY_PRIVATE_ARTIFACTS="" exchange_registry_credential 2>&1)" || ec=$?
   [ "$ec" -ne 0 ] || { printf 'the exchange succeeded with no capability\n'; return 0; }
   case "$out" in
-    *"export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from caf box enroll>'"*) return 1 ;;
+    *"export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from cafe box enroll>'"*) return 1 ;;
     *) printf 'the refusal does not carry the capability line\n%s\n' "$out"; return 0 ;;
   esac
 }
@@ -6012,7 +6012,7 @@ run 'control: a dependent Job launched in the first wave fails the ordering chec
 # 14. --headless — stdout is progress-only, and progress is secret-free
 # ===========================================================================
 #
-# The claim `caf box apply --phase N` rests on: run the installer with
+# The claim `cafe box apply --phase N` rests on: run the installer with
 # --headless and stdout is a stream of JSONL progress events, one object per
 # line, and NOTHING ELSE — because an agent parsing that stream cannot tell a
 # prose line from a progress line, and a prose line is where a credential
@@ -6389,7 +6389,7 @@ case "$(cat "$WORK/headless.human")" in
     ;;
 esac
 # And the converse, which is the real claim: the human prose must NOT be on
-# stdout. A single non-JSON line on stdout would break `caf box apply`'s
+# stdout. A single non-JSON line on stdout would break `cafe box apply`'s
 # parser, so this is asserted separately from the JSONL parse above.
 if grep -q 'secret identity-secrets created' "$WORK/headless.jsonl"; then
   fail 'headless: the human detail lines are not on stdout' "a prose line reached the JSONL channel"
@@ -6539,7 +6539,7 @@ esac
 #   * a remote apply missing either flag is RED (the defect that shipped)
 #   * a local apply carrying either flag is RED (the drift back into mixed mode)
 #   * the flags are required on the DRY_RUN plan string AND on the run, so the
-#     plan `caf box apply` reads cannot describe a mode the installer does not
+#     plan `cafe box apply` reads cannot describe a mode the installer does not
 #     use
 #   * the rule is over ANY remote URL, not over a remembered list of three: a
 #     new remote apply with no flags is RED, which is the shape a future
@@ -6673,7 +6673,7 @@ sed 's|apply -f "$DATA_DIR/postgres-cluster.yaml"|apply --server-side=true --for
   "$SUBSTRATE/install.sh" >"$fixture_local_ss"
 run 'control: a local apply carrying the remote flags goes red' red check_apply_modes "$fixture_local_ss"
 
-# And the plan half: the DRY_RUN string is what `caf box apply` reads and what
+# And the plan half: the DRY_RUN string is what `cafe box apply` reads and what
 # the receipt describes, so a run that gained the flags while its plan did not
 # is the drift a future reader would notice at the box and not here.
 fixture_plan_drift="$WORK/install-plan-drift.sh"
