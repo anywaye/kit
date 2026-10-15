@@ -13614,6 +13614,228 @@ YAML
 run 'control: a fixture where CoreDNS answers and node does not is not reported as resolving' green check_dns_agreement "$SUBSTRATE/install.sh"
 
 # ===========================================================================
+# 30. The trust preflight — a box that cannot verify its control plane is
+#     refreshed, or refused naming the origin and the verification error
+# ===========================================================================
+#
+# THE DEFECT, MEASURED ON THE BOX. The Contabo dogfood box (2026-10-15) had a
+# trimmed OS trust store — /etc/ssl/certs/ca-certificates.crt held 122
+# certificates and not one major root (no ISRG Root X1, no DigiCert Global
+# Root) — so `cafe boxd` (a Go client, reading the SYSTEM store) could not
+# verify https://box.svc.cafaye.com:8443 and failed with `x509: certificate
+# signed by unknown authority`, while a Mac client with a whole store could.
+# The remedy that worked was one command: `apt-get install --reinstall
+# ca-certificates && update-ca-certificates --fresh`.
+#
+# THE CHECKS, and what each proves:
+#   1. a verifiable box is reported verified, openssl IS invoked, and the
+#      package manager is NOT — the control that keeps "verified" from being a
+#      line printed unconditionally;
+#   2. a chain that fails and is fixed by a trust-store refresh is re-checked
+#      and reported fixed, with the remedy ATTEMPTED (the fake
+#      update-ca-certificates rebuilds the fake store, and the re-check sees it);
+#   3. a chain that stays broken REFUSES, naming the origin and openssl's own
+#      verification error, after the remedy was attempted (a verdict is not a
+#      silent pass);
+#   4. DRY_RUN plans the check and touches NOTHING — openssl is not called and
+#      the package manager is not run, because a plan must be offline and must
+#      not be able to refuse.
+#
+# HOW THE SUITE FAKES IT. The trust check calls the `openssl` BINARY, not a
+# shell function, so it is faked on PATH (the idiom fetch_test.sh uses for
+# docker): a fakebin with openssl / apt-get / update-ca-certificates. The fake
+# openssl fails for a named host until FAKE_TRUST_MARKER exists; the fake
+# update-ca-certificates creates that marker, so "refreshed" is a real state the
+# re-check can observe rather than a scripted reply. Both fake commands log
+# their argv, so "the remedy ran" and "the check ran" are read back rather than
+# assumed.
+#
+# THE RED CONTROL strips the `trust-preflight BEGIN/END` block from a copy of
+# install.sh: with the block gone there is no verification at all, and check 1
+# must go red — the proof that the check discriminates rather than passing on a
+# line that is always printed.
+
+trust_fakebin="$WORK/trust-fakebin"
+mkdir -p "$trust_fakebin"
+cat >"$trust_fakebin/openssl" <<'TRUST_OPENSSL'
+#!/usr/bin/env bash
+# A fake openssl for the trust-preflight test. Records its argv and answers
+# `s_client -verify_return_error`: exit 0 (chain verifies) unless the
+# -servername host is FAKE_OPENSSL_FAIL_HOST and the fix marker does not exist.
+printf '%s\n' "$*" >>"${FAKE_OPENSSL_LOG:-/dev/null}"
+host=""; prev=""
+for a in "$@"; do
+  case "$prev" in
+    -connect) host="${a%%:*}" ;;
+    -servername) host="$a" ;;
+  esac
+  prev="$a"
+done
+if [ "$host" = "${FAKE_OPENSSL_FAIL_HOST:-__none__}" ] && [ ! -f "${FAKE_TRUST_MARKER:-/nonexistent}" ]; then
+  printf 'verify error:num=20:unable to get local issuer certificate\n' >&2
+  printf 'verify return:0\n' >&2
+  exit 1
+fi
+printf 'CONNECTED(00000003)\nverify return:1\n'
+exit 0
+TRUST_OPENSSL
+chmod +x "$trust_fakebin/openssl"
+
+cat >"$trust_fakebin/apt-get" <<'TRUST_APT'
+#!/usr/bin/env bash
+# A fake apt-get: records the call and does nothing. The point is only that the
+# remedy is ATTEMPTED — the re-check after it is what decides.
+printf 'apt-get %s\n' "$*" >>"${FAKE_APT_LOG:-/dev/null}"
+exit 0
+TRUST_APT
+chmod +x "$trust_fakebin/apt-get"
+
+cat >"$trust_fakebin/update-ca-certificates" <<'TRUST_UPD'
+#!/usr/bin/env bash
+# A fake update-ca-certificates: records the call and, when FAKE_TRUST_MARKER is
+# set, creates it — that file is what the fake openssl reads as "the store was
+# refreshed", so the re-check can go green.
+printf 'update-ca-certificates %s\n' "$*" >>"${FAKE_APT_LOG:-/dev/null}"
+if [ -n "${FAKE_TRUST_MARKER:-}" ]; then
+  : >"$FAKE_TRUST_MARKER"
+fi
+exit 0
+TRUST_UPD
+chmod +x "$trust_fakebin/update-ca-certificates"
+
+# 1. Green, real tree: both origins verify, openssl ran, the remedy did not.
+check_trust_verified() {
+  local script="$1" src="$WORK/trust-verified-src.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local olog="$WORK/trust-verified-openssl.log" alog="$WORK/trust-verified-apt.log"
+  : >"$olog"; : >"$alog"
+  local out ec=0
+  out="$(env PATH="$trust_fakebin:$PATH" \
+    FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    DRY_RUN=0 \
+    bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'a verifiable box was refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'TLS chain verified against the system trust store: https://box.svc.cafaye.test'*) ;;
+    *) printf 'the control-plane origin is not reported verified\n%s\n' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'TLS chain verified against the system trust store: https://registry.svc.cafaye.test'*) ;;
+    *) printf 'the registry origin is not reported verified\n%s\n' "$out"; return 1 ;;
+  esac
+  [ -s "$olog" ] || { printf 'openssl was never invoked — the check is not a check\n'; return 1; }
+  [ ! -s "$alog" ] || { printf 'the remedy ran on a box that verified\n'; return 1; }
+  printf 'a verifiable box is reported verified, openssl ran, the remedy did not\n'
+}
+
+# 2. Green, real tree: a failing chain fixed by a refresh is re-checked and
+# reported fixed, and the remedy was actually attempted.
+check_trust_remedied() {
+  local script="$1" src="$WORK/trust-remedied-src.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local olog="$WORK/trust-remedied-openssl.log" alog="$WORK/trust-remedied-apt.log" marker="$WORK/trust-remedied.marker"
+  rm -f "$marker"; : >"$olog"; : >"$alog"
+  local out ec=0
+  out="$(env PATH="$trust_fakebin:$PATH" \
+    FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" FAKE_TRUST_MARKER="$marker" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    DRY_RUN=0 \
+    bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'a box fixable by a refresh was refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'TLS chain NOT verifiable: https://box.svc.cafaye.test'*) ;;
+    *) printf 'the failing chain was not reported\n%s\n' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'trust store refreshed: https://box.svc.cafaye.test now verifies'*) ;;
+    *) printf 'the refresh was not reported as fixing the chain\n%s\n' "$out"; return 1 ;;
+  esac
+  [ -s "$alog" ] || { printf 'the remedy was never attempted\n'; return 1; }
+  [ -f "$marker" ] || { printf 'the fake trust store was never rebuilt\n'; return 1; }
+  printf 'a failing chain is refreshed, re-checked, and reported fixed\n'
+}
+
+# 3. Green, real tree: a chain that stays broken refuses, naming the origin and
+# the verification error, with the remedy attempted first.
+check_trust_refused() {
+  local script="$1" src="$WORK/trust-refused-src.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local olog="$WORK/trust-refused-openssl.log" alog="$WORK/trust-refused-apt.log"
+  : >"$olog"; : >"$alog"
+  local out ec=0
+  out="$(env PATH="$trust_fakebin:$PATH" \
+    FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    DRY_RUN=0 \
+    bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -ne 0 ] || { printf 'an unverifiable chain did not refuse\n%s\n' "$out"; return 1; }
+  case "$out" in
+    *'https://box.svc.cafaye.test'*) ;;
+    *) printf 'the refusal does not name the failing origin\n%s\n' "$out"; return 1 ;;
+  esac
+  case "$out" in
+    *'unable to get local issuer certificate'*) ;;
+    *) printf 'the refusal does not carry the verification error\n%s\n' "$out"; return 1 ;;
+  esac
+  [ -s "$alog" ] || { printf 'the remedy was not attempted before refusing\n'; return 1; }
+  printf 'an unfixable chain refuses, naming the origin and the verification error\n'
+}
+
+# 4. Green, real tree: DRY_RUN plans and touches nothing.
+check_trust_dry_run() {
+  local script="$1" src="$WORK/trust-dryrun-src.sh"
+  sed '/^main "$@"/d' "$script" >"$src"
+  bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
+  local olog="$WORK/trust-dryrun-openssl.log" alog="$WORK/trust-dryrun-apt.log"
+  : >"$olog"; : >"$alog"
+  local out ec=0
+  out="$(env PATH="$trust_fakebin:$PATH" \
+    FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    DRY_RUN=1 HEADLESS=0 \
+    bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
+  [ "$ec" -eq 0 ] || { printf 'DRY_RUN refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }
+  case "$out" in
+    *'DRY_RUN:'*'KIT_SUBSTRATE_BOX_URL'*'KIT_SUBSTRATE_REGISTRY_URL'*) ;;
+    *) printf 'the plan does not name the trust check\n%s\n' "$out"; return 1 ;;
+  esac
+  [ ! -s "$olog" ] || { printf 'DRY_RUN called openssl\n'; return 1; }
+  [ ! -s "$alog" ] || { printf 'DRY_RUN ran the package manager\n'; return 1; }
+  printf 'DRY_RUN plans the trust check, runs neither the check nor the remedy\n'
+}
+
+run 'a box whose TLS chain verifies is reported verified (exit 0)' green check_trust_verified "$SUBSTRATE/install.sh"
+run 'a failing TLS chain is refreshed, re-checked, and reported fixed' green check_trust_remedied "$SUBSTRATE/install.sh"
+run 'an unfixable TLS chain refuses, naming the origin and the verification error' green check_trust_refused "$SUBSTRATE/install.sh"
+run 'DRY_RUN plans the trust check and runs neither the check nor the remedy' green check_trust_dry_run "$SUBSTRATE/install.sh"
+
+# The RED control: the trust-preflight block stripped from a copy of install.sh.
+# With it gone there is no verification at all, so check 1 must go red. The
+# fixture asserts its own premise first — the block is really absent and the
+# copy still parses — so a red cannot be a broken fixture wearing the finding's
+# clothes.
+trust_stripped="$WORK/trust-stripped.sh"
+sed -e '/trust-preflight BEGIN/,/trust-preflight END/d' "$SUBSTRATE/install.sh" >"$trust_stripped"
+if grep -q 'kit_substrate_trust_preflight()' "$trust_stripped" || ! bash -n "$trust_stripped"; then
+  fail 'control fixture: the trust-preflight block was not removed' \
+    'the sed did not strip the block — this control would prove nothing'
+else
+  run 'control: with the trust-preflight block gone there is no verification (red)' red \
+    check_trust_verified "$trust_stripped"
+fi
+
+# ===========================================================================
 # Summary
 # ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"

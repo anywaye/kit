@@ -2,6 +2,22 @@
 
 ### Substrate
 
+- **The preflight verifies the box's TLS trust chain against the system
+  store, and refreshes it if it cannot.** Measured on the Contabo dogfood box
+  (2026-10-15): `/etc/ssl/certs/ca-certificates.crt` held 122 certificates and
+  no major root (no ISRG, no DigiCert), so `cafe boxd` could not verify
+  `https://box.svc.cafaye.com:8443` (`x509: certificate signed by unknown
+  authority`) while a Mac client could, and the remedy was `apt-get install
+  --reinstall ca-certificates && update-ca-certificates --fresh`. The preflight
+  now verifies `KIT_SUBSTRATE_BOX_URL` and `KIT_SUBSTRATE_REGISTRY_URL` with
+  `openssl s_client -verify_return_error` against the SYSTEM store (curl can
+  answer where a Go client fails, so curl is not a proof), refreshes the OS CA
+  package when a chain does not verify (apt-get/dnf/apk, each call bounded by
+  `KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT`), RE-CHECKS, and refuses only a chain
+  the refresh could not fix — naming the origin and openssl's own verification
+  error. DRY_RUN plans the check and touches neither the network nor the
+  package manager.
+
 - **The OIDC patch restarts identity and watches its JWKS route answer.**
   The patch wrote all four OIDC keys into a secret whose pod was already
   running (`envFrom` is read at pod start): the keys round-tripped while the
