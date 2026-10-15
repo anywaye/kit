@@ -2916,7 +2916,11 @@ kit_substrate_manifest_files() {
 # convergence mechanism, and owned outright by the installer — so a re-run must
 # keep its ability to reclaim the fields it set.
 install_applications() {
-  log_step "the first Applications (identity, gateway, courier, parlor, observability)"
+  # billing joined the fleet here on 2026-10-15: the freeze lifted, the service
+  # went to charging, and the chart the substrate pulls is the one publish.yml
+  # pushes. The log names what it applies because a step that applies more than
+  # it says is a step whose output nobody can check against the tree.
+  log_step "the first Applications (identity, gateway, courier, parlor, billing, observability)"
   if dry_run "kubectl apply -f ${MANIFEST_DIR}"; then
     return 0
   fi

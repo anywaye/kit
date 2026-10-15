@@ -4145,16 +4145,18 @@ mock_probe_curl() {
   return 1
 }
 
-# 1. The derivation, off the real tree: 4 charts + 4 images (the four
-# services a customer runs — pantry, box and keyholder left with their
-# Applications, so their charts and images are derived nowhere), and no
-# plain-HTTPS chart among them.
+# 1. The derivation, off the real tree: 5 charts + 5 images (the five
+# services a customer runs — the launch four plus billing, which the
+# 2026-10-15 freeze-lift put on the substrate; pantry, box and keyholder
+# left with their Applications, so their charts and images are derived
+# nowhere), and no plain-HTTPS chart among them.
 derived_ok() {
   local rows n want
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
   n="$(printf '%s\n' "$rows" | grep -c .)"
-  [ "$n" -eq 8 ] || { printf 'derived %s artifact rows, expected 8\n%s\n' "$n" "$rows"; return 1; }
-  for want in "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
+  [ "$n" -eq 10 ] || { printf 'derived %s artifact rows, expected 10\n%s\n' "$n" "$rows"; return 1; }
+  for want in "cafaye/charts/billing 0.1.0" "cafaye/billing 0.1.0" \
+    "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
     "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
     "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \
     "cafaye/charts/parlor 0.1.0" "cafaye/parlor 0.1.0"; do
@@ -9746,7 +9748,10 @@ run 'control: a name in the wrong namespace goes red' red \
 # set, and the shipped set moved.)
 fixture_unshipped="$WORK/apps-unshipped"
 fixture_apps "$fixture_unshipped"
-sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://billing.billing.svc.cluster.local:8080|' \
+# pantry, because it is the service whose Application is deliberately NOT
+# shipped (billing's arrived on 2026-10-15 with the freeze-lift, so it is now a
+# real Service a manifest ships and the mutation would no longer be a control).
+sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://pantry.pantry.svc.cluster.local:8080|' \
   "$fixture_unshipped/gateway.yaml"
 rm -f "$fixture_unshipped/gateway.yaml.bak"
 run 'control: an address to a Service no manifest ships goes red' red \
@@ -12130,10 +12135,14 @@ apps_dir = sys.argv[1]
 #                                        grafana-clusterrole[grafana-clusterrolebinding]
 #   prometheus.yaml  prometheus 29.36.0:  ClusterRole + ClusterRoleBinding x2
 #                                        (kube-state-metrics, server)
-#   identity/courier/gateway/parlor: namespaced-only (Deployments, Services,
-#                                        ConfigMaps, Secrets in their own
-#                                        namespace; nothing cluster-scoped).
+#   identity/courier/gateway/parlor/billing: namespaced-only (Deployments,
+#                                        Services, ConfigMaps, Secrets in their
+#                                        own namespace; nothing cluster-scoped).
+#   billing joined 2026-10-15 with the freeze-lift: it is an internal service
+#   (Ingress off), so its chart renders a Deployment, a Service and nothing
+#   cluster-scoped — the same shape as the other four services.
 EXPECTED = {
+    "billing.yaml": set(),
     "alloy.yaml": {
         ("apiextensions.k8s.io", "CustomResourceDefinition"),
         ("rbac.authorization.k8s.io", "ClusterRole"),
