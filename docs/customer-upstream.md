@@ -17,10 +17,10 @@ repository you own, with the canonical template kept as a **named remote**
 you merge from — never a copy you re-download.
 
 ```sh
-git clone https://github.com/<canonical>/<app>.git myapp
+git clone https://github.com/cafaye/kit.git myapp
 cd myapp
 git remote rename origin upstream
-git remote add origin https://github.com/<you>/<app>.git
+git remote add origin https://github.com/your-handle/kit.git
 git push -u origin main
 ```
 
