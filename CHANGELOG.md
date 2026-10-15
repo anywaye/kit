@@ -3464,6 +3464,23 @@
     Runs with no docker for the grammar and the agreement checks; SKIPs loudly
     for the build.
 
+### Fixed
+
+- **`tests/isolation_test.sh` assertion 4 flaked: the control's wait was
+  satisfied by the temporary initdb server, and its connect ran once.**
+  The control cluster is a bare `docker run`, so its hand-rolled wait led
+  with `pg_isready` — which the entrypoint's temporary server answers before
+  the first init statement runs — and the single-shot
+  `psql -U alpha -d beta` could then land in the stop-temporary/start-real
+  restart window (two `ready to accept connections` lines ~1.6s apart in the
+  control's log) and fail with a connection error that reads exactly like a
+  refused control. The wait is now the evidence wait the main cluster uses
+  (`wait_for_provisioning`, no `pg_isready` lead), and the connect retries
+  transient failures bounded (30x1s) while a `permission denied for
+  database` stops the loop at once — so a control carrying the REVOKE still
+  fails on its first attempt, and the retry cannot make a broken control
+  pass. Proven with a with-REVOKE fixture control: refused on attempt 1.
+
 ## 2.0.0
 
 ### Breaking
