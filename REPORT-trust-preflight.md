@@ -94,33 +94,65 @@ evidence, not of the cafaye hosts.
 ## The tests
 
 `tests/substrate_test.sh` §30. One fakebin (`openssl`, `apt-get`,
-`update-ca-certificates`), four greens against the real `install.sh` (sourced,
-`main` stripped), one red control:
+`update-ca-certificates`, plus `kubectl` and `curl` for the preflight-wiring
+cases), **seven greens** against the real `install.sh` (sourced, `main` stripped)
+and **five red controls**, each mutating exactly one thing.
 
-1. a verifiable box is reported verified, **openssl IS invoked**, the package
-   manager is NOT;
-2. a failing chain fixed by a refresh is re-checked and reported fixed, with the
-   remedy attempted — the fake `update-ca-certificates` rebuilds the fake store
-   and the re-check observes it, so "refreshed" is state rather than a scripted
+The greens:
+
+1. a verifiable box is reported verified for BOTH origins, **openssl IS invoked**
+   with the origin in `-connect` and `-servername`, the package manager is NOT;
+2. a failing chain fixed by a refresh is **re-checked** — twice per failing
+   origin, read off the openssl log — and reported fixed, with the remedy
+   ATTEMPTED: the fake `update-ca-certificates` rebuilds the fake store, so
+   "refreshed" is a real state the re-check observes rather than a scripted
    reply;
 3. a chain that stays broken **refuses**, naming the origin and openssl's own
-   verification error, after the remedy was attempted;
-4. `DRY_RUN` plans and calls neither openssl nor the package manager;
-5. **RED**: strip the `trust-preflight BEGIN/END` block and there is no
-   verification at all, so check 1 goes red. The fixture asserts its own premise
-   (block absent, copy parses) first.
+   verification error, after the remedy was attempted, and the second origin is
+   never reached;
+4. an origin that never answers a **handshake** refuses as REACHABILITY and the
+   remedy is NOT run — openssl prints no `Verify return code:` line for a
+   refused port, so the store was never consulted;
+5. a remedy that itself **fails** is named in the refusal, so the operator is
+   never told to run a command that has just been refused;
+6. the installer's OWN `preflight()` reaches the trust check, and **stops** at
+   it: with a fake `curl`, the ghcr.io probe is visible in the record after a
+   pass and absent after a refusal;
+7. `DRY_RUN` plans the check and calls neither openssl nor the package manager.
+
+The red controls, one mutation each:
+
+| mutation | what must go red |
+| --- | --- |
+| `trust-preflight BEGIN/END` block stripped | check 1 — no verification at all |
+| `DRY_RUN` guard's four-line `if … fi` deleted | check 7 — a plan that runs openssl and apt-get |
+| `kit_substrate_refresh_trust_store` emptied | check 2 — a refreshable box now refuses |
+| reachability guard changed to `= "yes"` | check 4 — an unreachable origin run through the remedy |
+| BOTH `preflight()` call sites removed | check 6 — a tree where nothing runs the check |
+
+The fake openssl answers **three** shapes — unreachable (no verify verdict),
+unverifiable (`Verify return code: 20 (unable to get local issuer certificate)`,
+the live box's own failure) and verified (exit 0). A fake with one shape would
+let the installer collapse two different findings into one.
+
+Every fixture asserts its own premise before it is used: the DRY_RUN fixture
+asserts the guard is a four-line span whose middle is `step.plan` and `return 0`;
+the call-site fixture asserts the needle appears exactly twice (the DRY_RUN branch
+and the live branch) and that `preflight()` no longer calls the helper while its
+definition survives.
 
 ```sh
 $ bash tests/substrate_test.sh
--- substrate_test: 408 passed, 0 failed, 0 skipped
-PASS: 408 passed, 0 failed, 0 skipped
+-- substrate_test: 416 passed, 0 failed, 0 skipped
+PASS: 416 passed, 0 failed, 0 skipped
 
 $ bash tests/validate.sh --static-only
 PASS: every check passed.
 note: 9 check(s) skipped — reported above, never hidden.
+note: 1 tier(s) ran under a time bound; none was reached.
 ```
 
-403 → 408 checks. `shellcheck -S warning` clean on both edited files.
+`shellcheck -S warning` clean on both edited files, and `bash -n` on both.
 
 ## Commits (branch `feat/trust-preflight`)
 
@@ -149,34 +181,71 @@ error:num=20:unable to get local issuer certificate`, refresh, then either
 report `trust store refreshed: …` or refuse. That would replace the third
 "not proven" line above with a measurement.
 
-## Concurrency — read this before merging
+## Concurrency — this run, resolved
 
-**A second worker (`opencode-go/step-5-preview-free`, pid 65408) was dispatched
-into THIS worktree for THIS packet while this run was in progress.** It was
-actively editing `templates/substrate/install.sh` in the working tree (mtime
-moved at 16:09 and again at 16:12, after this run's commits). The committed
-history on `feat/trust-preflight` therefore contains **this run's** four
-commits only:
+**A second worker (`opencode-go/step-5-preview-free`) was dispatched into THIS
+worktree for THIS packet while the first run was in flight.** Both halves were
+written in the same working tree by two agents, which is how two reports came to
+describe one packet. The manager consolidated: `f856198` is the second worker's
+half — the refinement above and its proof — on top of this run's commits.
 
 ```
+f856198 substrate: finish the second worker's trust-preflight refinement and its proof
+4549b58 report: note the second worker dispatched into this worktree
 142bd6a docs: report the trust preflight, and name it in the substrate README
 81055c1 substrate_test: keep the local cycle offline — fake openssl on PATH
 4b85906 substrate_test: prove the trust preflight, with a fake openssl/apt on PATH
 94141d7 substrate: preflight the box's TLS trust chain against the system store
 ```
 
-The uncommitted diff in `templates/substrate/install.sh` is **the other
-worker's**, and it is an improvement on this implementation — it distinguishes
-"the store refused the chain" (fixable by a refresh) from "the origin never
-answered" (reachability, not the store), records what the refresh actually did,
-and skips verification for a plaintext `http://` origin. **This run deliberately
-did not commit it**: another agent was mid-write, and committing a torn file
-under a message its author did not write is worse than leaving it for its
-author. The manager should let that worker commit its own change (or, if it is
-gone, commit the diff itself after a `bash tests/substrate_test.sh` on the
-final file) — not discard it.
+**What the second half changed, and why.** The first half was right about the
+incident and wrong about one thing it could not have measured: it ran the
+trust-store refresh for ANY non-zero `openssl` exit, so an origin that was
+unreachable — a refused port, a name that does not resolve — was reported as
+`the OS trust store is stale or trimmed`, a false statement about a network
+problem, with the refresh budget burned on a remedy that could not land. openssl
+distinguishes the two itself: it prints `Verify return code:` only when a session
+was established and a chain was checked. Measured on this host:
 
-The two workers' versions agree on the substance of the packet, so either tip
-satisfies it; do not merge a state where the uncommitted diff is silently
-dropped.
+```
+$ openssl s_client -verify_return_error -connect github.com:443 -servername github.com </dev/null
+Verify return code: 0 (ok)                              # exit 0
+$ openssl s_client -verify_return_error -connect 127.0.0.1:1 -servername x </dev/null
+connect:errno=61                                        # exit 1, no verify verdict
+$ openssl s_client -verify_return_error -connect no-such-host.invalid:443 -servername x </dev/null
+nodename nor servname provided, or not known             # exit 1, no verify verdict
+$ openssl s_client -verify_return_error -connect github.com:443 ... -CAfile /tmp/self.pem
+Verify return code: 20 (unable to get local issuer certificate)   # exit 1, verdict printed
+```
 
+So `kit_substrate_tls_verify` now sets `TLS_VERIFY_REACHED` from that line, and
+four things follow:
+
+- an unreachable origin refuses **as reachability**, without running the remedy,
+  and its message never claims the store is stale;
+- `kit_substrate_refresh_trust_store` records what each bounded command did in
+  `TRUST_REFRESH_NOTE`, so a refusal never recommends a command that has just
+  failed — and says nothing at all when the refresh ran clean;
+- a plaintext `http://` origin is reported as carrying no chain to verify, rather
+  than refused with openssl's `wrong version number`;
+- the error extraction prefers the `Verify return code:` line, then
+  `verify error:`, then anything carrying a reason, so the refusal shows openssl's
+  own words instead of the `CONNECTED(…)` line.
+
+**What is still not proven here** — the same three as above, plus:
+
+- the unreachable-path branch is proven against the fake's connect-failure shape,
+  not against a box behind an egress firewall;
+- the `dnf`/`apk` remedy branches are bounded and named in the refusal, but only
+  the `apt-get` branch is exercised by the fakebin.
+
+## Successor's first move
+
+If a box with a genuine trimmed store is available: run the live installer
+against it and watch the preflight print `TLS chain NOT verifiable: … unable to
+get local issuer certificate`, refresh, then either report `trust store
+refreshed: …` or refuse. That would replace the first "not proven" line above
+with a measurement.
+
+The second such box needs no new test — the three-shape fake already covers the
+verdict openssl gives, and the only untested shape left is a dnf/apk box.

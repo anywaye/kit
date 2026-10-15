@@ -403,8 +403,21 @@ refreshes the OS CA package once if a chain does not verify, and refuses only a
 chain the refresh could not fix, naming the origin and openssl's own verification
 error. A stale or trimmed store is the live-box failure
 (`x509: certificate signed by unknown authority`) this ends; `DRY_RUN` plans the
-check and touches neither the network nor the package manager. A supplied
-cluster adds two refusals of its own: the kubeconfig is readable, and the
+check and touches neither the network nor the package manager.
+
+**An origin that never answers is not a stale trust store,** and the preflight
+now says so. openssl prints `Verify return code:` only when a session was
+established and a chain was checked, so a refused port or a name that does not
+resolve refuses as **reachability** — naming the origin and the handshake error —
+without running the remedy, which cannot make a dead port answer and whose
+budget it would otherwise burn. A remedy that itself fails is named in the
+refusal rather than recommended again, and a plaintext `http://` origin reports
+that it carries no chain instead of being refused with openssl's `wrong version
+number`. Each connect+verify is bounded by `KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT`
+and each package-manager call by `KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT`, through
+the resolved `KIT_SUBSTRATE_TIMEOUT_BIN` (`timeout`, else `gtimeout`).
+
+A supplied cluster adds two refusals of its own: the kubeconfig is readable, and the
 cluster behind it answers a namespace listing. A supplied cluster with no Node
 refuses naming the input — a supplied cluster is never provisioned by this
 script.

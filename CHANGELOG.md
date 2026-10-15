@@ -16,7 +16,24 @@
   `KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT`), RE-CHECKS, and refuses only a chain
   the refresh could not fix — naming the origin and openssl's own verification
   error. DRY_RUN plans the check and touches neither the network nor the
-  package manager.
+  package manager. A box that cannot verify its control plane is now either
+  fixed and re-verified, or refused — never waved through.
+- **… and it now tells an unreachable origin from an unverifiable chain.**
+  openssl prints `Verify return code:` only when a session was established and
+  a chain was checked, so a refused port or an unresolvable name is a
+  REACHABILITY failure and not a stale trust store: it refuses naming the
+  origin and the handshake error WITHOUT running the remedy, which a refresh
+  cannot reach and whose budget it would otherwise burn. A remedy that itself
+  fails is named in the refusal, so an operator is never told to run a command
+  that has just been refused. A plaintext `http://` origin reports that it
+  carries no chain rather than being refused with openssl's `wrong version
+  number`. Two variables are new: `KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT` (each
+  connect+verify) and the resolved `KIT_SUBSTRATE_TIMEOUT_BIN`
+  (`timeout`, else `gtimeout`) that bounds every package-manager call.
+  Measured on this host: exit 0 with `Verify return code: 0 (ok)`, exit 1 with
+  no verdict for a refused port and for a name that does not resolve, and exit 1
+  with `Verify return code: 20 (unable to get local issuer certificate)` for a
+  store that refuses the chain.
 
 - **The OIDC patch restarts identity and watches its JWKS route answer.**
   The patch wrote all four OIDC keys into a secret whose pod was already
