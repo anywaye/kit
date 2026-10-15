@@ -396,10 +396,18 @@ k3s gets installed on the host off some other tool's export is a trap.
 What the preflight checks changes with it, because the subject changes. Root,
 Linux, arch and memory are the **host's** business and are refusals only when
 this script installs k3s on that host; curl, jq, openssl and ghcr.io are the
-**run's** business and hold in both shapes. A supplied cluster adds two
-refusals of its own: the kubeconfig is readable, and the cluster behind it
-answers a namespace listing. A supplied cluster with no Node refuses naming the
-input — a supplied cluster is never provisioned by this script.
+**run's** business and hold in both shapes. So does the **TLS trust chain**: the
+preflight verifies `KIT_SUBSTRATE_BOX_URL` and `KIT_SUBSTRATE_REGISTRY_URL`
+against the system trust store — the one `cafe boxd` (a Go client) reads —
+refreshes the OS CA package once if a chain does not verify, and refuses only a
+chain the refresh could not fix, naming the origin and openssl's own verification
+error. A stale or trimmed store is the live-box failure
+(`x509: certificate signed by unknown authority`) this ends; `DRY_RUN` plans the
+check and touches neither the network nor the package manager. A supplied
+cluster adds two refusals of its own: the kubeconfig is readable, and the
+cluster behind it answers a namespace listing. A supplied cluster with no Node
+refuses naming the input — a supplied cluster is never provisioned by this
+script.
 
 This is not a test-only backdoor. It is the same capability a customer with
 their own Kubernetes needs: theirs is not a fresh box either, and the substrate
