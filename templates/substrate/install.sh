@@ -1741,6 +1741,195 @@ kit_substrate_readiness_json() {
 }
 # --- honest-done END
 
+# --- trust-preflight BEGIN ---------------------------------------------------
+# A BOX THAT CANNOT VERIFY ITS CONTROL PLANE IS A BOX THAT CANNOT WORK.
+# Measured on the Contabo dogfood box 2026-10-15: its
+# /etc/ssl/certs/ca-certificates.crt held 122 certificates and not one of the
+# major roots (no ISRG Root X1, no DigiCert Global Root) — a stale or trimmed
+# OS trust store — so `cafe boxd` (a Go client, which reads the SYSTEM store)
+# could not verify `https://box.svc.cafaye.com:8443` and failed with `x509:
+# certificate signed by unknown authority`, while a Mac client with a whole
+# store could. The box was seconds into `curl | sh` and headed for a
+# half-install it could not recover from. The remedy that worked was one
+# command: `apt-get install --reinstall ca-certificates &&
+# update-ca-certificates --fresh`.
+#
+# THE TWO ORIGINS THE BOX MUST REACH are KIT_SUBSTRATE_BOX_URL (the control
+# plane, where the capability is redeemed) and KIT_SUBSTRATE_REGISTRY_URL (the
+# exchange). A box whose OS trust store is stale or trimmed cannot reach
+# either, so the preflight verifies BOTH against the SYSTEM store before
+# anything is created — and refuses what a refresh cannot fix.
+#
+# WHY openssl AND NOT curl. `curl -sS ... --max-time 15 <url>/healthz` is NOT a
+# proof that the store a Go client reads can verify the chain: curl carries its
+# own CA fallbacks and verification policy on some builds, so it can answer on
+# a path Go fails — exactly the asymmetry the live incident showed (curl
+# succeeded; `cafe boxd` did not). `openssl s_client -verify_return_error`
+# FAILS (non-zero) on an unverifiable chain and reads the system store, so the
+# question this preflight asks is the question the Go client will ask.
+#
+# A VERIFICATION FAILURE IS A FINDING, NOT A WARNING. The OS trust store is
+# refreshed first (bounded, package-manager aware), the origins are RE-CHECKED,
+# and only a still-failing chain refuses — naming the origin and openssl's own
+# verification error. Never a silent pass: the whole point of the preflight is
+# that the box does not proceed to a state it cannot recover from. Nothing here
+# echoes a value: the origins are configuration (already printed elsewhere) and
+# openssl's own error line is not a secret. Refusals name a VARIABLE, never a
+# value, the same rule as every other refusal in this file.
+#
+# DRY_RUN PLANS AND TOUCHES NOTHING. The check is read-only and would be safe to
+# run in a plan, but a plan runs on a developer machine with neither a box's
+# store nor (often) a network, and a plan that could REFUSE — an origin that is
+# unreachable is not an origin that verifies — is not a plan. So the plan says
+# what the live run would do and invokes neither openssl nor the package
+# manager; the refresh below is additionally guarded by `dry_run` as a second
+# layer, because it is the one mutation here.
+
+# KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT bounds each openssl connect+verify, and
+# KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT bounds each package-manager call. Both
+# are seconds and both are overridable so the suite can shorten them — the rule
+# is the bound, not the number.
+: "${KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT:=15}"
+: "${KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT:=180}"
+
+# KIT_SUBSTRATE_TIMEOUT_BIN — the timeout(1) that bounds the calls above. GNU
+# coreutils calls it `timeout`; macOS has no /usr/bin/timeout and Homebrew's
+# installs `gtimeout`. Resolved once, here rather than in a function, so no
+# caller can be the one that gets it wrong. Empty when neither exists: openssl
+# then still bounds itself (its own -timeout and the kernel's TCP connect
+# timeout) and a package manager is left to its own bound.
+if command -v timeout >/dev/null 2>&1; then
+  KIT_SUBSTRATE_TIMEOUT_BIN="$(command -v timeout)"
+elif command -v gtimeout >/dev/null 2>&1; then
+  KIT_SUBSTRATE_TIMEOUT_BIN="$(command -v gtimeout)"
+else
+  KIT_SUBSTRATE_TIMEOUT_BIN=""
+fi
+
+# The verification error of the last failed kit_substrate_tls_verify, read by
+# the refusal below so the operator sees openssl's own words, not a paraphrase.
+TLS_VERIFY_ERROR=""
+
+# kit_substrate_run_bounded <seconds> <command...> — run a command under the
+# resolved timeout, or bare when there is none. Its own stdout is the command's,
+# so every caller redirects; it prints nothing of its own.
+kit_substrate_run_bounded() {
+  local secs="$1"
+  shift
+  if [ -n "$KIT_SUBSTRATE_TIMEOUT_BIN" ]; then
+    "$KIT_SUBSTRATE_TIMEOUT_BIN" "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
+# kit_substrate_tls_verify <url> — a bounded connect and certificate
+# verification of <url>'s origin against the SYSTEM trust store. Returns 0 when
+# the chain verifies, 1 otherwise; on failure TLS_VERIFY_ERROR carries the
+# verification error. Writes NOTHING to the process stdout: openssl's output is
+# captured and its error travels to the refusal through the variable.
+kit_substrate_tls_verify() {
+  local url="$1" rest scheme host port out ec=0
+  TLS_VERIFY_ERROR=""
+  rest="${url#*://}"
+  scheme="${url%%://*}"
+  host="${rest%%/*}"
+  port=""
+  case "$host" in
+    *:*) port="${host##*:}"; host="${host%:*}" ;;
+  esac
+  [ -n "$host" ] || { TLS_VERIFY_ERROR="empty host in origin ${url}"; return 1; }
+  if [ -z "$port" ]; then
+    case "$scheme" in
+      http) port=80 ;;
+      *) port=443 ;;
+    esac
+  fi
+  # -verify_return_error makes an unverifiable chain a non-zero exit; -servername
+  # sends SNI so the origin's vhost answers; </dev/null keeps openssl from
+  # waiting on a session. The output is captured, never printed.
+  out="$(kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_VERIFY_TIMEOUT" \
+    openssl s_client -verify_return_error -connect "${host}:${port}" \
+    -servername "$host" </dev/null 2>&1)" || ec=$?
+  if [ "$ec" -eq 0 ]; then
+    return 0
+  fi
+  # openssl's own words, bounded to one line so a refusal stays readable.
+  TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | grep -iE 'verify error|unable to|certificate|error' | head -n1 | cut -c1-200)"
+  [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="$(printf '%s\n' "$out" | grep -m1 . | cut -c1-200)"
+  [ -n "$TLS_VERIFY_ERROR" ] || TLS_VERIFY_ERROR="(openssl produced no diagnostic)"
+  return 1
+}
+
+# kit_substrate_refresh_trust_store — the remedy the live incident needed:
+# reinstall the OS CA package and rebuild the bundle. Package-manager aware
+# (apt-get, dnf, apk), each call bounded, and best-effort: the RE-CHECK that
+# follows is the verdict, so a package manager that refuses is reported rather
+# than fatal. Returns 0 when a refresh was attempted (or, in DRY_RUN, planned),
+# 1 when no supported package manager exists. In DRY_RUN it PLANS and runs
+# nothing.
+kit_substrate_refresh_trust_store() {
+  if command -v apt-get >/dev/null 2>&1; then
+    if dry_run "apt-get update && apt-get install -y --reinstall ca-certificates && update-ca-certificates --fresh"; then
+      return 0
+    fi
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get update >/dev/null 2>&1 || true
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apt-get install -y --reinstall ca-certificates >/dev/null 2>&1 || true
+    if command -v update-ca-certificates >/dev/null 2>&1; then
+      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-certificates --fresh >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+  if command -v dnf >/dev/null 2>&1; then
+    if dry_run "dnf -y reinstall ca-certificates && update-ca-trust"; then
+      return 0
+    fi
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" dnf -y reinstall ca-certificates >/dev/null 2>&1 || true
+    if command -v update-ca-trust >/dev/null 2>&1; then
+      kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" update-ca-trust >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+  if command -v apk >/dev/null 2>&1; then
+    if dry_run "apk add --no-cache ca-certificates"; then
+      return 0
+    fi
+    kit_substrate_run_bounded "$KIT_SUBSTRATE_TRUST_REFRESH_TIMEOUT" apk add --no-cache ca-certificates >/dev/null 2>&1 || true
+    return 0
+  fi
+  return 1
+}
+
+# kit_substrate_trust_preflight — verify each origin the box must reach, remedy
+# a failure, re-check, and refuse only what the remedy could not fix. In
+# DRY_RUN it plans and touches nothing (see the block comment above).
+kit_substrate_trust_preflight() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    kit_substrate_emit step.plan "verify the TLS chain of KIT_SUBSTRATE_BOX_URL and KIT_SUBSTRATE_REGISTRY_URL against the system trust store, refreshing ca-certificates only if a chain does not verify"
+    return 0
+  fi
+  local url err
+  for url in "$KIT_SUBSTRATE_BOX_URL" "$KIT_SUBSTRATE_REGISTRY_URL"; do
+    [ -n "$url" ] || continue
+    if kit_substrate_tls_verify "$url"; then
+      kit_substrate_out "    TLS chain verified against the system trust store: ${url}"
+      continue
+    fi
+    err="$TLS_VERIFY_ERROR"
+    kit_substrate_out "    TLS chain NOT verifiable: ${url} — ${err}"
+    kit_substrate_out "    refreshing the system trust store and re-checking (a stale or trimmed store is the live-box failure this ends)"
+    if kit_substrate_refresh_trust_store && kit_substrate_tls_verify "$url"; then
+      kit_substrate_out "    trust store refreshed: ${url} now verifies against the system store"
+      continue
+    fi
+    err="$TLS_VERIFY_ERROR"
+    kit_substrate_refuse "" \
+      "on the box run: apt-get update && apt-get install -y --reinstall ca-certificates && update-ca-certificates --fresh  (dnf: dnf -y reinstall ca-certificates && update-ca-trust), then re-run this installer" \
+      "the box cannot verify the TLS chain of ${url}: ${err} — the OS trust store is stale or trimmed, so every client that uses it (cafe boxd included) fails with 'x509: certificate signed by unknown authority'"
+  done
+}
+# --- trust-preflight END
+
 # --- preflight --------------------------------------------------------------
 # Every check here is a refusal, not a warning: a half-installed substrate is
 # worse than no substrate, because it looks like it works.
@@ -1764,6 +1953,7 @@ preflight() {
     else
       kit_substrate_emit progress "DRY_RUN: would check root, curl, openssl, jq, Linux, arch, memory, registry reachability"
     fi
+    kit_substrate_trust_preflight # trust-preflight
     kit_substrate_readiness_preflight # honest-done
     kit_substrate_ensure_public_resolver # honest-done
     return 0
@@ -1831,6 +2021,14 @@ preflight() {
   if ! command -v jq >/dev/null 2>&1; then
     kit_substrate_refuse "" "install jq — step 12 reads the minted credential out of identity's response" "jq is required — step 12 reads the minted credential out of identity's response"
   fi
+
+  # THE TRUST STORE, before anything is created: a box that cannot verify the
+  # control plane's TLS chain cannot redeem its capability, and a half-install
+  # it cannot recover from is the outcome the preflight exists to prevent. The
+  # check runs against the SYSTEM store (the one `cafe boxd` uses), refreshes
+  # it once if a chain does not verify, and refuses only what the refresh could
+  # not fix. See the trust-preflight block above.
+  kit_substrate_trust_preflight # trust-preflight
 
   # The registry is where the pull secret and every chart come from. An
   # unreachable ghcr.io is a refusal, not a retry: the install cannot complete.
