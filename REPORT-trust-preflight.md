@@ -148,3 +148,35 @@ against it and watch the preflight print `TLS chain NOT verifiable: … verify
 error:num=20:unable to get local issuer certificate`, refresh, then either
 report `trust store refreshed: …` or refuse. That would replace the third
 "not proven" line above with a measurement.
+
+## Concurrency — read this before merging
+
+**A second worker (`opencode-go/step-5-preview-free`, pid 65408) was dispatched
+into THIS worktree for THIS packet while this run was in progress.** It was
+actively editing `templates/substrate/install.sh` in the working tree (mtime
+moved at 16:09 and again at 16:12, after this run's commits). The committed
+history on `feat/trust-preflight` therefore contains **this run's** four
+commits only:
+
+```
+142bd6a docs: report the trust preflight, and name it in the substrate README
+81055c1 substrate_test: keep the local cycle offline — fake openssl on PATH
+4b85906 substrate_test: prove the trust preflight, with a fake openssl/apt on PATH
+94141d7 substrate: preflight the box's TLS trust chain against the system store
+```
+
+The uncommitted diff in `templates/substrate/install.sh` is **the other
+worker's**, and it is an improvement on this implementation — it distinguishes
+"the store refused the chain" (fixable by a refresh) from "the origin never
+answered" (reachability, not the store), records what the refresh actually did,
+and skips verification for a plaintext `http://` origin. **This run deliberately
+did not commit it**: another agent was mid-write, and committing a torn file
+under a message its author did not write is worse than leaving it for its
+author. The manager should let that worker commit its own change (or, if it is
+gone, commit the diff itself after a `bash tests/substrate_test.sh` on the
+final file) — not discard it.
+
+The two workers' versions agree on the substance of the packet, so either tip
+satisfies it; do not merge a state where the uncommitted diff is silently
+dropped.
+
