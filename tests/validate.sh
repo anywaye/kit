@@ -5611,10 +5611,12 @@ check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gat
 # functions absent while the byte verdict could only point at a comment),
 # files beside kit's own template not graded as adopted copies (measured: the
 # fleet run FAILed kit itself with all twelve functions "missing"), a
-# generated dump correctly ignored, a non-adopter, a missing path, and
-# --fleet. The fleet run stays a deliberate command, not a row here:
+# generated dump correctly ignored, a non-adopter, a bare `create schema if
+# not exists cafaye` that is NOT an adopted copy (the predicate the docstring
+# states is the predicate the code uses), a missing path, and --fleet. The
+# fleet run stays a deliberate command, not a row here:
 #   python3 tests/substrate_copy_check.py ../identity ../darkroom
-check 'tests/substrate_copy_test.sh  (64 assertions: missing/edited/comment-only/split/goose-Down both ways/unreadable/standalone byte+named/comment-only-named/extra-named/template-dir-not-graded/dump-excluded/not-adopted/bad-path/fleet)' \
+check 'tests/substrate_copy_test.sh  (66 assertions: missing/edited/comment-only/split/goose-Down both ways/unreadable/standalone byte+named/comment-only-named/extra-named/template-dir-not-graded/dump-excluded/not-adopted/schema-only-not-adoption/bad-path/fleet)' \
   bash "$ROOT/tests/substrate_copy_test.sh"
 
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port

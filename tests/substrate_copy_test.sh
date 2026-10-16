@@ -70,6 +70,10 @@
 #                    measured on inbox, whose dump re-spells every function and
 #                    would otherwise fail on pg_dump's formatting.
 #   not-adopted      a repository with no cafaye schema passes with a note.
+#   schema-only      a bare `create schema if not exists cafaye` is NOT an
+#                    adopted copy. The docstring claimed the schema line was
+#                    the predicate once; this pins the measured behaviour the
+#                    prose now states.
 #   bad-path         a path that does not exist is exit 2, never a clean repo.
 #   fleet            --fleet reads a directory of repositories and the summary
 #                    counts them.
@@ -466,6 +470,19 @@ expect_ec 0 "a repository with no adopted copy passes"
 expect_out "no adopted copy" "and says so rather than reporting agreement"
 
 # ---------------------------------------------------------------------------
+# schema-only — the predicate the docstring states IS the predicate the code
+# uses. A bare `create schema if not exists cafaye` is not a copy of the
+# substrate: treating it as adoption would either report agreement with
+# nothing or fire twelve MISSING FAILs at a repository that never carried it.
+# Measured, and the reason the docstring no longer claims it.
+R="$WORK/schema-only"
+mkdir -p "$R/migrations"
+printf 'create schema if not exists cafaye;\n' >"$R/migrations/0001_schema.sql"
+run "$R"
+expect_ec 0 "a bare cafaye schema is not an adopted copy"
+expect_out "no adopted copy" "and it is reported as no adopted copy"
+
+# ---------------------------------------------------------------------------
 # bad-path — a path that does not exist is an INPUT error, not a clean repo.
 run "$WORK/does-not-exist"
 expect_ec 2 "a missing repository path is exit 2"
@@ -485,4 +502,4 @@ if [ "$failures" -gt 0 ]; then
   printf 'FAIL substrate_copy_test: %d failed, %d passed\n' "$failures" "$passes"
   exit 1
 fi
-printf 'PASS substrate_copy_test: %d cases — missing/edited/comment-only/split/redefined/goose-Down (both directions)/unreadable/standalone (byte, named-missing, edited, comment-only, extra)/template-dir/dump-excluded/not-adopted/bad-path/fleet\n' "$passes"
+printf 'PASS substrate_copy_test: %d cases — missing/edited/comment-only/split/redefined/goose-Down (both directions)/unreadable/standalone (byte, named-missing, edited, comment-only, extra)/template-dir/dump-excluded/not-adopted/schema-only/bad-path/fleet\n' "$passes"

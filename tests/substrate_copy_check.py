@@ -48,8 +48,15 @@ THE THREE SHAPES OF ADOPTER, measured rather than imagined
 
   neither     no adopted copy found. Reported and not failed: a service that
               has not adopted the substrate is not drifting from it. Adoption
-              is detected by `create schema if not exists cafaye` or any
-              `cafaye.` function definition in a non-test SQL file.
+              is measured by two predicates and only two — a file named
+              `substrate.sql`, or a `cafaye.*` function definition in a
+              non-test SQL file. A bare `create schema if not exists cafaye`
+              is NOT one of them: earlier prose here claimed it was, and a
+              repository holding only that line was measured to report no
+              adopted copy. Treating the line as adoption would either report
+              agreement with nothing or fire twelve MISSING FAILs at a
+              repository that never carried the substrate; the `schema-only`
+              fixture in tests/substrate_copy_test.sh pins the measured answer.
 
 KIT'S OWN TEMPLATE DIRECTORY IS NOT A SHAPE OF ADOPTER, measured
 
@@ -597,8 +604,8 @@ def print_repo(res):
             lines.append("   no adopted copy found — the SQL files found are kit's "
                          "own templates, not a copy of one")
         else:
-            lines.append("   no adopted copy found (no substrate.sql, no `create schema if "
-                         "not exists cafaye`, no cafaye.* function definition)")
+            lines.append("   no adopted copy found (no substrate.sql, no cafaye.* "
+                         "function definition)")
         return lines
     for path, identical, sha in res.standalone:
         rel = os.path.relpath(path, res.root)
