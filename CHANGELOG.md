@@ -1,5 +1,33 @@
 ## Unreleased
 
+### Backends
+
+- **One sandbox hosts many projects, and a service has a pipeline template.**
+  The instabox backend shipped a single-project provisioner and only `cafaye/docs`
+  used it; the plan caps sandboxes at five and the fleet is thirteen services, so
+  the fleet could not adopt Actions-free CI. `backends/instabox/provision.sh` now
+  takes a **list** (`provision.sh cafaye-build billing courier docs identity`),
+  writes one `~/ci-env.d/<project>.env` and one `~/ci/agents/<project>.sh`
+  binding per project, and starts `backends/instabox/supervisor.sh`, which starts
+  and restarts one agent per project. The single-project form is the list with
+  one element; re-provisioning `docs` migrates it, inheriting its old `~/.ci-env`
+  (so `DEPLOY_HOST` survives) and leaving `ci/pipeline.sh` untouched. The agent
+  and the supervisor each take an atomic `mkdir` lock — over `flock`, which
+  macOS does not ship — so a restarted poller cannot race its predecessor and a
+  second supervisor exits instead of doubling every poller.
+  `backends/instabox/pipeline.template.sh` is the `ci/pipeline.sh` a service
+  copies: it reads the backend's environment, installs the repository's pinned
+  toolchain (`mise`), runs the gate under it, publishes through
+  `./bin/publish --service-dir .` when `chart/Chart.yaml` exists, and ends with
+  a line naming what shipped and the commit. Its comments cite
+  `.github/workflows/*.yml` as the source of the gate's name and the PATH lines,
+  and name the three repositories whose gate is not `bin/prime`: `box` (`bin/ci`),
+  `keyholder` (`bin/gate`) and `kit`. `backends/README.md` carries the rollout
+  table and the capacity arithmetic measured against `instabox usage` — 4 vCPU,
+  8 GB, 20 GB, 5 sandboxes; N=4 projects per sandbox planned, four sandboxes for
+  the fleet. `tests/validate.sh` now asserts the artifact set is whole and parses
+  and shellchecks the scripts.
+
 ### Substrate
 
 - **The front door installs: a served run fetches its own manifests, and a pipe

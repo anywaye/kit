@@ -246,11 +246,21 @@ REAL_ENV_BEFORE="$WORK/real-env-before"
 
 # launch_env <command...> — the fixture layout as environment, stubs on PATH,
 # HOME/TMPDIR jailed to $WORK so no fetch can touch the real machine.
+#
+# EVERY LAUNCH_*_DIR THE LAUNCHER KNOWS IS SET, and the fixture creates a
+# checkout for each. A dir left unset falls back to `$KIT_ROOT/../<service>`,
+# which is outside $WORK: the assertion then depends on a sibling checkout
+# that happens to sit beside kit, so it is green in one arrangement of the
+# filesystem and red in another (a worktree, or a CI runner with no fleet) for
+# a reason that has nothing to do with the harness. `billing` is the fifth
+# service (d3e6c7b) and was the one left out — the control below was also red
+# for TWO reasons until it was named here.
 launch_env() {
   env -i PATH="$STUB:/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK" \
     STUB_LOG="$STUB_LOG" \
     LAUNCH_IDENTITY_DIR="$SIBS/identity" LAUNCH_GATEWAY_DIR="$SIBS/gateway" \
     LAUNCH_COURIER_DIR="$SIBS/courier" LAUNCH_PARLOR_DIR="$SIBS/parlor" \
+    LAUNCH_BILLING_DIR="$SIBS/billing" \
     "$@"
 }
 
@@ -267,6 +277,7 @@ run 'CONTROL: --check is red with a missing sibling checkout' red \
     STUB_LOG="$STUB_LOG" \
     LAUNCH_IDENTITY_DIR="$SIBS/identity" LAUNCH_GATEWAY_DIR="$SIBS/gateway" \
     LAUNCH_COURIER_DIR="$SIBS/courier" LAUNCH_PARLOR_DIR="$WORK/nowhere" \
+    LAUNCH_BILLING_DIR="$SIBS/billing" \
     bash "$SCRIPT" --check
 run 'an unknown verb exits non-zero (usage, not a stack)' red \
   launch_env bash "$SCRIPT" frobnicate
