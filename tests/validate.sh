@@ -5438,6 +5438,29 @@ if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
     # runs one initdb.
     bounded_check 'tests/onecluster_test.sh  (two services, ONE postgres container, each with its own database and roles; both answer as their own role, neither reaches the other'"'"'s)' \
       1800 bash "$ROOT/tests/onecluster_test.sh"
+    # THE PRIVILEGE SURFACE, PINNED TO A GOLDEN FILE — the class of defect the
+    # tiers above cannot see. `isolation_test.sh` proves the BOUNDARY is
+    # applied; this proves the rest of the privilege model is EXACTLY what
+    # `initdb/10-cluster.sh` provisions, by diffing a fresh cluster's catalogs
+    # against the committed `tests/grant_surface.out`: role attributes including
+    # `rolbypassrls`, per-role timeouts and connection limits, membership
+    # direction, the CONNECT surface of every database, and `public`'s ACL in
+    # each. Two services' pools were found logging in as the OWNER role, by
+    # hand, twice — and a table's owner walks past RLS even with FORCE — so the
+    # dump reads both places those failures live and nothing static can.
+    #
+    # It also RUNS the drift it exists to catch: the test mutates the live
+    # cluster (`ALTER ROLE <svc>_app BYPASSRLS`, `GRANT CONNECT … TO PUBLIC`),
+    # requires the diff to go red NAMING the row, reverts, and requires the
+    # bytes back — so the negative path is exercised on every run rather than
+    # trusted, and a diff grown insensitive is caught by its own control.
+    #
+    # 1800s like its siblings: one image build and one initdb, but four psql
+    # passes (two dumps byte-compared for determinism, then one per database
+    # for the schema half) plus two more dumps for the mutation controls.
+    # Measured on this machine, image cached: 21s wall for the tier.
+    bounded_check 'tests/grant_surface_test.sh  (a fresh cluster'"'"'s roles, settings, memberships, CONNECT and public ACLs match tests/grant_surface.out byte for byte, and both mutation controls go red by name)' \
+      1800 bash "$ROOT/tests/grant_surface_test.sh"
   fi
 fi
 # ===========================================================================

@@ -1,0 +1,73 @@
+== roles: pg_roles, predefined pg_* rows excluded ==
+billing|f|f|f|f|t|t|10|f
+billing_app|f|f|f|f|t|t|-1|f
+cafaye|t|t|t|t|t|t|-1|t
+courier|f|f|f|f|t|t|10|f
+courier_app|f|f|f|f|t|t|-1|f
+identity|f|f|f|f|t|t|10|f
+identity_app|f|f|f|f|t|t|-1|f
+== role settings: pg_db_role_setting ==
+billing|(cluster-wide)|idle_in_transaction_session_timeout|30000
+billing|(cluster-wide)|statement_timeout|15000
+billing_app|(cluster-wide)|idle_in_transaction_session_timeout|30000
+billing_app|(cluster-wide)|statement_timeout|15000
+courier|(cluster-wide)|idle_in_transaction_session_timeout|30000
+courier|(cluster-wide)|statement_timeout|15000
+courier_app|(cluster-wide)|idle_in_transaction_session_timeout|30000
+courier_app|(cluster-wide)|statement_timeout|15000
+identity|(cluster-wide)|idle_in_transaction_session_timeout|30000
+identity|(cluster-wide)|statement_timeout|15000
+identity_app|(cluster-wide)|idle_in_transaction_session_timeout|30000
+identity_app|(cluster-wide)|statement_timeout|15000
+== memberships: pg_auth_members ==
+billing|billing_app|f|t|t
+courier|courier_app|f|t|t
+identity|identity_app|f|t|t
+== database connect surface: pg_database.datacl ==
+billing|billing|CONNECT
+billing|billing|CREATE
+billing|billing|TEMPORARY
+billing|billing_app|CONNECT
+billing|billing_app|TEMPORARY
+billing|cafaye|CONNECT
+billing|cafaye|TEMPORARY
+cafaye_platform|cafaye|CONNECT
+cafaye_platform|cafaye|CREATE
+cafaye_platform|cafaye|TEMPORARY
+courier|cafaye|CONNECT
+courier|cafaye|TEMPORARY
+courier|courier|CONNECT
+courier|courier|CREATE
+courier|courier|TEMPORARY
+courier|courier_app|CONNECT
+courier|courier_app|TEMPORARY
+identity|cafaye|CONNECT
+identity|cafaye|TEMPORARY
+identity|identity|CONNECT
+identity|identity|CREATE
+identity|identity|TEMPORARY
+identity|identity_app|CONNECT
+identity|identity_app|TEMPORARY
+postgres|cafaye|CONNECT
+postgres|cafaye|CREATE
+postgres|cafaye|TEMPORARY
+== schema public: billing ==
+billing|PUBLIC|USAGE
+billing|pg_database_owner|CREATE
+billing|pg_database_owner|USAGE
+== schema public: cafaye_platform ==
+cafaye_platform|PUBLIC|USAGE
+cafaye_platform|pg_database_owner|CREATE
+cafaye_platform|pg_database_owner|USAGE
+== schema public: courier ==
+courier|PUBLIC|USAGE
+courier|pg_database_owner|CREATE
+courier|pg_database_owner|USAGE
+== schema public: identity ==
+identity|PUBLIC|USAGE
+identity|pg_database_owner|CREATE
+identity|pg_database_owner|USAGE
+== schema public: postgres ==
+postgres|PUBLIC|USAGE
+postgres|pg_database_owner|CREATE
+postgres|pg_database_owner|USAGE
