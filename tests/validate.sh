@@ -4735,6 +4735,16 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 # over HTTPS — so an Application naming one of them is unclassified and still
 # fails closed while the fleet's own charts resolve.
 SERVICE_APPS = {"identity", "gateway", "courier", "parlor", "billing"}
+# billing released 0.1.1 (its chart is 0.1.1); the other services are still on
+# 0.1.0. The version is per-service, not a fleet-wide constant, because a
+# service's Application pulls the chart version that service actually publishes.
+SERVICE_VERSIONS = {
+    "identity": "0.1.0",
+    "gateway": "0.1.0",
+    "courier": "0.1.0",
+    "parlor": "0.1.0",
+    "billing": "0.1.1",
+}
 EXPECTED = {
     "alloy": (GRAFANA_REPO, "alloy", "1.13.0"),
     "grafana": (GRAFANA_REPO, "grafana", "10.5.15"),
@@ -4766,8 +4776,8 @@ for app in apps:
         continue
     source = ((adoc.get("spec") or {}).get("source") or {})
     triple = (source.get("repoURL"), source.get("chart"), str(source.get("targetRevision")))
-    if name in SERVICE_APPS:
-        want = (f"{PRIVATE_OCI}/{name}", name, "0.1.0")
+    if name in SERVICE_VERSIONS:
+        want = (f"{PRIVATE_OCI}/{name}", name, SERVICE_VERSIONS[name])
         if triple != want:
             problems.append(
                 f"{app}: service chart resolves to {triple!r}, not {want!r} — "
@@ -5301,7 +5311,7 @@ PY
   # two controls (a reverted repoURL, a drifted chart name) must go red under
   # the same assertions the real tree passes.
   section 'static: the observability chart sources — every Application resolves to a chart somebody publishes'
-  check 'obs chart sources  (service charts stay on the private OCI registry at their own path and 0.1.0; alloy/grafana/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
+  check 'obs chart sources  (service charts stay on the private OCI registry at their own path (0.1.0, 0.1.1 for billing); alloy/grafana/prometheus carry their pinned upstream repoURL, chart and targetRevision; anything else fails closed)' \
     check_obs_chart_sources \
       "$ROOT/templates/substrate/manifests/applications"
 
