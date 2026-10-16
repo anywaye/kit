@@ -3178,7 +3178,10 @@ fi
 # cf_mail_env <adapter> — the secrets step's operator-sourced inputs for one
 # adapter. The SMTP values are the same FAKE relay labels the MFA cases use;
 # the Cloudflare token and account id are fake labels too. A second parameter
-# sets the signing secret's value, and "empty" is the case that must refuse.
+# sets the signing secret's value, and an explicit EMPTY string is the absent
+# surface the installer documents (note `${2-…}`, not `${2:-…}`: an empty
+# argument must stay empty, because "the operator set nothing" is exactly
+# the case the cloudflare branch now accepts and the smtp branch refuses).
 cf_mail_env() {
   export DRY_RUN=0
   export KIT_SUBSTRATE_SMTP_ADAPTER="$1"
@@ -3186,7 +3189,7 @@ cf_mail_env() {
   export KIT_SUBSTRATE_SMTP_PORT="587"
   export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
   export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass"
-  export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="${2:-provider-signing-secret}"
+  export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="${2-provider-signing-secret}"
   # The key value is always the same fake label; only emptiness differs, so an
   # assertion about what was STORED is never reading back the test case's own
   # intent. `${3:-set}` is the case name ("set" | "unset-key"), not the value.
@@ -3214,7 +3217,7 @@ cf_mail_env() {
 # read the PREVIOUS case's store and pass on the wrong data.
 cf_run() {
   MOCK_ROOT="$1"
-  local adapter="$2" secret="${3:-provider-signing-secret}" key="${4:-set}" account="${5:-set-account}"
+  local adapter="$2" secret="${3-provider-signing-secret}" key="${4:-set}" account="${5:-set-account}"
   mkdir -p "$MOCK_ROOT"
   mfa_seed_roles
   cf_ec=0
@@ -3228,8 +3231,10 @@ cf_run() {
 }
 
 # Case A: cloudflare with its key AND its account id writes
-# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID and the signing secret,
-# and NOT the SMTP tuple — the shape courier's Cloudflare adapter boots on.
+# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID and NOT the SMTP tuple —
+# the shape courier's Cloudflare adapter boots on. With the signing secret
+# supplied it is written too (the conditional write, from the accepting
+# side); without it the run still succeeds and the key is absent (case A2).
 cf_run "$WORK/cf-a" cloudflare
 if [ "$cf_ec" -ne 0 ]; then
   fail 'cloudflare: the run succeeds with the MailChannels key supplied' "$(cat "$WORK/cf-a.log")"
@@ -3267,15 +3272,42 @@ cf_smtp_keys_absent() {
   printf 'the cloudflare branch writes no SMTP key'
 }
 run 'cloudflare: the SMTP tuple is not written' green cf_smtp_keys_absent
-# The signing secret is adapter-independent: an inbound webhook signing
-# secret is required whichever way outbound mail is sent, so a branch that
-# dropped it would break inbound delivery for a reason the outbound shape
-# hides. Asserted here so the cloudflare half cannot quietly lose it.
+# The signing secret on the cloudflare branch is a conditional write: supplied
+# means stored, so a branch that dropped it when given would silently lose
+# the inbound surface for a reason the outbound shape hides. Asserted here
+# so the cloudflare half cannot quietly lose it; the ABSENT half is case A2.
 if [ "$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)" = "provider-signing-secret" ]; then
   pass 'cloudflare: the inbound signing secret is still written'
 else
   fail 'cloudflare: the inbound signing secret is still written' \
     "stored: '$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)'"
+fi
+
+# Case A2: cloudflare with the two Cloudflare facts and NO signing secret —
+# the packet's accepting case. The run succeeds, the store carries the
+# adapter, the token and the account id, and carries NO
+# COURIER_INBOUND_RESEND_SECRET (absent, not empty: the installer keeps the
+# key out of the --from-literal list when unset).
+cf_run "$WORK/cf-a2" cloudflare ""
+if [ "$cf_ec" -ne 0 ]; then
+  fail 'cloudflare: the run succeeds with no signing secret supplied' "$(cat "$WORK/cf-a2.log")"
+elif [ "$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)" != "cloudflare" ]; then
+  fail 'cloudflare: no-secret run still writes the adapter' \
+    "stored: '$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)'"
+elif [ "$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)" != "mailchannels-key-fake" ]; then
+  fail 'cloudflare: no-secret run still writes the key' \
+    "stored: '$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)'"
+elif [ "$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)" != "cf-account-id-fake" ]; then
+  fail 'cloudflare: no-secret run still writes the account id' \
+    "stored: '$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)'"
+elif [ -n "$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)" ]; then
+  fail 'cloudflare: no-secret run writes no inbound signing secret' \
+    "stored: '$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)'"
+elif grep -q "COURIER_INBOUND_RESEND_SECRET" "$WORK/cf-a2/kubectl-argv"; then
+  fail 'cloudflare: no-secret run keeps the key out of the --from-literal list' \
+    "the mock records every kubectl argv in full: $(grep "COURIER_INBOUND_RESEND_SECRET" "$WORK/cf-a2/kubectl-argv" | head -2)"
+else
+  pass 'cloudflare: no signing secret is a supported run, and the key stays absent'
 fi
 
 # Case B: cloudflare WITHOUT the key refuses BEFORE anything is written —
@@ -3292,6 +3324,18 @@ elif ! grep -q "KIT_SUBSTRATE_CLOUDFLARE_API_KEY" "$WORK/cf-b.log"; then
   fail 'cloudflare: the refusal names the missing variable' "$(cat "$WORK/cf-b.log")"
 else
   pass 'cloudflare: a missing MailChannels key refuses before any write, naming the variable'
+fi
+# The refusal names exactly the two Cloudflare facts — two, not three — and
+# no longer instructs the operator to go and find a Resend webhook signing
+# secret. Read off the operator message (the refusal's human text), the way
+# the case above does: the raw variable list goes to the receipt, not here.
+if grep -q "signing secret" "$WORK/cf-b.log"; then
+  fail 'cloudflare: the refusal no longer names the signing secret' \
+    "the old demand for a provider signing secret is still in the refusal log"
+elif ! grep -q "export KIT_SUBSTRATE_CLOUDFLARE_API_KEY='<cloudflare-token>' and KIT_SUBSTRATE_CF_ACCOUNT_ID='<account-id>'" "$WORK/cf-b.log"; then
+  fail 'cloudflare: the refusal names exactly the two Cloudflare variables' "$(cat "$WORK/cf-b.log")"
+else
+  pass 'cloudflare: the refusal names exactly the two Cloudflare variables'
 fi
 # And the key itself is never on stdout — the same no-print contract every
 # other operator value answers to, checked against the value the run held.
@@ -3327,6 +3371,15 @@ elif ! grep -q "KIT_SUBSTRATE_CF_ACCOUNT_ID" "$WORK/cf-e.log"; then
 else
   pass 'cloudflare: a missing account id refuses before any write, naming the variable'
 fi
+# Same two-not-three shape on the account-id path: the whole refusal text is
+# one string, and both missing-fact paths must have stopped naming the
+# signing secret.
+if grep -q "signing secret" "$WORK/cf-e.log"; then
+  fail 'cloudflare: the account-id refusal no longer names the signing secret' \
+    "the old demand for a provider signing secret is still in the refusal log"
+else
+  pass 'cloudflare: the account-id refusal no longer names the signing secret'
+fi
 
 # Case C: the default smtp branch is unchanged — the tuple is written whole,
 # and neither Cloudflare value is. This is the bystander assertion: the new
@@ -3345,6 +3398,22 @@ elif [ -n "$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)" ]; then
     "stored: '$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)'"
 else
   pass 'smtp: the default branch writes the SMTP tuple and no Cloudflare key'
+fi
+
+# Case C2 (bystander): the smtp branch still refuses WITHOUT the signing
+# secret. The asymmetry is deliberate — an SMTP operator has a provider
+# dashboard to mint a webhook secret from, a Cloudflare-only operator has
+# none — so the relaxation above must not have leaked into this branch.
+cf_run "$WORK/cf-c2" smtp ""
+if [ "$cf_ec" -eq 0 ]; then
+  fail 'smtp: a missing signing secret still refuses' "exit 0 — the run should have refused"
+elif [ -e "$MOCK_ROOT/courier/courier-secrets" ]; then
+  fail 'smtp: the signing-secret refusal comes before any write' \
+    "courier-secrets exists: $(ls "$MOCK_ROOT/courier/courier-secrets" 2>/dev/null | tr '\n' ' ')"
+elif ! grep -q "the signing secret comes from the PROVIDER's dashboard" "$WORK/cf-c2.log"; then
+  fail 'smtp: the refusal still names the signing secret' "$(cat "$WORK/cf-c2.log")"
+else
+  pass 'smtp: a missing signing secret still refuses before any write, naming the variable'
 fi
 
 # Case D: an unknown adapter still refuses, and the refusal now names all
