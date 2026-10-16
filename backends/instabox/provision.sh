@@ -89,6 +89,19 @@ instabox get "$NAME" >/dev/null 2>&1 || instabox create --name "$NAME" --templat
 # idempotent, not a separate operator step.
 instabox start "$NAME" >/dev/null 2>&1 || true
 
+# The token is resolved ONCE, here, and an empty one is refused rather than
+# written. `GH_TOKEN=${GH_TOKEN:-$(gh auth token)}` used to fail silently into
+# an empty string — `echo` succeeds whatever the substitution did — and an
+# empty token is not a provision error until the agent tries to clone, on the
+# sandbox, with a message about a repository that does not exist.
+if [ -z "${GH_TOKEN:-}" ]; then
+  GH_TOKEN="$(gh auth token 2>/dev/null || true)"
+fi
+if [ -z "$GH_TOKEN" ]; then
+  echo "provision: no GH_TOKEN and \`gh auth token\` answered nothing — the agents cannot clone private repositories" >&2
+  exit 1
+fi
+
 log "the toolchain the sandbox lacks"
 # Bounded: `apt-get update` is network-bound and a sandbox with no route would
 # otherwise hang the whole provision. Both commands are best-effort — a missing
@@ -137,7 +150,7 @@ for p in "${PROJECTS[@]}"; do
     echo "PROJECT_NAME=${p}"
     echo "CI_BRANCH=${CI_BRANCH:-master}"
     echo "CI_POLL_SECONDS=${CI_POLL_SECONDS:-120}"
-    echo "GH_TOKEN=${GH_TOKEN:-$(gh auth token)}"
+    echo "GH_TOKEN=${GH_TOKEN}"
     if [ -n "$DEPLOY_HOST" ]; then
       echo "DEPLOY_HOST=${DEPLOY_HOST}"
     fi
