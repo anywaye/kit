@@ -59,25 +59,28 @@ set -euo pipefail
 # identity
 # ---------------------------------------------------------------------------
 # `run from anywhere`: the repository root is derived from this file, not from
-# the caller's cwd. The agent resets the checkout to the fetched commit before
-# calling us, and the pipeline does the same itself so that a hand-run is
-# identical to a polled one.
+# the caller's cwd.
+#
+# THE PIPELINE NEVER MOVES THE CHECKOUT, and this is not a style choice. It
+# used to `git fetch` + `git reset --hard` "so a hand-run is identical to a
+# polled one", and the first hand-run did exactly what that does: it reset a
+# worktree to origin/master and deleted three uncommitted files' worth of a
+# worker's packet. The AGENT owns the checkout's position — it fetches the
+# commit and resets before calling in (see agent.sh) — and a pipeline that
+# also resets is a pipeline that destroys any tree it is run against to
+# verify. The gate runs on whatever tree it is given, which is the only
+# property that makes it a verification tool.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 REPO_NAME="$(basename "$REPO_DIR")"
 
 WORKSPACE="${WORKSPACE:-$(cd "$REPO_DIR/../.." && pwd)}"
-BRANCH="${CI_BRANCH:-master}"
 export CI="${CI:-1}"
 export WORKSPACE
 
 log() { printf '\n== %s\n' "$1"; }
 
 log "pipeline: $REPO_NAME at $REPO_DIR"
-if git rev-parse --git-dir >/dev/null 2>&1; then
-  git fetch --quiet origin "$BRANCH" 2>/dev/null || true
-  git reset --hard FETCH_HEAD --quiet 2>/dev/null || true
-fi
 
 # ===========================================================================
 # MARKED 1 — THE GATE. Replace `./bin/prime` with the entrypoint THIS
