@@ -5135,6 +5135,12 @@ PY
     bash "$ROOT/tests/substrate_test.sh"
 
   # -------------------------------------------------------------------------
+  # The publish tool — Actions-free image+chart publish, plus the sandbox.
+  section 'static: the publish tool — Actions-free image+chart publish'
+  check 'publish tool  (bin/publish dry-run prints every command; no auth refused with login commands; malformed digest refused; sandbox dry-run idempotent)' \
+    bash "$ROOT/tests/publish_test.sh"
+
+  # -------------------------------------------------------------------------
   # The launch harness — the developer-only four-service stack, owned by kit.
   #
   # `launch/bin/launch` + `launch/docker-compose.launch.yml` are the retired

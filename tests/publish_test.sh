@@ -195,9 +195,13 @@ run_pub green "multi-arch with buildx is green (dry-run)" --dry-run --service-di
 # single comma but no buildx is hard to stub; at least ensure single platform is green
 run_pub green "single platform is green (dry-run)" --dry-run --service-dir "$svc" --platforms linux/amd64
 
-# 7. sandbox --dry-run is green
-run_pub green "sandbox --dry-run is green" --sandbox --dry-run
-assert_contains "sandbox dry-run prints instabox" "instabox" "$TMP/last.out"
+# 7. sandbox --dry-run is green (when instabox is installed)
+if command -v instabox >/dev/null 2>&1; then
+  run_pub green "sandbox --dry-run is green" --sandbox --dry-run
+  assert_contains "sandbox dry-run prints instabox" "instabox" "$TMP/last.out"
+else
+  echo "      SKIP publish_test: instabox not installed — sandbox dry-run not exercised"
+fi
 
 # 8. sandbox wrapper exists and is executable
 if [ -x "$ROOT/bin/publish-sandbox" ] && [ -x "$ROOT/templates/bin/publish.sh" ]; then
