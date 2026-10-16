@@ -5519,6 +5519,38 @@ if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
     # Measured on this machine, image cached: 21s wall for the tier.
     bounded_check 'tests/grant_surface_test.sh  (a fresh cluster'"'"'s roles, settings, memberships, CONNECT and public ACLs match tests/grant_surface.out byte for byte, and both mutation controls go red by name)' \
       1800 bash "$ROOT/tests/grant_surface_test.sh"
+    # PROVISIONING IS COMPLETE, IN BOTH HALVES — the one property every tier
+    # above is structurally unable to see.
+    #
+    # `10-cluster.sh` creates `<svc>` and `<svc>_app` per declared database, and
+    # it does that only on a FRESH volume, because that is where
+    # `docker-entrypoint-initdb.d` runs. `isolation_test.sh` and
+    # `grant_surface_test.sh` each provision their own fresh cluster, so neither
+    # can ever see an existing cluster on which a service's database was added
+    # later and only half its roles exist. Measured on the fleet's live cluster:
+    # `muse` was there and `muse_app` was not — `select rolname from pg_roles
+    # where rolname like 'muse%'` returned one row — and muse's application pool
+    # had been logging in as the OWNER, free to `DROP TABLE vault_secrets` and to
+    # `ALTER TABLE … DISABLE ROW LEVEL SECURITY` on any table a later change
+    # protects. Nothing reported it, because nothing was looking.
+    #
+    # So this tier grades the DECLARED list, per database, and fails BY NAME:
+    # the owner role present, `<db>_app` present and LOGIN and NOSUPERUSER and
+    # NOBYPASSRLS, membership granted app -> owner, and never the reverse. It
+    # then RUNS the four defects it exists to catch — the app role dropped, the
+    # membership reversed, BYPASSRLS, NOLOGIN — requiring a red that NAMES the
+    # role and the fact each time and a green again after a restore built from
+    # the init script's own statements.
+    #
+    # `--cluster <container>` grades a cluster that ALREADY EXISTS, which is the
+    # case this tier is about; the gate uses the fresh-cluster mode so the
+    # controls have a cluster they own.
+    #
+    # 1800s like its siblings: one image build and one initdb, then one psql
+    # round trip per database per check and ten more checks across the four
+    # controls. Measured on this machine, image cached: 12s wall for the tier.
+    bounded_check 'tests/provisioning_complete_test.sh  (every database in KIT_POSTGRES_DATABASES has BOTH roles — <db>_app exists, LOGIN, NOSUPERUSER, NOBYPASSRLS, membership app -> owner and never back — with a DROPPED role, a REVERSED membership, BYPASSRLS and NOLOGIN each going red by name)' \
+      1800 bash "$ROOT/tests/provisioning_complete_test.sh"
   fi
 fi
 # ===========================================================================
