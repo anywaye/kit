@@ -180,15 +180,49 @@ do_sandbox() {
     fi
   fi
 
+  # Capture token from stdin if piped (never argv, never logs)
+  SANDBOX_TOKEN_FILE=""
+  if [ ! -t 0 ]; then
+    # stdin is not a tty — may contain a token. Read with a short timeout to
+    # avoid blocking when stdin is a pipe that is open but empty.
+    tmp_tok="$(mktemp "${TMPDIR:-/tmp}/publish-token.XXXXXX")"
+    chmod 600 "$tmp_tok"
+    # Read at most 10KB, with 0.2s timeout if nothing arrives
+    if command -v gtimeout >/dev/null 2>&1; then
+      gtimeout 1 cat >"$tmp_tok" 2>/dev/null || true
+    elif command -v timeout >/dev/null 2>&1; then
+      timeout 1 cat >"$tmp_tok" 2>/dev/null || true
+    else
+      # No timeout available — cat with bounded read
+      cat >"$tmp_tok" 2>/dev/null || true
+    fi
+    if [ -s "$tmp_tok" ]; then
+      SANDBOX_TOKEN_FILE="$tmp_tok"
+      info "sandbox: token received on stdin (will be used via --password-stdin, never logged)"
+    else
+      rm -f "$tmp_tok"
+    fi
+  fi
+  # Ensure temp token is cleaned on exit
+  cleanup_token() { [ -n "${SANDBOX_TOKEN_FILE:-}" ] && rm -f "$SANDBOX_TOKEN_FILE" || true; }
+  trap cleanup_token EXIT
+
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "would run: instabox exec $SANDBOX_NAME -- docker --version"
     echo "would run: instabox exec $SANDBOX_NAME -- helm version (install v4.3.0 if missing)"
     echo "would run: instabox exec $SANDBOX_NAME -- gh --version (install if missing)"
-    echo "sandbox: ready — login with token via stdin:"
-    echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- docker login ghcr.io -u USERNAME --password-stdin"
-    echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- helm registry login ghcr.io -u USERNAME --password-stdin"
-    echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- gh auth login --with-token"
+    if [ -n "$SANDBOX_TOKEN_FILE" ]; then
+      echo "would run: cat [token] | instabox exec $SANDBOX_NAME --stdin -- docker login ghcr.io --password-stdin"
+      echo "would run: cat [token] | instabox exec $SANDBOX_NAME --stdin -- helm registry login ghcr.io --password-stdin"
+      echo "would run: cat [token] | instabox exec $SANDBOX_NAME --stdin -- gh auth login --with-token"
+    else
+      echo "sandbox: ready — login with token via stdin:"
+      echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- docker login ghcr.io -u USERNAME --password-stdin"
+      echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- helm registry login ghcr.io -u USERNAME --password-stdin"
+      echo "  cat token.txt | instabox exec $SANDBOX_NAME --stdin -- gh auth login --with-token"
+    fi
     echo "  instabox ssh $SANDBOX_NAME"
+    trap - EXIT; cleanup_token
     return 0
   fi
 
@@ -242,16 +276,38 @@ do_sandbox() {
     '
   fi
 
-  # Login reminder (tokens via stdin, never argv)
+  # If token was piped, log in now (via stdin, never argv)
+  if [ -n "$SANDBOX_TOKEN_FILE" ]; then
+    info "sandbox: logging in to ghcr.io and gh"
+    # Need a username for docker/helm login. gh auth login --with-token does
+    # not need one; docker/helm do. Use GITHUB_ACTOR or $USER, default to git actor.
+    gh_user="${GITHUB_ACTOR:-${USER:-cafaye}}"
+    info "sandbox: docker login ghcr.io as $gh_user (token via stdin)"
+    cat "$SANDBOX_TOKEN_FILE" | instabox exec "$SANDBOX_NAME" --stdin -- docker login ghcr.io -u "$gh_user" --password-stdin >/dev/null 2>&1 || warn "docker login failed"
+    info "sandbox: helm registry login ghcr.io as $gh_user (token via stdin)"
+    cat "$SANDBOX_TOKEN_FILE" | instabox exec "$SANDBOX_NAME" --stdin -- helm registry login ghcr.io -u "$gh_user" --password-stdin >/dev/null 2>&1 || warn "helm registry login failed"
+    info "sandbox: gh auth login --with-token (token via stdin)"
+    cat "$SANDBOX_TOKEN_FILE" | instabox exec "$SANDBOX_NAME" --stdin -- gh auth login --with-token >/dev/null 2>&1 || warn "gh auth login failed"
+    info "sandbox: logins complete"
+  fi
+
+  trap - EXIT; cleanup_token
+
   info "sandbox: $SANDBOX_NAME ready"
   echo "publish: sandbox $SANDBOX_NAME is ready."
-  echo "  Tokens via stdin (never argv):"
-  echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- docker login ghcr.io -u USERNAME --password-stdin"
-  echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- helm registry login ghcr.io -u USERNAME --password-stdin"
-  echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- gh auth login --with-token"
+  if [ -n "${SANDBOX_TOKEN_FILE:-}" ]; then
+    echo "  Logged in with token from stdin (never argv or logs)."
+  else
+    echo "  Tokens via stdin (never argv):"
+    echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- docker login ghcr.io -u USERNAME --password-stdin"
+    echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- helm registry login ghcr.io -u USERNAME --password-stdin"
+    echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- gh auth login --with-token"
+    echo "  Or re-run with token piped:"
+    echo "    cat token.txt | bin/publish --sandbox --sandbox-name $SANDBOX_NAME"
+  fi
   echo "  Then publish from inside:"
   echo "    instabox ssh $SANDBOX_NAME"
-  echo "  Or run publish with token piped through this machine (token never in argv):"
+  echo "  Or run publish via exec (token never in argv):"
   echo "    cat token.txt | instabox exec $SANDBOX_NAME --stdin -- bash -lc 'bin/publish ...'"
 }
 
