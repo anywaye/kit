@@ -504,6 +504,18 @@ services:
       # THE OWNER, FOR MIGRATIONS ONLY. Read by `Courier.OwnerRepo` and by
       # nothing else — the application never opens a connection with it.
       COURIER_OWNER_DATABASE_URL: "ecto://courier:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/courier"
+      # THE BUS, AND IT IS WHAT MAKES THIS SERVICE A CONSUMER HERE RATHER
+      # THAN AN ACCUMULATOR. courier's own `docker-compose.yml` leaves
+      # `NATS_URL` unset on purpose — its README says so ("the local stack
+      # accumulates events rather than publishing them until the variable is
+      # added") — because a standalone courier dev loop has no broker to
+      # promise. The LAUNCH is the whole-stack bring-up whose bus is the
+      # point: identity publishes, courier consumes, and a stack where half
+      # the fence is missing is a stack whose receipts never arrive. Measured
+      # on the first bring-up of 2026-10-16: courier logged "NATS_URL is not
+      # set; no connection is started", and a paid charge produced no receipt
+      # in mailpit.
+      NATS_URL: "nats://nats:4222"
       # Telemetry, by the kit convention. Unset it and the collector that ships
       # with the stack is the default.
       COURIER_OTEL_ENDPOINT: "http://otel-collector:4318"
@@ -693,6 +705,16 @@ services:
     environment:
       RAILS_ENV: development
       PORT: "3000"
+      # THE BIND, and it belongs in the environment rather than in
+      # `config/puma.rb` for a reason the file's own paragraph states:
+      # railties' server command hands Puma `-b localhost` ON THE COMMAND
+      # LINE in development, and a CLI flag wins over the config file — so
+      # the fix is the `BINDING` variable the command reads, set where the
+      # container's eth0 can actually answer. Without it the published
+      # `3000:3000` maps to a loopback-only listener and the host's curl
+      # earns `Connection reset by peer` while the container is `healthy`
+      # (measured on this stack, 2026-10-16).
+      BINDING: "0.0.0.0"
       # The cluster's own address, by service name. The role is the init
       # script's `billing` (not `billing_app`): this is the DEVELOPER stack
       # and the running service holds the owner because the schema is
