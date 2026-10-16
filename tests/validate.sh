@@ -1632,6 +1632,7 @@ PY
   if [ -z "$ONLY_MATCH" ]; then
   par_begin
   for f in "$ROOT"/.github/workflows/* "$ROOT"/lint/* "$ROOT"/docker/* \
+    "$ROOT"/backends/instabox/*.sh \
     "$ROOT"/templates/bin-prime/* "$ROOT"/templates/compose/* \
     "$ROOT"/templates/kamal/drill.sh \
     "$ROOT"/templates/compose/postgres/initdb/*.sh \
@@ -1976,7 +1977,7 @@ json.loads("".join(out))
     par_begin
     for f in "$ROOT"/templates/bin-prime/* "$ROOT"/templates/bin/* \
       "$ROOT"/templates/kamal/*.sh "$ROOT"/templates/substrate/*.sh \
-      "$ROOT"/docker/*.sh "$ROOT"/tests/*.sh; do
+      "$ROOT"/docker/*.sh "$ROOT"/backends/instabox/*.sh "$ROOT"/tests/*.sh; do
       [ -f "$f" ] || continue
       path="${f#"$ROOT"/}"
       # SC2317 (unreachable command) is excluded deliberately: the `check`
@@ -2215,6 +2216,33 @@ OTEL
     report PASS 'templates/kamal/  (4 artifacts present, the set is whole)'
   else
     report FAIL 'templates/kamal/  (4 artifacts present, the set is whole)'
+  fi
+
+  # -------------------------------------------------------------------------
+  section 'static: backends/instabox — the poller, its supervisor, the provisioner and the template are present'
+  #
+  # The set is whole or the backend is not usable, and the pieces are useless
+  # apart: `agent.sh` polls but knows nothing of projects, `supervisor.sh`
+  # keeps one agent per project alive, `provision.sh` is what writes the
+  # binding between them, and `pipeline.template.sh` is what a service copies
+  # into `ci/pipeline.sh`. A missing template is a rollout that cannot start —
+  # and it is the one file a service edits, so a repository that loses it goes
+  # on looking provisioned.
+  #
+  # `README.md` is in the list for the same reason as it is for kamal: it is
+  # not decoration, it is the contract, the rollout order and the capacity
+  # arithmetic, and a rollout that loses it loses the number N it is planned
+  # against. The static parse and shellcheck loops below cover the three
+  # scripts' syntax; this is what catches their absence.
+  if otel_required \
+    'backends/README.md' \
+    'backends/instabox/agent.sh' \
+    'backends/instabox/provision.sh' \
+    'backends/instabox/supervisor.sh' \
+    'backends/instabox/pipeline.template.sh'; then
+    report PASS 'backends/instabox/  (5 artifacts present, the set is whole)'
+  else
+    report FAIL 'backends/instabox/  (5 artifacts present, the set is whole)'
   fi
 
   # The superseded custom backup toolchain must be GONE, and this is the check
