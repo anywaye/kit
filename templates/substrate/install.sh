@@ -4492,8 +4492,23 @@ install_migrations() {
   for svc in identity courier billing; do
     migration_service_has_schema "$svc" || continue
     # The image the Running Deployment runs — the same build as the service.
-    image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
-      -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+    #
+    # THE READ IS BOUNDED-WAITED, because Argo's sync is not instantaneous and
+    # this step runs right after step 6's applies. Measured on a fresh box
+    # (2026-10-16): identity and courier had synced by the time their turns
+    # came; billing's Application was still in flight, the read returned
+    # empty, and the whole install died on a Deployment that appeared seconds
+    # later. The wait is for the DEPLOYMENT to exist — not to be Ready, since
+    # the pod may still be pulling — 120 s in 5 s steps; a Deployment that
+    # never appears is still the finding it was, named with its own sentence.
+    local image_tries=24
+    image=""
+    while [ -z "$image" ] && [ "$image_tries" -gt 0 ]; do
+      image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
+        -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+      [ -n "$image" ] || sleep 5
+      image_tries=$((image_tries - 1))
+    done
     if [ -z "$image" ]; then
       echo "error: deployment/${svc} does not exist yet — Argo has not synced it, so the image to migrate with is unknown; re-run step ${STEP}" >&2
       exit 1

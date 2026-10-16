@@ -66,8 +66,9 @@ spec:
   #   permitted by these patterns, with the pre-fix bare-root spelling as a red
   #   control.
   #
-  #   destinations       the five namespaces the Applications deploy into
-  #                      (observability, identity, gateway, courier, parlor)
+  #   destinations       the six namespaces the Applications deploy into
+  #                      (observability, identity, gateway, courier, parlor,
+  #                      billing)
   #                      — pantry, box and keyholder are deliberately NOT
   #                      among them. All three are Cafaye-operated services
   #                      the box reaches over HTTPS (pantry at
@@ -139,6 +140,13 @@ spec:
     - namespace: courier
       server: https://kubernetes.default.svc
     - namespace: parlor
+    # billing joined the Applications on 2026-10-15 and the project's
+    # allow-list on 2026-10-16 — the day the test-box walk showed what
+    # omitting it does: Argo refuses the Application with "destination
+    # ... namespace 'billing' do not match any of the allowed destinations",
+    # billing never syncs, and step 10 dies on "deployment/billing does not
+    # exist yet". Every other file had been updated; this one had not.
+    - namespace: billing
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     # alloy 1.13.0 renders CustomResourceDefinition
