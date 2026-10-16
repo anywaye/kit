@@ -3099,6 +3099,17 @@ elif [ "$first_broker_url" != "$BROKER_URL" ]; then
 else
   pass 'identity-secrets: the first run completes carrying the broker address'
 fi
+courier_broker_url="$(mock_get courier courier-secrets NATS_URL)"
+if [ "$courier_broker_url" != "$BROKER_URL" ]; then
+  fail 'courier-secrets: the first run completes carrying the broker address' "stored: '${courier_broker_url}'"
+else
+  pass 'courier-secrets: the first run completes carrying the broker address'
+fi
+if [ "$courier_broker_url" != "$first_broker_url" ]; then
+  fail 'broker agreement: courier and identity point at the same broker' "courier: '${courier_broker_url}', identity: '${first_broker_url}'"
+else
+  pass 'broker agreement: courier and identity point at the same broker'
+fi
 if [ "$nats_url_2_ec" -ne 0 ]; then
   fail 're-run: a second run succeeds and changes nothing' "$(cat "$WORK/nats-url-2.log")"
 elif [ "$second_broker_url" != "$first_broker_url" ]; then

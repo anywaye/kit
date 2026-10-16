@@ -3820,7 +3820,7 @@ validate_mfa_override() {
 # --from-literal below; a fixture with one removed must fail):
 #   RECORD identity-secrets: DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY NATS_URL COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE INVITATION_LINK_TEMPLATE OTEL_SDK_DISABLED
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
-#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_CLOUDFLARE_API_KEY COURIER_CF_ACCOUNT_ID COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN OTEL_SDK_DISABLED
+#   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_CLOUDFLARE_API_KEY COURIER_CF_ACCOUNT_ID COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN NATS_URL OTEL_SDK_DISABLED
 #   RECORD parlor-secrets: DATABASE_URL OTEL_SDK_DISABLED
 #
 # courier-secrets' RECORD lists the UNION of its two mail-adapter shapes, and
@@ -4112,6 +4112,14 @@ install_service_secrets() {
   # value — the loop that used to run across two terminals runs inside one run.
   # A missing key is a `System.get_env(…) || raise` at boot — the cheapest
   # possible failure, and it happens before the first customer request.
+  # NATS_URL rides along for the same reason identity's does (see its comment):
+  # configuration, not a secret, but this secret IS courier's environment, and
+  # courier builds its NATS subscriber only when NATS_URL is set — without it
+  # the box's courier never hears `identity.>` while the recovery mail still
+  # works. The address is the one constant above, the same value
+  # identity-secrets carries, so the two services cannot disagree about the
+  # broker. Written on first creation and never patched, like every other key
+  # here.
   local secret_base secret_box relay_token
   local -a courier_extra_args=() courier_adapter_args=()
   secret_base="$(read_secret_key courier courier-secrets SECRET_KEY_BASE)"
@@ -4160,6 +4168,7 @@ install_service_secrets() {
       "${courier_adapter_args[@]}" \
       --from-literal=COURIER_INBOUND_RESEND_SECRET="$KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
+      --from-literal=NATS_URL="$NATS_URL" \
       "${SERVICE_OTEL_DISABLED[@]}" \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
     kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 12 — minted on this box)"
