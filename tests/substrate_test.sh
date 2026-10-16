@@ -4722,7 +4722,7 @@ derived_ok() {
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
   n="$(printf '%s\n' "$rows" | grep -c .)"
   [ "$n" -eq 10 ] || { printf 'derived %s artifact rows, expected 10\n%s\n' "$n" "$rows"; return 1; }
-  for want in "cafaye/charts/billing 0.1.0" "cafaye/billing 0.1.0" \
+  for want in "cafaye/charts/billing 0.1.1" "cafaye/billing 0.1.1" \
     "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
     "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
     "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \

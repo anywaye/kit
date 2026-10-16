@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: oci://ghcr.io/cafaye/charts/billing
     chart: billing
-    targetRevision: 0.1.0
+    targetRevision: 0.1.1
   destination:
     server: https://kubernetes.default.svc
     namespace: billing
