@@ -289,7 +289,7 @@ NATS_URL="nats://nats.data.svc.cluster.local:4222"
 # exact, that it resolves locally, and that the manifests at that commit equal
 # the ones on disk — so a manifest change without a matching bump of this line
 # is a red gate rather than a served run that installs yesterday's tree.
-KIT_SUBSTRATE_MANIFESTS_REF="9001f5abec3fb60f01438b2ca54c5ce7345c603d"
+KIT_SUBSTRATE_MANIFESTS_REF="6f0a9dac1be727c70531153a1833663bd13ef7a1"
 # The canonical source, by host and by the tarball route GitHub serves for a
 # public repository with no credentials. No token, no `git`, no account: the
 # repository is public and a box that can reach ghcr.io can reach this.
