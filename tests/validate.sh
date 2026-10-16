@@ -5606,11 +5606,15 @@ check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gat
 # built here out of the real template and every verdict is asserted BY NAME:
 # missing functions, an edited body, a comment-only edit reported but not
 # failed, functions split across migrations, a goose Down section (both
-# directions), a truncated block, standalone byte-equality, a generated dump
-# correctly ignored, a non-adopter, a missing path, and --fleet. The fleet run
-# stays a deliberate command, not a row here:
+# directions), a truncated block, standalone byte-equality AND the named
+# function diff beside it when the bytes drift (measured on courier: four
+# functions absent while the byte verdict could only point at a comment),
+# files beside kit's own template not graded as adopted copies (measured: the
+# fleet run FAILed kit itself with all twelve functions "missing"), a
+# generated dump correctly ignored, a non-adopter, a missing path, and
+# --fleet. The fleet run stays a deliberate command, not a row here:
 #   python3 tests/substrate_copy_check.py ../identity ../darkroom
-check 'tests/substrate_copy_test.sh  (46 assertions: missing/edited/comment-only/split/goose-Down both ways/unreadable/standalone/dump-excluded/not-adopted/bad-path/fleet)' \
+check 'tests/substrate_copy_test.sh  (64 assertions: missing/edited/comment-only/split/goose-Down both ways/unreadable/standalone byte+named/comment-only-named/extra-named/template-dir-not-graded/dump-excluded/not-adopted/bad-path/fleet)' \
   bash "$ROOT/tests/substrate_copy_test.sh"
 
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port

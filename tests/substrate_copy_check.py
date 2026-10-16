@@ -29,7 +29,15 @@ THE THREE SHAPES OF ADOPTER, measured rather than imagined
               substrate.sql` byte-identical and reads it from its migration).
               A standalone file's whole point is that a shasum against kit's
               template is a valid verdict, so it gets the STRONGEST verdict:
-              byte equality. Any difference is a FAIL, comment or not.
+              byte equality. Any difference is a FAIL, comment or not — but
+              "not identical" is not a diagnosis, so a drifted standalone copy
+              is ALSO compared function by function and the missing/changed
+              functions are NAMED. Measured on courier before this rule: the
+              byte verdict could only say "first difference at line 71" (a
+              comment word) while four functions were absent, so the strictest
+              verdict was telling its reader the least. The byte FAIL stays:
+              it is the shape's promise and the only verdict a shasum can
+              reproduce. The name-level pass is the diagnosis beside it.
 
   embedded    `create or replace function cafaye.*` blocks living inside a
               service's own migration files (identity, darkroom). Compared
@@ -42,6 +50,25 @@ THE THREE SHAPES OF ADOPTER, measured rather than imagined
               has not adopted the substrate is not drifting from it. Adoption
               is detected by `create schema if not exists cafaye` or any
               `cafaye.` function definition in a non-test SQL file.
+
+KIT'S OWN TEMPLATE DIRECTORY IS NOT A SHAPE OF ADOPTER, measured
+
+  A fleet run walks every checkout, kit's included, and kit's tree carries
+  `templates/database/tenancy/advisor.sql` — a SIBLING template that happens
+  to define `cafaye.*` functions too. Graded as an adopted copy it reported
+  all twelve substrate functions MISSING on every single run, and a FAIL that
+  always fires on the template's own repository is how a reader learns to
+  scroll past FAILs — which is exactly how courier's real drift stayed
+  unread. So a `.sql` file whose DIRECTORY is kit's template directory (by
+  path relative to the repository root, so a kit worktree running --fleet
+  still recognises the main checkout's template directory) is a template, not
+  a copy: not read, named in the output as not read, never silently counted
+  clean.
+
+  The rule is the directory rather than the whole repository on purpose — a
+  blanket "skip kit" would also skip a real adopted copy if kit ever carried
+  one, and this checker's failure mode must never be a blind spot that looks
+  like agreement.
 
 THE COMPARISON RULES, in the order they apply
 
@@ -69,6 +96,12 @@ THE COMPARISON RULES, in the order they apply
   5. Extra `cafaye.*` functions in the repository are REPORTED, not failed.
      Services legitimately add their own helpers, and this checker cannot tell
      a helper from a substrate function kit has since renamed.
+
+  These five rules are ONE implementation shared by both shapes — the embedded
+  pass and the name-level pass over a drifted standalone copy — because a
+  second comparison would be a second thing to keep true, and the two shapes
+  disagreeing about what "the same function" means is worse than either one
+  being wrong alone.
 
 WHY `--fleet` IS A DOCUMENTED COMMAND AND NOT A GATE ROW
 
@@ -104,6 +137,13 @@ import sys
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(KIT_ROOT, "templates", "database", "tenancy", "substrate.sql")
+# Every `.sql` file in this directory is a template (advisor.sql and
+# isolation.sql are), never an adopting service's copy of one — see the
+# measured note in the docstring. The comparison is the directory's path
+# RELATIVE to the repository root, not an absolute one: a kit worktree running
+# `--fleet` grades the main checkout, whose realpath differs but whose
+# templates/database/tenancy/ is the same directory in the same tree layout.
+TEMPLATE_REL_DIR = os.path.relpath(os.path.dirname(TEMPLATE), KIT_ROOT)
 
 # Directories that are never the deployed copy: dependencies, build output and
 # the gate's own caches. Names, not paths, because services lay their trees out
@@ -372,6 +412,7 @@ class RepoResult:
         self.infos = []
         self.standalone = []   # (path, identical, sha)
         self.embedded_files = []
+        self.skipped_templates = []  # .sql files beside kit's template, not read
         self.adopted = False
 
     def fail(self, text):
@@ -384,82 +425,45 @@ class RepoResult:
         self.infos.append(text)
 
 
-def check_repo(root, template_defs, template_bytes):
-    """Compare one repository's adopted copy against the template."""
-    res = RepoResult(root)
-    if not os.path.isdir(root):
-        raise OSError("not a directory: %s" % root)
+def compare_definitions(res, defs, template_defs, root, standalone_source=None):
+    """The name-level verdict over one set of `cafaye.*` definitions.
 
-    standalone_paths = []
-    embedded_defs = []
-    for path in iter_sql_files(root):
-        if os.path.basename(path).lower() == STANDALONE_NAME:
-            standalone_paths.append(path)
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = goose_up_text(fh.read())
-        except OSError as err:
-            raise OSError("%s: %s" % (path, err))
-        found = extract_definitions(text, path)
-        if found:
-            embedded_defs.extend(found)
-            res.embedded_files.append(path)
+    Shared by the embedded pass and by the name-level pass over a drifted
+    standalone copy: the comparison rules (comment-stripped semantics, named
+    FAILs for missing and drifted functions, reports for extras and
+    comment-only differences) are one contract, and a second implementation
+    would be a second thing to keep true.
 
-    # -- standalone: byte equality, the strongest verdict the shape allows.
-    for path in standalone_paths:
-        res.adopted = True
-        got = open(path, "rb").read()
-        if got == template_bytes:
-            res.standalone.append((path, True, sha256_of(path)))
-            continue
-        res.standalone.append((path, False, sha256_of(path)))
-        where = first_difference(template_bytes.decode("utf-8", "replace"),
-                                 got.decode("utf-8", "replace"))
-        detail = ""
-        if where:
-            detail = " first difference at line %d:\n         kit: %s\n         here: %s" % (
-                where[0], where[1][:120], where[2][:120])
-        res.fail(
-            "standalone copy is not byte-identical to kit's template: %s%s"
-            % (path, detail)
-        )
-
-    # -- embedded: last definition wins across files in sorted path order.
+    `standalone_source` is the standalone file the definitions came from, or
+    None for embedded definitions. It is used only to name the file a missing
+    function is missing FROM: a repository can hold both shapes, and a bare
+    "MISSING function" would not say which copy is short.
+    """
     by_name = {}
     redefinitions = []
-    for d in embedded_defs:
+    for d in defs:
         if d.name in by_name:
             redefinitions.append((d.name, by_name[d.name].path, d.path))
         by_name[d.name] = d
 
-    if standalone_paths or embedded_defs:
-        res.adopted = True
-    else:
-        return res
-
-    # A standalone copy's byte verdict above IS its function verdict: bytes are
-    # the strongest comparison available, and a repository whose only copy is
-    # standalone has nothing left for the function-level pass to say. Running
-    # the missing-function sweep over an empty embedded set is how a
-    # byte-identical copy would fail with "MISSING function: all twelve" —
-    # measured on inbox before this branch existed.
-    if not embedded_defs:
-        return res
-
     # Readable-copy guard: an `<unparsed>` definition means this checker could
     # not read that block, and comparing it as text would fail with a message
-    # about the substrate when the truth is about the parser.
+    # about the substrate when the truth is about the parser. Returning here
+    # keeps the failure about the parser; the unreadable block is named, and
+    # the missing-function sweep below is not allowed to pile speculation on
+    # top of a parse failure.
+    unreadable = False
     for d in by_name.values():
         if d.sig == "<unparsed>":
+            unreadable = True
             res.fail(
                 "unreadable function block for cafaye.%s at %s:%d — its body does "
                 "not close with its own dollar-quote tag (a deleted terminator, or "
                 "a body that swallowed the next definition)"
                 % (d.name, os.path.relpath(d.path, root), d.line)
             )
-    if res.failures:
-        return res
+    if unreadable:
+        return
 
     for name in sorted(by_name):
         d = by_name[name]
@@ -492,9 +496,12 @@ def check_repo(root, template_defs, template_bytes):
             res.fail("      " + body_diff_context(
                 normalize_sql(ref.body), normalize_sql(d.body)))
 
+    where = ""
+    if standalone_source is not None:
+        where = " (%s)" % os.path.relpath(standalone_source, root)
     for name in sorted(template_defs):
         if name not in by_name:
-            res.fail("MISSING function: cafaye.%s" % name)
+            res.fail("MISSING function: cafaye.%s%s" % (name, where))
 
     for name, first, last in redefinitions:
         res.info(
@@ -503,15 +510,95 @@ def check_repo(root, template_defs, template_bytes):
             "compared above"
             % (name, os.path.relpath(first, root), os.path.relpath(last, root))
         )
+
+
+def check_repo(root, template_defs, template_bytes):
+    """Compare one repository's adopted copy against the template."""
+    res = RepoResult(root)
+    if not os.path.isdir(root):
+        raise OSError("not a directory: %s" % root)
+
+    standalone_paths = []
+    embedded_defs = []
+    for path in iter_sql_files(root):
+        # A file beside kit's template is a template (advisor.sql is one), not
+        # an adopting service's copy of one — see the docstring's measured
+        # note. Recorded so "not read" is printed rather than inferred.
+        if os.path.relpath(os.path.dirname(path), root) == TEMPLATE_REL_DIR:
+            res.skipped_templates.append(path)
+            continue
+        if os.path.basename(path).lower() == STANDALONE_NAME:
+            standalone_paths.append(path)
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = goose_up_text(fh.read())
+        except OSError as err:
+            raise OSError("%s: %s" % (path, err))
+        found = extract_definitions(text, path)
+        if found:
+            embedded_defs.extend(found)
+            res.embedded_files.append(path)
+
+    if standalone_paths or embedded_defs:
+        res.adopted = True
+    else:
+        return res
+
+    # -- standalone: byte equality first. It is the shape's whole promise and
+    # the strongest verdict available, so a drifting file is a FAIL whether or
+    # not anyone can also name the functions involved.
+    for path in standalone_paths:
+        got = open(path, "rb").read()
+        if got == template_bytes:
+            res.standalone.append((path, True, sha256_of(path)))
+            continue
+        res.standalone.append((path, False, sha256_of(path)))
+        where = first_difference(template_bytes.decode("utf-8", "replace"),
+                                 got.decode("utf-8", "replace"))
+        detail = ""
+        if where:
+            detail = " first difference at line %d:\n         kit: %s\n         here: %s" % (
+                where[0], where[1][:120], where[2][:120])
+        res.fail(
+            "standalone copy is not byte-identical to kit's template: %s%s"
+            % (path, detail)
+        )
+
+    # -- standalone drift: the diagnosis beside the byte verdict. Only drifted
+    # files are read this way: a byte-identical copy has nothing left to say
+    # (bytes are the strongest comparison), and running this pass over it is
+    # how a complete copy would fail with "MISSING function: all twelve" —
+    # measured on inbox before the identical-copy branch existed.
+    for path, identical, _sha in res.standalone:
+        if identical:
+            continue
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            defs = extract_definitions(goose_up_text(fh.read()), path)
+        compare_definitions(res, defs, template_defs, root, standalone_source=path)
+
+    # -- embedded: last definition wins across files in sorted path order.
+    if embedded_defs:
+        compare_definitions(res, embedded_defs, template_defs, root)
     return res
 
 
 def print_repo(res):
     lines = []
     lines.append("== %s ==" % res.root)
+    if res.skipped_templates:
+        rels = sorted(os.path.relpath(p, res.root) for p in res.skipped_templates)
+        lines.append(
+            "   not read: %d SQL file(s) beside kit's template (a template is not "
+            "an adopted copy): %s" % (len(rels), ", ".join(rels))
+        )
     if not res.adopted:
-        lines.append("   no adopted copy found (no substrate.sql, no `create schema if "
-                     "not exists cafaye`, no cafaye.* function definition)")
+        if res.skipped_templates:
+            lines.append("   no adopted copy found — the SQL files found are kit's "
+                         "own templates, not a copy of one")
+        else:
+            lines.append("   no adopted copy found (no substrate.sql, no `create schema if "
+                         "not exists cafaye`, no cafaye.* function definition)")
         return lines
     for path, identical, sha in res.standalone:
         rel = os.path.relpath(path, res.root)
@@ -577,12 +664,16 @@ def main(argv):
     print("  %d functions, sha256 %s\n" % (len(template_defs), sha256_of(TEMPLATE)[:16]))
 
     clean, drifting, silent = [], [], []
+    skipped_files, skipped_repos = 0, 0
     for target in targets:
         try:
             res = check_repo(target, template_defs, template_bytes)
         except OSError as err:
             print("== %s ==\n   ERROR  %s" % (target, err))
             return 2
+        if res.skipped_templates:
+            skipped_files += len(res.skipped_templates)
+            skipped_repos += 1
         if not res.adopted:
             silent.append(target)
         elif res.failures:
@@ -591,6 +682,9 @@ def main(argv):
             clean.append(target)
         if res.adopted:
             print("\n".join(print_repo(res)))
+        elif res.skipped_templates:
+            print("   -- %s: no adopted copy (%d template file(s) beside kit's "
+                  "template not read)" % (target, len(res.skipped_templates)))
         else:
             print("   -- %s: no adopted copy" % target)
 
@@ -599,6 +693,13 @@ def main(argv):
         len(clean), len(drifting),
         (", %d without an adopted copy" % len(silent)) if silent else "",
     ))
+    # A skip that cannot be seen reads as a clean repository, so the skip is
+    # counted out loud — the same rule validate.sh's live tiers follow.
+    if skipped_files:
+        print("not graded: %d SQL template file(s) in %d repositor%s beside kit's "
+              "template (a template is not an adopted copy)" % (
+                  skipped_files, skipped_repos,
+                  "y" if skipped_repos == 1 else "ies"))
     if drifting:
         print("drift is a FAIL: the repositories above carry a copy of the substrate "
               "that is not kit's")

@@ -51,6 +51,21 @@
 #   standalone       a byte-identical standalone copy passes on bytes.
 #   standalone-drift one byte added FAILS on bytes: a file that IS the
 #                    substrate must BE the substrate.
+#   standalone-missing  courier's exact drift: a standalone copy four functions
+#                    stale. The byte verdict alone said only "first difference
+#                    at line 71" (a comment); this proves the function-level
+#                    pass names all four absent functions beside it.
+#   standalone-edited   a semantic token changed inside one body of a
+#                    standalone copy is NAMED as drift, with the body window.
+#   standalone-comment-only  prose changed inside a body: still a byte FAIL
+#                    (the file must BE the template) but the diagnosis says
+#                    comment-only rather than leaving a line number.
+#   standalone-extra    a helper added to a standalone copy is still a byte
+#                    FAIL, but the extra is REPORTED by name.
+#   template-dir     kit's own template directory is NOT graded: advisor.sql
+#                    and isolation.sql are sibling templates, not adopted
+#                    copies. Measured before this rule: the fleet run FAILed
+#                    kit with all twelve functions "missing" on every run.
 #   dump-excluded    a generated pg_dump (`db/structure.sql`) is NOT graded:
 #                    measured on inbox, whose dump re-spells every function and
 #                    would otherwise fail on pg_dump's formatting.
@@ -345,6 +360,85 @@ expect_ec 1 "a standalone copy with one added line fails"
 expect_out "NOT byte-identical" "and the verdict names byte inequality"
 
 # ---------------------------------------------------------------------------
+# standalone-missing — courier's exact drift, measured 2026-10-16: a standalone
+# copy four functions stale, whose only feedback was "first difference at line
+# 71" (a comment word) while begin_user, current_user_id, membership_tables and
+# protect_membership_table were absent. The byte verdict stays; the functions
+# must be NAMED.
+R="$WORK/standalone-missing"
+mkdir -p "$R/db/tenancy"
+drop_functions 'begin_user|current_user_id|membership_tables|protect_membership_table' \
+  "$R/db/tenancy/substrate.sql"
+run "$R"
+expect_ec 1 "a standalone copy missing four functions fails"
+expect_out "NOT byte-identical" "and the byte verdict is still reported"
+for fn in begin_user current_user_id membership_tables protect_membership_table; do
+  expect_out "MISSING function: cafaye.$fn" "the standalone failure names cafaye.$fn"
+done
+
+# ---------------------------------------------------------------------------
+# standalone-edited — a semantic token changed inside one body. Byte inequality
+# is not a diagnosis; the drift must be named and located.
+R="$WORK/standalone-edited"
+mkdir -p "$R/db/tenancy"
+sed 's/p_account::text/p_account::varchar/' "$TEMPLATE" >"$R/db/tenancy/substrate.sql"
+run "$R"
+expect_ec 1 "a semantic change in a standalone copy fails"
+expect_out "SEMANTIC DRIFT in cafaye.begin_account" "and the standalone drift names the function"
+expect_out "first difference at character" "and shows the normalized-body window"
+
+# ---------------------------------------------------------------------------
+# standalone-comment-only — prose changed inside a body: bytes differ (so the
+# copy FAILs) but the SQL does not. The function-level pass must say WHICH kind
+# of difference it is, rather than leaving the reader a line number.
+R="$WORK/standalone-comment-only"
+mkdir -p "$R/db/tenancy"
+awk -v note='  -- a locally-true note this service added' \
+  -v anchor="raw := current_setting('cafaye.account_id', true);" \
+  '{ print; if (index($0, anchor) > 0) print note }' \
+  "$TEMPLATE" >"$R/db/tenancy/substrate.sql"
+run "$R"
+expect_ec 1 "a comment-only standalone difference still fails on bytes"
+expect_out "comment-only difference in cafaye.current_account_id" "and the function pass names it comment-only"
+expect_no_out "SEMANTIC DRIFT" "and does not call it semantic drift"
+
+# ---------------------------------------------------------------------------
+# standalone-extra — a service helper added to a standalone copy. Still a byte
+# FAIL (the file must BE the template), but the extra is REPORTED by name so a
+# renamed kit function cannot hide among helpers.
+R="$WORK/standalone-extra"
+mkdir -p "$R/db/tenancy"
+{
+  cat "$TEMPLATE"
+  echo
+  cat <<'SQL'
+create or replace function cafaye.service_helper()
+returns int
+language sql
+stable
+as $caf$
+  select 1
+$caf$;
+SQL
+} >"$R/db/tenancy/substrate.sql"
+run "$R"
+expect_ec 1 "an extra helper in a standalone copy is still a byte failure"
+expect_out "extra function not in kit's template: cafaye.service_helper" "and the extra is reported by name"
+
+# ---------------------------------------------------------------------------
+# template-dir — kit's own tree is the template's home, not an adopter.
+# `templates/database/tenancy/advisor.sql` defines cafaye.* functions too, and
+# grading it as an adopted copy reported all twelve substrate functions
+# MISSING on every fleet run — a FAIL that always fires is a FAIL its reader
+# learns to skip past. The files beside the template are not read, and the
+# output says so.
+run "$ROOT"
+expect_ec 0 "kit's own template directory is not graded as an adopted copy"
+expect_no_out "MISSING function" "and a sibling template produces no missing-function FAILs"
+expect_out "not read" "and the files not read are named"
+expect_out "no adopted copy" "and kit is reported as having no adopted copy"
+
+# ---------------------------------------------------------------------------
 # dump-excluded — a standalone copy plus a generated schema dump. The dump is
 # pg_dump's normalized respelling; grading it would fail on formatting.
 R="$WORK/dump"
@@ -391,4 +485,4 @@ if [ "$failures" -gt 0 ]; then
   printf 'FAIL substrate_copy_test: %d failed, %d passed\n' "$failures" "$passes"
   exit 1
 fi
-printf 'PASS substrate_copy_test: %d cases — missing/edited/comment-only/split/redefined/goose-Down (both directions)/unreadable/standalone/dump-excluded/not-adopted/bad-path/fleet\n' "$passes"
+printf 'PASS substrate_copy_test: %d cases — missing/edited/comment-only/split/redefined/goose-Down (both directions)/unreadable/standalone (byte, named-missing, edited, comment-only, extra)/template-dir/dump-excluded/not-adopted/bad-path/fleet\n' "$passes"
