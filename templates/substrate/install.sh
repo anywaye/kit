@@ -4215,7 +4215,7 @@ install_service_secrets() {
   # COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID are written alongside
   # the adapter;
   # with smtp/postmark the SMTP tuple rides along (cloudflare likewise keeps
-  # smtp.invalid unused — one shape, honest no-mail default preserved).
+  # the SMTP host unused — one shape, honest no-mail default preserved).
   if [ "$KIT_SUBSTRATE_SMTP_ADAPTER" = "cloudflare" ]; then
     courier_adapter_args=(
       --from-literal=COURIER_MAIL_ADAPTER="$KIT_SUBSTRATE_SMTP_ADAPTER"
