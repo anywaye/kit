@@ -706,7 +706,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_CLOUDFLARE_API_KEY KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_CLOUDFLARE_API_KEY KIT_SUBSTRATE_CF_ACCOUNT_ID KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -3151,7 +3151,8 @@ fi
 #
 # install.sh accepts three mail adapters — smtp, postmark, cloudflare — and
 # the cloudflare branch is the one with a DIFFERENT secret shape: courier
-# sends through MailChannels, so it takes COURIER_CLOUDFLARE_API_KEY instead
+# sends through Cloudflare's Email Sending API, so it takes
+# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID instead
 # of the SMTP tuple. The failure this section is written about is not a typo
 # but a silent half-write: a run that keeps the SMTP validation while writing
 # only the Cloudflare key (or the reverse) leaves a secret that is missing a
@@ -3165,8 +3166,8 @@ fi
 
 # cf_mail_env <adapter> — the secrets step's operator-sourced inputs for one
 # adapter. The SMTP values are the same FAKE relay labels the MFA cases use;
-# the MailChannels key is a fake label too. A second parameter sets the
-# signing secret's value, and "empty" is the case that must refuse.
+# the Cloudflare token and account id are fake labels too. A second parameter
+# sets the signing secret's value, and "empty" is the case that must refuse.
 cf_mail_env() {
   export DRY_RUN=0
   export KIT_SUBSTRATE_SMTP_ADAPTER="$1"
@@ -3182,21 +3183,27 @@ cf_mail_env() {
   if [ "${3:-set}" = "unset-key" ]; then
     export KIT_SUBSTRATE_CLOUDFLARE_API_KEY=""
   fi
+  # The account id follows the same shape: always the same fake label, and
+  # `${4:-set-account}` ("set-account" | "unset-account") picks the case.
+  export KIT_SUBSTRATE_CF_ACCOUNT_ID="cf-account-id-fake"
+  if [ "${4:-set-account}" = "unset-account" ]; then
+    export KIT_SUBSTRATE_CF_ACCOUNT_ID=""
+  fi
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
 }
 
-# cf_run <mock-root> <adapter> [signing-secret] [key-handling] — runs the
-# secrets step for one adapter and leaves the exit code in `cf_ec`.
+# cf_run <mock-root> <adapter> [signing-secret] [key-handling] [account-handling] —
+# runs the secrets step for one adapter and leaves the exit code in `cf_ec`.
 # Deliberately NOT a `$(...)` command substitution: the mock store it writes is
 # read back afterwards by `mock_get`, and a command substitution would confine
 # the `MOCK_ROOT` assignment to a subshell — every later assertion would then
 # read the PREVIOUS case's store and pass on the wrong data.
 cf_run() {
   MOCK_ROOT="$1"
-  local adapter="$2" secret="${3:-provider-signing-secret}" key="${4:-set}"
+  local adapter="$2" secret="${3:-provider-signing-secret}" key="${4:-set}" account="${5:-set-account}"
   mkdir -p "$MOCK_ROOT"
   mfa_seed_roles
   cf_ec=0
@@ -3204,25 +3211,36 @@ cf_run() {
     # shellcheck source=/dev/null
     . "$fixture_sourced"
     kubectl() { mock_kubectl "$@"; }
-    cf_mail_env "$adapter" "$secret" "$key"
+    cf_mail_env "$adapter" "$secret" "$key" "$account"
     install_service_secrets >"$MOCK_ROOT.log" 2>&1
   ) || cf_ec=$?
 }
 
-# Case A: cloudflare with its key writes COURIER_CLOUDFLARE_API_KEY and the
-# signing secret, and NOT the SMTP tuple — the shape courier's Cloudflare
-# adapter boots on.
+# Case A: cloudflare with its key AND its account id writes
+# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID and the signing secret,
+# and NOT the SMTP tuple — the shape courier's Cloudflare adapter boots on.
 cf_run "$WORK/cf-a" cloudflare
 if [ "$cf_ec" -ne 0 ]; then
   fail 'cloudflare: the run succeeds with the MailChannels key supplied' "$(cat "$WORK/cf-a.log")"
 elif [ "$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)" != "mailchannels-key-fake" ]; then
   fail 'cloudflare: courier-secrets holds the MailChannels key' \
     "stored: '$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)'"
+elif [ "$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)" != "cf-account-id-fake" ]; then
+  fail 'cloudflare: courier-secrets holds the account id' \
+    "stored: '$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)'"
 elif [ "$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)" != "cloudflare" ]; then
   fail 'cloudflare: the adapter is written as cloudflare' \
     "stored: '$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)'"
 else
   pass 'cloudflare: courier-secrets holds the adapter and the MailChannels key'
+fi
+if [ "$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)" = "cloudflare" ] \
+  && [ "$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)" = "mailchannels-key-fake" ] \
+  && [ "$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)" = "cf-account-id-fake" ]; then
+  pass 'cloudflare: key and account id are written together with the adapter'
+else
+  fail 'cloudflare: key and account id are written together with the adapter' \
+    "adapter='$(mock_get courier courier-secrets COURIER_MAIL_ADAPTER)' key='$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)' account='$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)'"
 fi
 cf_smtp_keys_absent() {
   local leaked=""
@@ -3274,9 +3292,33 @@ case "$(cat "$WORK/cf-a.log")" in
     pass 'cloudflare: the MailChannels key is never printed'
     ;;
 esac
+case "$(cat "$WORK/cf-a.log")" in
+  *"cf-account-id-fake"*)
+    fail 'cloudflare: the account id is never printed' "the account id value appears in the output"
+    ;;
+  *)
+    pass 'cloudflare: the account id is never printed'
+    ;;
+esac
+
+# Case B2: cloudflare with a key and NO account id refuses BEFORE anything
+# is written — the same refuse-before-write contract as the missing key.
+# A box installed without the account id would boot a courier whose URL has
+# no account in it, which is the defect this packet exists to end.
+cf_run "$WORK/cf-e" cloudflare "provider-signing-secret" "set" "unset-account"
+if [ "$cf_ec" -eq 0 ]; then
+  fail 'cloudflare: a missing account id refuses' "exit 0 — the run should have refused"
+elif [ -e "$MOCK_ROOT/courier/courier-secrets" ]; then
+  fail 'cloudflare: the account-id refusal comes before any write' \
+    "courier-secrets exists: $(ls "$MOCK_ROOT/courier/courier-secrets" 2>/dev/null | tr '\n' ' ')"
+elif ! grep -q "KIT_SUBSTRATE_CF_ACCOUNT_ID" "$WORK/cf-e.log"; then
+  fail 'cloudflare: the account-id refusal names the missing variable' "$(cat "$WORK/cf-e.log")"
+else
+  pass 'cloudflare: a missing account id refuses before any write, naming the variable'
+fi
 
 # Case C: the default smtp branch is unchanged — the tuple is written whole,
-# and the Cloudflare key is not. This is the bystander assertion: the new
+# and neither Cloudflare value is. This is the bystander assertion: the new
 # branch must not have become the only branch.
 cf_run "$WORK/cf-c" smtp
 if [ "$cf_ec" -ne 0 ]; then
@@ -3287,6 +3329,9 @@ elif [ "$(mock_get courier courier-secrets COURIER_SMTP_PASSWORD)" != "relay-pas
 elif [ -n "$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)" ]; then
   fail 'smtp: no Cloudflare key is written on the smtp branch' \
     "stored: '$(mock_get courier courier-secrets COURIER_CLOUDFLARE_API_KEY)'"
+elif [ -n "$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)" ]; then
+  fail 'smtp: no Cloudflare account id is written on the smtp branch' \
+    "stored: '$(mock_get courier courier-secrets COURIER_CF_ACCOUNT_ID)'"
 else
   pass 'smtp: the default branch writes the SMTP tuple and no Cloudflare key'
 fi
