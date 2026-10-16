@@ -35,6 +35,72 @@ A project's `ci/pipeline.sh` must:
    GitHub Actions reads repository secrets. A pipeline that reads
    `DEPLOY_HOST` works on both without knowing which.
 
+### The database
+
+A project whose gate needs Postgres declares a database and the instabox
+backend runs **one Postgres for the whole sandbox** and creates `<project>`
+database + `<project>` role for it, so the project's own `bin/dev`-style stack
+is replaced by a fixed server it connects to. Provision it with `--postgres`:
+
+```sh
+GH_TOKEN=… backends/instabox/provision.sh --postgres cafaye-build billing courier docs identity
+```
+
+The projects that declare one are read, never invented: each of `identity`,
+`billing`, `courier`, `darkroom` and `box` names a `postgres:17-alpine` service
+in its `.github/workflows/ci.yml`, and the rollout table below records the same
+column. `provision.sh` reads the declaration from `CI_DB_PROJECTS`, whose
+default is exactly that list. A project not in it gets no database and no URL.
+
+For each declared project the env carries two names, **both pointing at the
+same database** — the fleet's gates read both:
+
+| variable | who reads it |
+| --- | --- |
+| `DATABASE_URL` | a migration step; identity's `bin/migrate` proves this name before applying a migration |
+| `TEST_DATABASE_URL` | a test tier; identity's `bin/prime` skips its 1,732 database tests when this is unset, and its `bin/provision-testdb` provisions the owner/app roles and applies migrations when it is set |
+| `TEST_DATABASE_ADMIN_URL` | a gate that provisions its own roles (the name identity's `bin/provision-testdb` reads) |
+
+Four properties of the sandbox's Postgres, each a check rather than a hope:
+
+- **One container, `postgres:17-alpine`, on `CI_POSTGRES_PORT` (default 5432).**
+  Re-running provision starts it; it is never replaced, so its data and its
+  roles' passwords survive. `docker inspect` is the existence test.
+- **Passwords are generated once and kept.** Each project's password lives at
+  `~/ci/pg-passwords/<project>` (0600) on the sandbox and is re-read on every
+  re-provision; the role is created only when absent and an existing role's
+  password is never rotated. A re-provision that rotated it would turn every
+  run red until the container restarted, because the running agent's env still
+  named the old credential.
+- **The database is the boundary.** `REVOKE ALL ON DATABASE <project> FROM
+  PUBLIC` and `GRANT CONNECT` back to its own role: this is the fleet's
+  one-cluster rule in miniature (docs: `architecture/one-cluster.md`), and
+  without the revoke a project's role could reach another's rows.
+- **The timeouts are set per role**, the shared-cluster backstop:
+  `statement_timeout` and `idle_in_transaction_session_timeout`, plus a
+  `CONNECTION LIMIT`, overridable with `CI_PG_*` variables.
+
+### Gate concurrency on a shared sandbox
+
+Two projects' gates running at once is **normal and fine** here: their
+databases are separate, so they share nothing. A project whose GATE cannot run
+beside another's — a fixed port, a global temp path — declares it with
+`CI_GATE_SERIAL=1` in its env (via provision's `CI_EXTRA_ENV`), and the agent
+then serialises it against every other declaring project with a sandbox-wide
+lock. The resource is machine-wide, so the lock is too.
+
+**Which projects need it, read from their workflows and READMEs.** On a Linux
+sandbox, none of the five database projects does. `box` is the one whose gate
+has a serial mode at all: its README says `bin/ci` runs the suite serially
+**on macOS**, because parallel workers fork with the `pg` gem connected and
+segfault the Ruby VM — and its `.github/workflows/ci.yml` sets
+`PARALLEL_WORKERS: '4'` with the note that "CI is Linux, where the fork is
+safe". The sandbox is Linux, so box's gate is concurrent-safe there and does
+not set the flag. kit's own `tests/validate.sh` is the worked example of a gate
+that WOULD set it — its Docker tiers claim a fixed 15000–15999 port block and
+stay serial — but kit is not in the rollout table.
+
+
 ## Switching backends
 
 Change the one line in `ci/backend` and, for `github-actions`, ensure the
@@ -96,15 +162,25 @@ projects needs a second sandbox only after the disk is measured, not before.
 test-tier sandbox and is not a CI host. The first wave lands on `cafaye-build`,
 and each following sandbox carries the next four. One project per line, and
 the gate column is the fact a pipeline's MARKED 1 must carry — read from the
-repository's own `.github/workflows/ci.yml`, never assumed.
+repository's own `.github/workflows/ci.yml`, never assumed. The database column
+is the same kind of fact: a project is `yes` when its `ci.yml` names a
+`postgres:17-alpine` service, and it is those five names that `provision.sh`'s
+`CI_DB_PROJECTS` defaults to.
 
-| sandbox | projects | gate entrypoints |
-| --- | --- | --- |
-| `cafaye-build` (exists) | `docs`, `billing`, `courier`, `identity` | `./bin/prime` ×4 |
-| `cafaye-release` (new) | `box`, `pantry`, `parlor`, `website` | `bin/ci`, then `./bin/prime` ×3 |
-| `cafaye-libs` (new) | `gateway`, `cafe`, `core`, `muse` | `./bin/prime` ×4 |
-| `cafaye-rest` (new) | `keyholder`, `darkroom`, `cafaye-ts` | `bin/gate`, then `./bin/prime` ×2 |
-| *fifth slot* | spare, or the second wave of the three libraries (`cafaye-py`, `cafaye-rb`) | — |
+| sandbox | projects | gate entrypoints | database |
+| --- | --- | --- | --- |
+| `cafaye-build` (exists) | `docs`, `billing`, `courier`, `identity` | `./bin/prime` ×4 | `billing`, `courier`, `identity` |
+| `cafaye-release` (new) | `box`, `pantry`, `parlor`, `website` | `bin/ci`, then `./bin/prime` ×3 | `box` |
+| `cafaye-libs` (new) | `gateway`, `cafe`, `core`, `muse` | `./bin/prime` ×4 | none — no `postgres:17-alpine` service in any of the four |
+| `cafaye-rest` (new) | `keyholder`, `darkroom`, `cafaye-ts` | `bin/gate`, then `./bin/prime` ×2 | `darkroom` |
+| *fifth slot* | spare, or the second wave of the three libraries (`cafaye-py`, `cafaye-rb`) | — | `cafaye-rb` (its own `ci.yml` names `postgres:17`, not `-alpine`) |
+
+Because a sandbox carries at most one or two database projects in this
+placement, `--postgres` is given on the first three rows and not on
+`cafaye-libs`, which has none. A project that starts one Postgres per job on
+Actions (a `services:` block) is exactly the project that needs a database
+here; a project that finds Postgres binaries on the runner (`pantry`) is not.
+
 
 `docs` is already on `cafaye-build` under the **single-project** provisioner.
 Re-provisioning it with the multi-project form migrates it: the per-project
@@ -123,7 +199,10 @@ takes over the agent, and `ci/pipeline.sh` is not touched.
    malformed one.
 3. **Write `instabox`** into `ci/backend`. Commit and push `master`.
 4. **Provision.** On the operator's machine, logged into `instabox` and `gh`:
-   `GH_TOKEN=… backends/instabox/provision.sh cafaye-build <project>`. A chart
+   `GH_TOKEN=… backends/instabox/provision.sh cafaye-build <project>`. A gate
+   that needs Postgres takes `--postgres` —
+   `… provision.sh --postgres cafaye-build billing courier docs identity` —
+   and `DATABASE_URL`/`TEST_DATABASE_URL` land in the project's env. A chart
    publisher is logged in once more —
    `cat token | bin/publish --sandbox --sandbox-name cafaye-build`.
 5. **Watch one green run.** `instabox ssh <sandbox> -- tail -f

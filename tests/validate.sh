@@ -2245,6 +2245,36 @@ OTEL
     report FAIL 'backends/instabox/  (5 artifacts present, the set is whole)'
   fi
 
+  # The provisioner's database flag, and the two things it exists to carry.
+  #
+  # THREE PARTS, and each is a different failure. `--postgres` no longer being
+  # accepted is a rollout that silently provisions no database — so the flag is
+  # asserted by RUNNING the script's own usage path (no arguments, no network)
+  # and requiring the flag to appear in what it prints, not by grepping a
+  # comment that mentions it. The URL pair is the contract the flag's output
+  # must satisfy: a project whose env carries the wrong name is a gate that
+  # skips its database tier and reports green, which is why the NAME is
+  # asserted and not the feature. And `CI_GATE_SERIAL` is the shared-sandbox
+  # concurrency declaration; without it a project whose gate cannot run beside
+  # another's has nothing to say so.
+  #
+  # The two `provision.sh`/`agent.sh` greps match CODE (`echo "TEST_DATABASE_URL=`
+  # and `${CI_GATE_SERIAL:-0}`), deliberately: a check that a comment can satisfy
+  # is not a check, and both files explain themselves in long comments.
+  provision_usage="$(bash "$ROOT/backends/instabox/provision.sh" 2>&1 || true)"
+  if case "$provision_usage" in
+    *--postgres*) true ;;
+    *) false ;;
+  esac &&
+    grep -q 'echo "TEST_DATABASE_URL=' "$ROOT/backends/instabox/provision.sh" &&
+    grep -q 'CI_GATE_SERIAL:-0' "$ROOT/backends/instabox/agent.sh" &&
+    grep -q 'DATABASE_URL' "$ROOT/backends/README.md" &&
+    grep -q 'TEST_DATABASE_URL' "$ROOT/backends/README.md"; then
+    report PASS 'backends/instabox  (--postgres, the DATABASE_URL/TEST_DATABASE_URL pair, and CI_GATE_SERIAL are present)'
+  else
+    report FAIL 'backends/instabox  (--postgres, the DATABASE_URL/TEST_DATABASE_URL pair, and CI_GATE_SERIAL are present)'
+  fi
+
   # The superseded custom backup toolchain must be GONE, and this is the check
   # that goes red if it ever comes back.
   #

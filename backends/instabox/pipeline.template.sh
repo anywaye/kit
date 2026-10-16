@@ -53,6 +53,37 @@
 # a key, a bucket — it declares, and the backend materializes it from
 # `~/ci-env.d/<project>.env`. A pipeline that reads DEPLOY_HOST works on the
 # instabox backend and on GitHub Actions without knowing which one ran it.
+#
+# THE DATABASE. A project whose gate starts Postgres on Actions (`services:
+# postgres: image: postgres:17-alpine`) does NOT need it to start one on the
+# sandbox: `provision.sh --postgres` runs ONE Postgres for the whole sandbox and
+# creates a database and role per project that declares one, so a project's own
+# `bin/dev`-style stack is replaced by a fixed server it merely connects to.
+# The two names the fleet's gates read are in that project's env, both pointing
+# at the SAME database:
+#
+#   DATABASE_URL       the one a migration step reads — identity's `bin/migrate`
+#                      proves this name before applying a migration.
+#   TEST_DATABASE_URL  the one a test tier reads — identity's `bin/prime` skips
+#                      its 1,732 database tests when this is unset, and its
+#                      `bin/provision-testdb` creates the owner/app roles and
+#                      applies migrations when it is set.
+#
+# `TEST_DATABASE_ADMIN_URL` is also written when the project declares a
+# database, for a gate that provisions its own roles (that is the name identity's
+# `bin/provision-testdb` reads). A pipeline does not need to read any of these
+# itself — the gate it calls does — but a pipeline that runs migrations must
+# point them at the right place, not invent its own. There is no `bin/dev up`
+# here: the server is already up, and starting a second one is the bug.
+#
+# GATE CONCURRENCY. Two projects' gates run at once on this backend and that is
+# fine — their databases are separate. A pipeline whose GATE cannot run beside
+# another project's — a fixed port, a global temp path — declares it with
+# `CI_GATE_SERIAL=1` (set it in the project's env, via provision's
+# `CI_EXTRA_ENV`), and the agent then serialises it against every other
+# declaring project. Nothing in this template sets it: which projects need it is
+# a fact read from their workflows and READMEs and recorded in
+# backends/README.md.
 set -euo pipefail
 
 # ---------------------------------------------------------------------------

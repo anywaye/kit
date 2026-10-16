@@ -2,11 +2,45 @@
 # kit/backends/instabox/provision.sh — bring a sandbox up as ONE OR MANY
 # projects' CI.
 #
-#   kit/backends/instabox/provision.sh <sandbox-name> <project> [<project> ...]
+#   kit/backends/instabox/provision.sh [--postgres] <sandbox-name> <project> [...]
 #
-# e.g. one sandbox for the whole fleet:
+# e.g. one sandbox for the whole fleet, with a database for the five services
+# whose gates need one:
 #
-#   kit/backends/instabox/provision.sh cafaye-build billing courier docs identity
+#   kit/backends/instabox/provision.sh --postgres \
+#     cafaye-build billing courier docs identity
+#
+# --postgres AND PER-PROJECT DATABASES. Five projects' gates cannot start
+# without a Postgres (identity, billing, courier, darkroom, box — read from each
+# repository's `.github/workflows/ci.yml`, which names a `postgres:17-alpine`
+# service; the README's rollout table records the same column). Without the flag
+# a project's pipeline fails at its first migration on a machine nobody
+# provisioned for it. With it, provision ensures ONE postgres container on the
+# sandbox and, for each project that DECLARES a database, a `<project>` database
+# and a `<project>` login role, and writes `DATABASE_URL` / `TEST_DATABASE_URL`
+# into that project's env.
+#
+# WHICH PROJECTS DECLARE ONE. `CI_DB_PROJECTS` (default: the five service names
+# above) is the declaration, and it is the README's rollout table's database
+# column in one place. A project not in the set gets no database and no
+# `DATABASE_URL`; a project in it that --postgres is not given gets neither,
+# which is the loud half — its gate fails at the migration rather than writing
+# to a database that was never created.
+#
+# THE PASSWORDS ARE GENERATED ONCE AND KEPT. A per-project password is stored at
+# `~/ci/pg-passwords/<project>` (0600) on the sandbox and re-read on every
+# re-provision; the role is created only when it is absent, and an EXISTING
+# role's password is never touched. The measured trap this avoids: a
+# re-provision that rotates the password under a live agent turns every run red
+# until the container restarts, because the agent's environment still names the
+# old credential. The container itself is likewise never recreated — a re-run
+# starts an existing one rather than replacing it.
+#
+# ONE CLUSTER, ONE DATABASE PER PROJECT, is the fleet's own rule in miniature
+# (docs: architecture/one-cluster.md): each database has `REVOKE ALL ... FROM
+# PUBLIC` and a `GRANT CONNECT` back to its own role, so no project's role can
+# reach another's rows. See `templates/compose/postgres/initdb/10-cluster.sh`
+# for the fleet's full contract; this is the sandbox-sized version of it.
 #
 # Run from an operator's machine with the instabox CLI logged in and `gh`
 # authenticated. Idempotent on purpose: it reconciles a sandbox that drifted
@@ -62,15 +96,23 @@ set -euo pipefail
 
 KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-usage() { printf 'usage: provision.sh <sandbox-name> <project> [<project> ...]\n' >&2; exit 2; }
+usage() { printf 'usage: provision.sh [--postgres] <sandbox-name> <project> [<project> ...]\n' >&2; exit 2; }
 
-NAME="${1:-}"
+POSTGRES=0
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --postgres) POSTGRES=1 ;;
+    -h | --help) usage ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+NAME="${ARGS[0]:-}"
 [ -n "$NAME" ] || usage
-shift
 
 DEPLOY_HOST="${DEPLOY_HOST:-}"
 PROJECTS=()
-for arg in "$@"; do
+for arg in "${ARGS[@]:1}"; do
   case "$arg" in
     # A host, not a project name: no cafaye project carries a `.` or a `:`.
     # See the header for why this heuristic exists at all.
@@ -79,6 +121,21 @@ for arg in "$@"; do
   esac
 done
 [ "${#PROJECTS[@]}" -gt 0 ] || usage
+
+# The projects that declare a database, and the rollout table's database column
+# in one place. Read from each repository's `.github/workflows/ci.yml`, never
+# invented: every name here has a `postgres:17-alpine` service block. A caller
+# that adds or removes a project overrides this rather than editing the file.
+CI_DB_PROJECTS="${CI_DB_PROJECTS:-identity billing courier darkroom box}"
+
+# needs_db <project> — is this project one that declares a database?
+needs_db() {
+  local p
+  for p in $CI_DB_PROJECTS; do
+    [ "$p" = "$1" ] && return 0
+  done
+  return 1
+}
 
 log() { printf '\n== %s\n' "$1"; }
 ssh_() { instabox ssh "$NAME" -- "$@"; }
@@ -113,6 +170,130 @@ if ! ssh_ "command -v mise >/dev/null 2>&1"; then
   echo "provision: installing mise (the fleet pins every toolchain in mise.toml)"
   timeout 180 instabox ssh "$NAME" -- "curl -fsSL https://mise.run | sh" \
     || echo "provision: WARN mise install did not finish — pipelines will fall back to the sandbox's own toolchain"
+fi
+
+# ---------------------------------------------------------------------------
+# the database, one cluster and one database per project
+# ---------------------------------------------------------------------------
+# THE CONTAINER IS ONE, AND IT IS NOT RECREATED. `postgres:17-alpine` on a
+# fixed port, because that is the image the five repositories' CI already runs
+# (`services: postgres: image: postgres:17-alpine`) — a sandbox that ran a
+# different image would be a second thing to keep in step. The port is
+# `CI_POSTGRES_PORT` (default 5432), the host port the projects' `localhost:…`
+# URLs name.
+#
+# `docker inspect` is the existence test and `docker start` is the idempotent
+# action: re-running provision over a live container must START it, never
+# replace it. `docker run` on an existing name errors; recreating it would lose
+# nothing only because the data lives in a named volume, and a role password
+# lives in the data too — so the container is deliberately left alone.
+PG_PORT="${CI_POSTGRES_PORT:-5432}"
+PG_ADMIN_PW=""
+if [ "$POSTGRES" -eq 1 ]; then
+  log "postgres on $NAME (port $PG_PORT)"
+
+  # The admin password, generated once and stored. It is not load-bearing for
+  # provisioning — every statement below runs over `docker exec` into the
+  # container's unix socket, where the image trusts the local user — but a
+  # project's gate that provisions its own owner/app roles needs an admin DSN
+  # over TCP (identity's `bin/provision-testdb` reads `TEST_DATABASE_ADMIN_URL`),
+  # so the password has to be known and stable.
+  if ssh_ "test -s \$HOME/ci/pg-admin-password"; then
+    PG_ADMIN_PW="$(ssh_ "cat \$HOME/ci/pg-admin-password")"
+  else
+    PG_ADMIN_PW="$(ssh_ 'openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n"')"
+    printf '%s' "$PG_ADMIN_PW" | ssh_ "mkdir -p \$HOME/ci && cat > \$HOME/ci/pg-admin-password && chmod 600 \$HOME/ci/pg-admin-password"
+  fi
+
+  if ssh_ "docker inspect ci-postgres >/dev/null 2>&1"; then
+    ssh_ "docker start ci-postgres >/dev/null 2>&1 || true"
+    echo "provision: ci-postgres exists — started; its data and role passwords are kept"
+  else
+    ssh_ "docker run -d --name ci-postgres --restart unless-stopped \
+      -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD='$PG_ADMIN_PW' -e POSTGRES_DB=postgres \
+      -p ${PG_PORT}:5432 -v ci-postgres-data:/var/lib/postgresql/data \
+      postgres:17-alpine >/dev/null" \
+      || { echo "provision: docker run failed — is the docker daemon running on $NAME?" >&2; exit 1; }
+    echo "provision: ci-postgres created (postgres:17-alpine, host port $PG_PORT)"
+  fi
+
+  # Bounded readiness wait: a pipeline run against a server still initialising
+  # is a connection refused three layers down inside a service's own gate.
+  if ! ssh_ "for i in \$(seq 1 60); do docker exec ci-postgres pg_isready -U postgres -d postgres -q && exit 0; sleep 1; done; exit 1"; then
+    echo "provision: ci-postgres did not become ready in 60s" >&2
+    ssh_ "docker logs --tail 20 ci-postgres" || true
+    exit 1
+  fi
+
+  ssh_ "mkdir -p \$HOME/ci/pg-passwords"
+  for p in "${PROJECTS[@]}"; do
+    needs_db "$p" || continue
+
+    # THE PASSWORD IS THE STORE'S, AND AN EXISTING ROLE'S IS NEVER ROTATED.
+    # If the store has it, that is the credential — full stop. If the store is
+    # absent, one is generated; and if the role nevertheless exists (a previous
+    # provision whose store was removed), the new password is applied with
+    # ALTER, which is safe precisely because nothing recorded the old one. The
+    # trap this closes is a live agent whose env names the old password: it
+    # exists only when the store exists, and the store existing is what stops
+    # the ALTER.
+    pwfile="\$HOME/ci/pg-passwords/$p"
+    if ssh_ "test -s $pwfile"; then
+      pw="$(ssh_ "cat $pwfile")"
+      role_action="create-if-absent"
+    else
+      pw="$(ssh_ 'openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n"')"
+      printf '%s' "$pw" | ssh_ "cat > $pwfile && chmod 600 $pwfile"
+      role_action="create-or-set"
+    fi
+
+    # The identifier rule is the cluster's: a project name is pasted into an
+    # unquoted identifier below, and `[a-z_][a-z0-9_]*` is what keeps one
+    # project from naming another's database. `LC_ALL=C` is set in the SQL
+    # session's shell for the same collation reason the cluster script records.
+    case "$p" in
+      "" | [!a-z_]* | *[!a-z0-9_]*)
+        echo "provision: REFUSING '$p' as a database name — must match [a-z_][a-z0-9_]*" >&2
+        exit 1
+        ;;
+    esac
+
+    # CREATE ROLE and CREATE DATABASE cannot share a batch (`CREATE DATABASE
+    # cannot run inside a transaction block`), and the database is created with
+    # `\gexec` so the "does it already exist" test and the CREATE are one round
+    # trip. Every call runs under `ON_ERROR_STOP=1`: without it psql logs the
+    # error, carries on, and still exits 0, which is how a cluster reports a
+    # database it never created.
+    ssh_ "docker exec -i ci-postgres psql --no-psqlrc --quiet -U postgres -d postgres --set=ON_ERROR_STOP=1" <<SQL
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$p') THEN
+    CREATE ROLE "$p" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '$pw';
+  ELSIF '$role_action' = 'create-or-set' THEN
+    ALTER ROLE "$p" LOGIN PASSWORD '$pw';
+  END IF;
+END
+\$\$;
+SQL
+
+    ssh_ "docker exec -i ci-postgres psql --no-psqlrc --quiet -U postgres -d postgres --set=ON_ERROR_STOP=1" <<SQL
+SELECT 'CREATE DATABASE "$p" OWNER "$p"'
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$p')\gexec
+SQL
+
+    # THE BOUNDARY, the fleet's rule in miniature. PUBLIC holds CONNECT on every
+    # database by default, so without the REVOKE the database-per-project split
+    # is a naming convention rather than an isolation boundary. The timeouts
+    # are the shared-cluster backstop the fleet's role provisioning also sets.
+    ssh_ "docker exec -i ci-postgres psql --no-psqlrc --quiet -U postgres -d postgres --set=ON_ERROR_STOP=1" <<SQL
+REVOKE ALL ON DATABASE "$p" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "$p" TO "$p";
+ALTER ROLE "$p" CONNECTION LIMIT ${CI_PG_ROLE_CONNECTIONS:-10};
+ALTER ROLE "$p" SET statement_timeout = '${CI_PG_STATEMENT_TIMEOUT_MS:-15000}';
+ALTER ROLE "$p" SET idle_in_transaction_session_timeout = '${CI_PG_IDLE_IN_TRANSACTION_TIMEOUT_MS:-30000}';
+SQL
+    echo "provision: $p -> database $p, role $p, DATABASE_URL/TEST_DATABASE_URL"
+  done
 fi
 
 log "the shared poller and supervisor"
@@ -153,6 +334,26 @@ for p in "${PROJECTS[@]}"; do
     echo "GH_TOKEN=${GH_TOKEN}"
     if [ -n "$DEPLOY_HOST" ]; then
       echo "DEPLOY_HOST=${DEPLOY_HOST}"
+    fi
+    # THE DATABASE, when this project declares one and --postgres provisioned
+    # it. BOTH URLS POINT AT THE SAME DATABASE and that is deliberate: the
+    # fleet's gates read two names — identity's `bin/migrate` reads
+    # `DATABASE_URL` while its gate reads `TEST_DATABASE_URL` — and a pair that
+    # disagreed would migrate one database and test another. The password is
+    # read back from the sandbox's store, so the URL is stable across
+    # re-provisions.
+    #
+    # `TEST_DATABASE_ADMIN_URL` is the superuser the same database, for a gate
+    # that provisions its own owner/app roles (identity's `bin/provision-testdb`
+    # reads exactly that name). It is written only for a DB project, and it is
+    # the sandbox's own admin credential — the boundary it crosses is the
+    # database's, not the container's.
+    if [ "$POSTGRES" -eq 1 ] && needs_db "$p"; then
+      db_pw="$(ssh_ "cat \$HOME/ci/pg-passwords/$p")"
+      echo "PROJECT_DB=1"
+      echo "DATABASE_URL=postgres://${p}:${db_pw}@localhost:${PG_PORT}/${p}?sslmode=disable"
+      echo "TEST_DATABASE_URL=postgres://${p}:${db_pw}@localhost:${PG_PORT}/${p}?sslmode=disable"
+      echo "TEST_DATABASE_ADMIN_URL=postgres://postgres:${PG_ADMIN_PW}@localhost:${PG_PORT}/postgres?sslmode=disable"
     fi
     # Anything the caller exports in CI_EXTRA_ENV (KEY=value lines) is passed
     # through verbatim: a project's pipeline declares its own variables, and
