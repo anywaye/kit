@@ -175,11 +175,11 @@ is the same kind of fact: a project is `yes` when its `ci.yml` names a
 | `cafaye-rest` (new) | `keyholder`, `darkroom`, `cafaye-ts` | `bin/gate`, then `./bin/prime` ×2 | `darkroom` |
 | *fifth slot* | spare, or the second wave of the three libraries (`cafaye-py`, `cafaye-rb`) | — | `cafaye-rb` (its own `ci.yml` names `postgres:17`, not `-alpine`) |
 
-Because a sandbox carries at most one or two database projects in this
-placement, `--postgres` is given on the first three rows and not on
-`cafaye-libs`, which has none. A project that starts one Postgres per job on
-Actions (a `services:` block) is exactly the project that needs a database
-here; a project that finds Postgres binaries on the runner (`pantry`) is not.
+Because some sandboxes carry no database project at all, `--postgres` is given
+on the rows that have one and not on `cafaye-libs`. A project that starts one
+Postgres per job on Actions (a `services:` block) is exactly the project that
+needs a database here; a project that finds Postgres binaries on the runner
+(`pantry`) is not.
 
 
 `docs` is already on `cafaye-build` under the **single-project** provisioner.

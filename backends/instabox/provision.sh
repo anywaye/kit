@@ -202,6 +202,7 @@ if [ "$POSTGRES" -eq 1 ]; then
     PG_ADMIN_PW="$(ssh_ "cat \$HOME/ci/pg-admin-password")"
   else
     PG_ADMIN_PW="$(ssh_ 'openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n"')"
+    [ -n "$PG_ADMIN_PW" ] || { echo "provision: could not generate an admin password on $NAME (no openssl, no usable /dev/urandom)" >&2; exit 1; }
     printf '%s' "$PG_ADMIN_PW" | ssh_ "mkdir -p \$HOME/ci && cat > \$HOME/ci/pg-admin-password && chmod 600 \$HOME/ci/pg-admin-password"
   fi
 
@@ -243,6 +244,7 @@ if [ "$POSTGRES" -eq 1 ]; then
       role_action="create-if-absent"
     else
       pw="$(ssh_ 'openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n"')"
+      [ -n "$pw" ] || { echo "provision: could not generate a password for $p on $NAME" >&2; exit 1; }
       printf '%s' "$pw" | ssh_ "cat > $pwfile && chmod 600 $pwfile"
       role_action="create-or-set"
     fi
