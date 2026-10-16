@@ -21,3 +21,6 @@ __pycache__/
 # The launch harness's generated credentials — stable dev secrets, never
 # committed. launch/bin/launch writes this; the overlay reads it.
 launch/.env
+
+# dispatch worktrees live here; they are local artifacts, never content
+/wt/
