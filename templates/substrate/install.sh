@@ -22,13 +22,14 @@
 #   8. the Postgres Cluster — one CNPG Cluster, one database and two roles per
 #      service, reproducing templates/compose/postgres/initdb/10-cluster.sh
 #   9. Redis (single instance) and the services' secrets — identity-secrets,
-#      gateway-secrets, courier-secrets, parlor-secrets, one per namespace,
+#      gateway-secrets, courier-secrets, parlor-secrets, billing-secrets, one
+#      per namespace,
 #      each exactly the keys its chart reads (see the SECRET RECORD on
 #      install_service_secrets)
 #   10. the services' database schemas — one migrate Job per schema-owning
-#      service (identity, courier), in that service's own running image and as
-#      its OWNER role, waited to completion; gateway and parlor own no schema
-#      and are named-and-skipped. Without this the fleet boots against an empty
+#      service (identity, courier, billing), in that service's own running
+#      image and as its OWNER role, waited to completion; gateway and parlor
+#      own no schema and are named-and-skipped. Without this the fleet boots against an empty
 #      database: identity's outbox loop retries forever on a missing
 #      `outbox_events`, which is the failure this step ends.
 #   11. NATS with JetStream (single instance) and the fleet's stream — one
@@ -464,6 +465,20 @@ SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)
 : "${KIT_SUBSTRATE_MAIL_FROM:=}"
 : "${KIT_SUBSTRATE_MAIL_FROM_NAME:=}"
 
+# billing's processor settings: the Stripe secret key and the webhook signing
+# secret, and BOTH ARE REQUIRED whenever billing is in KIT_SUBSTRATE_DATABASES.
+# Not generatable — the operator mints them in Stripe's dashboard (Developers →
+# API keys for the secret key; the webhook endpoint's Signing Secret for the
+# other) — and not skippable: a box whose billing is deployed without them
+# boots and serves, then refuses every checkout with "STRIPE_API_KEY is not
+# configured" and answers 503 on its own webhook door, which is a failure a
+# customer discovers and an installer can prevent. `sk_test_…` on a test box
+# and `sk_live_…` on a live one are the same procedure two dashboard modes
+# apart; the installer does not read which mode a key is in (the strings are
+# opaque and the mode is the account's).
+: "${KIT_SUBSTRATE_STRIPE_API_KEY:=}"
+: "${KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET:=}"
+
 # Courier's mail path. The relay host, username and password are the
 # operator's account with their provider and have no defaults — a default
 # relay is a relay that mails nobody while reporting success (see runtime.exs
@@ -754,7 +769,7 @@ kit_substrate_present() {
       # All five service secrets exist. One missing re-runs the whole step,
       # which reads every existing value back rather than regenerating —
       # so a half-finished first run resumes without rotating live keys.
-      for s in identity/identity-secrets gateway/gateway-secrets courier/courier-secrets parlor/parlor-secrets; do
+      for s in identity/identity-secrets gateway/gateway-secrets courier/courier-secrets parlor/parlor-secrets billing/billing-secrets; do
         kubectl --kubeconfig="$KUBECONFIG" get secret "${s#*/}" -n "${s%/*}" >/dev/null 2>&1 || return 1
       done
       ;;
@@ -3219,7 +3234,7 @@ install_cluster_issuers() {
 # and the reconcile is not part of the re-provision.
 create_postgres_role_secrets() {
   local svc role secret_name pw
-  for svc in identity gateway courier parlor; do
+  for svc in identity gateway courier parlor billing; do
     for role in "$svc" "${svc}_app"; do
       # The secret name wears the service's spelling (`-app`); the username
       # key must wear the ROLE's (`_app`). The mapping is explicit so the two
@@ -3283,7 +3298,7 @@ install_postgres_cluster() {
   log_step "the Postgres Cluster (from KIT_SUBSTRATE_DATABASES, in the data namespace)"
   if [ -z "$KIT_SUBSTRATE_DATABASES" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES is not set"
   fi
   # The manifest is the contract and the variable is the operator confirming
@@ -3295,12 +3310,12 @@ install_postgres_cluster() {
   have="$(printf '%s' "$KIT_SUBSTRATE_DATABASES" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$' | sort -u | tr '\n' ',')"
   if [ -z "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing' on the box and re-run" \
       "KIT_SUBSTRATE_DATABASES names no services (empty after trimming)"
   fi
   if [ "$want" != "$have" ]; then
     kit_substrate_refuse "KIT_SUBSTRATE_DATABASES" \
-      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
+      "export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing' on the box and re-run — it must equal the service set manifests/data/postgres-cluster.yaml provisions" \
       "KIT_SUBSTRATE_DATABASES does not match the Cluster manifest (it provisions: ${want%,})"
   fi
   # The extension list is declared (default: vector, mirroring compose) and
@@ -3834,6 +3849,7 @@ validate_mfa_override() {
 #   RECORD gateway-secrets: REDIS_URL ASSERTION_SIGNING_KEY
 #   RECORD courier-secrets: DATABASE_URL SECRET_KEY_BASE COURIER_IDENTITY_TOKEN COURIER_IDENTITY_URL COURIER_SECRET_BOX_KEY COURIER_MAIL_ADAPTER COURIER_SMTP_HOST COURIER_SMTP_PORT COURIER_SMTP_USERNAME COURIER_SMTP_PASSWORD COURIER_CLOUDFLARE_API_KEY COURIER_CF_ACCOUNT_ID COURIER_INBOUND_RESEND_SECRET COURIER_ERROR_RELAY_TOKEN NATS_URL OTEL_SDK_DISABLED
 #   RECORD parlor-secrets: DATABASE_URL OTEL_SDK_DISABLED
+#   RECORD billing-secrets: DATABASE_URL SECRET_KEY_BASE NATS_URL BILLING_IDENTITY_ISSUER BILLING_IDENTITY_AUDIENCE STRIPE_API_KEY STRIPE_WEBHOOK_SECRET OTEL_SDK_DISABLED
 #
 # courier-secrets' RECORD lists the UNION of its two mail-adapter shapes, and
 # no single install writes both halves: the smtp/postmark path writes
@@ -3945,7 +3961,7 @@ install_service_secrets() {
     kit_substrate_out "      already installed, skipping"
     return 0
   fi
-  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets (generated values once-only, sourced values validated on the live path)"; then
+  if dry_run "create identity-secrets, gateway-secrets, courier-secrets, parlor-secrets, billing-secrets (generated values once-only, sourced values validated on the live path)"; then
     return 0
   fi
   # Externally sourced values are validated on the LIVE path only — a dry run
@@ -3994,13 +4010,35 @@ install_service_secrets() {
       ;;
   esac
 
+  # billing's Stripe pair, validated the same way and for the same reason: a
+  # billing deployed without its processor settings is a checkout door that
+  # answers "not configured" and a webhook door that answers 503 — a failure
+  # discovered when a customer tries to pay rather than here. BOTH are
+  # required — the secret key authenticates outbound calls to Stripe and the
+  # signing secret verifies inbound webhooks, and one without the other is
+  # half a door — and a box that has billing in KIT_SUBSTRATE_DATABASES has
+  # no reason to deploy it without them.
+  if [ -n "$KIT_SUBSTRATE_STRIPE_API_KEY" ] && [ -z "$KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" ] ||
+     [ -z "$KIT_SUBSTRATE_STRIPE_API_KEY" ] && [ -n "$KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" ]; then
+    kit_substrate_refuse \
+      "KIT_SUBSTRATE_STRIPE_API_KEY, KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" \
+      "export BOTH on the box and re-run — the secret key is at dash.stripe.com → Developers → API keys (sk_test_… or sk_live_…), and the signing secret is the webhook endpoint's Signing Secret (whsec_…); one without the other is half a door" \
+      "billing's Stripe settings are half-present — exactly one of the two is set"
+  fi
+  if [ -z "$KIT_SUBSTRATE_STRIPE_API_KEY" ] || [ -z "$KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" ]; then
+    kit_substrate_refuse \
+      "KIT_SUBSTRATE_STRIPE_API_KEY, KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" \
+      "export BOTH on the box and re-run — billing is in KIT_SUBSTRATE_DATABASES, so this box sells; the secret key is at dash.stripe.com → Developers → API keys and the signing secret is the webhook endpoint's Signing Secret" \
+      "billing's Stripe settings are required when billing is deployed (KIT_SUBSTRATE_DATABASES names it)"
+  fi
+
   # Externally sourced OIDC surface is validated before any secret is written.
   # A lone issuer or a lone login UI is a boot-time refusal discovered three
   # steps later; the installer refuses by name before writing anything.
   validate_oidc_all_or_nothing
 
   local ns
-  for ns in identity gateway courier parlor; do
+  for ns in identity gateway courier parlor billing; do
     kubectl --kubeconfig="$KUBECONFIG" create namespace "$ns" --dry-run=client -o yaml |
       kubectl --kubeconfig="$KUBECONFIG" apply -f - >/dev/null
   done
@@ -4221,6 +4259,53 @@ install_service_secrets() {
       "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
     kit_substrate_out "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
   fi
+
+  # billing-secrets. The first secret on this box whose keys include REAL
+  # operator credentials rather than generated values — which is why the two
+  # Stripe keys were refused above when missing: billing is in
+  # KIT_SUBSTRATE_DATABASES, so this box sells, and the refusal happens before
+  # anything is written.
+  #
+  # SECRET_KEY_BASE is GENERATED here (64 bytes, the same spelling courier's
+  # uses): Rails 8 refuses to boot in production without one — measured on
+  # this image, `bin/rails runner` dies with "Missing `secret_key_base` for
+  # 'production' environment" — and the key signs the app's own message
+  # verifiers, so it is the app's to own, not the operator's to carry. A
+  # re-run reads it back rather than regenerating: a rotated key invalidates
+  # live sessions, which is a rotate-by-replacement (README), never a side
+  # effect of re-running the installer.
+  #
+  # BILLING_IDENTITY_ISSUER is identity's in-cluster Service and
+  # BILLING_IDENTITY_AUDIENCE is the audience the BFF's exchange asks for
+  # (`billing`, the same string as the BFF's BILLING_TOKEN_AUDIENCE). The
+  # issuer is the SERVICE address, not the public origin: billing fetches
+  # `{issuer}/.well-known/jwks.json` to verify tokens, the key set is
+  # cluster-internal, and a public-origin fetch would hairpin through the
+  # box's own edge — the same split gateway's Application documents for
+  # IDENTITY_JWKS_URL. The `iss` claim inside a minted token is the public
+  # origin; the verifier is TOLD the issuer it expects, and it is this one, so
+  # the two must not be confused.
+  # NATS_URL rides along for the same reason identity's and courier's do (see
+  # their comments): configuration, not a secret, but this secret IS billing's
+  # environment, and without it the outbox accumulates and courier never mails
+  # a receipt.
+  if kubectl --kubeconfig="$KUBECONFIG" get secret billing-secrets -n billing >/dev/null 2>&1; then
+    kit_substrate_out "      secret billing-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
+  else
+    local billing_secret_base
+    billing_secret_base="$(read_secret_key billing billing-secrets SECRET_KEY_BASE)"
+    [ -n "$billing_secret_base" ] || billing_secret_base="$(head -c 64 /dev/urandom | base64 | tr -d '\n')"
+    kubectl --kubeconfig="$KUBECONFIG" create secret generic billing-secrets -n billing \
+      --from-literal=DATABASE_URL="$(database_url_for billing)" \
+      --from-literal=SECRET_KEY_BASE="$billing_secret_base" \
+      --from-literal=NATS_URL="$NATS_URL" \
+      --from-literal=BILLING_IDENTITY_ISSUER="http://identity.identity.svc.cluster.local:8080" \
+      --from-literal=BILLING_IDENTITY_AUDIENCE="billing" \
+      --from-literal=STRIPE_API_KEY="$KIT_SUBSTRATE_STRIPE_API_KEY" \
+      --from-literal=STRIPE_WEBHOOK_SECRET="$KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" \
+      "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
+    kit_substrate_out "      secret billing-secrets created (SECRET_KEY_BASE generated once-only; the Stripe pair from the environment)"
+  fi
 }
 
 # --- step 10: the services' database schemas ---------------------------------
@@ -4288,7 +4373,7 @@ KIT_SUBSTRATE_MIGRATE_MARKER="${KIT_SUBSTRATE_MIGRATE_MARKER:-substrate-migratio
 # nothing for it.
 migration_service_has_schema() {
   case "$1" in
-    identity | courier) return 0 ;;
+    identity | courier | billing) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -4306,6 +4391,13 @@ migration_command_for() {
     # courier's release overlays a `bin/migrate` -> `courier eval
     # Courier.Release.migrate`, which runs as Courier.OwnerRepo.
     courier) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_courier:-/app/bin/migrate}" ;;
+    # billing's repo entrypoint: `bin/migrate` is one line, `bundle exec
+    # rails db:prepare`, and it lives at /rails/bin/migrate in the image
+    # (WORKDIR /rails). `db:prepare` creates the database when it is absent
+    # and applies what is pending, which is the same one-shot semantics the
+    # other two have; the OWNER DSN below is what gives it the DDL right
+    # (billing_app owns nothing — the rule every service here follows).
+    billing) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_billing:-/rails/bin/migrate}" ;;
     *) return 1 ;;
   esac
 }
@@ -4324,6 +4416,16 @@ migration_env_args_for() {
       printf '%s\n' "--env=COURIER_OWNER_DATABASE_URL=$(owner_database_url_for courier)"
       printf '%s\n' "--env=DATABASE_URL=$(database_url_for courier)"
       ;;
+    # billing's migrate boots Rails in production, which refuses without
+    # SECRET_KEY_BASE; the value is billing-secrets' own, read back rather
+    # than re-generated, so the schema Job boots on the same key the
+    # running pods hold. OTEL_SDK_DISABLED matches the pods' switch (the
+    # box deploys no OTLP endpoint).
+    billing)
+      printf '%s\n' "--env=DATABASE_URL=$(owner_database_url_for billing)"
+      printf '%s\n' "--env=SECRET_KEY_BASE=$(read_secret_key billing billing-secrets SECRET_KEY_BASE)"
+      printf '%s\n' "--env=OTEL_SDK_DISABLED=true"
+      ;;
     *) return 1 ;;
   esac
 }
@@ -4335,7 +4437,7 @@ migration_guard_applied() {
     return 1
   fi
   local svc image marked
-  for svc in identity courier; do
+  for svc in identity courier billing; do
     migration_service_has_schema "$svc" || continue
     image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \
       -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)"
@@ -4347,12 +4449,12 @@ migration_guard_applied() {
 }
 
 install_migrations() {
-  log_step "the database schemas of the services that own one (identity, courier)"
+  log_step "the database schemas of the services that own one (identity, courier, billing)";
   if migration_guard_applied; then
     kit_substrate_out "      every schema already applied at the running image, skipping (a new image re-enters this step)"
     return 0
   fi
-  if dry_run "run one migrate Job per schema-owning service, in that service's own running image, connected as its OWNER role (identity/identity, courier/courier), and wait for completion; gateway and parlor own no schema and are skipped"; then
+  if dry_run "run one migrate Job per schema-owning service, in that service's own running image, connected as its OWNER role (identity/identity, courier/courier, billing/billing), and wait for completion; gateway and parlor own no schema and are skipped"; then
     return 0
   fi
 
@@ -4387,7 +4489,7 @@ install_migrations() {
   local cluster_phase=""
   local -a marker_args=() failed=() launched=()
   # Phase 1: launch every independent Job, wait for none.
-  for svc in identity courier; do
+  for svc in identity courier billing; do
     migration_service_has_schema "$svc" || continue
     # The image the Running Deployment runs — the same build as the service.
     image="$(kubectl --kubeconfig="$KUBECONFIG" get deployment "$svc" -n "$svc" \

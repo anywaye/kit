@@ -30,15 +30,19 @@ spec:
     # in the `identity` namespace — spelled once per consumer, and asserted to
     # name a Service the substrate's manifests ship.
     #
-    # `BILLING_URL` IS DELIBERATELY NOT SET. parlor treats an empty/absent one
-    # as the supported "no billing deployed" state (`src/lib/…`: an unset
-    # billing URL answers 503 on the billing routes rather than a boot
-    # failure), and the substrate ships no billing — so naming one would be an
-    # address to a Service that does not exist.
+    # `BILLING_URL` ARRIVED WITH BILLING, and until 2026-10-16 it was
+    # deliberately absent: parlor treats an empty/absent one as the supported
+    # "no billing deployed" state, and the substrate shipped no billing. billing
+    # joined the set with its Application (2026-10-15) and its database, secrets
+    # and migration (2026-10-16), so naming the address here now points at a
+    # Service these manifests ship — which is exactly what §24 checks. The
+    # address is billing's own Service port (80 → the container's 3000); the
+    # BFF calls it for every billing route a screen reads.
     helm:
       values: |
         env:
           IDENTITY_URL: "http://identity.identity.svc.cluster.local:8080"
+          BILLING_URL: "http://billing.billing.svc.cluster.local"
   destination:
     server: https://kubernetes.default.svc
     namespace: parlor

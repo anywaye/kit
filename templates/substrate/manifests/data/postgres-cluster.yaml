@@ -50,8 +50,8 @@
 #                                     every operator pass, so a hand-edited
 #                                     membership heals rather than persists.
 #
-# THE SERVICE SET IS THE CONTRACT. The four launch services below
-# (identity, gateway, courier, parlor) are the same four `install.sh`
+# THE SERVICE SET IS THE CONTRACT. The five services below (identity,
+# gateway, courier, parlor, billing) are the same five `install.sh`
 # step 8 requires `KIT_SUBSTRATE_DATABASES` to name, in the same spelling,
 # and the gate refuses a mismatch: a database the manifest does not
 # provision is a DATABASE_URL pointing at nothing. pantry, box and
@@ -205,6 +205,23 @@ spec:
         - ALTER ROLE "parlor" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "parlor_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "parlor_app" SET idle_in_transaction_session_timeout = '30000ms'
+        # --- billing ---
+        # billing joined the set on 2026-10-16: its Application arrived with
+        # the freeze-lift (2026-10-15) and its database arrives here, because
+        # an Application whose service has no DATABASE_URL is a pod in
+        # CrashLoopBackOff. The migration for it is install.sh step 10's third
+        # schema.
+        - CREATE ROLE "billing" WITH LOGIN
+        - CREATE ROLE "billing_app" WITH LOGIN
+        - CREATE DATABASE "billing" OWNER "billing"
+        - REVOKE ALL ON DATABASE "billing" FROM PUBLIC
+        - GRANT CONNECT, TEMPORARY ON DATABASE "billing" TO "billing"
+        - GRANT CONNECT, TEMPORARY ON DATABASE "billing" TO "billing_app"
+        - ALTER ROLE "billing" CONNECTION LIMIT 10
+        - ALTER ROLE "billing" SET statement_timeout = '15000ms'
+        - ALTER ROLE "billing" SET idle_in_transaction_session_timeout = '30000ms'
+        - ALTER ROLE "billing_app" SET statement_timeout = '15000ms'
+        - ALTER ROLE "billing_app" SET idle_in_transaction_session_timeout = '30000ms'
   # The declarative half: every role, its login flag, its password secret, and
   # the one membership. `inRoles: [<svc>_app]` on role `<svc>` IS the
   # `GRANT <svc>_app TO <svc>` the local contract carries — the owner may
@@ -261,3 +278,15 @@ spec:
         login: true
         passwordSecret:
           name: postgres-role-parlor-app
+      - name: billing
+        ensure: present
+        login: true
+        inRoles:
+          - billing_app
+        passwordSecret:
+          name: postgres-role-billing
+      - name: billing_app
+        ensure: present
+        login: true
+        passwordSecret:
+          name: postgres-role-billing-app

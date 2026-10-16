@@ -129,7 +129,7 @@ run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 # prove an unset or empty value is refused with the fix named. (SMTP and the
 # paired courier values are validated on the live path only — a plan does not
 # need credentials to print.)
-DBS="identity,gateway,courier,parlor"
+DBS="identity,gateway,courier,parlor,billing"
 dry_run_out="$(KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
 if [ "$dry_run_ec" -ne 0 ]; then
@@ -706,7 +706,7 @@ fi
 # every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
 # the line also dereferences it. Naming the VARIABLE in a message is fine
 # (every refusal below does); printing its VALUE is the leak.
-sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_CLOUDFLARE_API_KEY KIT_SUBSTRATE_CF_ACCOUNT_ID KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
+sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_CLOUDFLARE_API_KEY KIT_SUBSTRATE_CF_ACCOUNT_ID KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_STRIPE_API_KEY KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
   if grep -nE "echo.*\\$$v" "$SUBSTRATE/install.sh" >/dev/null 2>&1; then
@@ -1316,8 +1316,8 @@ import sys
 src = open(sys.argv[1], encoding="utf-8").read()
 code = re.sub(r"(?m)^\s*#.*$", "", src)
 records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
-if len(records) != 4:
-    print(f"expected 4 RECORD lines, found {len(records)}")
+if len(records) != 5:
+    print(f"expected 5 RECORD lines, found {len(records)}")
     sys.exit(1)
 # A key is WRITTEN in one of two spellings: `--from-literal=KEY=` (the secrets
 # step 9 creates) or the merge patch step 11 sends, whose body is built as a
@@ -1446,7 +1446,7 @@ import yaml
 
 install_path, fleet = sys.argv[1], sys.argv[2]
 
-SERVICES = ("identity", "gateway", "courier", "parlor")
+SERVICES = ("identity", "gateway", "courier", "parlor", "billing")
 
 # install.sh's inventory: the SECRET RECORD maps a secret to the keys it writes,
 # and the two writers are the `--from-literal=KEY=` sites plus step 11's merge
@@ -2839,7 +2839,7 @@ PY
 # 8, which is a different contract from the one proven here.
 mfa_seed_roles() {
   local svc
-  for svc in identity gateway courier parlor; do
+  for svc in identity gateway courier parlor billing; do
     mock_seed data "postgres-role-$svc-app" password "pw-$svc-app"
   done
   mock_seed data redis-password password "redis-pw"
@@ -2863,6 +2863,11 @@ mfa_smtp_env() {
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
+  # billing's Stripe pair, dummies: the live path requires both whenever
+  # billing is deployed, and the shape of the refusal is proven elsewhere —
+  # here they only open the gate to the secrets half.
+  export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
+  export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
 }
 
 # Case A: no override — first creation generates a correctly shaped key.
@@ -3207,6 +3212,11 @@ cf_mail_env() {
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
+  # billing's Stripe pair, dummies: the live path requires both whenever
+  # billing is deployed, and the shape of the refusal is proven elsewhere —
+  # here they only open the gate to the secrets half.
+  export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
+  export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
 }
 
 # cf_run <mock-root> <adapter> [signing-secret] [key-handling] [account-handling] —
@@ -3677,7 +3687,7 @@ check_rerun_repairs_username() {
     # shellcheck source=/dev/null
     . "$root/install-no-main.sh"
     kubectl() { mock_kubectl "$@"; }
-    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor"
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing"
     export DRY_RUN=0
     install_postgres_cluster >"$root/rerun.log" 2>&1
   ) || ec=$?
@@ -6048,7 +6058,8 @@ fi
 # THE DEFECT THIS STEP EXISTS FOR. Nothing ran a service's migrations, so a box
 # that "finished" the substrate booted identity against an empty database and
 # the outbox loop retried forever on `relation "outbox_events" does not exist`.
-# The step runs one one-shot Job per schema-owning service (identity, courier),
+# The step runs one one-shot Job per schema-owning service (identity, courier,
+# billing),
 # in that service's own RUNNING image (read back from the Deployment), as the
 # OWNER role, and waits for the pod's phase.
 #
@@ -6068,17 +6079,23 @@ fi
 # pod is deleted on success exactly as a real box deletes it — so the assertions
 # read the recorded argv, which survives the delete.
 migrate_seed_fixture() {
-  mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier"
-  printf 'data\nidentity\ncourier\n' >"$MOCK_ROOT/namespaces"
+  mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier" "$MOCK_ROOT/billing"
+  printf 'data\nidentity\ncourier\nbilling\n' >"$MOCK_ROOT/namespaces"
   # The OWNER role passwords step 8 makes (the migrate Job's credential) and the
   # app passwords step 8 makes beside them (courier's DATABASE_URL).
   mock_seed data postgres-role-identity password "owner-identity-pw"
   mock_seed data postgres-role-courier password "owner-courier-pw"
   mock_seed data postgres-role-courier-app password "app-courier-pw"
+  mock_seed data postgres-role-billing password "owner-billing-pw"
+  mock_seed data postgres-role-billing-app password "app-billing-pw"
   # The Deployments Argo synced from step 6 — step 10 reads the image off them,
   # so there is no second pin to keep in step.
   mock_seed identity deploy-identity image "ghcr.io/cafaye/identity:0.1.0"
   mock_seed courier deploy-courier image "ghcr.io/cafaye/courier:0.1.0"
+  mock_seed billing deploy-billing image "ghcr.io/cafaye/billing:0.1.0"
+  # billing-secrets' SECRET_KEY_BASE, read back by the migrate env: the
+  # schema Job boots Rails in production, which refuses without one.
+  mock_seed billing billing-secrets SECRET_KEY_BASE "base64-secret-for-the-gate"
   # The Cluster step 8 left behind: the object EXISTS (the guard marker) and
   # its Ready condition is True (the *-ready file the wait reads), at the
   # settled phase the failure message names. Step 10 waits on this before
@@ -6128,18 +6145,20 @@ else
 fi
 # The image comes from the Deployment, not a literal in install.sh.
 if grep -q -- '--image=ghcr.io/cafaye/identity:0.1.0' "$migrate_argv" 2>/dev/null &&
-   grep -q -- '--image=ghcr.io/cafaye/courier:0.1.0' "$migrate_argv" 2>/dev/null; then
+   grep -q -- '--image=ghcr.io/cafaye/courier:0.1.0' "$migrate_argv" 2>/dev/null &&
+   grep -q -- '--image=ghcr.io/cafaye/billing:0.1.0' "$migrate_argv" 2>/dev/null; then
   pass 'step 10 migrates in each service own RUNNING image (read off the Deployment)'
 else
   fail 'step 10 migrates in each service own RUNNING image (read off the Deployment)' \
     "argv images: $(grep -o -- '--image=[^ ]*' "$migrate_argv" 2>/dev/null | sort -u | tr '\n' ' ')"
 fi
 if [ "$(mock_get data substrate-migrations identity)" = "ghcr.io/cafaye/identity:0.1.0" ] &&
-   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ]; then
+   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ] &&
+   [ "$(mock_get data substrate-migrations billing)" = "ghcr.io/cafaye/billing:0.1.0" ]; then
   pass 'step 10 records the applied image per service (the re-run marker)'
 else
   fail 'step 10 records the applied image per service (the re-run marker)' \
-    "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)'"
+    "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)' billing='$(mock_get data substrate-migrations billing)'"
 fi
 # A service with no schema is named in the plan and skipped, not run.
 if grep -q -- '--image=.*parlor' "$migrate_argv" 2>/dev/null; then
@@ -6293,7 +6312,7 @@ m = re.search(r"migration_service_has_schema\(\)\s*\{(.*?)\n\}", code, re.S)
 if not m:
     problems.append("no migration_service_has_schema inventory")
 else:
-    for svc in ("identity", "courier"):
+    for svc in ("identity", "courier", "billing"):
         if svc not in m.group(1):
             problems.append(f"{svc} is not in the migration inventory")
 # The failure path names the service and prints the logs.
@@ -6318,7 +6337,7 @@ run 'step 10 has a step, a guard and an OWNER-role inventory' green check_migrat
 # control used to remove pantry; pantry left with its Application by
 # decision, so the control removes a service the substrate still ships.)
 fixture_mig_inventory="$WORK/install-mig-inventory.sh"
-sed 's/    identity | courier) return 0 ;;/    identity) return 0 ;;/' \
+sed 's/    identity | courier | billing) return 0 ;;/    identity) return 0 ;;/' \
   "$SUBSTRATE/install.sh" >"$fixture_mig_inventory"
 run 'control: an inventory missing a service goes red' red check_migration_step "$fixture_mig_inventory"
 
@@ -6842,6 +6861,11 @@ headless_ec=0
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
+  # billing's Stripe pair, dummies: the live path requires both whenever
+  # billing is deployed, and the shape of the refusal is proven elsewhere —
+  # here they only open the gate to the secrets half.
+  export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
+  export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
   mfa_seed_roles
   # shellcheck source=/dev/null
   . "$fixture_sourced"
@@ -6914,6 +6938,8 @@ headless_absent() {
 headless_secrets=(
   "relay-pass-fake"
   "provider-signing-fake"
+  "sk_test_dummy_for_the_gate"
+  "whsec_dummy_for_the_gate"
   "$(mock_get identity identity-secrets SIGNUP_SIGNING_KEY)"
   "$(mock_get identity identity-secrets MFA_ENCRYPTION_KEY)"
   "$(mock_get courier courier-secrets SECRET_KEY_BASE)"
@@ -7012,7 +7038,7 @@ run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$
 refusal_hint_ok() {
   local log mode="$2"
   case "$1" in
-    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'"*)
+    *"error: KIT_SUBSTRATE_DATABASES is not set"*"export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'"*)
       printf 'the refusal names the variable and the fix that clears it (%s)\n' "$mode"
       ;;
     *)
@@ -7961,7 +7987,7 @@ pg8_step() {
   (
     export DRY_RUN=0
     export HEADLESS=0
-    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor"
+    export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing"
     export KIT_SUBSTRATE_RECEIPT="$2/receipt.json"
     MOCK_ROOT="$2"
     # shellcheck source=/dev/null
@@ -9974,7 +10000,7 @@ elif tuple(defs[0]) != (SWITCH_KEY, SWITCH_VALUE):
 # 2. Every generated-chart service's secret carries it BY REFERENCE. A window
 #    after the create line is long enough for the multi-line invocations and
 #    short enough not to reach the next secret.
-for secret in ("identity-secrets", "courier-secrets", "parlor-secrets"):
+for secret in ("identity-secrets", "courier-secrets", "parlor-secrets", "billing-secrets"):
     m = re.search(r"create secret generic " + re.escape(secret) + r"\b", code)
     if not m:
         problems.append(f"{secret} is never created")
@@ -10010,7 +10036,7 @@ else:
 #    secret to carry the switch or an Application that does. A service dropped
 #    from the secret step is a service nothing configures.
 services = set(re.findall(r"create secret generic (\S+-secrets)", code))
-for svc in ("identity", "gateway", "courier", "parlor"):
+for svc in ("identity", "gateway", "courier", "parlor", "billing"):
     if f"{svc}-secrets" not in services:
         problems.append(f"{svc} has no secret in install.sh")
 
@@ -12396,7 +12422,7 @@ PY
     fi
     # Present and valid — also require install.sh to report loki
     local out
-    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+    out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
     case "$out" in
       *"logs: centralized Loki installed"*) ;;
       *) printf 'loki present but install.sh does not report "centralized Loki installed"\n'; return 1 ;;
@@ -12405,7 +12431,7 @@ PY
   fi
   # 2. Not present — require the honest report (human + headless JSON)
   local out
-  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
+  out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
   case "$out" in
     *"centralized Loki not installed"* ) ;;
     *) printf 'install.sh does not report "centralized Loki not installed"\n%s\n' "$out"; return 1 ;;
@@ -12420,7 +12446,7 @@ PY
   esac
   # 3. Headless JSON carries log_store journald beside the existing readiness fields
   local jsonl="$WORK/loki-headless.jsonl"
-  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
+  KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
   if ! grep -q '"event":"readiness"' "$jsonl"; then
     printf 'headless stream has no readiness event\n'; return 1
   fi
@@ -13558,7 +13584,7 @@ lc_cycle() {
       export MOCK_ROOT="$dir"
       export PATH="$dir/bin:$PATH"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
-      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
       export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
       export HEADLESS=1
       export DRY_RUN=0
@@ -13671,7 +13697,7 @@ lc_unsets_the_input() {
     (
       export MOCK_ROOT="$dir"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
-      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
       export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
       export HEADLESS=1
       unset KIT_SUBSTRATE_KUBECONFIG
@@ -13715,7 +13741,7 @@ lc_stdout_is_jsonl() {
     (
       export MOCK_ROOT="$dir"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
-      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+      export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
       export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
       export KIT_SUBSTRATE_KUBECONFIG="$3"
       export HEADLESS=1

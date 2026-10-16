@@ -16,7 +16,7 @@ this file only describes what is here and what is proven.
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
 | `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
-| `manifests/applications/` | The Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Grafana, Prometheus). Pantry, box and keyholder are Cafaye-operated and reached over HTTPS, never deployed here — see the boundary note under `manifests/argocd/appproject.yaml`. |
+| `manifests/applications/` | The Argo CD `Application` manifests: the five services (identity, gateway, courier, parlor, billing) and the observability set (Alloy, Grafana, Prometheus). Pantry, box and keyholder are Cafaye-operated and reached over HTTPS, never deployed here — see the boundary note under `manifests/argocd/appproject.yaml`. |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 | `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
@@ -78,7 +78,8 @@ this file only describes what is here and what is proven.
 9. **Redis and the services' secrets** — one Deployment + Service + PVC in
    `data`, applied from `manifests/data/redis.yaml`, with the generated
    `redis-password` secret; then `identity-secrets`, `gateway-secrets`,
-   `courier-secrets`, `parlor-secrets`, one per service namespace, each
+   `courier-secrets`, `parlor-secrets`, `billing-secrets`, one per service
+   namespace, each
    exactly the keys its chart reads (see [The services' secrets](#the-services-secrets)
    below). Generated values are once-only with read-back; externally-sourced
    values are shape-validated and never echoed; `NATS_URL` is a constant, so
@@ -87,7 +88,8 @@ this file only describes what is here and what is proven.
    step, so a half-finished step 9 resumes the secrets without touching
    Redis.
 10. **The services' database schemas** — one one-shot migrate Job per
-    schema-owning service (`identity`, `courier`), in that service's own
+    schema-owning service (`identity`, `courier`, `billing`), in that
+    service's own
     **running image** (read back from the Deployment Argo synced, so there is
     no second pin) and connected as its **OWNER** role (a migration is DDL;
     `<svc>_app` owns nothing). The two schema-owning services each own a
@@ -259,7 +261,13 @@ or, from a kit checkout:
 export KIT_SUBSTRATE_BOX_ID='<the enrolled uuid of this box>'
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY='<cap_… from cafe box enroll>'
 export KIT_SUBSTRATE_ACME_EMAIL='<your-address>'
-export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor'
+export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
+# billing's processor settings, REQUIRED whenever billing is deployed (which
+# the five-service list above always names): the Stripe secret key and the
+# webhook endpoint's Signing Secret. Test-mode keys are `sk_test_…`; a live
+# box carries `sk_live_…` and a live endpoint's `whsec_…`.
+export KIT_SUBSTRATE_STRIPE_API_KEY='sk_test_…'
+export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET='whsec_…'
 export KIT_SUBSTRATE_SMTP_HOST='<relay-host>'
 export KIT_SUBSTRATE_SMTP_USERNAME='<relay-user>'
 export KIT_SUBSTRATE_SMTP_PASSWORD='<relay-password>'
@@ -723,6 +731,7 @@ environment variable and the key list IS the service's env list:
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11; the rest from the environment |
 | `courier-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `COURIER_SECRET_BOX_KEY`, `COURIER_ERROR_RELAY_TOKEN`, `COURIER_IDENTITY_TOKEN`, `COURIER_IDENTITY_URL`, `COURIER_MAIL_ADAPTER`, `COURIER_SMTP_HOST`, `COURIER_SMTP_PORT`, `COURIER_SMTP_USERNAME`, `COURIER_SMTP_PASSWORD`, `COURIER_INBOUND_RESEND_SECRET`, `OTEL_SDK_DISABLED` (+ `MAIL_FROM`, `MAIL_FROM_NAME` only when set) | first four generated; `COURIER_IDENTITY_TOKEN` minted on this box in step 11 and `COURIER_IDENTITY_URL` is identity's Service, written in the same patch; `OTEL_SDK_DISABLED` is the telemetry kill switch; the rest from the environment |
 | `parlor-secrets` | `DATABASE_URL`, `OTEL_SDK_DISABLED` | generated agreement with the Cluster (parlor's chart names the secret but documents no required keys); `OTEL_SDK_DISABLED` is the telemetry kill switch |
+| `billing-secrets` | `DATABASE_URL`, `SECRET_KEY_BASE`, `NATS_URL`, `BILLING_IDENTITY_ISSUER`, `BILLING_IDENTITY_AUDIENCE`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `OTEL_SDK_DISABLED` | `SECRET_KEY_BASE` generated once (Rails 8 refuses production boot without one); `NATS_URL` is the broker constant; the issuer is identity's Service and the audience is the BFF exchange's (`billing`); **the two Stripe values are the environment's** — the install refuses without them, because a billing that cannot take payments or verify webhooks is a door that exists to be knocked on |
 
 **The services' telemetry is DELIBERATELY OFF on a box, and the switch is
 `OTEL_SDK_DISABLED=true`.** The services' compiled default OTLP endpoint is the
