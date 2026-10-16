@@ -25,7 +25,9 @@
 #
 # Environment comes from $CI_ENV, one KEY=value per line, written by
 # provision. The pipeline sees those plus WORKSPACE, GH_TOKEN and CI — see
-# backends/README.md for the contract.
+# backends/README.md for the contract. That includes the database pair
+# (`DATABASE_URL`, `TEST_DATABASE_URL`) when the project declares one, and
+# `CI_GATE_SERIAL=1` when the project's gate cannot run beside another's.
 #
 # ONE LOCK PER AGENT, because a poller that is started twice is a project that
 # is built twice concurrently. The supervisor can race itself across a
@@ -84,6 +86,54 @@ trap 'rm -rf "$LOCK_DIR"' EXIT
 mkdir -p "$WORKSPACE/cafaye"
 PROJECT_DIR="$WORKSPACE/cafaye/$PROJECT_NAME"
 
+# The serial gate lock. Two projects' gates running at once is normal and fine
+# on this backend — their databases are separate, so they share nothing. A
+# project whose GATE cannot run concurrently with another's — a fixed port, a
+# global temp path — declares it with `CI_GATE_SERIAL=1` in its env, and its run
+# then takes a SANDBOX-WIDE lock that serialises it against every other
+# declaring project. The resource such a gate contends for is machine-wide, so
+# the lock is too; a per-project lock would not be, because the contention is
+# with a *different* project.
+#
+# The lock is the same `mkdir` + pid shape as the agent lock above, chosen for
+# the same reason: atomic on the Linux sandbox and on a developer's macOS.
+# Unlike the agent lock it WAITS rather than exits — the correct behaviour for a
+# contended resource is to run after the other owner, not to skip a commit. It
+# is named `serial.lock` in the per-sandbox workspace, so the sandboxes do not
+# contend with each other.
+GATE_LOCK_ROOT="${CI_GATE_LOCK_DIR:-$WORKSPACE/.ci-gate-locks}"
+GATE_LOCK_DIR="$GATE_LOCK_ROOT/serial.lock"
+
+acquire_gate_lock() {
+  mkdir -p "$GATE_LOCK_ROOT"
+  while ! mkdir "$GATE_LOCK_DIR" 2>/dev/null; do
+    local holder
+    holder="$(cat "$GATE_LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      echo "agent[$AGENT_NAME]: waiting for the serial gate lock (held by pid $holder)"
+      sleep 2
+    else
+      # The holder is gone; its lock outlived it. Take it over.
+      rm -rf "$GATE_LOCK_DIR"
+    fi
+  done
+  echo "$$" >"$GATE_LOCK_DIR/pid"
+}
+
+release_gate_lock() { rm -rf "$GATE_LOCK_DIR"; }
+
+# run_pipeline — the project's pipeline, serialised when it declares itself so.
+run_pipeline() {
+  if [ "${CI_GATE_SERIAL:-0}" = "1" ]; then
+    local rc=0
+    acquire_gate_lock
+    bash "$PROJECT_DIR/ci/pipeline.sh" >"$RUN_LOG" 2>&1 || rc=$?
+    release_gate_lock
+    return "$rc"
+  fi
+  bash "$PROJECT_DIR/ci/pipeline.sh" >"$RUN_LOG" 2>&1
+}
+
 cd "$WORKSPACE/cafaye"
 if [ -d "$PROJECT_DIR/.git" ]; then
   echo "agent[$AGENT_NAME]: found $PROJECT_DIR"
@@ -101,7 +151,7 @@ while true; do
       last="$remote"
       echo "agent[$AGENT_NAME]: $PROJECT_NAME $BRANCH is $remote — running its pipeline"
       git -C "$PROJECT_DIR" reset --hard FETCH_HEAD --quiet
-      if bash "$PROJECT_DIR/ci/pipeline.sh" >"$RUN_LOG" 2>&1; then
+      if run_pipeline; then
         echo "agent[$AGENT_NAME]: $PROJECT_NAME shipped $remote"
       else
         echo "agent[$AGENT_NAME]: $PROJECT_NAME failed on $remote — see $RUN_LOG"

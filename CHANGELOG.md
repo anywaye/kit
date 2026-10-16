@@ -2,6 +2,30 @@
 
 ### Backends
 
+- **A hosted sandbox's gate gets its own database, and its passwords survive a
+  re-provision.** Five projects' gates need Postgres (identity, billing,
+  courier, darkroom, box — read from each `.github/workflows/ci.yml`, which names
+  a `postgres:17-alpine` service), and on a shared sandbox that was a machine
+  nobody provisioned for it. `backends/instabox/provision.sh` gains
+  **`--postgres`**: it ensures ONE `postgres:17-alpine` container
+  (`ci-postgres`, on `CI_POSTGRES_PORT`) and, for every project that declares a
+  database, creates `<project>` database + `<project>` login role with a
+  generated password, idempotently. The password is stored at
+  `~/ci/pg-passwords/<project>` and re-read on every re-run, the role is created
+  only when absent, and an existing role's password is never rotated — the
+  measured trap being a re-provision that rotates it under a live agent and
+  turns every run red until the container restarts. `DATABASE_URL` and
+  `TEST_DATABASE_URL` (both the same database — identity's `bin/migrate` reads
+  one and its gate reads the other) plus `TEST_DATABASE_ADMIN_URL` land in the
+  project's env, so the project's own `bin/dev` stack is replaced by a fixed
+  server. Each database is `REVOKE ALL … FROM PUBLIC` + `GRANT CONNECT`, the
+  fleet's one-cluster rule in miniature. `backends/instabox/agent.sh` gains
+  `CI_GATE_SERIAL`: a project whose gate cannot run beside another's takes a
+  sandbox-wide lock, and `backends/README.md` records the rollout table's
+  database column and names the projects (none, on Linux — `box`'s serial mode
+  is macOS-only and its CI opts into four workers). `tests/validate.sh` asserts
+  the flag, the URL pair and the declaration.
+
 - **One sandbox hosts many projects, and a service has a pipeline template.**
   The instabox backend shipped a single-project provisioner and only `cafaye/docs`
   used it; the plan caps sandboxes at five and the fleet is thirteen services, so
