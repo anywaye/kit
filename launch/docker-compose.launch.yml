@@ -1,5 +1,5 @@
 ---
-# The LAUNCH overlay — identity + gateway + courier + parlor, on kit's stack.
+# The LAUNCH overlay — identity + gateway + courier + parlor + billing, on kit's stack.
 #
 #   launch/bin/launch      resolve kit, generate the credentials, mint the
 #                          courier key, bring the stack up, print where to look
@@ -28,12 +28,12 @@
 # the fleet's databases. `bin/launch` sets the variable rather than trusting
 # a reader to.
 #
-# WHAT THIS FILE OWNS, and it is four things:
+# WHAT THIS FILE OWNS, and it is five things:
 #
 #   1. the `postgres` service's database list — kit ships the CLUSTER; the
 #      DATABASE is the isolation boundary, so naming the launch's databases is
 #      the whole of this file's postgres block.
-#   2. the four launch services: their images, their ports, their environment.
+#   2. the five launch services: their images, their ports, their environment.
 #   3. the SMTP sink (mailpit), copied from courier's own definition.
 #   4. nothing at all about the collector, NATS, or Redis — kit's stack is the
 #      whole of those, and a second copy of any of them is two opinions about
@@ -64,6 +64,14 @@
 #   ${LAUNCH_COURIER_PORT:-15082}   courier, the mail service
 #   ${LAUNCH_PARLOR_PORT:-15083}    parlor, the product UI — the front door
 #
+# BILLING IS NOT IN THAT LIST, and it is not an omission: billing's port is
+# its OWN (3000, the one its image listens on and the one a browser walks),
+# not one of the shared block's slots. kit's block is the shared
+# infrastructure's and this tier's five; 3000 belongs to a service contract
+# and moving it would be changing the service rather than the stack. The
+# collision this protects against is the OTHER direction — the same five
+# ports as the site-launch stack, and the two cannot share a machine.
+#
 # A literal port in a compose file is a collision the second developer on the
 # machine hits; the variable is the mechanism. The container-side ports are
 # not parameterized — those are fixed by the images and by the service
@@ -85,7 +93,7 @@
 # ---------------------------------------------------------------------------
 # THE BUILD CONTEXTS, AND WHY THEY ARE VARIABLES
 # ---------------------------------------------------------------------------
-# The four services are built from source checkouts, and no two developers
+# The five services are built from source checkouts, and no two developers
 # keep them in the same place. Each context is a `${LAUNCH_*_DIR}` variable
 # whose default is the fleet layout — the checkout beside the kit checkout
 # that owns this file — resolved against the PROJECT DIRECTORY
@@ -199,7 +207,7 @@ services:
   # services at 20 is 40 against the cluster's 200.
   postgres:
     environment:
-      KIT_POSTGRES_DATABASES: "identity,courier"
+      KIT_POSTGRES_DATABASES: "identity,courier,billing"
       KIT_POSTGRES_ROLE_CONNECTIONS: "20"
 
   # ---------------------------------------------------------------- identity
@@ -573,12 +581,15 @@ services:
   # The product UI, and the front door. This block is parlor's only service
   # definition — parlor ships no compose file of its own.
   #
-  # `IDENTITY_URL` is REQUIRED and `BILLING_URL` IS DELIBERATELY ABSENT. The
-  # launch deploys identity + gateway + courier + parlor with no billing, and
-  # parlor's own deploy.yml says why an empty value is correct rather than a
-  # workaround: "an empty value does not fail the render — it omits
-  # BILLING_URL from env.clear entirely, and the app answers its billing routes
-  # with a distinct 'not configured' state rather than dialing a default."
+  # `IDENTITY_URL` is REQUIRED. `BILLING_URL` was DELIBERATELY ABSENT while
+  # the launch deployed identity + gateway + courier + parlor with no billing
+  # — parlor's own deploy.yml carries the reasoning and it stays true for a
+  # deployment that has no billing: "an empty value does not fail the render —
+  # it omits BILLING_URL from env.clear entirely, and the app answers its
+  # billing routes with a distinct 'not configured' state rather than dialing
+  # a default." The launch deploys billing now (see the `billing` block), so
+  # the value is present here; the ABSENCE path is kept honest rather than
+  # deleted, because a deployment without a billing service still reaches it.
   parlor:
     build:
       context: ${LAUNCH_PARLOR_DIR:-../../parlor}
@@ -593,6 +604,13 @@ services:
       # point: if the browser ever tried to call this address directly, it
       # would fail, so the only way this sign-in can work is through the app.
       IDENTITY_URL: "http://identity:8080"
+      # Where billing runs, and this is the line the billing story turns
+      # on: the launch deploys it now, so the app forwards to the service
+      # rather than answering "not configured". The address is the compose
+      # network's own, by service name, on billing's own port — which is
+      # why it is NOT a host address: the browser never reaches this, the
+      # BFF does.
+      BILLING_URL: "http://billing:3000"
     ports:
       - "${LAUNCH_PARLOR_PORT:-15083}:3000"
     depends_on:
@@ -641,6 +659,94 @@ services:
       timeout: 3s
       retries: 6
       start_period: 5s
+    networks: [platform]
+
+  # ------------------------------------------------------------------ billing
+  # THE FIRST CUSTOMER-STACK APP ON THE LAUNCH, and the reason the launch's
+  # billing story stopped being "no billing at all": parlor's billing screens
+  # need a service that answers them, and a developer walking the money loop
+  # was building scratch compose files to get one (measured: the whole-stack
+  # walk of 2026-10-16 ran on `/tmp/launch`, a copy of this overlay extended
+  # by hand — a recipe to remember rather than a thing that ships).
+  #
+  # THE THREE BONES, and which of the three this file touches. kit's stack is
+  # shared infrastructure, and billing lands on it the way every other service
+  # in this file does — the cluster's database list above (one role+DB per
+  # name by initdb, `PUBLIC` revoked everywhere), the bus's `billing.>`
+  # subjects (the `cafaye` stream already claims them, so outbox rows
+  # publish without a second stream being defined), the collector (whose OTLP
+  # path is the traces URL, and the Ruby exporter needs the path to be
+  # present — a bare host raised "HTTP request path is empty" once per
+  # request).
+  #
+  # THE PORT IS NOT IN THE BLOCK, and that reads as a contradiction until the
+  # launch's port rule is said out loud: kit's 15000-15999 is the SHARED
+  # block and a service's OWN port is not one of its slots. Billing documents
+  # 3000 as its own port for the same reason Rails does, and the launch
+  # honors that rather than spending a shared slot on it — `3000:3000` is
+  # billing's own contract, and a browser walks billing at 127.0.0.1:3000.
+  billing:
+    build:
+      context: ${LAUNCH_BILLING_DIR:-../../billing}
+      dockerfile: Dockerfile
+    image: cafaye/billing:dev
+    environment:
+      RAILS_ENV: development
+      PORT: "3000"
+      # The cluster's own address, by service name. The role is the init
+      # script's `billing` (not `billing_app`): this is the DEVELOPER stack
+      # and the running service holds the owner because the schema is
+      # prepared by its own `bin/docker-entrypoint`, which runs `db:prepare`
+      # before the server. The two-role split is production's (kit's
+      # tenancy rule: the pool must not be the owner row-level security
+      # exempts); nothing here is deployed with it.
+      DATABASE_URL: postgresql://billing:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/billing
+      # The bus, and setting it is what makes the outbox relay start. Unset
+      # would leave billing publishing into its own table forever and the
+      # receipts nobody sends would be invisible — the walk measured the
+      # drain (8 rows, 0 unpublished) against this same address.
+      NATS_URL: nats://nats:4222
+      # The verifier's two halves, and they must equal what identity
+      # publishes: the issuer is `OIDC_ISSUER` below, and the audience is
+      # billing's own. A mismatch in either direction is a 401 on every
+      # request, and the walk paid that bill once already.
+      BILLING_IDENTITY_ISSUER: "http://identity:8080"
+      BILLING_IDENTITY_AUDIENCE: billing
+      # The collector, with the traces path the exporter needs (see the
+      # three-bones paragraph above). It is the same shape identity uses,
+      # and `test/observability/telemetry_test.rb` holds the two to one.
+      BILLING_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_VERSION: "0.0.0-dev"
+      # `local` is not one of core's four (development/test/staging/
+      # production), so the development name is the honest one for a
+      # developer's laptop.
+      DEPLOYMENT_ENVIRONMENT: development
+      # THE PROCESSOR'S KEYS, and both are `:?` so a boot without them
+      # names the fix rather than serving a service whose money paths
+      # refuse in a body nobody reads. They are the test-mode pair from
+      # the operator's Stripe CLI (`stripe listen --forward-to
+      # http://127.0.0.1:3000/v1/webhooks/stripe` prints the webhook
+      # secret); neither has a development default because a value in
+      # version control is a credential in version control.
+      STRIPE_API_KEY: "${STRIPE_API_KEY:?set STRIPE_API_KEY — the test-mode secret key from the Stripe CLI}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:?set STRIPE_WEBHOOK_SECRET — run: stripe listen --forward-to http://127.0.0.1:3000/v1/webhooks/stripe --print-secret}"
+    ports:
+      # Billing's own port, and the one the container listens on. Not a
+      # shared-block slot: the block's variables name kit's and this
+      # tier's services, and billing's 3000 is what a browser uses.
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Liveness, for the same reason as gateway's: a restart means this
+      # process is not answering. A dependency outage is `/readyz`'s to
+      # report and must not take the service out of rotation.
+      test: ["CMD", "/rails/bin/rails", "runner", "puts Rails.env"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
     networks: [platform]
 
   # NO `nats-stream-init` BLOCK, and the absence is the fix. Kit's one-shot

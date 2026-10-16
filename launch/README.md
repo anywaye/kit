@@ -1,26 +1,26 @@
-# The launch harness — Kit's developer-only four-service stack
+# The launch harness — Kit's developer-only five-service stack
 
 > Kit owns this. `cafaye/website` does not carry launcher code, and the old
 > `cafaye/site` launcher this is derived from is retired, not mirrored.
 
 ## What this is
 
-A **developer-only** local bring-up for the four product services —
-identity, gateway, courier, parlor — built from source checkouts on the
-developer's machine, on Kit's pinned compose stack, with an SMTP sink
-(mailpit) a person can read.
+A **developer-only** local bring-up for the five product services —
+identity, gateway, courier, parlor, billing — built from source checkouts
+on the developer's machine, on Kit's pinned compose stack, with an SMTP
+sink (mailpit) a person can read.
 
 ```
 launch/
 ├── README.md                    # this file
-├── docker-compose.launch.yml    # the overlay: four services + mailpit, nothing else
+├── docker-compose.launch.yml    # the overlay: five services + mailpit, nothing else
 └── bin/launch                   # the bring-up: checks, secrets, mint, two phases, down
 ```
 
 `docker-compose.launch.yml` is an **override** on Kit's stack, in exactly the
 shape every service's own `docker-compose.yml` is: Kit ships the
 infrastructure (one Postgres cluster, NATS with JetStream, Redis, the OTel
-collector), and this file adds only what the launch needs — the four
+collector), and this file adds only what the launch needs — the five
 services' images, ports and environment, the database list, and mailpit.
 It redeclares nothing Kit ships. `bin/launch` layers it over the stack:
 
@@ -60,13 +60,13 @@ expensive place for it:
 
 Install what is missing (`brew install postgresql` on macOS, the
 `postgresql-client` package on Linux) and re-run `--check`. Alongside the
-tools, the four service checkouts must exist — see the layout below; that is
+tools, the five service checkouts must exist — see the layout below; that is
 also part of what `--check` reports on, and a missing one is a build failure
 rather than a fetch failure.
 
 ## Repository layout
 
-The four services are built from source, so their checkouts must exist.
+The five services are built from source, so their checkouts must exist.
 Defaults assume the fleet layout — every service beside the Kit checkout:
 
 ```
@@ -75,8 +75,11 @@ cafaye/
 ├── identity/
 ├── gateway/
 ├── courier/
-└── parlor/      # the customer-stack app. NOT website: website is the
+├── parlor/      # the customer-stack app. NOT website: website is the
                  # Cafaye app derived from Parlor and is never built here.
+└── billing/     # the money service. Its port is its OWN (3000), not one of
+                 # the shared 15000-15999 block's slots — billing is a service
+                 # contract, not shared infrastructure.
 ```
 
 Neither Website nor Site is required or consulted. Any layout works by
@@ -93,6 +96,7 @@ LAUNCH_IDENTITY_DIR=/path/to/identity LAUNCH_PARLOR_DIR=/path/to/parlor \
 | `LAUNCH_GATEWAY_DIR` | `<kit>/../gateway` | gateway checkout (build context) |
 | `LAUNCH_COURIER_DIR` | `<kit>/../courier` | courier checkout (build context) |
 | `LAUNCH_PARLOR_DIR` | `<kit>/../parlor` | parlor checkout (build context, the front door) |
+| `LAUNCH_BILLING_DIR` | `<kit>/../billing` | billing checkout (build context, the money service) |
 | `KIT_STACK_DIR` | the Kit checkout itself | the stack to compose from |
 | `LAUNCH_KIT_REF` | unset | when set, resolve this pin through `templates/bin/dev.sh live` instead |
 
@@ -119,6 +123,25 @@ block (15000-15999):
 | `KIT_MAILPIT_PORT` | `15025` | mailpit 8025 (web UI; SMTP 1025 is not published) |
 
 The container-side ports are fixed by the images and are not parameters.
+**Billing's published port is not in that table** — 3000 is billing's own
+contract (the port its image listens on, the one a browser walks), not one of
+the shared block's slots. The launch publishes it as `3000:3000` for the same
+reason: moving it would be changing the service, not the stack.
+
+Two operator values the launch passes through to billing rather than
+generating, because a value in version control is a credential in version
+control (`kit/launch` never holds one):
+
+| Variable | Where it comes from |
+|----------|--------------------|
+| `STRIPE_API_KEY` | the Stripe CLI's test-mode secret key (`stripe config --list`, profile `cafaye`) |
+| `STRIPE_WEBHOOK_SECRET` | `stripe listen --forward-to http://127.0.0.1:3000/v1/webhooks/stripe --print-secret` |
+
+Without them billing refuses to boot — the compose file marks both `:?`, so
+the failure names the variable and the fix. That is deliberate: a service
+whose money paths could quietly run without credentials would answer 401s a
+developer would read as a bug in the service.
+
 Underneath them sit Kit's infrastructure: `KIT_POSTGRES_PORT` (15500),
 `KIT_NATS_CLIENT_PORT` (15600), `KIT_NATS_MONITOR_PORT` (15700),
 `KIT_REDIS_PORT` (15800) — inherited from the stack, overridable the same way.
@@ -169,6 +192,14 @@ teardown: `SIGNUP_SIGNING_KEY`, `MFA_ENCRYPTION_KEY`,
 **minted from identity's own API** after identity is ready, then rewritten —
 the one value in the file that is replaced rather than kept. The OIDC signing
 key is generated per run and exported, never written down.
+
+**Billing's two Stripe values are NOT generated and NOT in that file** — the
+launch passes them through from the operator's environment
+(`STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, see the variables table) and
+refuses to boot billing without them. That asymmetry is the fleet's rule
+arriving in the launch: a generated credential is fine for a service talking
+only to itself, and a processor credential is a value in version control
+either way, so the launch holds none.
 
 ## The two phases
 

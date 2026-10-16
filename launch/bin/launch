@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The LAUNCH harness — identity + gateway + courier + parlor, on kit's stack.
+# The LAUNCH harness — identity + gateway + courier + parlor + billing, on kit's stack.
 #
 #   launch/bin/launch           resolve kit, generate the credentials, mint the
 #                              courier key, bring the stack up, print where to look
@@ -10,9 +10,12 @@
 # ---------------------------------------------------------------------------
 # WHAT THIS IS
 # ---------------------------------------------------------------------------
-# Kit's developer-only local bring-up for the four product services, built
+# Kit's developer-only local bring-up for the five product services, built
 # from the source checkouts the LAUNCH_*_DIR variables name, on kit's stack,
-# with an SMTP sink a person can read. The topology is
+# with an SMTP sink a person can read. Billing is the fifth and the only one
+# that holds a credential the operator must supply (STRIPE_API_KEY and
+# STRIPE_WEBHOOK_SECRET are passed through, never generated), because a
+# processor credential in version control is a leaked credential. The topology is
 # `launch/docker-compose.launch.yml`, an override on kit's stack. See
 # `launch/README.md` for the layout, the variables, and what this is not —
 # in particular: this is NOT the customer installer
@@ -57,17 +60,19 @@ log() { printf '[launch] %s\n' "$1"; }
 # ---------------------------------------------------------------------------
 # 0. THE SIBLING CHECKOUTS — explicit paths, documented defaults.
 # ---------------------------------------------------------------------------
-# The four services are built from source, so these must be git checkouts.
+# The five services are built from source, so these must be git checkouts.
 # Defaults assume the fleet layout: every service beside this kit checkout.
 # Any other layout works by exporting the variables — Website and Site are
 # never required and never consulted. The front door is PARLOR, the
 # customer-stack app; Website is the Cafaye app derived from Parlor and is
-# not a service this harness builds.
+# not a service this harness builds. BILLING is the money service and its
+# port is its OWN (3000) rather than one of the shared block's slots.
 LAUNCH_IDENTITY_DIR="${LAUNCH_IDENTITY_DIR:-$KIT_ROOT/../identity}"
 LAUNCH_GATEWAY_DIR="${LAUNCH_GATEWAY_DIR:-$KIT_ROOT/../gateway}"
 LAUNCH_COURIER_DIR="${LAUNCH_COURIER_DIR:-$KIT_ROOT/../courier}"
 LAUNCH_PARLOR_DIR="${LAUNCH_PARLOR_DIR:-$KIT_ROOT/../parlor}"
-export LAUNCH_IDENTITY_DIR LAUNCH_GATEWAY_DIR LAUNCH_COURIER_DIR LAUNCH_PARLOR_DIR
+LAUNCH_BILLING_DIR="${LAUNCH_BILLING_DIR:-$KIT_ROOT/../billing}"
+export LAUNCH_IDENTITY_DIR LAUNCH_GATEWAY_DIR LAUNCH_COURIER_DIR LAUNCH_PARLOR_DIR LAUNCH_BILLING_DIR
 
 # THERE IS NO FOURTH SOURCE, and the absence is deliberate rather than an
 # omission. A `kit_ref()` reader used to sit here, reading a committed `kit.ref`
@@ -285,9 +290,9 @@ need psql "psql is used to apply identity's migrations from the host, through id
 # siblings themselves. Say so before the first build, not four minutes in.
 # Website and Site are deliberately NOT in this list: neither is built,
 # and neither needs to exist.
-for sibling in "$LAUNCH_IDENTITY_DIR" "$LAUNCH_GATEWAY_DIR" "$LAUNCH_COURIER_DIR" "$LAUNCH_PARLOR_DIR"; do
+for sibling in "$LAUNCH_IDENTITY_DIR" "$LAUNCH_GATEWAY_DIR" "$LAUNCH_COURIER_DIR" "$LAUNCH_PARLOR_DIR" "$LAUNCH_BILLING_DIR"; do
   [ -d "$sibling/.git" ] ||
-    die "$sibling is not a git checkout. The launch tier builds the four services from the directories LAUNCH_*_DIR names — check them out first, or export the variables."
+    die "$sibling is not a git checkout. The launch tier builds the five services from the directories LAUNCH_*_DIR names — check them out first, or export the variables."
 done
 
 [ -f "$LAUNCH_DIR/docker-compose.launch.yml" ] ||
@@ -566,15 +571,23 @@ fi
 log "the cafaye JetStream stream exists"
 
 log "phase 2c: the full launch stack (identity and courier restart with the real key)"
-# `--build` for the reason phase 1's comment gives: the four launch services
-# are this tier's subject, and a stale image is a silent wrong answer.
+# `--build` for the reason phase 1's comment gives: the launch services are
+# this tier's subject, and a stale image is a silent wrong answer.
 # EVERY long-running service, NAMED: kit's postgres, nats, redis and
 # otel-collector (the default-profile set — tempo, loki, grafana are
 # profile-gated and were never in the blanket wait either), plus this tier's
-# mailpit, identity, gateway, courier and parlor. No one-shot: it ran bounded
-# in 2b, and a wait set containing a completed container exits 1 by the
+# mailpit, identity, gateway, courier, parlor and billing. No one-shot: it ran
+# bounded in 2b, and a wait set containing a completed container exits 1 by the
 # orchestrator's own accounting.
-compose up -d --wait --build postgres nats redis otel-collector mailpit identity gateway courier parlor
+#
+# BILLING'S MIGRATIONS ARE NOT A HOST STEP, and that is deliberate: billing's
+# image carries Rails' own entrypoint, which runs `db:prepare` before the
+# server, so the step the other two services need from the host is already
+# inside its container. What IS worth a word: `up --wait` returns when the
+# healthcheck passes, and healthcheck's start_period is the budget that
+# `db:prepare` gets — the first bring-up applies the schema inside the
+# container while the pod sits `starting`, and the second one finds it applied.
+compose up -d --wait --build postgres nats redis otel-collector mailpit identity gateway courier parlor billing
 
 # ---------------------------------------------------------------------------
 # 5a. COURIER'S MIGRATIONS — its own deploy step, for identity's reason.
@@ -605,6 +618,7 @@ printf '  mailpit   http://127.0.0.1:%s   <- the SMTP sink: read what the stack 
 printf '  identity  http://127.0.0.1:%s   <- the auth service\n' "$IDENTITY_PORT"
 printf '  gateway   http://127.0.0.1:%s   <- the API edge\n' "$GATEWAY_PORT"
 printf '  courier   http://127.0.0.1:%s   <- the mail service\n' "$COURIER_PORT"
+printf '  billing   http://127.0.0.1:3000   <- the money service (billing'"'"'s own port)\n'
 printf '\n'
 printf '  sign in as the launch owner:\n'
 printf '    email    %s\n' "$MINT_EMAIL"
@@ -613,5 +627,7 @@ printf '\n'
 printf '  the generated credentials are in launch/.env (git-ignored) — the courier key\n'
 printf '  is minted by identity and stable across a teardown; the OIDC signing\n'
 printf '  key is per-run and exported, never written to the repository.\n'
+printf '  billing ran on the two Stripe values from your environment, so the webhook\n'
+printf '  leg needs: stripe listen --forward-to http://127.0.0.1:3000/v1/webhooks/stripe\n'
 printf '  take it down with: launch/bin/launch down\n'
 printf '\n'

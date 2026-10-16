@@ -30,8 +30,8 @@
 #                         real one is git-ignored and belongs to a stack that
 #                         may be running — see the shadow fixture in §1)
 #     overlay invariants (exactly the six service blocks — postgres,
-#                         identity, gateway, courier, parlor, mailpit — and no
-#                         re-declaration of anything kit ships; all four build
+#                         identity, gateway, courier, parlor, billing, mailpit —
+#                         and no re-declaration of anything kit ships; all five build
 #                         contexts parameterized; every published port a
 #                         ${VAR:-15...} default in kit's block; the seam
 #                         secrets fail closed on `:?`; the project name is
@@ -182,10 +182,10 @@ done
 export STUB_LOG="$WORK/docker.log"
 : >"$STUB_LOG"
 
-# The sibling fixture: four git checkouts, nothing else. Website and Site
+# The sibling fixture: five git checkouts, nothing else. Website and Site
 # are deliberately ABSENT — the harness must not require them.
 SIBS="$WORK/sibs"
-mkdir -p "$SIBS/identity/.git" "$SIBS/gateway/.git" "$SIBS/courier/.git" "$SIBS/parlor/.git"
+mkdir -p "$SIBS/identity/.git" "$SIBS/gateway/.git" "$SIBS/courier/.git" "$SIBS/parlor/.git" "$SIBS/billing/.git"
 
 # canon <dir> — an absolute path, spelled the way the launcher spells its own.
 #
@@ -441,7 +441,7 @@ run 'CONTROL premise: the minting fixture is a real down (one down -v, both file
 # 5. Overlay invariants, each with a control that must go red
 # ===========================================================================
 # Service blocks: top-level `  <name>:` lines under `services:`.
-WANT="courier gateway identity mailpit parlor postgres "
+WANT="billing courier gateway identity mailpit parlor postgres "
 services_of() {
   sed -n '/^services:/,$p' "$1" | grep -E '^  [a-z][a-z0-9-]*:$' |
     sed 's/^  //;s/:$//' | sort | tr '\n' ' '
@@ -449,11 +449,18 @@ services_of() {
 services_match() { [ "$(services_of "$1")" = "$WANT" ]; }
 contexts_parameterized() {
   ! grep -Eq '^[[:space:]]*context: \.\./' "$1" &&
-    [ "$(grep -c 'context: ${LAUNCH_.*_DIR:-' "$1")" = 4 ]
+    [ "$(grep -c 'context: ${LAUNCH_.*_DIR:-' "$1")" = 5 ]
 }
 ports_in_block() {
-  ! grep -Eq '^[[:space:]]*- "[0-9]+:' "$1" &&
-    [ "$(grep -Ec '^[[:space:]]*- "\$\{(KIT|LAUNCH)_[A-Z_]+:-15[0-9]{3}\}:' "$1")" = 5 ]
+  # FIVE variables in the block — identity, gateway, courier, parlor, mailpit
+  # — and billing's own 3000 is NOT one of them, so the literal check's total
+  # is FIVE and not six. The literal allowance is billing's: its port is a
+  # service contract (the one its image listens on) rather than a slot in
+  # kit's shared 15000-15999, and the check below is written so that adding
+  # a SECOND literal anywhere else still fails.
+  ! grep -Eq '^[[:space:]]*- "[0-9]+:5432"' "$1" &&
+    [ "$(grep -Ec '^[[:space:]]*- "\$\{(KIT|LAUNCH)_[A-Z_]+:-15[0-9]{3}\}:' "$1")" = 5 ] &&
+    [ "$(grep -Ec '^[[:space:]]*- "3000:3000"' "$1")" = 1 ]
 }
 seam_secrets_closed() {
   [ "$(grep -c 'COURIER_TOKEN:?set COURIER_TOKEN' "$1")" = 2 ] &&
@@ -629,7 +636,7 @@ run 'CONTROL: a comment naming the protected stack is not the project name' gree
   project_is_kit_launch "$mut"
 
 run 'the database list is the literal this tier decided' green \
-  bash -c "grep -q 'KIT_POSTGRES_DATABASES: \"identity,courier\"' \"\$0\"" "$OVERLAY"
+  bash -c "grep -q 'KIT_POSTGRES_DATABASES: \"identity,courier,billing\"' \"\$0\"" "$OVERLAY"
 
 # ===========================================================================
 # 5b. The contract corrections — the overlay against the services' own current
@@ -682,15 +689,17 @@ run 'CONTROL: a committed-pin reader is caught' red no_committed_pin_reader "$mu
 # config` — parsing only, it contacts no daemon — or a SKIP naming why not.
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   RENDER="$WORK/render"
-  mkdir -p "$RENDER/identity" "$RENDER/gateway" "$RENDER/courier" "$RENDER/parlor"
+  mkdir -p "$RENDER/identity" "$RENDER/gateway" "$RENDER/courier" "$RENDER/parlor" "$RENDER/billing"
   cp "$OVERLAY" "$RENDER/docker-compose.launch.yml"
   render() {
     env "KIT_COMPOSE_DIR=$ROOT/templates/compose" \
       KIT_STACK_NAME=kit-launch-test \
-      "KIT_POSTGRES_DATABASES=identity,courier" \
+      "KIT_POSTGRES_DATABASES=identity,courier,billing" \
       COURIER_TOKEN=t COURIER_SECRET_BOX_KEY=t COURIER_ERROR_RELAY_TOKEN=t \
       "LAUNCH_IDENTITY_DIR=$RENDER/identity" "LAUNCH_GATEWAY_DIR=$RENDER/gateway" \
       "LAUNCH_COURIER_DIR=$RENDER/courier" "LAUNCH_PARLOR_DIR=$RENDER/parlor" \
+      "LAUNCH_BILLING_DIR=$RENDER/billing" \
+      STRIPE_API_KEY=sk_test_fixture STRIPE_WEBHOOK_SECRET=whsec_fixture \
       timeout 60 docker compose --project-directory "$RENDER" \
         -f "$ROOT/templates/compose/docker-compose.yml" \
         -f "$RENDER/docker-compose.launch.yml" "$@"
@@ -698,7 +707,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   render_config() { (cd "$RENDER" && render config >/dev/null); }
   render_services() {
     (cd "$RENDER" && render config --services 2>/dev/null |
-      sort | tr '\n' ' ' | grep -q 'courier gateway identity mailpit .*parlor.*postgres')
+      sort | tr '\n' ' ' | grep -q 'billing courier gateway identity mailpit .*parlor.*postgres')
   }
   # The RESOLVED DSN, not the literal: `${KIT_POSTGRES_PASSWORD:-cafaye}` and
   # `${APP_BASE_URL:-…}` are interpolated by compose, so what a container would
@@ -724,7 +733,17 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     return 0
   }
   run 'the overlay renders against this checkout (compose config)' green render_config
-  run 'the render carries all six services' green render_services
+  run 'the render carries all seven services' green render_services
+  # BILLING'S `:?` IS PROVEN BY THE RENDER RATHER THAN BY A GREP: absent values
+  # fail the config, present ones pass — the seam secret's own test, at the
+  # render rather than on the file, because a render that fails is a service
+  # that refuses to boot.
+  render_billing_secrets_closed() {
+    (cd "$RENDER" && render config >/dev/null 2>&1 &&
+     env -u STRIPE_API_KEY -u STRIPE_WEBHOOK_SECRET        KIT_COMPOSE_DIR="$ROOT/templates/compose" KIT_STACK_NAME=kit-launch-test        "KIT_POSTGRES_DATABASES=identity,courier,billing"        COURIER_TOKEN=t COURIER_SECRET_BOX_KEY=t COURIER_ERROR_RELAY_TOKEN=t        "LAUNCH_IDENTITY_DIR=$RENDER/identity" "LAUNCH_GATEWAY_DIR=$RENDER/gateway"        "LAUNCH_COURIER_DIR=$RENDER/courier" "LAUNCH_PARLOR_DIR=$RENDER/parlor"        "LAUNCH_BILLING_DIR=$RENDER/billing"        timeout 60 docker compose --project-directory "$RENDER" config >/dev/null 2>&1 &&
+       return 1 || return 0)
+  }
+  run 'CONTROL: billing renders closed when a Stripe value is absent' green render_billing_secrets_closed
   run 'the RENDERED identity DSN logs in as the login role' green \
     test "$(rendered_dsn_role)" = identity_app
   run 'every RENDERED link template resolves onto a path parlor serves' green \
