@@ -5505,6 +5505,24 @@ check 'tests/route_test.sh  (19 cases: every routing class fails closed; the rou
 check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gate: _timeout_bin never calls have)' \
   bash "$ROOT/tests/have_timeout_test.sh"
 
+# The substrate drift checker, EXECUTED over fixtures built from the REAL
+# template. `templates/database/tenancy/substrate.sql` is COPIED into each
+# adopter's migrations, and one measured copy drifted: identity's
+# credential_tables() predated a kit rewrite and returned ZERO ROWS for the
+# role an operator audits credentials as — an empty result indistinguishable
+# from a correct one. kit's gate may not read sibling repositories (MD36, the
+# commit that deleted tests/fleet_check.py: a clone of kit has no siblings, so
+# the check took a skip branch on every CI run), so the service shapes are
+# built here out of the real template and every verdict is asserted BY NAME:
+# missing functions, an edited body, a comment-only edit reported but not
+# failed, functions split across migrations, a goose Down section (both
+# directions), a truncated block, standalone byte-equality, a generated dump
+# correctly ignored, a non-adopter, a missing path, and --fleet. The fleet run
+# stays a deliberate command, not a row here:
+#   python3 tests/substrate_copy_check.py ../identity ../darkroom
+check 'tests/substrate_copy_test.sh  (46 assertions: missing/edited/comment-only/split/goose-Down both ways/unreadable/standalone/dump-excluded/not-adopted/bad-path/fleet)' \
+  bash "$ROOT/tests/substrate_copy_test.sh"
+
 # THE PORT-RACE CONTROL, EXECUTED. `tests/onecluster_test.sh` probes a 10-port
 # block and only later binds it; two concurrent runs starting at the same seed
 # offset both saw the same block free and one of them died binding it
