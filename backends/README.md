@@ -181,6 +181,30 @@ Postgres per job on Actions (a `services:` block) is exactly the project that
 needs a database here; a project that finds Postgres binaries on the runner
 (`pantry`) is not.
 
+### Per-project environment prerequisites
+
+Beyond the template, these projects need extra material on the sandbox, and
+`provision.sh` now provides all of it:
+
+| project | extra need | how provision satisfies it |
+| --- | --- | --- |
+| `docs`, `identity`, `gateway`, `keyholder` (Go gates) | a per-project `golangci-lint` cache — three Go gates at once collide on the shared lock | `GOLANGCI_LINT_CACHE=$HOME/.cache/golangci-lint/<project>` in that project's env |
+| `keyholder` | a ghcr.io login with `packages:write` (and `read:packages` for pull) | `docker login ghcr.io` from `GH_TOKEN` when it resolves to a GitHub user |
+| `pantry` | PostgreSQL server binaries (`pg_ctl`, `psql`, `initdb`) on the host, for its RLS suite | installs `postgresql`/`postgresql-client` and writes `PANTRY_PG_BIN` into pantry's env |
+| `identity`, `darkroom` | an `<owner>_app` LOGIN role — their account-isolation migration's `protect_table` defaults to `<owner>_app` and refuses to run without it | provision creates `<project>_app` (NOSUPERUSER, LOGIN) and grants CONNECT on the project's database |
+
+`docs` also needs kit's own tree on the sandbox (`$WORKSPACE/cafaye/kit`), for
+the fleet sync that reads every sibling's `cafaye.yml`; provision clones it
+once and fetches on re-provision.
+
+**Open finding, not yet fixed (identity/darkroom side):** provision creates
+`<project>_app` so the migration passes, but the runtime DSN provision writes
+is still the owner role (`<project>`). The two-role split (owner migrates, app
+runs, scoped by RLS) only holds if the service connects as `_app`. Switching
+identity and darkroom to a separate runtime DSN is a service-side change and
+is deliberately not done here — this packet is kit. Tracked as the next
+identity/darkroom packet.
+
 
 `docs` is already on `cafaye-build` under the **single-project** provisioner.
 Re-provisioning it with the multi-project form migrates it: the per-project
