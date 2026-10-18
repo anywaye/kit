@@ -24,3 +24,5 @@ launch/.env
 
 # dispatch worktrees live here; they are local artifacts, never content
 /wt/
+keyring/
+secrets/

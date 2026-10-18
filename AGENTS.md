@@ -1192,3 +1192,6 @@ See `DECISIONS.md` (MD26, MD27).
       added one you **proved the thing it excuses can still fail** — an allowlist
       entry that silences a live proof is not an allowlist entry, it is a deleted
       test with a comment attached
+
+## Secrets
+- No `.env` files with values. Use `cafe secret set/get/list` (dev) and `cafe dev` (injects). See `docs/secrets.md`.

@@ -4068,7 +4068,7 @@ run 'the exchange speaks the registry-credentials route, bearer + box' green cur
 # bytes into data, so the decoded bytes are what kubectl must receive; the
 # kubelet-shaped read in 3b proves it, and the control re-introduces the
 # double-encode to prove the read can fail.
-APPLIED_NAMESPACES=(argocd identity gateway courier parlor observability)
+APPLIED_NAMESPACES=(argocd identity gateway courier parlor billing observability)
 applied_pull_secrets_ok() {
   local ns found
   for ns in "${APPLIED_NAMESPACES[@]}"; do
@@ -4454,7 +4454,7 @@ RUNNER
       return 1
     fi
     local ns
-    for ns in identity gateway courier parlor observability; do
+    for ns in identity gateway courier parlor billing observability; do
       if grep -q "namespace: $ns" "$MOCK_ROOT_NONS/applied.yaml" 2>/dev/null; then
         printf 'the secret was written into %s after the refusal — the loop carried on\n' "$ns"
         return 1
@@ -4529,7 +4529,7 @@ stray_files_ok() {
       # the step MADE the namespaces it wrote into. It carries no credential —
       # it holds names — which is why it is allowed to sit in the store.
       namespaces) continue ;;
-      argocd|identity|gateway|courier|parlor|observability) continue ;;
+      argocd|identity|gateway|courier|parlor|billing|observability) continue ;;
     esac
     printf 'unexpected file in the store: %s\n' "${f##*/}"
     return 1
@@ -4722,7 +4722,7 @@ derived_ok() {
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
   n="$(printf '%s\n' "$rows" | grep -c .)"
   [ "$n" -eq 10 ] || { printf 'derived %s artifact rows, expected 10\n%s\n' "$n" "$rows"; return 1; }
-  for want in "cafaye/charts/billing 0.1.1" "cafaye/billing 0.1.1" \
+  for want in "cafaye/charts/billing 0.1.2" "cafaye/billing 0.1.2" \
     "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
     "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
     "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \

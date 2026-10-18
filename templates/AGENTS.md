@@ -41,6 +41,7 @@ Run these; do not improvise equivalents.
 | Everything CI runs | `bin/prime` — CI runs the same steps in the same order |
 
 ## Conventions
+- Secrets: no `.env` files with values. Use `cafe secret set/get/list` (dev) and `cafe dev` (injects). Manifests declare env vars via `env:` block. See `docs/secrets.md`.
 
 - **Never** edit a lockfile as a side effect (`go.sum`, `Gemfile.lock`,
   `mix.lock`, `uv.lock`, `package-lock.json`, `Cargo.lock`). A lockfile change

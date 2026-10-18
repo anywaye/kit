@@ -2636,7 +2636,7 @@ install_argocd() {
 # The namespaces that pull the fleet's own images. Five, and the list is
 # asserted by the suite: a namespace added here without a pull secret is a
 # CrashLoopBackOff in a voice nobody can attribute.
-REGISTRY_PULL_NAMESPACES=(argocd identity gateway courier parlor observability)
+REGISTRY_PULL_NAMESPACES=(argocd identity gateway courier parlor billing observability)
 REGISTRY_PULL_SECRET_NAME="ghcr-pull-secret"
 
 # The floor the exchange reports for the credential's remaining life. It is
