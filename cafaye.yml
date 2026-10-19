@@ -64,7 +64,7 @@ repository:
   defaultBranch: master
   # public, per OPS-D2: the framework is open under MIT because its job is
   # adoption, and `LICENSE` is that grant.
-  visibility: public
+  visibility: private
 
 owner:
   team: kit
