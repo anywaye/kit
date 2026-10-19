@@ -1,5 +1,7 @@
 # kit
 
+**Current direction (2026-10-19):** Ship is the product. The cafaye stack is internal infrastructure; we are not selling or supporting it as a standalone product as of this date. We continue to develop and improve it, treating the founder as the primary customer and keeping "build once, run everywhere" true, with the expectation that it may be offered again later.
+
 **kit is the shared CI, lint, and toolchain layer every cafaye service repo
 adopts.** It contains no runtime code and no dependencies — only conventions
 that would otherwise be retyped, and slightly differently, in each of the six
