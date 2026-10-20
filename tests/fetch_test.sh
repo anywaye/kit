@@ -54,7 +54,7 @@
 #      This is the one that is not about `bin/dev` at all: the cache directory is
 #      bind-mounted into running containers, so deleting it leaves every container
 #      serving off descriptors it already holds while every NEW open through the
-#      mount path fails. See `REPORT-kit-cachemount-01.md` for the measurement
+#      mount path fails. See `REPORT-kit-cachemount-01` for the measurement
 #      and `templates/bin/dev.sh`'s retired-generations header for the mechanism.
 #   9. `up` composes from a SERVICE-OWNED snapshot (`.kit/live/<ref>`), never
 #      from the cache — so deleting the whole cache with the network forbidden

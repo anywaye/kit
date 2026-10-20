@@ -96,8 +96,8 @@ cleanup() {
   # teardown reached. A teardown that names what it expects to find is a teardown
   # that silently stops cleaning up the moment the stack gains a service, and the
   # residue is on the developer's machine rather than in a CI log. The label is
-  # derived from THIS RUN, so the sweep reaches only its own containers — see
-  # reports/compose-collision/README.md on why a namespace must come from the run.
+  # derived from THIS RUN, so the sweep reaches only its own containers: a
+  # namespace has to come from the run, or two concurrent runs share one stack.
   if [ -n "${PROJECT:-}" ]; then
     docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" 2>/dev/null |
       xargs -r docker rm -f >/dev/null 2>&1 || true

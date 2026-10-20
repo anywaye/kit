@@ -16,7 +16,7 @@ running. What is missing is a remote host, and only that.
 
 Calling this "production" would be the single most likely way this packet
 produces something dishonest, so it is stated in the first line of this file,
-in the first line of `REPORT-kit-16-deploy.md`, and in the tool's own header
+in the first line of `REPORT-kit-16-deploy`, and in the tool's own header
 comment rather than being discovered on page nine.
 
 ### Why `courier` is the reference service

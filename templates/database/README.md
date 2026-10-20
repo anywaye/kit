@@ -272,7 +272,7 @@ Two consequences worth stating:
   regardless, so a per-service grant would only have governed who pays the disk
   cost.
 
-`DECISIONS.md` carries the rest.
+`cafaye/notes/decisions.md` carries the rest.
 
 ## Adopting this
 

@@ -27,8 +27,8 @@
 #   `WHERE account_id = $1` in five functions, and a refactor that drops one is
 #   invisible to a grep, to `go vet`, to golangci-lint, and to identity's own
 #   suite — which asserts the SUBSTRATE and never asserts these clauses. That is
-#   why `reports/tenant-adapter-go-01/mutations.sh` has its own anchors and does
-#   not reuse the Elixir recipe's.
+#   why the Go mutation recipe has its own anchors and does not reuse the
+#   Elixir recipe's.
 #
 # THE CONNECTION IS A SUPERUSER, AND IT IS DELIBERATE — READ THIS BEFORE CHANGING IT
 #

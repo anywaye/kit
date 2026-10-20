@@ -6345,7 +6345,7 @@ run 'control: an inventory missing a service goes red' red check_migration_step 
 # 13h. Step 10 — migrations run in parallel (the 25 s sequential cost)
 # ===========================================================================
 #
-# The measurement (reports/CYCLE-TIMINGS.md, provisioned in the packet brief):
+# The measurement (provisioned in the packet brief):
 # step 10 costs 25 s of a 219.46 s cold install — the fourth-largest cost, after
 # Postgres bootstrap (72.26 s), NATS (36.63 s) and the pull-secret (11.81 s) —
 # and the only one that is not operator-bound: the Jobs are installer-created

@@ -5,7 +5,7 @@ customer substrate: k3s → cert-manager → CloudNativePG → Argo CD core →
 image pull secret → the first Applications sync → the Let's Encrypt
 ClusterIssuers.
 
-The decisions are in [`DEPLOYMENT.md`](../../../DEPLOYMENT.md). This directory
+The decisions are in [`cafaye/notes/deployment.md`](../../../DEPLOYMENT.md). This directory
 is the executable half of that decision record. Read the decision record first;
 this file only describes what is here and what is proven.
 
@@ -133,12 +133,12 @@ releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
 
 ## The ACME solver: HTTP-01 through Traefik
 
-`DEPLOYMENT.md` settles the substrate — Traefik (k3s's default ingress
+`cafaye/notes/deployment.md` settles the substrate — Traefik (k3s's default ingress
 controller) and cert-manager — but not the challenge solver. The decision
 taken here is **HTTP-01, answered by an Ingress cert-manager creates with
 `ingressClassName: traefik`**, and the reasons in order of weight:
 
-1. **It needs no credential.** `DEPLOYMENT.md:28` says Cloudflare in front is
+1. **It needs no credential.** `cafaye/notes/deployment.md:33` says Cloudflare in front is
    a DNS change, never infrastructure — so the install must not require a
    Cloudflare API token. A token committed to this repository is precisely
    the thing the pull-based deploy loop exists to prevent, and a token the
@@ -227,7 +227,7 @@ to push. That is one packet per service, not this one.
 The three observability `Application`s (`alloy`, `grafana`,
 `prometheus`) once named the same private OCI registry as the service charts
 — for charts nothing in the fleet publishes, so four Applications could never
-sync. Per `DEPLOYMENT.md` ("Who owns the `Application`", cited rather than
+sync. Per `cafaye/notes/deployment.md` ("Who owns the `Application`", cited rather than
 restated so this file cannot drift from it), the private-OCI shape exists for
 **our closed-source service charts** — a customer must be able to pull them
 without read access to our repositories. It does not cover third-party
@@ -462,7 +462,7 @@ local-cycle: the substrate did NOT reach install.done
   refused at step 5 (pull-secret): KIT_SUBSTRATE_BOX_ID is not set
 ```
 
-**Measured on this machine** (see `REPORT-roll-c5-local-cycle.md` for the run
+**Measured on this machine** (see `REPORT-roll-c5-local-cycle` for the run
 logs): a cold cycle — cluster created, CNPG and Argo CD installed into it, the
 CNPG controller's rollout waited on — took **3m22s** end to end. A warm cycle,
 where the operators are already in the cluster, takes **2s** and stops at step 5.
@@ -483,7 +483,7 @@ whenever an artifact the Applications name is not anonymously fetchable. Step
 id, no capability and no exchange. The three private artifacts the old
 measurement named (`cafaye/charts/box:0.1.0`, `cafaye/box:0.1.0`,
 `cafaye/charts/pantry:0.1.0` — 11 of 14 anonymous on 2026-10-14, see
-`REPORT-roll-c5-public-artifacts.md`) left with their Applications: all
+`REPORT-roll-c5-public-artifacts`) left with their Applications: all
 three are Cafaye-operated, and a customer's box reaches them over HTTPS
 rather than pulling their images. What remains is eight artifacts (four
 charts + four images); their anonymous-fetchability is re-probed on every
@@ -686,7 +686,7 @@ boot" assumed — that last one is checked, not believed.
 
 | service | migrations? | entrypoint | DSN env | notes |
 | --- | --- | --- | --- | --- |
-| `identity` | yes — `migrations/*.sql`, 35 files | `bin/migrate` (a `psql` loop over the Up sections) | `DATABASE_URL` | **the repository ships the entrypoint; the image does not.** `ghcr.io/cafaye/identity` is `gcr.io/distroless/static-debian12:nonroot` — no shell, no `psql`, no migration files — so it cannot migrate from the image it runs. The service-repo edit is named in `REPORT-roll-c5-migrations.md`. |
+| `identity` | yes — `migrations/*.sql`, 35 files | `bin/migrate` (a `psql` loop over the Up sections) | `DATABASE_URL` | **the repository ships the entrypoint; the image does not.** `ghcr.io/cafaye/identity` is `gcr.io/distroless/static-debian12:nonroot` — no shell, no `psql`, no migration files — so it cannot migrate from the image it runs. The service-repo edit is named in `REPORT-roll-c5-migrations`. |
 | `gateway` | no | `bin/migrate` is an explicit no-op | — | no driver, no pool, no `DATABASE_URL`; the file says so out loud. |
 | `courier` | yes — `priv/repo/migrations`, Ecto | `/app/bin/migrate` (release overlay → `courier eval Courier.Release.migrate`) | `COURIER_OWNER_DATABASE_URL` (+ `DATABASE_URL`) | the release eval loads `runtime.exs`, which raises without `DATABASE_URL`, and configures `Courier.OwnerRepo` only from the owner variable — both are passed. |
 | `parlor` | no | — | — | a front end: its runtime reads `IDENTITY_URL` / `BILLING_URL` / `OTEL_*`, no database. Its database and roles exist only because the Cluster provisions one per named service. |
@@ -740,7 +740,7 @@ the box deploys no such Service and no OTLP endpoint at all: alloy is pinned at
 chart `1.13.0` with no values, so its default config
 (`config/example.alloy`) declares no `otelcol.receiver.otlp` and its Service
 exposes only `http-metrics` on `12345`, and the substrate ships no Tempo
-(`DEPLOYMENT.md`: "Traces | deferred"). Without the switch every service
+(`cafaye/notes/deployment.md`: "Traces | deferred"). Without the switch every service
 retries forever and logs a DNS failure every ten seconds. The switch is core's
 `otel-endpoint.schema.json` no-op mechanism — free: no queue, no retry, no
 warning per export, no dial at boot — written once as `SERVICE_OTEL_DISABLED`
@@ -944,7 +944,7 @@ issuer must set the **same** origin as gateway's `IDENTITY_ISSUER` — otherwise
 identity mints `iss` the gateway will not accept — so the two are the same fact
 spelled in two places and are set together. `IDENTITY_ISSUER` is deliberately
 **not** fixed in gateway's Application: it is the customer's own public domain,
-which a static manifest cannot hold. See `REPORT-roll-c5-crossns.md` for the
+which a static manifest cannot hold. See `REPORT-roll-c5-crossns` for the
 measured pair and the exact commands.
 
 **`BILLING_URL` is deliberately out of scope; gateway's `ROUTE_TABLE` points

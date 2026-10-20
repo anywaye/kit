@@ -211,7 +211,7 @@ fi
 # ONE NAME FOR THE WHOLE RUN. Every namespace below derives from it, because a
 # compose project name IS the namespace for that stack's containers, networks and
 # volumes, and a hardcoded one makes two concurrent runs into one stack with two
-# owners. See reports/compose-collision/README.md, which measured that.
+# owners. Two concurrent runs sharing one stack has been measured, and it is bad.
 PROJECT="kit-onecluster-$$"
 
 # THE HOST PORTS — ALL FIVE, AND THAT IS THE FINDING.
@@ -282,8 +282,8 @@ cleanup() {
   # that sibling's layout happens to have. The sweep below names NOTHING — it
   # filters on the label compose stamps on every container, volume and network it
   # creates, so it covers the cheap stack whatever it grows to. The label derives
-  # from this run, so it can only reach its own containers; see
-  # reports/compose-collision/README.md on why a namespace must come from the run.
+  # from this run, so it can only reach its own containers: a namespace has to
+  # come from the run, or two concurrent runs share one stack.
   #
   # `-v` matters twice over: `docker-entrypoint-initdb.d` runs ONLY on a fresh
   # volume, so a leaked one makes the NEXT run reuse an already-provisioned

@@ -20,13 +20,14 @@ of a postgres or ORM driver, not one declared driver, and not one `.sql` outside
 an `e2e/` fixture. There is therefore nothing for `adapter_migrate` to apply, no
 write path to seed two accounts through, and no query layer for
 `adapter_run` to call as account A — the adapter is **undefined**, not
-unfinished, and no amount of work on it changes that. `reports/tenant-adapter-ts-01/subject-audit.sh`
+unfinished, and no amount of work on it changes that. The `tenant-adapter-ts-01`
+subject audit
 is the measurement, and it goes red the day that stops being true.
 
 That is not an argument that TypeScript is safe. It is an argument that **this
 harness cannot be the thing that says so**, and that a claim about TypeScript
 written here would be a claim about nothing. See
-`REPORT-kit-tenant-adapter-ts-01.md` for the full reading.
+`REPORT-kit-tenant-adapter-ts-01` for the full reading.
 
 ## Why `gateway` is TypeScript, and why that is a finding rather than a typo
 
@@ -122,7 +123,7 @@ adapter needed went through variables the contract already granted it:
 `KIT_TENANT_WORK` is where the container name is derived from.
 
 The one thing that did NOT fit was in identity's migrations, not in the harness,
-and it is written up as a finding in `REPORT-kit-tenant-adapter-go-01.md`:
+and it is written up as a finding in `REPORT-kit-tenant-adapter-go-01`:
 `cafaye.protect_table` refuses to install a policy unless a LOGIN role it derives
 from `current_user` already exists, so the substrate a migration installs can
 depend on infrastructure outside the migration.
@@ -154,9 +155,10 @@ breakage the recipe plants, **each named after the breakage it is the control
 for** — the recipe asserts on the name, so a name that changes silently
 un-proofs the case.
 
-**It does not write the recipe.** `reports/tenant-isolation-harness/mutations.sh`
+**It does not write the recipe.** The `tenant-isolation-harness` mutation
+recipe
 is language-neutral except for the six *anchors*, which are the service's own
-source text. A second language gets its own `reports/<packet>/mutations.sh` with
+source text. A second language gets its own mutation recipe, with
 its own anchors; the harness, the tally and the four assertions per case are
 already written and are not re-implemented.
 

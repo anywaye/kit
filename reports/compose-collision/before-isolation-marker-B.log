@@ -1,8 +1,0 @@
-FAIL: the shared cluster did not come up. Last lines:
-        Container kit-isolation-postgres-1 Recreate 
-        Container kit-isolation-postgres-1 Recreated 
-        Container kit-isolation-postgres-1 Starting 
-        Container kit-isolation-postgres-1 Started 
-        Container kit-isolation-postgres-1 Waiting 
-       Error response from daemon: No such container: 84e80c2220253515c34c89572153ded7f9d02f8201a568a423f99574f12c418f
-FAIL: cluster bring-up

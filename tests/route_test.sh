@@ -46,7 +46,7 @@ fi
 # 01-03. Prose/docs-only takes docs.
 expect docs -- README.md CHANGELOG.md DECISIONS.md
 expect docs -- LICENSE docs/guide.md templates/otel/README.md
-expect docs -- REPORT-kit-04-secrets.md
+expect docs -- REPORT-kit-04-secrets
 
 # 04-05. A family prefix wins over a prose suffix: still the family.
 expect tier -- templates/tier/go/tier.go templates/tier/README.md

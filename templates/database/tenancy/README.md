@@ -229,7 +229,7 @@ Every other table reads zero rows.
    compared against from `pg_depend`, which records them as OIDs, and
    `tests/tenancy_test.sh` reads it as three roles and requires one answer.
 
-### What it was instead of, and why — `DECISIONS.md` (MD24)
+### What it was instead of, and why — `cafaye/notes/decisions.md` (MD24)
 
 - **A `BYPASSRLS` role.** This is Supabase's answer, and it is right for Supabase's
   topology: `service_role` is created `nologin noinherit bypassrls`, granted only

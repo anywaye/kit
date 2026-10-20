@@ -166,7 +166,7 @@ that grows one stops being a template.
 
 Honest, and the reason this section exists.
 
-- **Only Go has an adapter.** See `REPORT-kit-04-secrets.md` for the per-language
+- **Only Go has an adapter.** See `REPORT-kit-04-secrets` for the per-language
   status and why each missing one is missing. The contract above is what the
   other five adapters must implement; the Go one is the worked example and the
   only one currently proven.

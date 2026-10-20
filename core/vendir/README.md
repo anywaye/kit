@@ -51,7 +51,7 @@ child of it:
 ```
 
 The second form was run. It exits **0** and vendors the entire upstream
-repository — `AGENTS.md`, `DECISIONS.md`, the test suite, `.git` and all —
+repository — `AGENTS.md`, `cafaye/notes/decisions.md`, the test suite, `.git` and all —
 because vendir unmarshals through `sigs.k8s.io/yaml`, which drops keys the
 target struct does not declare, and then `includePaths` is empty. An empty
 `includePaths` means `matched = true` for every file, so the filter removes

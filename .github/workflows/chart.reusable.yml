@@ -20,7 +20,7 @@
 #       with:
 #         push: true
 #
-# WHY THIS EXISTS, IN ONE SENTENCE. `DEPLOYMENT.md`'s deploy loop is
+# WHY THIS EXISTS, IN ONE SENTENCE. `cafaye/notes/deployment.md`'s deploy loop is
 # pull-based — a commit changes a chart, Argo makes the box agree — and only
 # one end of that loop existed: eight Argo CD `Application`s pull each chart's
 # own path under `oci://ghcr.io/cafaye/charts`, and nothing in the fleet ever

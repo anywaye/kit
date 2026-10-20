@@ -43,8 +43,8 @@
 // Postgres exempts a SUPERUSER from row-level security unconditionally, whatever
 // the FORCE says. So this probe's connection cannot be scoped by RLS, which means
 // every denial below is caused by identity's own `WHERE account_id = $1` and by
-// nothing else. That is what makes the breakages in
-// `reports/tenant-adapter-go-01/mutations.sh` mean anything: a predicate removed
+// nothing else. That is what makes the mutation breakages mean anything: a
+// predicate removed
 // from `Store.Members` is a predicate nothing catches, and this file is the only
 // thing in the fleet that would notice.
 //

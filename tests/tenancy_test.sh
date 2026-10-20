@@ -1296,7 +1296,7 @@ if printf '%s\n' "$neg" | grep -q '^rls_references_user_metadata@helper_opaque$'
 fi
 say "   helper_opaque -> silent, and that is the rule's measured limit: the catalog"
 say "      does not carry a string body, so no rule reads one. See the"
-say "      \"what this does not find\" block in advisor.sql and REPORT-kit-advisor-pgproc-01.md."
+say "      \"what this does not find\" block in advisor.sql and REPORT-kit-advisor-pgproc-01."
 
 # ---------------------------------------------------------------------------
 # ASSERTION 7b — THE HONEST NEGATIVES OF ASSERTION 7.

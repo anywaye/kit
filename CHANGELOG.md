@@ -122,7 +122,7 @@
   rule), then probes `GET /.well-known/jwks.json` for 2xx; a stuck rollout
   or a non-2xx route is fatal. Creation path and converged re-runs restart
   nothing. The done report names verified vs unverified instead of promising
-  a route the run did not watch. See `REPORT-roll-c5-oidc-restart.md`.
+  a route the run did not watch. See `REPORT-roll-c5-oidc-restart`.
 
 - **The substrate carries only what a customer runs: pantry, box and
   keyholder are out.** All three are Cafaye-operated and reached over
@@ -142,7 +142,7 @@
   own manifest requires box, which is the dimension that catches it).
   A 503 naming the unreachable *external* pantry origin is the honest
   answer until Cafaye hosts the registry. See
-  `REPORT-roll-c5-operated-out.md`.
+  `REPORT-roll-c5-operated-out`.
 
 - **Step 5 asks GHCR first, and only reaches for the capability when an
   artifact is private.** The pull-secret step demanded a single-use,
@@ -160,7 +160,7 @@
   today: 11 of 14 anonymously fetchable; `cafaye/box`, `cafaye/charts/box`
   and `cafaye/charts/pantry` refuse anonymous fetch, so installs pulling
   them still take the capability path. See
-  `REPORT-roll-c5-public-artifacts.md`.
+  `REPORT-roll-c5-public-artifacts`.
 
 - **pantry deploys: the registry the routes already named.** gateway has
   published `/v1/pantry` (public) and `/v1/pantry-writes` at
@@ -320,7 +320,7 @@
   current/scaled-down/mid-rollout/unsynced untouched, dry run prints and
   changes nothing, and two red controls (master shape without the step
   leaves the residual; an inverted hash check converges the current RS).
-  See `REPORT-roll-c5-rs-residual.md`.
+  See `REPORT-roll-c5-rs-residual`.
 
 - **The orphan sweep deleted a WORKING mail path and called it leftovers.**
   The live Contabo box carries a complete seven-key courier block
@@ -346,7 +346,7 @@
   reads `HEAD~1` — the first commit after the oidc-four merge shifted the
   parent onto the four-key tree and turned it red — it locates the commit
   that wired `OIDC_LOGIN_UI_URL` and reads that commit's parent. See
-  `REPORT-roll-c5-sweep-honest.md`.
+  `REPORT-roll-c5-sweep-honest`.
 - **The glob-fixed AppProject never reached a box that already had Argo CD, so
   every Application stayed `Unknown: repo … is not permitted in project
   'default'`.** `install.sh` step 4's guard answers *is the operator installed*
@@ -400,7 +400,7 @@
   §25 proves it with three green checks, the headless event check, the
   resolving-host no-warn control, the intended-hosts unit, and four red
   controls against the master-shaped fixture. See
-  `REPORT-roll-c5-honest-done.md`.
+  `REPORT-roll-c5-honest-done`.
 - **The AppProject permitted the registry ROOT while every Application named
   its own chart's PATH, so the controller refused all eight Applications.**
   A sibling packet moved each Application's OCI `source.repoURL` from
@@ -531,7 +531,7 @@
   + prometheus, alloy is pinned at chart `1.13.0` with **no values**, so its
   default config (`config/example.alloy`) declares no `otelcol.receiver.otlp`
   and its default Service exposes only `http-metrics` on `12345`; the substrate
-  ships no Tempo (`DEPLOYMENT.md`: "Traces | deferred"); and `kubectl get svc -n
+  ships no Tempo (`cafaye/notes/deployment.md`: "Traces | deferred"); and `kubectl get svc -n
   observability` on the live box returns nothing. So the decision is the
   packet's other branch — **deliberately off** — and the mechanism is core's
   pinned no-op: `OTEL_SDK_DISABLED=true` (free: no queue, no retry, no warning
@@ -618,7 +618,7 @@
   `courier`'s release ships `/app/bin/migrate` (`Courier.Release.migrate`) and
   needs `COURIER_OWNER_DATABASE_URL` (plus `DATABASE_URL`, which its release
   eval raises without). The exact service-repo edit for `identity` is named in
-  `REPORT-roll-c5-migrations.md`. `tests/substrate_test.sh` §13g executes the
+  `REPORT-roll-c5-migrations`. `tests/substrate_test.sh` §13g executes the
   step against the file-backed `kubectl`: the run, the OWNER DSN in each Job's
   argv, the per-service marker, the re-run guard (no new pod), and a `Failed`
   pod that must fail the step naming the service — with the inventory-shrinks
@@ -770,7 +770,7 @@
   in the argv; red: a stuck cluster fails naming `Setting up primary`), and
   step 10 executed (green: pre-waits under the bound; red: a half-ready
   Cluster refuses, launching nothing). See
-  `REPORT-roll-c5-cnpg-ready.md`.
+  `REPORT-roll-c5-cnpg-ready`.
 
 ### Substrate
 
@@ -1324,7 +1324,7 @@
   `openssl` and `jq` and reported "every prerequisite is in place" on a
   machine where the launch could not succeed — the manager hit this for real:
   the failure arrived after both images were built, at `psql: command not
-  found`. `REPORT-kit-launch-contract-audit-m195b.md` §3 had named the exact
+  found`. `REPORT-kit-launch-contract-audit-m195b` §3 had named the exact
   gap in advance. `--check` now fails closed on a missing `psql` naming the
   tool, the host-side migration step, and the install; `launch/README.md`
   gains a Prerequisites table that is the same list, tool for tool, with the
@@ -1337,7 +1337,7 @@
 - **The launch overlay contradicted the service contracts; four corrections,
   each with a test (m199).** A read-only audit of `launch/` against the current
   Identity, Gateway, Courier and Parlor checkouts
-  (`REPORT-kit-launch-contract-audit-m195b.md`) found no blocker that fails
+  (`REPORT-kit-launch-contract-audit-m195b`) found no blocker that fails
   after an image build — every readiness URL, bootstrap endpoint, response
   field, migration path, required environment variable and port is satisfied —
   and one definite contradiction plus three quality gaps:
@@ -1414,7 +1414,7 @@
   must go red, a real `compose config` render, and the installer split (the
   harness names no k3s/Argo/ACME/GHCR/Cloudflare; the customer installer in
   `templates/substrate/` is separate and unproven here) — wired into the
-  gate's static phase. See `REPORT-kit-launch-harness-m186.md`.
+  gate's static phase. See `REPORT-kit-launch-harness-m186`.
 
 - **`license_check` for the Cafaye proprietary grant (m172).** m168
   re-pointed the prose — README.md's `## License` section and AGENTS.md's
@@ -1585,7 +1585,7 @@
   `oci://ghcr.io/cafaye/charts`, but nothing in the fleet publishes the
   observability four — kit holds no `Chart.yaml` for `alloy`, `grafana`,
   `loki` or `prometheus` and no service publish workflow pushes them — so
-  four Applications could never sync. Per `DEPLOYMENT.md` ("Who owns the
+  four Applications could never sync. Per `cafaye/notes/deployment.md` ("Who owns the
   `Application`"), the private-OCI shape governs the closed-source service
   charts only; third-party components we do not author and do not modify
   point upstream, shipped unmodified: `alloy 1.13.0`, `grafana 10.5.15`,
@@ -1604,7 +1604,7 @@
   after it.
 
 - **The substrate's data layer and the services' secrets: `install.sh`
-  steps 8–9.** `DEPLOYMENT.md` (manager decision, 2026-10-06) commits the
+  steps 8–9.** `cafaye/notes/deployment.md` (manager decision, 2026-10-06) commits the
   box to a CNPG Postgres `Cluster`, single-instance Redis, and
   box-created service secrets — and `install.sh` installed the CNPG
   *operator* with nothing that used it, no Redis, and no service secret.
@@ -1646,7 +1646,7 @@
   customer-box claim.
 
 - **The install host: `kit-install.mjs` serves `install.sh` at
-  `kit.cafaye.com`'s root.** `DEPLOYMENT.md` decides the product's front
+  `kit.cafaye.com`'s root.** `cafaye/notes/deployment.md` decides the product's front
   door — `curl https://kit.cafaye.com | sh` — and the script it serves has
   existed since W74 with nothing behind the URL: measured fleet-wide,
   `grep -rln 'kit\.cafaye\.com'` returned only documentation and
@@ -1683,7 +1683,7 @@
   the URL works only when observed.
 
 - **The publish end of the pull-based loop: `chart.reusable.yml`, the
-  composed `publish.reusable.yml`, and the caller template.** `DEPLOYMENT.md`'s
+  composed `publish.reusable.yml`, and the caller template.** `cafaye/notes/deployment.md`'s
   deploy loop is pull-based — a commit changes a chart, Argo makes the box
   agree — and only the consume end existed: eight Argo CD `Application`s pull
   `oci://ghcr.io/cafaye/charts` and nothing in the fleet ever ran `helm push`
@@ -1748,7 +1748,7 @@
   the ACME directory URL, solved with HTTP-01 through Traefik's ingress class
   by `ingressClassName` — the field the pinned cert-manager v1.21.2 CRD
   recommends, verified against the release asset rather than memory. The
-  solver decision is HTTP-01 because it needs no credential (`DEPLOYMENT.md:28`
+  solver decision is HTTP-01 because it needs no credential (`cafaye/notes/deployment.md:33`
   makes Cloudflare a DNS change, never infrastructure), because Traefik is
   already there, and because the cost — wildcards — is a capability this
   product does not need; DNS-01 is not implemented and the README says why.
@@ -1803,7 +1803,7 @@
 
 - **`templates/substrate/`: the customer substrate — the one-command install,
   and the Applications that make it real.** `install.sh` is the executable
-  half of `DEPLOYMENT.md`: it installs k3s (single node, sqlite), cert-manager,
+  half of `cafaye/notes/deployment.md`: it installs k3s (single node, sqlite), cert-manager,
   CloudNativePG, Argo CD core, the GHCR image pull secret (from
   `KIT_SUBSTRATE_PULL_SECRET`, never a literal), and the first Applications, in
   that order. Every version is pinned exactly — k3s `v1.37.1+k3s1`,
@@ -1847,7 +1847,7 @@
   cap and spawn-latency-bound, the docker tiers are substrate-backed, and the
   remaining serial static checks are each under 0.1 s.
 
-- **`REPORT-kit-m44-gate-profile-truth-01.md`: the two written answers — the
+- **`REPORT-kit-m44-gate-profile-truth-01`: the two written answers — the
   gate tests no other repository, and `tests/validate.sh` is still needed.**
   (a) Confirmed with a command of the same shape as the manager's: zero
   `$ROOT/..` references in `tests/`, the only `../` hits are fixture strings
@@ -1875,7 +1875,7 @@
   see: ~99 s in the observability phase and ~22 s in the fetch section that no
   check row claims — real wall clock outside any `check`/`tier` call.
 
-- **`REPORT-kit-gate-speed-overlap-01.md`: the gate-speed packet's target was
+- **`REPORT-kit-gate-speed-overlap-01`: the gate-speed packet's target was
   retired before it was dispatched, and the measurement that proves it.** The
   packet commissioned overlap for the 73 `--only`-filtered child gates; those
   lived in `tests/self_test.sh`, which `32df467` deleted on 2026-10-05 by the
@@ -2531,7 +2531,8 @@
   distribution and appears nowhere in the README, and
   `.github/workflows/image.reusable.yml` is kit's *second* reusable standard
   and appears nowhere either. Measured on this tree, 145 of the 175 tracked
-  files under `reports/`, `tests/` and `templates/` are not on the tuple, and
+  files under the packet-evidence tree, `tests/` and `templates/` are not on
+  the tuple, and
   `grep -nE 'readme' tests/self_test.sh` returned **nothing** — so in a suite of
   107 recipes, not one had ever turned this check on in either direction.
 
@@ -2542,7 +2543,8 @@
   whether every shipped path sits under one the README names. Coverage is per
   **tree**, not per file: that bound is the argument, because requiring a row
   per shipped file is the failure this check exists to prevent, and a README
-  listing 157 paths is a README nobody reads. `tests/` and `reports/` are out of
+  listing 157 paths is a README nobody reads. `tests/` and the
+  packet-evidence tree are out of
   scope for stated reasons — one is the gate's own implementation, the other is
   packet evidence — and both exclusions are written into the check.
 
@@ -2559,8 +2561,9 @@
   **Two defects this found in the harness itself, both pre-existing and both
   the reason the first one was invisible.**
 
-  - `fresh_copy` did not copy `reports/`, and `readme_check`'s tuple requires
-    `reports/account-scope-contract-01/snapshot.sh` to **exist**. So every one of
+  - `fresh_copy` did not copy the packet-evidence tree, and `readme_check`'s
+    tuple requires the `account-scope-contract-01` snapshot to **exist**. So
+    every one of
     the suite's throwaway copies was red on an unbroken tree, and the control the
     file calls "the sentence that makes every proof below it meaningless" was
     printing `FAIL self_test: unbroken tree — the gate is RED on an unbroken
@@ -2590,7 +2593,7 @@
   self-test over its own fixtures, and that self-test's script. So the contract
   was continuous in nobody's build — a service could add a route, widen a
   declaration, or delete `account_scope.yml` entirely and its own gate stayed
-  green. `DEBT.md` D18's shape, one level up from where D18 had been looking,
+  green. `cafaye/notes/debt.md` D18's shape, one level up from where D18 had been looking,
   and the failure has a name in this repository's own history: *the gate that
   did not run the proof*.
 
@@ -2640,7 +2643,7 @@
   written, once between two measurements of the same command forty minutes
   apart, so "the current baseline" measured against live working trees is a
   number that changes while the report is being typed.
-  `reports/account-scope-contract-01/snapshot.sh` unpacks all nine at named
+  The `account-scope-contract-01` snapshot unpacks all nine at named
   commits with `git archive` (which reads a repository and writes nothing in
   it) and gives each copy a git repository of its own — because the runner's
   continuity rule reads `HEAD`, and a copy without history makes the runner
@@ -2656,7 +2659,7 @@
   two accounts through, and there is no query layer for `adapter_run` to call as
   account A. The adapter is **undefined, not unfinished**.
 
-  `reports/tenant-adapter-ts-01/subject-audit.sh` is the measurement, and it is
+  The `tenant-adapter-ts-01` subject audit is the measurement, and it is
   written to fail in the one direction that matters: it exits 0 while no
   TypeScript service holds a database and exits **1 naming the service** the
   moment one does, because that service is the first subject this harness can
@@ -2664,7 +2667,7 @@
   is the easiest kind of claim to satisfy by accident, so a check that could
   only report green would be reporting nothing.
 
-  `reports/tenant-adapter-ts-01/mutations.sh` is its recipe: **2 controls green,
+  The `tenant-adapter-ts-01` mutation recipe: **2 controls green,
   6 breakages planted, 4 observed RED each naming its own assertion, 9 greens,
   0 failures** — and the six are deliberately not six reds. B4 must stay GREEN
   (a `.sql` under `e2e/` is a fixture for another service's migration, so the
@@ -2691,7 +2694,7 @@
 - **The cross-tenant harness has a second adapter, and the honest claim is now
   two languages rather than one.** `tests/tenant_isolation/adapters/go.sh` is the
   five-function adapter against `identity`, and
-  `reports/tenant-adapter-go-01/mutations.sh` is its recipe: six breakages in
+  The `tenant-adapter-go-01` mutation recipe: six breakages in
   identity's own query layer, each one observed RED with the assertion it was
   written for named, each reverted and green again, with the tree byte-identical
   at the end. Measured: **1 control green (7 assertions), 6 breakages planted,
@@ -2892,10 +2895,10 @@
   The suffix is the shape a "make the group more specific" patch actually takes,
   and it is unprefixed without colliding.
 
-- **`fresh_copy` did not copy `reports/`, so every throwaway copy this suite
+- **`fresh_copy` did not copy the packet-evidence tree, so every throwaway copy this suite
   makes was a tree whose README documented a file it did not have.** The
   account-scope packet
-  added `reports/account-scope-contract-01/snapshot.sh` to the list
+  added the `account-scope-contract-01` snapshot to the list
   `readme_check` asserts both halves of — that `README.md` names the path and
   that `os.path.exists` finds it — and `fresh_copy`'s entry list is explicit and
   closed, so the new directory was not in it. Every copy then ran:
@@ -2996,7 +2999,7 @@
   holding `USAGE` on `api_keys_id_seq`.
 
   Five cases and three mutated controls, red first, in
-  `reports/substrate-sequence-grant/` — `BEFORE.txt` is the run against the
+  the `substrate-sequence-grant` packet — `BEFORE.txt` is the run against the
   substrate as it stood (`FAIL bigserial — permission denied for sequence`,
   `2/8 green, 4 N/A, 2 failed`), `AFTER.txt` is the same script on the fix
   (`8/8 cases green`). The negative control is green on an EMPTY grant set before
@@ -3034,12 +3037,12 @@
   this defect. That is also the trap — the natural next step for that suite is to
   give the probe table a serial column, and on the day that happens every
   `'42501'` assertion becomes satisfiable by the wrong failure, silently.
-  `reports/substrate-sequence-grant/` requires the message today, which is what
+  The `substrate-sequence-grant` packet requires the message today, which is what
   tells the two apart.
 
 ### Added
 
-- **`tests/tenant_isolation/` and `reports/tenant-isolation-harness/mutations.sh`:
+- **`tests/tenant_isolation/` and the `tenant-isolation-harness` mutation recipe:
   a harness that PROVES one account cannot read another's rows, by running the
   service's real query layer against a real database.** D18 says nothing proves
   it and nothing can ask. `core`'s `account_scope_check.py` (landing
@@ -3108,11 +3111,11 @@
   session; that is now a fact the rules are pointed at rather than a fact a reader
   has to notice.
 
-- **`reports/tenant-isolation-harness/BEFORE-*.ex` and `AFTER-*.ex`: the two source
+- **The `tenant-isolation-harness` fixtures `BEFORE-*.ex` and `AFTER-*.ex`: the two source
   files the six breakages are applied to, so a reviewer reads what is being broken
   instead of reconstructing it.** They are byte-identical by construction — every
   case reverts before the next — and they are committed because
-  `reports/wrapper-tier-scope/mutations.sh` already commits its `BEFORE.txt` and
+  The `wrapper-tier-scope` mutation recipe already commits its `BEFORE.txt` and
   `AFTER.txt` for the same reason.
 
 ### Added
@@ -3185,7 +3188,7 @@
     the new image rule first read as a hardcoded tag; matches are now ignored when
     the `docker` itself lies inside a quoted run. `-t` is matched only after
     `docker build`, because `-t` is `--tty` to `run` and `exec`.
-  - Recipe: `reports/wrapper-tier-scope/mutations.sh`, **8 cases, all bit**, guard
+  - Recipe: the `wrapper-tier-scope` mutation suite, **8 cases, all bit**, guard
     extracted from `tests/validate.sh` on every run so it cannot outlive it. Text
     scan only — no image, no container, no docker.
 
@@ -3251,7 +3254,7 @@
   `kit-tenancy` at two sites apiece. A compose project name is the namespace for
   that stack's containers, networks and volumes, so a fixed one means one run's
   teardown destroys the other's cluster mid-assertion. Observed on this box, not
-  argued from the source (`reports/compose-collision/`):
+  argued from the source (the `compose-collision` packet):
   - **isolation**, two concurrent runs: `A exit=0 B exit=1`. The second run
     replaced the first's running container (`kit-isolation-postgres-1 Recreate`)
     and could not bring up a cluster of its own.
@@ -3304,7 +3307,7 @@
   as in `self_test_no_version_literal`: a guard that covers nothing says so
   rather than reporting nothing.
   - **The guard was wrong three times before it was right, and the mutation
-    suite is what said so** (`reports/compose-collision/mutations.sh`, which
+    suite is what said so** (the `compose-collision` mutation suite, which
     breaks each property in turn, requires the gate to go red *and name the
     site*, then restores and re-asserts green): bring-up was detected per line,
     so the `if ! docker compose …` / `up -d` pair that is one command matched
@@ -3344,7 +3347,7 @@
   did: with `below` correct and the aliasing left alone, this tree's own legal
   `### Breaking` went red. Fixed together, and the message now reads "which was
   released against" because that is the fact being checked. Five trees, one
-  property each; see `REPORT-kit-version-recipe-drift-01.md`.
+  property each; see `REPORT-kit-version-recipe-drift-01`.
 
 - **Breakages 96, 97 and 99 died on `92a1127` and nobody could read it as
   related.** All four version-gate recipes spelled their `edit` anchor as the
@@ -3449,7 +3452,7 @@
     `FAIL: --only='kamal_test' selected NO check out of the suite.` The recipes
     passed only because `expect_red_check` greps for its own needle and ignores
     the next line. After: `1 check(s) ran, 94 excluded`.
-  - **And it withdraws a standing suggestion.** `REPORT-kit-cache-rollout-01.md`
+  - **And it withdraws a standing suggestion.** `REPORT-kit-cache-rollout-01`
     §5 listed "interpreter resolution → resolved once" among the floor's fixes.
     Measured: `00 bootstrap` is **0.040 s**, 0.6% of the floor. It cannot be
     made to matter, and it is struck rather than left standing.
@@ -3457,7 +3460,7 @@
     wiring a check into the fingerprint cache, find out whether a filtered copy
     is running it at all — a check that ignores the filter is charged to every
     copy that asked for something else, and no input declaration reaches that.
-    See `REPORT-kit-startup-floor-01.md` and `PROFILE-startup-floor.md`.
+    See `REPORT-kit-startup-floor-01` and `PROFILE-startup-floor.md`.
 
 ### Added
 
@@ -3931,7 +3934,7 @@ that debt is named in the handoff rather than paid here.
   gate's own findings underneath. The ceiling was in force throughout.
 
 - **It was the SEVENTH conversion, and the only one never measured.** The reach
-  table in `REPORT-kit-gate-speed-02.md` §4b walked the six `expect_red_check`
+  table in `REPORT-kit-gate-speed-02` §4b walked the six `expect_red_check`
   conversions plus a control. `expect_green_check` is a *different helper* with a
   *different single caller*, so the conversion was made and never run. A
   conversion nobody ran is a conversion nobody proved — the same lesson as
@@ -3992,7 +3995,7 @@ that debt is named in the handoff rather than paid here.
   it is from was truncated at 569.0 s and the file says so in its own first
   paragraph.
 
-- **`HANDOFF-kit-gate-speed.md`** — the successor's brief, including the finding
+- **`HANDOFF-kit-gate-speed`** — the successor's brief, including the finding
   that decides the order of work: **`--only`, which the recipe comments call
   "the 60×", is appended by `expect_red_check` and by nothing else, so 21 of 94
   recipes still run the whole static phase.** The real factor is ~47×.
@@ -4618,7 +4621,7 @@ that debt is named in the handoff rather than paid here.
   not a regression — but it is a real change in what the fleet gate reports, and
   it is called out here rather than discovered by whoever runs the gate next.
 
-- **`REPORT-kit-13.md` is left as it was.** Its line 95 is a verbatim copy of the
+- **`REPORT-kit-13` is left as it was.** Its line 95 is a verbatim copy of the
   output as it was printed, and a dated report is a record of what a packet did.
   Rewriting it would make the history lie about itself.
 
@@ -5917,7 +5920,7 @@ static gate was green because nothing in it looked at the thing that broke.
     read off the file.
 
 - **One of my own sentences was wrong, which is why it is here.** The first draft
-  of `REPORT-kit-14.md` and of eight ledger entries said a partially-adopted
+  of `REPORT-kit-14` and of eight ledger entries said a partially-adopted
   compose stack "cannot start". Checked with `docker compose config`: it does
   not. None of the six services' compose files mounts any of kit's stack files,
   each declares one or two services of its own, and five of six pass validation

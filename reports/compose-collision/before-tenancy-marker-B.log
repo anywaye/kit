@@ -1,5 +1,0 @@
-FAIL: the shared cluster did not come up. Last lines:
-        Container kit-tenancy-postgres-1 Recreate 
-        Container kit-tenancy-postgres-1 Error response from daemon: removal of container f55b2fbe01b1d59f30fc061e58932f72e8ede9ca19a4cda958b716bcd01e6c08 is already in progress 
-       Error response from daemon: removal of container f55b2fbe01b1d59f30fc061e58932f72e8ede9ca19a4cda958b716bcd01e6c08 is already in progress
-FAIL: cluster bring-up

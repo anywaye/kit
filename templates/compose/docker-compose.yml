@@ -693,7 +693,7 @@ services:
       # probe then failed `bin/dev up` with `stack did not become healthy`, so the
       # recovery path reported the fault the cache had caused. `bin/dev` now
       # retires a replaced cache instead of deleting it; see
-      # REPORT-kit-cachemount-01.md.
+      # REPORT-kit-cachemount-01.
       #
       # IT DOES NOT PROVE: that the pipelines are WIRED. `up --wait` waiting on
       # this waits for "the config reads and parses", which is weaker than

@@ -29,7 +29,7 @@ spec:
     #    `otelcol.receiver.otlp`; there is no Tempo), so without
     #    `OTEL_SDK_DISABLED=true` gateway retries `http://otel-collector:4317`
     #    forever and logs `traces export: ... produced zero addresses` every ten
-    #    seconds. See REPORT-roll-c5-otel.md.
+    #    seconds. See REPORT-roll-c5-otel.
     #
     # 2. THE CROSS-NAMESPACE ADDRESSES. THE BOX PUTS EVERY SERVICE IN ITS OWN
     #    NAMESPACE (`identity`, `gateway`, `courier`, `parlor`) AND THE DATA
@@ -66,7 +66,7 @@ spec:
     # NO default: unset means identity serves no OIDC surface at all), while the
     # chart's default is the fleet's production origin `https://auth.cafaye.com`.
     # A box that sets the installer's issuer must set the SAME origin here — the
-    # pair is reported in REPORT-roll-c5-crossns.md, and it is an operator fact
+    # pair is reported in REPORT-roll-c5-crossns, and it is an operator fact
     # (the customer's own domain) that a static manifest cannot hold.
     helm:
       values: |

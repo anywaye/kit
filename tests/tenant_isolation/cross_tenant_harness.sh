@@ -59,9 +59,8 @@
 #   with another test run.
 #
 #   `SESSION` is exported by a caller that makes three invocations (`up`, then
-#   `run` per case, then `down`) — which is what
-#   `reports/tenant-isolation-harness/mutations.sh` does, so that one database
-#   and one compilation serve all seven cases.
+#   `run` per case, then `down`), so that one database and one compilation serve
+#   all seven cases.
 #
 # A RUN THAT COULD NOT HAPPEN EXITS 2, NEVER 0
 #

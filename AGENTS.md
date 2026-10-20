@@ -959,7 +959,7 @@ nothing else). Removing the distribution would also delete
 `tests/deploy_test.sh`, which is where kit-16's live proof that the redactor
 catches a JWT by shape lives. That is a larger decision than this packet,
 it is recorded in
-`REPORT-kit-20.md` §"not removed", and it is not resolved here.
+`REPORT-kit-20` §"not removed", and it is not resolved here.
 
 ## The stack is FETCHED, and the pin is the only thing that decides what it is
 
@@ -1026,7 +1026,7 @@ Five rules, each of which is a thing that has to be true:
   **red**, reporting `2.0.0`'s perfectly legal heading against a release
   written after it. So the corrected sentence is the one above, and the clause
   now has red proofs on five trees, one property each; see
-  `REPORT-kit-version-recipe-drift-01.md` and `CHANGELOG.md`.
+  `REPORT-kit-version-recipe-drift-01` and `CHANGELOG.md`.
 
   **A rule that is checked over a list needs the RIGHT element of the list.**
   The comparison was additionally vacuous — `stability_parse` returns no value,
@@ -1195,3 +1195,11 @@ See `DECISIONS.md` (MD26, MD27).
 
 ## Secrets
 - No `.env` files with values. Use `cafe secret set/get/list` (dev) and `cafe dev` (injects). See `docs/secrets.md`.
+
+## Packet identifiers
+
+`REPORT-x`, `HANDOFF-x` and `MEASUREMENTS-x` name **work packets, not
+files**. The written reports were removed on 2026-10-20: duplicated across
+repositories, owned by nobody, rotting faster than they were read. What
+survives of a packet is its entry in `CHANGELOG.md` and, where a decision was
+made, in `DECISIONS.md`. A citation to a packet id points at that entry.

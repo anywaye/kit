@@ -4557,7 +4557,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # -------------------------------------------------------------------------
   # The chart publish path — the publish/consume seam, both ends in kit.
   #
-  # WHY THIS CHECK EXISTS. `DEPLOYMENT.md`'s deploy loop is pull-based: a
+  # WHY THIS CHECK EXISTS. `cafaye/notes/deployment.md`'s deploy loop is pull-based: a
   # commit changes a chart, Argo makes the box agree. The consume end is the
   # SERVICE half of the Argo CD `Application`s in `templates/substrate/
   # manifests/applications/` — `identity`, `gateway`, `courier`, `parlor`,
@@ -4657,7 +4657,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # finds it — the same silent shape as the publish/consume seam above, at
   # the other end of the same directory.
   #
-  # THE RULING IT ENFORCES (decided in `DEPLOYMENT.md`, "Who owns the
+  # THE RULING IT ENFORCES (decided in `cafaye/notes/deployment.md`, "Who owns the
   # `Application`" — cited, not restated, so this comment cannot drift from
   # it): the private-OCI shape exists for the closed-source service charts a
   # customer must pull without read access to our repositories. Third-party
@@ -4726,7 +4726,7 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 #   loki 7.3.0 was removed: its chart requires object storage this substrate
 #   does not provision, and an Application Argo cannot render is Unknown
 #   (ComparisonError at loki/storage.bucketNames.chunks) — see
-#   REPORT-roll-c5-loki-render.md.
+#   REPORT-roll-c5-loki-render.
 # The service set follows manifests/applications/: the services a customer
 # runs. `billing` joined on 2026-10-15 (it went to charging, and its
 # `publish.yml` pushes the chart the Application pulls) — it resolves to the
@@ -5415,7 +5415,7 @@ if [ "$RUN_OBSERVABILITY" -eq 1 ]; then
   # own if it is reached (one live tier plus three cluster tiers; failfast is
   # bounded where it runs).
   #
-  # The numbers are ~3x the quiet-machine durations recorded in REPORT-kit-13.md
+  # The numbers are ~3x the quiet-machine durations recorded in REPORT-kit-13
   # §7, not a guess: a bound set at the observed quiet duration is a bound that
   # fires on any contention at all, and a bound that fires is a tier that proved
   # nothing. That sentence is also why the fix for contention here was NOT to

@@ -91,9 +91,9 @@ conflicts, not to a working tree.
 
 **The failure mode this whole file is vulnerable to is `yarn add` succeeding on
 one row and failing on the next**, which is why the assertion is *installed
-truth*, not *a number that looked current*. See `HANDOFF-otel-01.md` §2.2 in
+truth*, not *a number that looked current*. See `HANDOFF-otel-01` §2.2 in
 `parlor` for the same reconciliation reached independently, and
-`HANDOFF-otel-01.md` §2.3 for the API removals that arrived with the 2.x line.
+`HANDOFF-otel-01` §2.3 for the API removals that arrived with the 2.x line.
 
 **The rust row is the one thing here that is not fleet-verified**, because no
 service in the fleet is written in rust. It is stated as the crate's published

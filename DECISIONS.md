@@ -765,7 +765,7 @@ at one recipe each, that is the right side of the trade.
 
 ## MD29 — **a rollout is sized against a MEASUREMENT, and a measurement the last packet made stale is not a measurement**
 
-`REPORT-kit-fingerprint-01.md` §5 handed the successor a rollout "as a list of
+`REPORT-kit-fingerprint-01` §5 handed the successor a rollout "as a list of
 declarations", and the brief behind it sized the prize at *"94 throwaway COPIES
 of the whole static phase, one per breakage"*.
 
@@ -800,7 +800,7 @@ write.
 
 ## MD30 — **the self-test's child gates opt OUT of the observability live tier, and no bound was widened**
 
-`REPORT-kit-selftest-live-tier-01.md`, §6. This is a decision about **what the
+`REPORT-kit-selftest-live-tier-01`, §6. This is a decision about **what the
 105 labelled recipes are allowed to run**, and the four available responses were
 all worse than the one taken.
 
@@ -955,7 +955,7 @@ version literal that reaches a recipe through a variable is invisible:
     v_part="2.0"; edit "$baseNN/VERSION" "$v_part" "$v_part.0.0"      -> GREEN
     v96_major="2.0"."0.0"                                            -> GREEN
 
-Both were measured, and both are reported in `REPORT-kit-version-recipe-drift-01.md`
+Both were measured, and both are reported in `REPORT-kit-version-recipe-drift-01`
 rather than left as a footnote. Neither is obfuscation a careful author reaches
 for, and closing them means either re-implementing bash's expansion (which fires
 on correct code and teaches the reader to ignore the check) or parsing recipe
@@ -1119,7 +1119,7 @@ passing it is still not something a text scan can read.
 **The count is 9, not the 8 this packet predicted**, and the difference is
 `provenance_test.sh` — named by the new emptiness finding, closed rather than tuned
 away. A guard whose number was adjusted to a target is a guard measuring the
-target. Recipe and measurements: `reports/wrapper-tier-scope/mutations.sh`,
+target. Recipe and measurements: the `wrapper-tier-scope` mutation suite,
 8 cases, all bit.
 
 ---
@@ -1132,12 +1132,14 @@ names it, and it exists. So a documented path that was **deleted** is a finding.
 A path that was **added** is not one at all. `readme_closure_check` now walks
 the five adoption trees and asks whether every shipped path sits under a path
 the README names. What was **not** made: a row per shipped file, a row per
-directory, or a check that `tests/` and `reports/` are documented too.
+directory, or a check that `tests/` and the packet-evidence tree are
+documented too.
 
 **The two things that were not made, and why.**
 
 1. *A row per shipped file.* Measured on this tree, **145 of the 175** tracked
-   files under `reports/`, `tests/` and `templates/` are not on the tuple. A
+   files under the packet-evidence tree, `tests/` and `templates/` are not
+   on the tuple. A
    README listing 157 paths is a README nobody reads, and a check that demanded
    them would be satisfied by the very thing it exists to prevent. So coverage
    is asserted per **tree**, and the cheapest true case is deliberately green: a
@@ -1151,12 +1153,14 @@ directory, or a check that `tests/` and `reports/` are documented too.
    `` `templates/deploy/` and `templates/bin/deploy.sh` `` rather than six
    leaves.
 
-**Why `tests/` and `reports/` are out of scope, which is a judgement and not a
+**Why `tests/` and the packet-evidence tree are out of scope, which is a
+judgement and not a
 measurement.** `tests/` is kit's own gate implementation; the README already
 names every proof a reader is expected to *run* (`isolation_test.sh`,
 `tenancy_test.sh`, `canary_test.sh`, `kamal_test.sh`, `fetch_test.sh`,
 `stack_live_test.sh`) and `tests/validate.sh` itself, and naming `fingerprint.py`
-and `bootstrap.sh` would add 17 rows that teach a reader nothing. `reports/` is
+and `bootstrap.sh` would add 17 rows that teach a reader nothing. The
+packet-evidence tree is
 packet evidence: it is addressed to whoever reads that packet's report, not to a
 reader deciding whether to adopt kit, and it is 32 files. Both exclusions are
 written into the check rather than left as a gap a future reader mistakes for

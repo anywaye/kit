@@ -24,7 +24,7 @@ way to get this fix any other way — kit is adopted by copy, so an old copy is
 an old verifier.
 
 `parlor` and `site` each carry a copy and are mid-packet with the consumer
-wiring; that copy is tracked in `HANDOFF-provenance-ownership-01.md` rather than
+wiring; that copy is tracked in `HANDOFF-provenance-ownership-01` rather than
 done here, because kit cannot commit to those repositories.
 
 ### What to expect to go red, and what each answer means

@@ -25,7 +25,7 @@
 > So the target was never the 21 unfiltered recipes; it is the 73 filtered ones,
 > and the fix for them is overlap, not filtering. **§4 below is correct and was
 > acted on. The table and answers 1–3 should be re-derived before anyone quotes
-> them.** The reasoning is in `REPORT-kit-gate-speed-02.md` §2 and §3.
+> them.** The reasoning is in `REPORT-kit-gate-speed-02` §2 and §3.
 
 **What this is.** The measurement `KIT_PROFILE` takes, and the table it produces.
 **What this is not.** An optimization. Nothing in this file was made faster; the
