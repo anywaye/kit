@@ -70,7 +70,7 @@ with no grant to request.
 
 | Piece | How it reaches you | How an update lands |
 |---|---|---|
-| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: cafaye/kit/.github/workflows/<file>@<ref>` — never copied | A PR bumping the ref |
+| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: cafaye/kit/ci/<file>@<ref>` — never copied | A PR bumping the ref |
 | Lint configs (`lint/`) | **Fetched at run time** by the workflow (`kit-lint-ref` input) | With the workflow bump; nothing in your tree |
 | Local stack (`templates/compose/`) | **Fetched** by `bin/dev` from your committed `kit.ref` | `bin/dev pin <new-sha>` (prints the stack diff first) |
 | Copied files (`docker/Dockerfile`, `bin/prime`, `mise.toml`, `AGENTS.md`, …) | **Copied** once | Re-copy + review the diff. Nothing automates this; a fix in Kit sits un-copied until you copy it — the documented cost of copy-adoption |
@@ -81,8 +81,8 @@ commit SHA** — never a branch, and never `@master` in a customer app
 branch moves under you between two runs of the same command):
 
 ```yaml
-# .github/workflows/ci.yml
-uses: cafaye/kit/.github/workflows/ci.reusable.yml@<40-char-sha> # master
+# ci/ci.yml
+uses: cafaye/kit/ci/ci.reusable.yml@<40-char-sha> # master
 with:
   kit-lint-ref: '<the same 40-char-sha>' # master
 ```
@@ -135,7 +135,7 @@ branch and opens PRs moving the pins forward — a PR per pin/update set
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/\\.github/workflows/[^/]*\\.ya?ml$/"],
+      "managerFilePatterns": ["/ci/[^/]*\\.ya?ml$/"],
       "matchStrings": ["kit-lint-ref:\\s*['\"]?(?<currentDigest>[0-9a-f]{40})['\"]?\\s*#\\s*(?<currentValue>\\S+)"],
       "depNameTemplate": "cafaye/kit",
       "packageNameTemplate": "cafaye/kit",
