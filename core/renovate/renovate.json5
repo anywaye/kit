@@ -5,7 +5,7 @@
   // Read this file's comments as load-bearing. Every option below was checked
   // against Renovate's own source at commit f998d68 (2026-09-30), and three of
   // them are not what the documentation's shape suggests. The checks and their
-  // outcomes are recorded in REPORT-kit-05-fanout.md.
+  // outcomes are recorded in REPORT-kit-05-fanout.
   //
   // WHY A SEPARATE REPOSITORY AT ALL. `inheritConfig` is read once, before any
   // repository is processed, so a policy change is one pull request in one place

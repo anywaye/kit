@@ -235,7 +235,7 @@ select cafaye.protect_table('pg_temp.cafaye_probe_things');
 -- The CREDENTIAL fixture. A second account-scoped table whose access path is
 -- "find the row by a value you present and learn the account from it" — the
 -- shape that made `identity`'s scoped tokens resolve to nothing under 00016,
--- measured and pinned in REPORT-identity-isolation-02.md §3 and in
+-- measured and pinned in REPORT-identity-isolation-02 §3 and in
 -- `TestTenancyACredentialLookupHasNoIdentityToRunUnder`.
 --
 -- TWO ROWS, ONE PER TENANT, WITH TWO DISTINCT DIGESTS, and that is the fixture
