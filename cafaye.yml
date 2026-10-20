@@ -45,7 +45,7 @@ language: spec
 core: ^0.2.0
 
 # kit publishes no HTTP surface and no events, and consumes none. It is not a
-# running process: a service CALLS `.github/workflows/ci.reusable.yml`, COPIES
+# running process: a service CALLS `ci/ci.reusable.yml`, COPIES
 # `lint/` and `templates/bin`, and FETCHES `templates/compose/` through the pin
 # in its own `kit.ref` — none of which is a contract, and none of which can break
 # at runtime. `exposes` is omitted rather than left empty, per core's manifest

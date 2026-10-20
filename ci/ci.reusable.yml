@@ -1,16 +1,32 @@
+# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
+#
+# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
+# on the machine the developer chose. This file is the SPECIFICATION those
+# checks read — the steps, the floors, the exemptions — kept where the
+# repository can hold it and read it.
+#
+# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
+# `ci.workflow`), and the CI service reads that declaration and runs it.
+#
+# The GitHub Actions spelling is retired, not deleted, because the checks in
+# this repository read this file to hold the specification still: a gate that
+# checks a specification nobody executes is a gate checking a fiction, and a
+# gate that checks nothing is worse. The steps below are the specification
+# the executable CI is measured against, and the day this file stops being
+# that, the checks move with it.
 ---
 # kit — the CI path every cafaye service repo runs.
 #
 # Consumers do not copy this file; they call it (repo: github.com/cafaye/<svc>):
 #
-#   # .github/workflows/ci.yml
+#   # ci/ci.yml
 #   name: ci
 #   on: [push, pull_request]
 #   permissions:
 #     contents: read
 #   jobs:
 #     ci:
-#       uses: cafaye/kit/.github/workflows/ci.reusable.yml@master
+#       uses: cafaye/kit/ci/ci.reusable.yml@master
 #       with:
 #         language: go
 #         working-dir: .
@@ -23,11 +39,11 @@
 # file for the measurement.
 #
 # The `.github/workflows/` in that path is not decoration. GitHub resolves a
-# reusable workflow at `{owner}/{repo}/.github/workflows/{file}@{ref}` and
+# reusable workflow at `{owner}/{repo}/ci/{file}@{ref}` and
 # documents that subdirectories of the workflows directory are not supported, so
 # this file has no reachable path from anywhere else in the tree. It is also the
 # only place a workflow may live at all if the repository that defines it is to
-# call it with `uses: ./.github/workflows/ci.reusable.yml`.
+# call it with `uses: ./ci/ci.reusable.yml`.
 #
 # One job per language exists on purpose: six services, six toolchains, and a
 # `language` x `version` matrix would multiply CI minutes the org cannot spend.
@@ -87,7 +103,7 @@ on:
       # workflow file itself was fetched at.
       #
       # These are two different things and the difference is the whole reason
-      # this input exists. `uses: cafaye/kit/.github/workflows/ci.reusable.yml@X`
+      # this input exists. `uses: cafaye/kit/ci/ci.reusable.yml@X`
       # pins the WORKFLOW at X. GitHub does not hand a called workflow its own
       # ref — `github.workflow_ref` inside a reusable workflow is the CALLER's
       # workflow, and `GITHUB_ACTION_PATH` is documented as composite-action-only
@@ -523,7 +539,7 @@ jobs:
   # It exists because of that, and because of a second, sharper reason: this is
   # kit, and the repository that defines the standard should be the first
   # repository held to it. Without it kit could not call its own workflow at
-  # all — `uses: ./.github/workflows/ci.reusable.yml` still needs a `language`,
+  # all — `uses: ./ci/ci.reusable.yml` still needs a `language`,
   # `language` is required, and every value in `options` named a toolchain this
   # repository does not have. The repository that ships the standard was
   # structurally excluded from using it.
@@ -727,7 +743,7 @@ jobs:
           # (shape 1). The check fails when neither shape is present — the defect
           # the guard exists for.
           if grep -rn --include='*.go' '^//go:generate.*@v' . >/dev/null; then
-            if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' .github/workflows/ci.yml 2>/dev/null; then
+            if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' ci/ci.yml 2>/dev/null; then
               : # warmed out of band — library shape, allowed
             else
               echo "::error::a //go:generate line pins @v but no cache-warming step was found — a library must warm the generator's graph out of band (throwaway module, GOMODCACHE is shared) or an application must declare the tool in tools.go and run as go run <module> without @v. See identity/bin/prime and gateway/tools.go." >&2

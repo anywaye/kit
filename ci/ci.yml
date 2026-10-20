@@ -1,3 +1,19 @@
+# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
+#
+# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
+# on the machine the developer chose. This file is the SPECIFICATION those
+# checks read — the steps, the floors, the exemptions — kept where the
+# repository can hold it and read it.
+#
+# What executes is `ci/gate.sh` (named in this repository's `gate.yml`, under
+# `ci.workflow`), and the CI service reads that declaration and runs it.
+#
+# The GitHub Actions spelling is retired, not deleted, because the checks in
+# this repository read this file to hold the specification still: a gate that
+# checks a specification nobody executes is a gate checking a fiction, and a
+# gate that checks nothing is worse. The steps below are the specification
+# the executable CI is measured against, and the day this file stops being
+# that, the checks move with it.
 ---
 # kit gating itself, with proportional feedback per change.
 #
@@ -19,7 +35,7 @@
 # narrowed. The weekly schedule below keeps that proof green on a quiet tree.
 #
 # WHAT THIS FILE DOES NOT DO. It does not change
-# `.github/workflows/ci.reusable.yml` — that file is a public standard other
+# `ci/ci.reusable.yml` — that file is a public standard other
 # repositories may call, so its inputs and behavior are frozen by this packet.
 # All routing lives here, in kit-owned local jobs. Service repositories are
 # independent: calling kit's reusable workflows is optional and versioned,
@@ -165,7 +181,7 @@ jobs:
     # its own ceiling, so this waiting job ends when the bounded `none` job it
     # calls does. `tests/workflow_timeouts_check.sh` enforces both halves —
     # every runs-on job bounded, and no uses job carrying the illegal key.
-    uses: ./.github/workflows/ci.reusable.yml
+    uses: ./ci/ci.reusable.yml
     with:
       language: none
       working-dir: .

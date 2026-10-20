@@ -53,7 +53,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-workflows="${1:-$ROOT/.github/workflows}"
+workflows="${1:-$ROOT/ci}"
 
 if [ ! -d "$workflows" ]; then
   echo "workflow timeouts: $workflows is not a directory" >&2

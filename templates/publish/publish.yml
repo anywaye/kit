@@ -1,13 +1,13 @@
 # kit — the publish path a service runs: one caller, two artifacts.
 #
-# Copy this file to .github/workflows/publish.yml in the service repository,
+# Copy this file to ci/publish.yml in the service repository,
 # verbatim. It is the whole of the service's side of the publish loop: the
 # image `config/deploy.yml` deploys and the chart the Argo CD `Application`
 # pulls, both published by kit's reusable workflows on every push to master.
 #
 # THE TWO ARTIFACTS, AND WHY ONE CALLER. The image is built and pushed by
-# `cafaye/kit/.github/workflows/image.reusable.yml`; the chart is packaged
-# and pushed by `cafaye/kit/.github/workflows/chart.reusable.yml`. Both are
+# `cafaye/kit/ci/image.reusable.yml`; the chart is packaged
+# and pushed by `cafaye/kit/ci/chart.reusable.yml`. Both are
 # called here, each opted in by the single `push` input below, so the
 # decision "what does a push publish" is made once, in kit, rather than in
 # every service repository. A service that ships a chart and no image
@@ -62,6 +62,6 @@ concurrency:
 
 jobs:
   publish:
-    uses: cafaye/kit/.github/workflows/publish.reusable.yml@master
+    uses: cafaye/kit/ci/publish.reusable.yml@master
     with:
       push: true

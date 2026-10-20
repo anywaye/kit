@@ -5,7 +5,7 @@
 # THIS FILE IS A DELIVERABLE FOR `core`, NOT A KIT ARTIFACT. kit ships it here
 # because kit is where the standard is written down, and because a file that
 # lives only in a pull request description is a file nobody can `git grep` for.
-# Copy it to `core/.github/workflows/release.yml` in a pull request against core.
+# Copy it to `core/ci/release.yml` in a pull request against core.
 #
 # WHY CORE NEEDS THIS AT ALL
 #

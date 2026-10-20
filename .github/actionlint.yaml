@@ -26,6 +26,6 @@
 # When actionlint's schema catches up, delete this file; the workflow does not
 # depend on it.
 paths:
-  .github/workflows/image.reusable.yml:
+  ci/image.reusable.yml:
     ignore:
       - 'property "workflow_sha" is not defined'

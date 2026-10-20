@@ -70,7 +70,7 @@ trap 'kit_phase "END OF RUN (no section header after this point)"; kit_total; rm
 # reusable workflow. It is a variable rather than a literal repeated in a dozen
 # heredocs because the path being wrong is exactly the defect this packet
 # exists to fix — see the `callable path` check below.
-WORKFLOW='.github/workflows/ci.reusable.yml'
+WORKFLOW='ci/ci.reusable.yml'
 
 # The SECOND reusable workflow kit hands out, added by kit-32: the one that
 # builds a service's image and publishes it to ghcr.io. It is a variable for
@@ -1631,7 +1631,7 @@ PY
   # section still prints one line per file in file order.
   if [ -z "$ONLY_MATCH" ]; then
   par_begin
-  for f in "$ROOT"/.github/workflows/* "$ROOT"/lint/* "$ROOT"/docker/* \
+  for f in "$ROOT"/ci/* "$ROOT"/lint/* "$ROOT"/docker/* \
     "$ROOT"/backends/instabox/*.sh \
     "$ROOT"/templates/bin-prime/* "$ROOT"/templates/compose/* \
     "$ROOT"/templates/kamal/drill.sh \
@@ -2023,7 +2023,7 @@ json.loads("".join(out))
   # neither (red).
   check 'ci.reusable.yml Go job has no-generate-version guard' bash -c '
     set -euo pipefail
-    f="$1/.github/workflows/ci.reusable.yml"
+    f="$1/ci/ci.reusable.yml"
     if ! grep -q "no generate version pin" "$f"; then
       echo "ci.reusable.yml Go job has no \"no generate version pin\" step" >&2
       exit 1
@@ -2063,7 +2063,7 @@ json.loads("".join(out))
     guard_passes() {
       local dir="$1"
       if grep -rq "^//go:generate.*@v" --include="*.go" "$dir" >/dev/null; then
-        if grep -q "GOMODCACHE\|go mod download all" "$dir/bin/prime" 2>/dev/null || grep -q "GOMODCACHE\|go mod download all" "$dir/.github/workflows/ci.yml" 2>/dev/null; then
+        if grep -q "GOMODCACHE\|go mod download all" "$dir/bin/prime" 2>/dev/null || grep -q "GOMODCACHE\|go mod download all" "$dir/ci/ci.yml" 2>/dev/null; then
           return 0
         else
           return 1
@@ -2088,10 +2088,10 @@ json.loads("".join(out))
     fi
 
     # 2. WARMED OUT OF BAND shape: @v present plus warming step — the library shape (identity). Must pass.
-    mkdir -p "$tmp/warmed/bin" "$tmp/warmed/.github/workflows"
+    mkdir -p "$tmp/warmed/bin" "$tmp/warmed/ci"
     printf "//go:generate go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0 --config oapi-codegen.yaml\n" > "$tmp/warmed/gen.go"
     printf "# WARM THE GENERATOR — GOMODCACHE is shared\n# go mod download all\n" > "$tmp/warmed/bin/prime"
-    printf "warming: GOMODCACHE\n" > "$tmp/warmed/.github/workflows/ci.yml"
+    printf "warming: GOMODCACHE\n" > "$tmp/warmed/ci/ci.yml"
     if ! guard_passes "$tmp/warmed"; then
       echo "generate-version guard failed on warmed fixture — false positive (should be green)" >&2
       exit 1
@@ -2750,7 +2750,7 @@ PY
   # by the shell that runs it — which is why every check above is satisfied by a
   # workflow whose `run:` bodies are all broken.
   #
-  # THE DEFECT THIS EXISTS FOR, measured. `.github/workflows/image.reusable.yml`'s
+  # THE DEFECT THIS EXISTS FOR, measured. `ci/image.reusable.yml`'s
   # `stamp provenance` step was:
   #
   #   KIT_PROVENANCE_BUILT_AT="$(date …)" \
@@ -2911,7 +2911,7 @@ def steps(node, path=()):
 
 problems = []
 
-for wf in sorted(glob.glob(os.path.join(root, ".github/workflows/*.yml"))):
+for wf in sorted(glob.glob(os.path.join(root, "ci/*.yml"))):
     rel = os.path.relpath(wf, root)
     with open(wf, encoding="utf-8") as fh:
         doc = yaml.safe_load(fh)
@@ -2989,7 +2989,7 @@ PY
     bash "$ROOT/tests/workflow_timeouts_check.sh" "$1"
   }
   check 'workflow timeouts  (every runs-on job declares timeout-minutes in 1..360; no uses job carries the illegal key)' \
-    check_workflow_timeouts "$ROOT/.github/workflows"
+    check_workflow_timeouts "$ROOT/ci"
 
   # -------------------------------------------------------------------------
   section 'static: compose — the observability chokepoint'
@@ -4562,7 +4562,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # SERVICE half of the Argo CD `Application`s in `templates/substrate/
   # manifests/applications/` — `identity`, `gateway`, `courier`, `parlor`,
   # the four charts the fleet publishes; the publish end is
-  # `.github/workflows/chart.reusable.yml`. The loop fails
+  # `ci/chart.reusable.yml`. The loop fails
   # SILENTLY when the two disagree — Argo reports no error, it just never
   # finds the artifact — and the fact that BOTH ends of that seam live in
   # this repository is what makes it provable here rather than documented.
@@ -5246,7 +5246,7 @@ PY
   # real tree passes.
   section 'static: the chart publish path — the publish/consume seam, both ends in kit'
   check 'chart publish  (workflow_call, push defaults false, registry + chart == every service Application repoURL, name/version not inputs, pull_request refused)' \
-    check_chart_publish "$ROOT/.github/workflows/chart.reusable.yml" \
+    check_chart_publish "$ROOT/ci/chart.reusable.yml" \
       "$ROOT/templates/substrate/manifests/applications"
 
   # -------------------------------------------------------------------------
@@ -5258,7 +5258,7 @@ PY
   #   1. `publish.reusable.yml` called its siblings with
   #      `uses: ./image.reusable.yml` and `uses: ./chart.reusable.yml`.
   #      GitHub resolves a local reusable workflow from the repository ROOT
-  #      as `./.github/workflows/<file>`, so the run was rejected at
+  #      as `./ci/<file>`, so the run was rejected at
   #      workflow-resolution time — `referenced_workflows: []`, no jobs, no
   #      check-runs, no log line — and the services' publish workflows
   #      failed on every push since they were created.
@@ -5288,7 +5288,7 @@ PY
   # same assertions the real tree passes.
   section 'static: the publish path — the references resolve, and the tag the chart pins is the tag the publish produces'
   check 'publish seam  (local uses root-relative and resolving; caller/callee inputs agree both ways; appVersion derived into the image tag; sha-<40> kept; image digest derived from the image job, written before helm package, refused when malformed; sibling charts agree with their Applications)' \
-    check_publish_seam "$ROOT/.github/workflows" \
+    check_publish_seam "$ROOT/ci" \
       "$ROOT/templates/substrate/manifests/applications" \
       "$ROOT/.." \
       "$ROOT/templates/publish/publish.yml"
@@ -5298,7 +5298,7 @@ PY
   # provenance stamper was read from the caller's checkout though the script
   # lives in kit. Both were in steps that had never once run, in any caller.
   check 'publish toolchain  (no helm flag the pinned v4 lacks; the pin is verified against one value; the provenance stamper is fetched from the reusable workflow'"'"'s own commit, guarded by name)' \
-    check_publish_toolchain "$ROOT/.github/workflows"
+    check_publish_toolchain "$ROOT/ci"
 
   # -------------------------------------------------------------------------
   # The observability chart sources — every Application resolves to a chart

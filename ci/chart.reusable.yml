@@ -1,8 +1,24 @@
+# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
+#
+# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
+# on the machine the developer chose. This file is the SPECIFICATION those
+# checks read — the steps, the floors, the exemptions — kept where the
+# repository can hold it and read it.
+#
+# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
+# `ci.workflow`), and the CI service reads that declaration and runs it.
+#
+# The GitHub Actions spelling is retired, not deleted, because the checks in
+# this repository read this file to hold the specification still: a gate that
+# checks a specification nobody executes is a gate checking a fiction, and a
+# gate that checks nothing is worse. The steps below are the specification
+# the executable CI is measured against, and the day this file stops being
+# that, the checks move with it.
 ---
 # kit — the chart path every cafaye service repo runs.
 #
 # Consumers do not copy this file; they call it, exactly as they call
-# `.github/workflows/image.reusable.yml`. Most call it through the composed
+# `ci/image.reusable.yml`. Most call it through the composed
 # `publish.reusable.yml` (see that file's header); a service that ships a chart
 # and no image calls it directly:
 #
@@ -16,7 +32,7 @@
 #     packages: write          # REQUIRED, and the caller's to grant — see below
 #   jobs:
 #     chart:
-#       uses: cafaye/kit/.github/workflows/chart.reusable.yml@master
+#       uses: cafaye/kit/ci/chart.reusable.yml@master
 #       with:
 #         push: true
 #

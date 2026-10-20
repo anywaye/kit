@@ -139,7 +139,7 @@ kitref = managers["/(^|/)kit\\.ref$/"]
 rx = re.compile(pat.replace("(?<", "(?P<"))
 m = rx.search(sha + "\n")
 assert m and m.group("currentDigest") == sha, "kit.ref pattern misses a bare SHA"
-lint = managers["/\\.github/workflows/[^/]*\\.ya?ml$/"]
+lint = managers["/ci/[^/]*\\.ya?ml$/"]
 (pat,) = lint["matchStrings"]
 rx = re.compile(pat.replace("(?<", "(?P<"))
 line = "  kit-lint-ref: '%s' # master" % sha

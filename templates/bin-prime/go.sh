@@ -90,7 +90,7 @@ if grep -rn --include='*.go' '^//go:generate.*@v' . >/dev/null; then
   # and runs `go mod download all` out of band, so we look for that pattern in
   # the gate itself (bin/prime) or in the CI workflow. GOMODCACHE is the marker
   # that the cache is shared between the throwaway module and `go run`.
-  if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' .github/workflows/ci.yml 2>/dev/null; then
+  if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' ci/ci.yml 2>/dev/null; then
     : # warmed out of band — library shape, allowed
   else
     echo "bin/prime: a //go:generate line pins @v but no cache-warming step was found" >&2

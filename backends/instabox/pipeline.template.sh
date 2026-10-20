@@ -10,7 +10,7 @@
 # between them that Actions used to hold, moved into the repository where it
 # can be run by hand, by a sandbox, or by a runner.
 #
-# WHERE THE FACTS COME FROM: `.github/workflows/*.yml` IN THIS REPOSITORY.
+# WHERE THE FACTS COME FROM: `ci/*.yml` IN THIS REPOSITORY.
 # Every fact this template uses about how a repository is built — whether it
 # pins a toolchain with mise, what its gate entrypoint is called, and which
 # PATH entries its CI adds — is visible in its workflow files, and THAT FILE
@@ -23,17 +23,17 @@
 #      `mise install` and then the gate under `mise exec`, so the gate runs on
 #      the pinned toolchain rather than whatever the sandbox ships.
 #
-#   2. WHAT IS THE GATE CALLED?  `grep -A2 'name: ' .github/workflows/ci.yml`.
+#   2. WHAT IS THE GATE CALLED?  `grep -A2 'name: ' ci/ci.yml`.
 #      It is `bin/prime` in almost every repository, and NOT in these, which
 #      is why this is a MARKED place rather than a default:
-#        box        `bin/ci`      (.github/workflows/ci.yml, "gate (bin/ci)")
-#        keyholder  `bin/gate`    (.github/workflows/ci.yml, "bin/gate")
+#        box        `bin/ci`      (ci/ci.yml, "gate (bin/ci)")
+#        keyholder  `bin/gate`    (ci/ci.yml, "bin/gate")
 #        kit        `bash tests/validate.sh` — kit has no bin/prime, and its
 #                   `language: none` job runs its own gate; see its ci.yml
 #      A gate a workflow names and a pipeline does not is a pipeline that is
 #      green while testing nothing — read the file, do not assume.
 #
-#   3. DOES ITS CI ADD PATH ENTRIES?  `grep 'GITHUB_PATH' .github/workflows/*.yml`.
+#   3. DOES ITS CI ADD PATH ENTRIES?  `grep 'GITHUB_PATH' ci/*.yml`.
 #      gateway's `prime` job installs golangci-lint into `$HOME/.local/bin`
 #      and then appends it to PATH, because `bin/prime` exits 127 without the
 #      binary. Any such line in a workflow belongs in the PATHS list below, in
@@ -115,13 +115,13 @@ log "pipeline: $REPO_NAME at $REPO_DIR"
 
 # ===========================================================================
 # MARKED 1 — THE GATE. Replace `./bin/prime` with the entrypoint THIS
-# repository's `.github/workflows/ci.yml` names. See the header.
+# repository's `ci/ci.yml` names. See the header.
 # ===========================================================================
 GATE=(./bin/prime)
 
 # ===========================================================================
 # MARKED 2 — PATHS THIS REPOSITORY'S CI ADDS. Copy every `echo … >> $GITHUB_PATH`
-# line out of `.github/workflows/*.yml`. Example, from gateway's ci.yml:
+# line out of `ci/*.yml`. Example, from gateway's ci.yml:
 #   PATHS=("$HOME/.local/bin")     # golangci-lint, installed by the gate job
 # ===========================================================================
 PATHS=()

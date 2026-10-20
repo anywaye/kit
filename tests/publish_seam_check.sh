@@ -10,7 +10,7 @@
 #
 #   1. publish.reusable.yml called its siblings with `uses: ./image.reusable.yml`
 #      and `uses: ./chart.reusable.yml`. GitHub resolves a local reusable
-#      workflow from the repository ROOT as `./.github/workflows/<file>`; a
+#      workflow from the repository ROOT as `./ci/<file>`; a
 #      path that omits the directory cannot be resolved and GitHub rejects
 #      the run at workflow-resolution time — `referenced_workflows: []`, no
 #      jobs, no check-runs, no log line. The services' publish workflows
@@ -24,7 +24,7 @@
 #
 # WHAT IT PROVES.
 #   1. Every local `uses:` in the composer is root-relative
-#      (`./.github/workflows/<file>`) and resolves to a file that exists.
+#      (`./ci/<file>`) and resolves to a file that exists.
 #   2. Caller/callee agreement, in BOTH directions: a job passes no input the
 #      callee does not declare (a refusal at run time), and every REQUIRED
 #      input of the callee is passed. Asserted for the composer's own two
@@ -180,7 +180,7 @@ jobs = composer_doc.get("jobs") or {}
 # ---------------------------------------------------------------------
 # 1 + 2. The local `uses:` paths, and caller/callee agreement both ways.
 # ---------------------------------------------------------------------
-LOCAL_PREFIX = "./.github/workflows/"
+LOCAL_PREFIX = "./ci/"
 for job_id in sorted(jobs):
     job = jobs[job_id] if isinstance(jobs[job_id], dict) else {}
     uses = job.get("uses")
@@ -192,7 +192,7 @@ for job_id in sorted(jobs):
         problems.append(
             f"publish.reusable.yml job {job_id!r} uses {uses!r} — GitHub "
             f"resolves a local reusable workflow from the repository ROOT "
-            f"as ./.github/workflows/<file>, so this reference cannot be "
+            f"as ./ci/<file>, so this reference cannot be "
             f"resolved and the run is rejected at workflow-resolution time: "
             f"no jobs, no check-runs, no log line"
         )
@@ -414,7 +414,7 @@ for job_id, job in (template_doc.get("jobs") or {}).items():
     if not isinstance(uses, str) or "publish.reusable.yml" not in uses:
         continue
     called = True
-    if not uses.startswith("cafaye/kit/.github/workflows/publish.reusable.yml@"):
+    if not uses.startswith("cafaye/kit/ci/publish.reusable.yml@"):
         problems.append(
             f"{caller_template} job {job_id!r} uses {uses!r} — the caller "
             f"names the kit ref it adopts, pinned"
@@ -539,7 +539,7 @@ for app in apps:
                 )
 
         repo = repo_root_of(chart_dir)
-        caller_path = os.path.join(repo, ".github", "workflows", "publish.yml")
+        caller_path = os.path.join(repo, "ci", "publish.yml")
         if os.path.isfile(caller_path):
             try:
                 cdoc2 = load(caller_path)
@@ -617,7 +617,7 @@ fi
 ctl_a="$TMP/ctl-a-workflows"
 mkdir -p "$ctl_a"
 cp "$workflows"/*.yml "$ctl_a"/
-sed 's|^\( *\)uses: \./\.github/workflows/image\.reusable\.yml$|\1uses: ./image.reusable.yml|' \
+sed 's|^\( *\)uses: \./ci/image\.reusable\.yml$|\1uses: ./image.reusable.yml|' \
   "$ctl_a/publish.reusable.yml" >"$ctl_a/publish.reusable.yml.new"
 mv "$ctl_a/publish.reusable.yml.new" "$ctl_a/publish.reusable.yml"
 run_checker "$ctl_a" "$apps_dir" "$fleet" "$caller_template"

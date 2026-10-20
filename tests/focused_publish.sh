@@ -24,7 +24,7 @@
 #      appVersion, sha-<40> kept, and every sibling chart beside
 #      $ROOT/.. asserted against its Application (or named absent).
 #   4. tests/workflow_timeouts_check.sh: the billing guard — every `runs-on`
-#      job in .github/workflows/*.yml declares `timeout-minutes` in 1..360,
+#      job in ci/*.yml declares `timeout-minutes` in 1..360,
 #      and no `uses:` job carries the key GitHub refuses. Its three red
 #      controls (a deleted bound; the key on a uses job; a bound above 360)
 #      must go red under the same checker the real tree passes.
@@ -88,14 +88,14 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 if ! bash "$ROOT/tests/chart_publish_check.sh" \
-  "$ROOT/.github/workflows/chart.reusable.yml" \
+  "$ROOT/ci/chart.reusable.yml" \
   "$ROOT/templates/substrate/manifests/applications"; then
   printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + chart publish check FAILED\n' "$pass" "$fail" "$skip"
   exit 1
 fi
 
 if ! bash "$ROOT/tests/publish_seam_check.sh" \
-  "$ROOT/.github/workflows" \
+  "$ROOT/ci" \
   "$ROOT/templates/substrate/manifests/applications" \
   "$ROOT/.." \
   "$ROOT/templates/publish/publish.yml"; then
@@ -107,7 +107,7 @@ fi
 # `uses:` job carries the key GitHub rejects. This file is the narrow gate for
 # the workflow-timeouts packet, so its own proof (green here, three red
 # controls inside) runs beside the publish seams it lives with.
-if ! bash "$ROOT/tests/workflow_timeouts_check.sh" "$ROOT/.github/workflows"; then
+if ! bash "$ROOT/tests/workflow_timeouts_check.sh" "$ROOT/ci"; then
   printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + workflow timeouts check FAILED\n' "$pass" "$fail" "$skip"
   exit 1
 fi
@@ -115,7 +115,7 @@ fi
 # 5. The toolchain seams: no helm flag the pinned v4 lacks, a helm pin that is
 # verified against one value, and the provenance stamper fetched from kit's own
 # commit — the two steps that failed the first time the publish path ran.
-if ! bash "$ROOT/tests/publish_toolchain_check.sh" "$ROOT/.github/workflows"; then
+if ! bash "$ROOT/tests/publish_toolchain_check.sh" "$ROOT/ci"; then
   printf 'FOCUSED=publish  pass=%d fail=%d skip=%d + publish toolchain check FAILED\n' "$pass" "$fail" "$skip"
   exit 1
 fi

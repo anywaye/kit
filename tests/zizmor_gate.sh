@@ -12,7 +12,7 @@
 #
 #   `unpinned-uses` findings are RECORDED, and nothing else is.
 #
-#   The fleet calls `cafaye/kit/.github/workflows/ci.reusable.yml@master`, so
+#   The fleet calls `cafaye/kit/ci/ci.reusable.yml@master`, so
 #   every `uses:` in every adopting repo is a branch ref and zizmor reports
 #   thirty-odd of them. Two things can be done with that, and only one of them
 #   is honest:
@@ -46,8 +46,8 @@ set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
 ZIZMOR="${2:-zizmor}"
 
-if [ ! -d "$ROOT/.github/workflows" ]; then
-  echo "zizmor_gate: $ROOT/.github/workflows does not exist — nothing to audit." >&2
+if [ ! -d "$ROOT/ci" ]; then
+  echo "zizmor_gate: $ROOT/ci does not exist — nothing to audit." >&2
   exit 1
 fi
 
@@ -71,7 +71,7 @@ fi
 # the question this script exists to answer.
 if ! "$ZIZMOR" --no-progress --format json \
   "${config_args[@]}" \
-  "$ROOT/.github/workflows" >"$report" 2>"$work/stderr"; then
+  "$ROOT/ci" >"$report" 2>"$work/stderr"; then
   # Not an error: findings present is a normal outcome, and the report is about
   # to be read. A zizmor that could not run at all prints nothing parseable, so
   # that is the case worth failing on here.
@@ -100,7 +100,7 @@ except Exception as exc:
 RECORDED = {
     "unpinned-uses": (
         "kit and its thirteen adopters call "
-        "cafaye/kit/.github/workflows/ci.reusable.yml@master by design. Pinning "
+        "cafaye/kit/ci/ci.reusable.yml@master by design. Pinning "
         "to a SHA is a real cost and a real benefit; both are costed in "
         "DECISIONS.md under MD10, together with the third option (pin, and let "
         "Renovate open the bump PRs). Until that is decided, this finding is "

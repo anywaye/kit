@@ -57,7 +57,7 @@ expect publish -- templates/publish/publish.yml
 
 # 07-09. Platform/runtime artifacts, workflows, tests take full.
 expect full -- tests/validate.sh tests/route.sh
-expect full -- .github/workflows/ci.yml .github/workflows/ci.reusable.yml
+expect full -- ci/ci.yml ci/ci.reusable.yml
 expect full -- templates/substrate/install.sh VERSION core/release/foo.json
 
 # 10. Unknown paths fail closed.

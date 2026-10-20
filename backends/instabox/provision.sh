@@ -12,7 +12,7 @@
 #
 # --postgres AND PER-PROJECT DATABASES. Five projects' gates cannot start
 # without a Postgres (identity, billing, courier, darkroom, box — read from each
-# repository's `.github/workflows/ci.yml`, which names a `postgres:17-alpine`
+# repository's `ci/ci.yml`, which names a `postgres:17-alpine`
 # service; the README's rollout table records the same column). Without the flag
 # a project's pipeline fails at its first migration on a machine nobody
 # provisioned for it. With it, provision ensures ONE postgres container on the
@@ -123,7 +123,7 @@ done
 [ "${#PROJECTS[@]}" -gt 0 ] || usage
 
 # The projects that declare a database, and the rollout table's database column
-# in one place. Read from each repository's `.github/workflows/ci.yml`, never
+# in one place. Read from each repository's `ci/ci.yml`, never
 # invented: every name here has a `postgres:17-alpine` service block. A caller
 # that adds or removes a project overrides this rather than editing the file.
 CI_DB_PROJECTS="${CI_DB_PROJECTS:-identity billing courier darkroom box}"
