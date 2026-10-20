@@ -3,7 +3,7 @@
 #
 # Checked by cafaye/core's contract harness:
 #
-#     bash /Users/kaka/Code/any/moon/cafaye/core/harness/bin/tenancy-check .
+#     bash /Users/kaka/Code/any/cafaye/core/harness/bin/tenancy-check .
 #
 # KIT IS THE SUBSTRATE INSTALLER, AND IT HOLDS NO CUSTOMER ROWS. It provisions
 # the k3s cluster, Traefik, cert-manager, CNPG, ArgoCD, Redis, NATS and the

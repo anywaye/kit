@@ -10,7 +10,7 @@
 
 WHAT THIS IS
 
-  moon's `TaskFingerprint` (refs/moon/crates/task-hasher/src/task_fingerprint.rs:10-53)
+  moon's `TaskFingerprint` (reference/moon/crates/task-hasher/src/task_fingerprint.rs:10-53)
   and `task_runner.rs:238-256` do two things: they hash a MANIFEST — the declared
   inputs, by content — and they skip a run only when the fingerprint matches, the
   last exit was 0, and the outputs are still on disk. This file is that pair,

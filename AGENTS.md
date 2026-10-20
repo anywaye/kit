@@ -1135,7 +1135,7 @@ See `DECISIONS.md` (MD26, MD27).
   dependency into a run that did not. A witness from a different run is not a
   witness. Cache build products — `target/`, `$GOCACHE`, `node_modules`,
   `vendor/bundle` — and never a witness.
-- **Never copy code from `moon/refs/`** into this repo or into any cafaye
+- **Never copy code from `reference/`** into this repo or into any cafaye
   repo. Those trees are behavioral references; every line here is ours.
 - **Pins are placeholders.** `templates/mise.toml` and the Dockerfiles carry
   placeholder versions on purpose. A service raises them in its own repo; kit

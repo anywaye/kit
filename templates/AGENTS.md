@@ -49,7 +49,7 @@ Run these; do not improvise equivalents.
 - **Never** weaken a linter, add an inline disable, or raise a threshold to
   make a build green. Fix the code, or open a PR that says why the rule is
   wrong.
-- **Never** copy code from `moon/refs/` into this repo. Those trees are
+- **Never** copy code from `reference/` into this repo. Those trees are
   behavioral references only; every line here is written from scratch.
 - Errors are wrapped at the boundary (`errorlint`, `Error` structs) and carry
   the identifier needed to find the failing row, not just a message.

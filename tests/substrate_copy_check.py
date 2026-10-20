@@ -2,7 +2,7 @@
 """Does an adopting service's copy of the substrate still match kit's?
 
     python3 tests/substrate_copy_check.py ../identity ../darkroom
-    python3 tests/substrate_copy_check.py --fleet /Users/kaka/Code/any/moon/cafaye
+    python3 tests/substrate_copy_check.py --fleet /Users/kaka/Code/any/cafaye
 
 WHY THIS EXISTS, AND WHAT IT WOULD HAVE CAUGHT
 

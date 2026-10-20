@@ -22,7 +22,7 @@
 -- database advisor (`pg-meta`'s `studio/advisor/lints.ts`), which is where the
 -- row-per-rule union-all query and the nine-column output come from. NOTHING is
 -- copied from it: it is MIT-licensed and its own rule is that an adopter must not
--- vendor it, and this repository's rule is that nothing in `moon/refs/` is ever
+-- vendor it, and this repository's rule is that nothing in `reference/` is ever
 -- copied in. Every query below was written against this fleet's catalogs, and
 -- every one that had to differ says so at the point of the difference.
 --

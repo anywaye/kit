@@ -3860,7 +3860,7 @@ that debt is named in the handoff rather than paid here.
   The rules are ported from the shape of Supabase's database advisor and are
   **written from scratch against this fleet's catalogs** — nothing is vendored,
   per that project's own MIT-licensed-advisor rule and this repository's
-  no-copy-from-`moon/refs/` rule. Every substitution is stated at the point it
+  no-copy-from-`reference/` rule. Every substitution is stated at the point it
   happens: `anon`/`authenticated` → any non-owner LOGIN role (so the
   source's anonymous-vs-signed-in distinction collapses and two rules become
   four-word rules rather than four), `pgrst.db_schemas` → the `p_schemas`
@@ -4140,7 +4140,7 @@ that debt is named in the handoff rather than paid here.
   budgets are the argument: mimir 130s (retries 12 × interval 10s), tempo 65s,
   loki 16s, grafana 20s once and over 180s another time on a cold volume while it
   downloads a plugin zip nobody asked for. Against a 180s stack deadline and a
-  76s typical cold start (`RESEARCH-fleet-velocity.md` P1), the default was the
+  76s typical cold start (`cafaye/notes/reference/fleet-velocity.md` P1), the default was the
   tax and `KIT_DEV_PROFILES= bin/dev up` — documented as the *escape hatch* — was
   the good path. That is backwards, so it is now the highway:
   `KIT_DEV_PROFILES=observability bin/dev up` brings up tempo, loki and grafana.
@@ -4225,10 +4225,10 @@ that debt is named in the handoff rather than paid here.
   template shipped a bare `ENTRYPOINT ["/app/service"]`, so the schema a service
   booted against was whatever the last deploy or the last developer left behind,
   and a second replica booting beside the first met the cold-start failure:
-  the service is up, the schema is not. `RESEARCH-fleet-velocity.md` P0-6.
+  the service is up, the schema is not. `cafaye/notes/reference/fleet-velocity.md` P0-6.
   Both references that get this right do it in one shape — migrate first, serve
   last, chained so a failure refuses the start
-  (`refs/signoz/…/compose.yaml:7-12`, `refs/bugsink/Dockerfile:54`) — so that
+  (`reference/signoz/…/compose.yaml:7-12`, `reference/bugsink/Dockerfile:54`) — so that
   shape is one script rather than seven hand-written wrappers.
 
 - **THE DEPLOY STORY CHANGED, and this is the feature.** A failed migration now
