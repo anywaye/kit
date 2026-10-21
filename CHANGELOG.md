@@ -3121,8 +3121,8 @@
 ### Added
 
 - **`tests/generated_stack_check.py`, and a gate section that runs it: the file
-  `caf dev` GENERATES is not a source file, and nothing said so in the six
-  repositories nobody had visited yet.** `caf dev` renders a stack from
+  `cafe dev` GENERATES is not a source file, and nothing said so in the six
+  repositories nobody had visited yet.** `cafe dev` renders a stack from
   `cafaye.yml` and writes it to `caf.dev.compose.yaml` on every run — including
   the run that finds no services, because the write precedes the empty-stack
   return (`caf/internal/cli/dev.go:186`, before the `len(stack.Services) == 0`
@@ -3137,14 +3137,14 @@
     answering "not ignored" about a tracked path however correct the
     `.gitignore` is, until `git rm --cached` moves it.
 
-  Scope is read off the FILESYSTEM: a root `cafaye.yml` is exactly what `caf dev`
+  Scope is read off the FILESYSTEM: a root `cafaye.yml` is exactly what `cafe dev`
   uses to decide a directory is a project at all, so a repository is in scope
   the day it grows a manifest and nothing here is edited. Measured against the
   real fleet with the five per-repository fixes not yet merged: **11 findings
   across 10 of 16 repositories**, exit 1. Five of those ten — `cafaye-rb`,
   `cafaye-ts`, `docs`, `guard`, `muse` — hold a manifest, no ignore entry and no
   file on disk, and they are invisible to a hand-written list precisely because
-  nobody has run `caf dev` on that machine yet.
+  nobody has run `cafe dev` on that machine yet.
 
   Green control over three conforming fixture repositories: exit 0. The TRACKED
   branch is proved by a planted divergence (`git add -f`, then `git rm --cached`
