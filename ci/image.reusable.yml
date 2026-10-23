@@ -15,7 +15,7 @@
 # the executable CI is measured against, and the day this file stops being
 # that, the checks move with it.
 ---
-# kit — the image path every cafaye service repo runs.
+# kit — the image path every anywaye service repo runs.
 #
 # Consumers do not copy this file; they call it, exactly as they call
 # `ci/ci.reusable.yml`:
@@ -30,7 +30,7 @@
 #     packages: write          # REQUIRED, and the caller's to grant — see below
 #   jobs:
 #     image:
-#       uses: cafaye/kit/ci/image.reusable.yml@master
+#       uses: anywaye/kit/ci/image.reusable.yml@master
 #       with:
 #         push: true
 #
@@ -68,7 +68,7 @@
 # LOWERCASED, AND NOT COSMETICALLY. GitHub Packages rejects an uppercase path
 # with a 404 at the push, and neither an org name nor a repository name is
 # required to be lowercase. `github.repository` is verbatim, so
-# `Cafaye/Site` pushes nothing and the error names a package rather than
+# `Anywaye/Site` pushes nothing and the error names a package rather than
 # naming a character. The `resolve image` step below is where the lowercasing
 # happens, and it is a real step rather than a claim in a comment because a
 # comment does not lowercase anything.
@@ -196,7 +196,7 @@ on:
       kit-version:
         description: >-
           The version of kit's TEMPLATES that shaped this image, stamped as
-          `com.cafaye.kit.template.version`. It is the one field that says
+          `com.anywaye.kit.template.version`. It is the one field that says
           which build STANDARD produced the bytes rather than which source they
           came from, and it is an input rather than a constant because kit is
           not an org-wide lockfile: a service pins the template version it
@@ -216,7 +216,7 @@ on:
       image:
         description: >-
           The full image reference that was (or would have been) pushed, e.g.
-          ghcr.io/cafaye/site. A follow-on job that needs the image — a
+          ghcr.io/anywaye/site. A follow-on job that needs the image — a
           smoke test, a deploy — should take this output rather than
           reconstructing the string.
         value: ${{ jobs.build.outputs.image }}
@@ -389,7 +389,7 @@ jobs:
       # job ends. This is the same shape `ci.reusable.yml`'s conformance
       # fallback already uses for the same two reasons.
       #
-      # NO SECRET. `cafaye/kit` is public, so the clone needs no token;
+      # NO SECRET. `anywaye/kit` is public, so the clone needs no token;
       # `GIT_TERMINAL_PROMPT=0` makes a future private repo fail instead of
       # hanging on a prompt CI cannot answer.
       #
@@ -408,14 +408,14 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           kit_dir="$RUNNER_TEMP/kit-provenance"
           git init --quiet "$kit_dir"
-          git -C "$kit_dir" remote add origin "https://github.com/cafaye/kit.git"
+          git -C "$kit_dir" remote add origin "https://github.com/anywaye/kit.git"
           git -C "$kit_dir" sparse-checkout set --no-cone "$KIT_SPARSE"
           git -C "$kit_dir" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
           git -C "$kit_dir" checkout --quiet FETCH_HEAD
           script="$kit_dir/docker/provenance.sh"
           if [ ! -f "$script" ]; then
             echo "image: kit's provenance stamper is not at $script" >&2
-            echo "image: fetched cafaye/kit@$KIT_REF (sparse '$KIT_SPARSE') with no docker/provenance.sh" >&2
+            echo "image: fetched anywaye/kit@$KIT_REF (sparse '$KIT_SPARSE') with no docker/provenance.sh" >&2
             echo "image: the stamp cannot run without it; an unstamped image is worse than a refusal" >&2
             exit 1
           fi
@@ -445,7 +445,7 @@ jobs:
           # two lines down was reading a shell variable that had never been set.
           # Under `set -u` that is not an empty value, it is a FATAL: this step
           # died with `KIT_PROVENANCE_BUILT_AT: unbound variable` on every run
-          # of every caller that reached it, which for `cafaye/site` means no
+          # of every caller that reached it, which for `anywaye/site` means no
           # image has ever been published. The other three fields work because
           # they arrive through this step's `env:` block, which really does
           # populate the shell environment — `built_at` was the only one created

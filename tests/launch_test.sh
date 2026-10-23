@@ -166,7 +166,7 @@ if [ "${1:-}" = "compose" ]; then
     if [ "$a" = "ps" ]; then
       echo "NAME   IMAGE   STATUS"
       if [ -n "${STUB_PS_UP:-}" ]; then
-        echo "kit-launch-identity-1 cafaye/identity:dev running"
+        echo "kit-launch-identity-1 anywaye/identity:dev running"
       fi
       exit 0
     fi
@@ -720,7 +720,7 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (cd "$RENDER" && render config --services 2>/dev/null |
       sort | tr '\n' ' ' | grep -q 'billing courier gateway identity mailpit .*parlor.*postgres')
   }
-  # The RESOLVED DSN, not the literal: `${KIT_POSTGRES_PASSWORD:-cafaye}` and
+  # The RESOLVED DSN, not the literal: `${KIT_POSTGRES_PASSWORD:-anywaye}` and
   # `${APP_BASE_URL:-…}` are interpolated by compose, so what a container would
   # actually receive is only visible here. The role token is read the same way
   # the static check reads it — between `postgres://` and the next colon.

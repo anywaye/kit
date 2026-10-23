@@ -1,11 +1,11 @@
 # templates/substrate — the customer install
 
-**One command, one box.** `curl https://cafaye.com/box/install | sh` installs
+**One command, one box.** `curl https://anywaye.com/box/install | sh` installs
 customer substrate: k3s → cert-manager → CloudNativePG → Argo CD core →
 image pull secret → the first Applications sync → the Let's Encrypt
 ClusterIssuers.
 
-The decisions are in [`cafaye/notes/deployment.md`](../../../DEPLOYMENT.md). This directory
+The decisions are in [`anywaye/notes/deployment.md`](../../../DEPLOYMENT.md). This directory
 is the executable half of that decision record. Read the decision record first;
 this file only describes what is here and what is proven.
 
@@ -16,7 +16,7 @@ this file only describes what is here and what is proven.
 | `install.sh` | The one command. Installs the substrate in order, idempotently, failing loudly and early. |
 | `kit-install.mjs` | The install host: a Cloudflare Worker serving `install.sh` at `GET /` and `GET /install.sh` — the exact bytes, byte-proven in kit's gate. |
 | `wrangler.jsonc` | The Worker's config: pinned `compatibility_date`, observability on, a Text-module rule bundling `install.sh`. No `routes` — the domain binding is an operator action. |
-| `manifests/applications/` | The Argo CD `Application` manifests: the five services (identity, gateway, courier, parlor, billing) and the observability set (Alloy, Grafana, Prometheus). Pantry, box and keyholder are Cafaye-operated and reached over HTTPS, never deployed here — see the boundary note under `manifests/argocd/appproject.yaml`. |
+| `manifests/applications/` | The Argo CD `Application` manifests: the five services (identity, gateway, courier, parlor, billing) and the observability set (Alloy, Grafana, Prometheus). Pantry, box and keyholder are Anywaye-operated and reached over HTTPS, never deployed here — see the boundary note under `manifests/argocd/appproject.yaml`. |
 | `manifests/tls/` | The two Let's Encrypt `ClusterIssuer` manifests — staging and production, HTTP-01 through Traefik. |
 | `manifests/data/` | The data layer, applied by `install.sh` (not by Argo): `postgres-cluster.yaml` — the CNPG `Cluster` reproducing the local `10-cluster.sh` contract — `redis.yaml` — one Deployment + Service + PVC — and `nats.yaml` — one Deployment + Service + PVC running NATS with JetStream, the bus the local stack runs. |
 
@@ -109,7 +109,7 @@ this file only describes what is here and what is proven.
 11. **NATS with JetStream and the fleet's stream** — one Deployment + Service
     + PVC in `data`, applied from `manifests/data/nats.yaml` with the pinned
     image substituted at apply time, then the one-shot stream init defining
-    stream `cafaye` (same subjects, retention, storage and replicas as the
+    stream `anywaye` (same subjects, retention, storage and replicas as the
     local `nats-stream-init`; the gate refuses drift). The broker half is
     guarded like every other step; the stream init runs on every install and
     is a no-op when the stream exists (`info || add`), failing the install
@@ -133,12 +133,12 @@ releases API on 2026-10-07 and are re-checked by `tests/substrate_test.sh`.
 
 ## The ACME solver: HTTP-01 through Traefik
 
-`cafaye/notes/deployment.md` settles the substrate — Traefik (k3s's default ingress
+`anywaye/notes/deployment.md` settles the substrate — Traefik (k3s's default ingress
 controller) and cert-manager — but not the challenge solver. The decision
 taken here is **HTTP-01, answered by an Ingress cert-manager creates with
 `ingressClassName: traefik`**, and the reasons in order of weight:
 
-1. **It needs no credential.** `cafaye/notes/deployment.md:33` says Cloudflare in front is
+1. **It needs no credential.** `anywaye/notes/deployment.md:33` says Cloudflare in front is
    a DNS change, never infrastructure — so the install must not require a
    Cloudflare API token. A token committed to this repository is precisely
    the thing the pull-based deploy loop exists to prevent, and a token the
@@ -175,8 +175,8 @@ The deploy loop this substrate serves is **pull-based**: a commit changes a
 chart, Argo makes the box agree. The consume end is the seven `Application`
 manifests in `manifests/applications/`, in two halves with different owners:
 the four service charts (`identity`, `gateway`, `courier`, `parlor`) pull
-their own chart's path in `oci://ghcr.io/cafaye/charts` — e.g.
-`oci://ghcr.io/cafaye/charts/identity` — at `targetRevision: 0.1.0`, and the
+their own chart's path in `oci://ghcr.io/anywaye/charts` — e.g.
+`oci://ghcr.io/anywaye/charts/identity` — at `targetRevision: 0.1.0`, and the
 three observability charts (`alloy`, `grafana`, `prometheus`) pull their
 official upstream chart repositories at pinned chart versions (see [The
 observability half of the loop](#the-observability-half-of-the-loop)). **The publish end
@@ -196,13 +196,13 @@ Three facts about that loop, each load-bearing:
   string a service copies into its own repo and a copied string drifts from
   the chart it names.
 - **The registry string is one fact in two files.** The workflow's default
-  `registry` input is `oci://ghcr.io/cafaye/charts` — the **prefix**, the root
+  `registry` input is `oci://ghcr.io/anywaye/charts` — the **prefix**, the root
   `helm push` appends the chart's name to. Every `Application` therefore
-  carries `source.repoURL: oci://ghcr.io/cafaye/charts/<its chart name>`, and
+  carries `source.repoURL: oci://ghcr.io/anywaye/charts/<its chart name>`, and
   the registry root is **not** a valid `repoURL`: Argo resolves an OCI source's
   revision against `repoURL` itself, so the root asks for an artifact named
   after nothing and the sync never finds the chart (measured on the fleet's
-  first end-to-end install: `HEAD https://ghcr.io/v2/cafaye/charts/manifests/
+  first end-to-end install: `HEAD https://ghcr.io/v2/anywaye/charts/manifests/
   0.1.0` → 403, every service Application un-synced). Both files are in kit,
   which is what makes the seam provable: `check_chart_publish` in kit's gate
   asserts `repoURL == registry + "/" + chart` for every service `Application`
@@ -227,7 +227,7 @@ to push. That is one packet per service, not this one.
 The three observability `Application`s (`alloy`, `grafana`,
 `prometheus`) once named the same private OCI registry as the service charts
 — for charts nothing in the fleet publishes, so four Applications could never
-sync. Per `cafaye/notes/deployment.md` ("Who owns the `Application`", cited rather than
+sync. Per `anywaye/notes/deployment.md` ("Who owns the `Application`", cited rather than
 restated so this file cannot drift from it), the private-OCI shape exists for
 **our closed-source service charts** — a customer must be able to pull them
 without read access to our repositories. It does not cover third-party
@@ -252,7 +252,7 @@ pinned upstream, and anything else fails closed.
 ## How to run it
 
 ```sh
-curl https://cafaye.com/box/install | sh
+curl https://anywaye.com/box/install | sh
 ```
 
 or, from a kit checkout:
@@ -281,7 +281,7 @@ bash templates/substrate/install.sh
 
 ### Shipping the tree to a box from a macOS workstation
 
-**A served install needs no tree.** `curl https://cafaye.com/box/install | sh`
+**A served install needs no tree.** `curl https://anywaye.com/box/install | sh`
 fetches the manifest set itself, from kit's public repository at the ref pinned
 in `install.sh` (`KIT_SUBSTRATE_MANIFESTS_REF`), and a fetch that cannot
 complete is refused by name before anything runs. The rest of this section is
@@ -302,8 +302,8 @@ the install. Ship the tree clean anyway:
 
 ```sh
 COPYFILE_DISABLE=1 tar --no-xattrs -czf - . | ssh box 'tar xzf -'
-rsync -a --exclude '._*' --exclude '.DS_Store' ./ box:/var/lib/cafaye/substrate/
-ditto -c -k --norsrc --noextattr . - | ssh box 'ditto -x -k --norsrc - /var/lib/cafaye/substrate'
+rsync -a --exclude '._*' --exclude '.DS_Store' ./ box:/var/lib/anywaye/substrate/
+ditto -c -k --norsrc --noextattr . - | ssh box 'ditto -x -k --norsrc - /var/lib/anywaye/substrate'
 ```
 
 `COPYFILE_DISABLE=1` stops BSD `tar` writing the sidecars and `--no-xattrs`
@@ -442,7 +442,7 @@ has to run on any box.
 ### The local cycle — one command, measured
 
 ```sh
-bash templates/substrate/local-cycle.sh          # k3d cluster cafaye-local, created if absent
+bash templates/substrate/local-cycle.sh          # k3d cluster anywaye-local, created if absent
 KIT_LOCAL_CLUSTER=other bash templates/substrate/local-cycle.sh
 ```
 
@@ -453,7 +453,7 @@ per-step table **read back out of the JSONL**, the wall clock, the receipt, and
 `kubectl -n argocd get applications` on that cluster:
 
 ```
-local-cycle: reusing cluster cafaye-local (delete it with: k3d cluster delete cafaye-local)
+local-cycle: reusing cluster anywaye-local (delete it with: k3d cluster delete anywaye-local)
 local-cycle: kubeconfig /var/folders/…/kit-local-cycle-roll-c5-local-cycle/kubeconfig.yaml -> https://0.0.0.0:16443
 local-cycle: running the substrate (headless) — /var/folders/…/kit-local-cycle-roll-c5-local-cycle/local.jsonl
 
@@ -481,10 +481,10 @@ names no box address and dials no ssh.
 whenever an artifact the Applications name is not anonymously fetchable. Step
 5 probes first: with every artifact public the install proceeds with no box
 id, no capability and no exchange. The three private artifacts the old
-measurement named (`cafaye/charts/box:0.1.0`, `cafaye/box:0.1.0`,
-`cafaye/charts/pantry:0.1.0` — 11 of 14 anonymous on 2026-10-14, see
+measurement named (`anywaye/charts/box:0.1.0`, `anywaye/box:0.1.0`,
+`anywaye/charts/pantry:0.1.0` — 11 of 14 anonymous on 2026-10-14, see
 `REPORT-roll-c5-public-artifacts`) left with their Applications: all
-three are Cafaye-operated, and a customer's box reaches them over HTTPS
+three are Anywaye-operated, and a customer's box reaches them over HTTPS
 rather than pulling their images. What remains is eight artifacts (four
 charts + four images); their anonymous-fetchability is re-probed on every
 run by step 5 itself, so no count is restated here to go stale.
@@ -636,7 +636,7 @@ Service + PVC running the broker with `-js` and file storage on the
 signal the local stack's healthcheck uses. The manifest carries
 `NATS_IMAGE_PLACEHOLDER` where the tag goes; install.sh step 11 substitutes
 the pinned image at apply time, so the pin lives in exactly one place. The
-fleet's stream (`cafaye`: `identity.>`, `billing.>`, `courier.>`, `muse.>`,
+fleet's stream (`anywaye`: `identity.>`, `billing.>`, `courier.>`, `muse.>`,
 `darkroom.>` — file storage, `limits` retention, 7d max-age, `old` discard,
 1 replica) is defined by step 11's one-shot init, mirroring the local
 `nats-stream-init` flag for flag; `tests/substrate_test.sh` parses both
@@ -686,7 +686,7 @@ boot" assumed — that last one is checked, not believed.
 
 | service | migrations? | entrypoint | DSN env | notes |
 | --- | --- | --- | --- | --- |
-| `identity` | yes — `migrations/*.sql`, 35 files | `bin/migrate` (a `psql` loop over the Up sections) | `DATABASE_URL` | **the repository ships the entrypoint; the image does not.** `ghcr.io/cafaye/identity` is `gcr.io/distroless/static-debian12:nonroot` — no shell, no `psql`, no migration files — so it cannot migrate from the image it runs. The service-repo edit is named in `REPORT-roll-c5-migrations`. |
+| `identity` | yes — `migrations/*.sql`, 35 files | `bin/migrate` (a `psql` loop over the Up sections) | `DATABASE_URL` | **the repository ships the entrypoint; the image does not.** `ghcr.io/anywaye/identity` is `gcr.io/distroless/static-debian12:nonroot` — no shell, no `psql`, no migration files — so it cannot migrate from the image it runs. The service-repo edit is named in `REPORT-roll-c5-migrations`. |
 | `gateway` | no | `bin/migrate` is an explicit no-op | — | no driver, no pool, no `DATABASE_URL`; the file says so out loud. |
 | `courier` | yes — `priv/repo/migrations`, Ecto | `/app/bin/migrate` (release overlay → `courier eval Courier.Release.migrate`) | `COURIER_OWNER_DATABASE_URL` (+ `DATABASE_URL`) | the release eval loads `runtime.exs`, which raises without `DATABASE_URL`, and configures `Courier.OwnerRepo` only from the owner variable — both are passed. |
 | `parlor` | no | — | — | a front end: its runtime reads `IDENTITY_URL` / `BILLING_URL` / `OTEL_*`, no database. Its database and roles exist only because the Cluster provisions one per named service. |
@@ -740,7 +740,7 @@ the box deploys no such Service and no OTLP endpoint at all: alloy is pinned at
 chart `1.13.0` with no values, so its default config
 (`config/example.alloy`) declares no `otelcol.receiver.otlp` and its Service
 exposes only `http-metrics` on `12345`, and the substrate ships no Tempo
-(`cafaye/notes/deployment.md`: "Traces | deferred"). Without the switch every service
+(`anywaye/notes/deployment.md`: "Traces | deferred"). Without the switch every service
 retries forever and logs a DNS failure every ten seconds. The switch is core's
 `otel-endpoint.schema.json` no-op mechanism — free: no queue, no retry, no
 warning per export, no dial at boot — written once as `SERVICE_OTEL_DISABLED`
@@ -939,7 +939,7 @@ resolving it once keeps `/readyz` and the verifier asking the same URL.
 **The issue/verify pair is an operator fact, and it is reported rather than
 guessed.** `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` has **no default**: unset means
 identity serves no OIDC surface at all. gateway's chart default is the fleet's
-production origin, `https://auth.cafaye.com`. A box that sets the installer's
+production origin, `https://auth.anywaye.com`. A box that sets the installer's
 issuer must set the **same** origin as gateway's `IDENTITY_ISSUER` — otherwise
 identity mints `iss` the gateway will not accept — so the two are the same fact
 spelled in two places and are set together. `IDENTITY_ISSUER` is deliberately
@@ -952,11 +952,11 @@ at the operated registry.** parlor treats an unset `BILLING_URL` as the
 supported "no billing deployed" state, so a box that deploys billing writes
 that address in its **values commit**, the pull-based loop's documented write
 path, not here. gateway's `ROUTE_TABLE` is the other shape: both pantry
-entries name the operated origin `https://pantry.cafaye.com` — the name the
-fleet's own code documents (`cafaye/cafe`, `CAF_PANTRY_URL`) — shipped by
+entries name the operated origin `https://pantry.anywaye.com` — the name the
+fleet's own code documents (`anywaye/cafe`, `CAF_PANTRY_URL`) — shipped by
 gateway's own chart, so there is nothing for the substrate to override. A
 503 naming that unreachable *external* origin is the truthful answer until
-Cafaye hosts pantry; the substrate still deploys no pantry, and §24's rule
+Anywaye hosts pantry; the substrate still deploys no pantry, and §24's rule
 stands (the substrate names only Services its own manifests create).
 
 `tests/substrate_test.sh` §24 is the check: every cross-service address the
@@ -966,9 +966,9 @@ in the namespace they ship it in — with red controls for a bare name, a name i
 the wrong namespace, a name no manifest ships, a service that loses its
 address, and a drifted name in the installer.
 
-## The install host: `cafaye.com/box/install`
+## The install host: `anywaye.com/box/install`
 
-`install.sh` is served at `https://cafaye.com/box/install` by
+`install.sh` is served at `https://anywaye.com/box/install` by
 `kit-install.mjs`, a Cloudflare Worker in this directory — the fleet's
 established mechanism (`site` and `parlor` are Workers). The Worker serves
 the **exact bytes** of `install.sh` with `content-type: text/x-shellscript`
@@ -993,7 +993,7 @@ it needs it generates itself.
 script's own directory is empty under a pipe, so `manifests/` is not beside it;
 `kit_substrate_resolve_manifests` fetches the pinned set
 (`KIT_SUBSTRATE_MANIFESTS_REF`, a 40-character commit sha) as a tarball from
-kit's public repository (`codeload.github.com/cafaye/kit`) and points the four
+kit's public repository (`codeload.github.com/anywaye/kit`) and points the four
 manifest directories at it. A fetch that cannot complete is a **refusal naming
 the fetch**, before preflight and long before step 5 — never a run that derives
 an empty artifact list and demands a registry capability for artifacts that are
@@ -1005,8 +1005,8 @@ that installs yesterday's tree.
 
 **The operator step (an action, not a file):** publish the Worker
 (`wrangler deploy` from this directory) and bind the route
-`cafaye.com/box/install` to `kit-install` — a Cloudflare route / custom
-domain, the same way `cafaye.com` is bound to `site` today. The Worker
+`anywaye.com/box/install` to `kit-install` — a Cloudflare route / custom
+domain, the same way `anywaye.com` is bound to `site` today. The Worker
 itself is hostname-agnostic: it serves `/box/install` under whatever host it
 is reached on, so the plan's path and the host binding are two separate
 moves and only the second one is the operator's. Measured:
@@ -1014,7 +1014,7 @@ moves and only the second one is the operator's. Measured:
 outside the repositories and **cannot be asserted from this repository** —
 which is why `wrangler.jsonc` does not invent one.
 
-**What is not proven here:** that `https://cafaye.com/box/install` answers.
+**What is not proven here:** that `https://anywaye.com/box/install` answers.
 The Worker, its config and the byte-equality are proven; binding the route
 is an operator action, and the URL works only when observed.
 
@@ -1063,7 +1063,7 @@ is an operator action, and the URL works only when observed.
 - The NATS manifest carries one Deployment + Service + PVC with `-js` file
   storage and monitor-port probes, its image the `NATS_IMAGE_PLACEHOLDER`
   `install.sh` substitutes — fixtures without `-js` or floating on `latest`
-  go **red** — and step 11 defines stream `cafaye` idempotently
+  go **red** — and step 11 defines stream `anywaye` idempotently
   (`info || add`) with the local stack's subject set and flags, while the
   drift check parses both renders and refuses divergence (a fixture missing a
   publisher, or with a drifted `max-age`, goes **red**).
@@ -1136,7 +1136,7 @@ is an operator action, and the URL works only when observed.
   machine (or any development machine) is. The `DATABASE_URL`↔Cluster
   agreement, the once-only generation and the refusal paths are all asserted
   without a box; the live boot is a customer-box claim.
-- That `https://cafaye.com/box/install` answers. The Worker, its config and
+- That `https://anywaye.com/box/install` answers. The Worker, its config and
   the byte-equality are proven; binding the route to the Worker is a
   Cloudflare route/custom-domain action outside every repository, so the URL
   works only when observed.
@@ -1150,7 +1150,7 @@ this paragraph is unexercised.
 
 The first real run, on a Linux box with 8GB or more:
 
-1. `curl https://cafaye.com/box/install | sh` completes all thirteen steps.
+1. `curl https://anywaye.com/box/install | sh` completes all thirteen steps.
 2. `kubectl get nodes` shows the node Ready.
 3. `kubectl get applications -n argocd` shows all seven Applications synced.
 4. The observability stack is reachable and retaining.

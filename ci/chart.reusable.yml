@@ -15,7 +15,7 @@
 # the executable CI is measured against, and the day this file stops being
 # that, the checks move with it.
 ---
-# kit — the chart path every cafaye service repo runs.
+# kit — the chart path every anywaye service repo runs.
 #
 # Consumers do not copy this file; they call it, exactly as they call
 # `ci/image.reusable.yml`. Most call it through the composed
@@ -32,14 +32,14 @@
 #     packages: write          # REQUIRED, and the caller's to grant — see below
 #   jobs:
 #     chart:
-#       uses: cafaye/kit/ci/chart.reusable.yml@master
+#       uses: anywaye/kit/ci/chart.reusable.yml@master
 #       with:
 #         push: true
 #
-# WHY THIS EXISTS, IN ONE SENTENCE. `cafaye/notes/deployment.md`'s deploy loop is
+# WHY THIS EXISTS, IN ONE SENTENCE. `anywaye/notes/deployment.md`'s deploy loop is
 # pull-based — a commit changes a chart, Argo makes the box agree — and only
 # one end of that loop existed: eight Argo CD `Application`s pull each chart's
-# own path under `oci://ghcr.io/cafaye/charts`, and nothing in the fleet ever
+# own path under `oci://ghcr.io/anywaye/charts`, and nothing in the fleet ever
 # ran `helm push` or `helm package`, so every `Application` pointed at a
 # registry nothing wrote to. Argo synced nothing; the box never converged. This
 # is the other half.
@@ -48,12 +48,12 @@
 #
 #   1. THE REGISTRY PATH. This workflow pushes to the registry root; `helm
 #      push` APPENDS the chart's name, so the artifact is
-#      `oci://ghcr.io/cafaye/charts/<chart>`, and every `Application` in
+#      `oci://ghcr.io/anywaye/charts/<chart>`, and every `Application` in
 #      `templates/substrate/manifests/applications/` must carry that path as
 #      its `source.repoURL`. Argo resolves an OCI source's revision against
 #      `repoURL` ITSELF, so an `Application` naming the bare root asks for an
 #      artifact named after nothing — measured on the fleet's first end-to-end
-#      install, `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403
+#      install, `HEAD https://ghcr.io/v2/anywaye/charts/manifests/0.1.0` → 403
 #      and every service Application un-synced. Both files are in kit, which
 #      is what makes this provable in this repository's own gate:
 #      `check_chart_publish` in `tests/validate.sh` asserts
@@ -78,7 +78,7 @@
 #      textually IDENTICAL before and after a build, so Argo's diff reported
 #      `Synced`, rolled nothing, and the box sat on the old image while the
 #      registry held the new one. Measured (roll-c5-image-digest): the
-#      registry's `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165`
+#      registry's `ghcr.io/anywaye/gateway:0.1.0` held `sha256:c264…37165`
 #      while the node ran `sha256:8e60…e79b`, six hours after the fix was
 #      merged and published; a refresh reported `Synced` with no diff and
 #      `imagePullPolicy: IfNotPresent` re-served the stale copy on every pod
@@ -155,7 +155,7 @@ on:
           fleet's, and kit's gate proves the two agree.
         required: false
         type: string
-        default: 'oci://ghcr.io/cafaye/charts'
+        default: 'oci://ghcr.io/anywaye/charts'
       chart-dir:
         description: >-
           The directory holding Chart.yaml, relative to the repository root.
@@ -292,7 +292,7 @@ jobs:
 
       # PIN THE IMAGE BY DIGEST — the step that makes a new build a change
       # Argo can SEE. THE MEASURED DEFECT (roll-c5-image-digest, gateway):
-      # the registry's `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165`
+      # the registry's `ghcr.io/anywaye/gateway:0.1.0` held `sha256:c264…37165`
       # (the merged Redis AUTH fix) while the node ran `sha256:8e60…e79b`,
       # six hours older. The chart pinned the image by TAG, the tag is
       # overwritten on every master push, so the rendered Deployment was

@@ -1,18 +1,18 @@
 ---
 # vendir.yml for `pantry` — rust.
 #
-# Proven by running vendir 0.46.2 against cafaye/core: the file this produces is
+# Proven by running vendir 0.46.2 against anywaye/core: the file this produces is
 # byte-identical (sha256) to the copy pantry has committed today, at
-# schemas/cafaye.manifest.schema.json.
+# schemas/anywaye.manifest.schema.json.
 #
 # This is the EASY case and it is here for that reason: both repositories call
-# the file schemas/cafaye.manifest.schema.json, so the only work `newRootPath`
+# the file schemas/anywaye.manifest.schema.json, so the only work `newRootPath`
 # does here is strip the `schemas/` prefix that the sync root would otherwise
 # re-add. A template that only ever showed the hard cases would give a reader no
 # way to tell which of their repositories they are looking at.
 #
-# pantry resolves the copy through `cafaye_root()`, which looks for exactly
-# `core/schemas/cafaye.manifest.schema.json` as its workspace marker — so the
+# pantry resolves the copy through `anywaye_root()`, which looks for exactly
+# `core/schemas/anywaye.manifest.schema.json` as its workspace marker — so the
 # destination path is load-bearing in a way a reader should know about before
 # moving it. See pantry/tests/drift.rs.
 apiVersion: vendir.k14s.io/v1alpha1
@@ -23,8 +23,8 @@ directories:
     contents:
       - path: .
         includePaths:
-          - schemas/cafaye.manifest.schema.json
+          - schemas/anywaye.manifest.schema.json
         newRootPath: schemas
         git:
-          url: https://github.com/cafaye/core.git
+          url: https://github.com/anywaye/core.git
           ref: master

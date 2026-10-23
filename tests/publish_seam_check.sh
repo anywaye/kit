@@ -290,7 +290,7 @@ if "type=sha,format=long" not in image_code:
 #     overwritten on every push (it is this file's own appVersion hand-off),
 #     so a chart pinned by tag rendered a textually identical Deployment
 #     after every build and Argo rolled nothing — measured on the box
-#     (roll-c5-image-digest): the registry's ghcr.io/cafaye/gateway:0.1.0
+#     (roll-c5-image-digest): the registry's ghcr.io/anywaye/gateway:0.1.0
 #     held the merged Redis AUTH fix while the node served an image six
 #     hours older, a refresh reported `Synced`, and imagePullPolicy:
 #     IfNotPresent re-served the stale copy on every restart. A digest
@@ -414,7 +414,7 @@ for job_id, job in (template_doc.get("jobs") or {}).items():
     if not isinstance(uses, str) or "publish.reusable.yml" not in uses:
         continue
     called = True
-    if not uses.startswith("cafaye/kit/ci/publish.reusable.yml@"):
+    if not uses.startswith("anywaye/kit/ci/publish.reusable.yml@"):
         problems.append(
             f"{caller_template} job {job_id!r} uses {uses!r} — the caller "
             f"names the kit ref it adopts, pinned"
@@ -674,7 +674,7 @@ if [ -z "$identity_chart" ]; then
   } >"$identity_chart/Chart.yaml"
   {
     echo 'image:'
-    echo '  repository: ghcr.io/cafaye/identity'
+    echo '  repository: ghcr.io/anywaye/identity'
     echo '  tag: "0.1.0"'
   } >"$identity_chart/values.yaml"
 else

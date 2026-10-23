@@ -10,7 +10,7 @@
 #   (`git log --oneline | grep -i unusable` is empty). Two defects prove the gap
 #   is load-bearing, and both are invisible to a parse:
 #
-#     1. `proxy.healthcheck.path: /up` — a path NO cafaye service serves. All
+#     1. `proxy.healthcheck.path: /up` — a path NO anywaye service serves. All
 #        six services that adopt this template (`identity`, `courier`,
 #        `gateway`, `parlor`, `darkroom`, `muse`) serve `/healthz` and `/readyz`;
 #        none serves `/up`. `billing` does, and does not use this template.

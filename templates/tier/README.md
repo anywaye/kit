@@ -47,7 +47,7 @@ that every language kit ships a job for also appears here.
 
 | `language` | Declaration | Collector that already exists | Adapter? |
 |---|---|---|---|
-| `rust` | `#[ignore = "cafaye:tier=db reason=…"]` | `cargo test -- --list` | none |
+| `rust` | `#[ignore = "anywaye:tier=db reason=…"]` | `cargo test -- --list` | none |
 | `go` | `//go:build tier_db` on the test file | `go test -tags tier_db -list '.*' ./...` | none |
 | `python` | `@pytest.mark.tier_db` | `pytest --collect-only -q -m tier_db` | none |
 | `elixir` | `@tier :db` | none — needs one | ~15 lines |
@@ -83,7 +83,7 @@ $ cargo test -- --list                 # INVENTORY, ignored tests INCLUDED
 $ cargo test -- --list --ignored       # the ignored subset
 $ cargo test                           # a run prints the reason:
                                        #   test tests::tier_db_needs_postgres
-                                       #     ... ignored, cafaye:tier=db reason=…
+                                       #     ... ignored, anywaye:tier=db reason=…
 ```
 
 `--list --include-ignored` is a trap, and `templates/tier/rust/tier.rs` says so:

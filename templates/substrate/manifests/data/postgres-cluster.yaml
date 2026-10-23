@@ -56,10 +56,10 @@
 # and the gate refuses a mismatch: a database the manifest does not
 # provision is a DATABASE_URL pointing at nothing. pantry, box and
 # keyholder are deliberately NOT among them: all three are
-# Cafaye-operated services the box reaches over HTTPS (pantry at
-# https://pantry.cafaye.com, the registry exchange at
+# Anywaye-operated services the box reaches over HTTPS (pantry at
+# https://pantry.anywaye.com, the registry exchange at
 # KIT_SUBSTRATE_REGISTRY_URL, the control plane at KIT_SUBSTRATE_BOX_URL),
-# and each carries the reason in its own licence — pantry "runs on Cafaye
+# and each carries the reason in its own licence — pantry "runs on Anywaye
 # infrastructure" and may never run "as a second, forked catalog", box is
 # "never part of … the Kit deployment substrate", and keyholder requires
 # the operated control plane it exchanges against. Adding a fifth service

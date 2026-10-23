@@ -96,7 +96,7 @@ def endpoint() -> str:
       a buffer". See ``enabled()``.
 
     ``OTEL_EXPORTER_OTLP_ENDPOINT`` is honoured as a fallback so the service
-    also works with generic OTel tooling, but the cafaye name wins when both
+    also works with generic OTel tooling, but the anywaye name wins when both
     are set. The precedence is written down here rather than discovered later:
     a contract with an undocumented precedence order is a bug report.
     """
@@ -111,7 +111,7 @@ def enabled() -> bool:
     """Whether there is anywhere to export to, for any signal.
 
     ``OTEL_SDK_DISABLED`` is the OpenTelemetry spec's OWN kill switch, and it is
-    the mechanism core's otel-endpoint schema pins the no-op to — not a cafaye
+    the mechanism core's otel-endpoint schema pins the no-op to — not a anywaye
     reimplementation. Re-implementing "disabled" in six languages is how six
     services acquire six different definitions of it, and the difference between
     them is somebody's production incident.

@@ -324,7 +324,7 @@ else:
         # P2: the fetch itself — kit, into $RUNNER_TEMP, at the ref from env.
         if (
             "fetch" in body
-            and "cafaye/kit" in body
+            and "anywaye/kit" in body
             and "docker/provenance.sh" in body
             and "RUNNER_TEMP" in body
         ):
@@ -379,7 +379,7 @@ print(
     f"publish toolchain: {helm_version_invocations} `helm version` "
     f"invocation(s) carry no flag outside the pinned major's set; the helm pin "
     f"is verified against one value; the provenance stamper is fetched from "
-    f"cafaye/kit@job.workflow_sha into $RUNNER_TEMP, guarded by name"
+    f"anywaye/kit@job.workflow_sha into $RUNNER_TEMP, guarded by name"
 )
 PY
 

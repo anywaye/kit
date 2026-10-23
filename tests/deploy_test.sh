@@ -453,8 +453,8 @@ if ! docker info >/dev/null 2>&1; then
 elif [ -z "$IMAGE_A" ]; then
   skip "live proofs (no image; set KIT_DEPLOY_TEST_IMAGE)"
   note "build one with:"
-  note "  docker build -t cafaye-kit16/courier:35c6a27 /path/to/courier"
-  note "then re-run with KIT_DEPLOY_TEST_IMAGE=cafaye-kit16/courier:35c6a27"
+  note "  docker build -t anywaye-kit16/courier:35c6a27 /path/to/courier"
+  note "then re-run with KIT_DEPLOY_TEST_IMAGE=anywaye-kit16/courier:35c6a27"
 else
   printf -- '-- 3. a real deploy reaches green\n'
 

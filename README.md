@@ -1,17 +1,17 @@
 # kit
 
-**Current direction (2026-10-19):** Ship is the product. The cafaye stack is internal infrastructure; we are not selling or supporting it as a standalone product as of this date. We continue to develop and improve it, treating the founder as the primary customer and keeping "build once, run everywhere" true, with the expectation that it may be offered again later.
+**Current direction (2026-10-19):** Ship is the product. The anywaye stack is internal infrastructure; we are not selling or supporting it as a standalone product as of this date. We continue to develop and improve it, treating the founder as the primary customer and keeping "build once, run everywhere" true, with the expectation that it may be offered again later.
 
-**kit is the shared CI, lint, and toolchain layer every cafaye service repo
+**kit is the shared CI, lint, and toolchain layer every anywaye service repo
 adopts.** It contains no runtime code and no dependencies — only conventions
 that would otherwise be retyped, and slightly differently, in each of the six
 services.
 
 ```
-github.com/cafaye/cafe     Go       github.com/cafaye/billing  Ruby
-github.com/cafaye/identity Go      github.com/cafaye/courier  Elixir
-github.com/cafaye/gateway TypeScript  github.com/cafaye/muse   Python
-github.com/cafaye/darkroom Rust    github.com/cafaye/parlor   TypeScript
+github.com/anywaye/cafe     Go       github.com/anywaye/billing  Ruby
+github.com/anywaye/identity Go      github.com/anywaye/courier  Elixir
+github.com/anywaye/gateway TypeScript  github.com/anywaye/muse   Python
+github.com/anywaye/darkroom Rust    github.com/anywaye/parlor   TypeScript
 ```
 
 Every one of those repos **calls** the same workflow. A change to how we build
@@ -45,7 +45,7 @@ kit has retired, kept dead. Both are below, and both are in `DECISIONS.md`
 beside this repository and has since been removed along with the rest of the
 cross-repo surface (MD36). Nothing re-runs it, so read the numbers below as what
 was true on that date. Over those nine services (the fleet the packet counts;
-`docs` and `cafaye-{py,rb,ts}` are toolchain repos, not services, and
+`docs` and `anywaye-{py,rb,ts}` are toolchain repos, not services, and
 `pantry` is a registry that has not called kit's workflow). **Nine of 108 cells are
 byte-identical.** One of them, `gateway/bin/prime`, is the only copy in the fleet
 that matches kit exactly — and it matches because `gateway` is the service that
@@ -115,12 +115,12 @@ than something a green run prints.
 |------|-----------|-------------|
 | `.github/workflows/ci.reusable.yml` | One reusable GitHub Actions workflow. Input `language` picks one of seven jobs — install, lint, test, coverage gate. Opt-in `telemetry` input adds the traceparent conformance job; opt-in `required-tier` demands a tier by gate-variable name. **Plus one opt-in security job: `zizmor`.** No job builds or pushes an image — that is the other file. | Every service, via a 6-line `.github/workflows/ci.yml` |
 | `.github/workflows/image.reusable.yml` | **The second reusable workflow**, and it exists because `ci.reusable.yml` deliberately does not build an artifact: it is the gate, and a gate that publishes is a gate whose failure is a rollback. It builds the service image and publishes it to ghcr.io, and **the caller grants `packages: write`** — a reusable workflow cannot grant itself a permission. "One file per standard" means three files here, not one — the gate, the image, and now the chart — and a caller reaches each by `uses:`, never by copying. Every workflow file is parsed by the gate's artifact loop and linted by zizmor; the old `REUSABLE_WORKFLOWS` enumeration that used to police callable paths was cut with the self-test layer in w21 (ce12131) and has not been replaced. | A service that ships a deployable artifact, via a 9-line `publish.yml` |
-| `.github/workflows/chart.reusable.yml` | **The third reusable workflow — the publish end of the pull-based loop.** `cafaye/notes/deployment.md`'s loop is pull-based (a commit changes a chart, Argo makes the box agree) and only the consume end existed: eight Argo `Application`s pull each chart's own path under `oci://ghcr.io/cafaye/charts` and nothing in the fleet ever ran `helm push`. This workflow packages the chart directory and pushes it to the OCI registry. The chart's **name and version are read from `Chart.yaml`, never inputs** — the OCI tag of a Helm chart IS its `version`, so the push tag and the pull `targetRevision` are one fact written twice. `push` defaults to **false**, exactly as the image workflow's does; the job refuses to publish from a `pull_request`; helm is pinned (`v4.3.0`), not `latest`; the credential is the workflow's own `GITHUB_TOKEN` and **the caller grants `packages: write`**. | A service that ships a chart, via the composed caller below |
+| `.github/workflows/chart.reusable.yml` | **The third reusable workflow — the publish end of the pull-based loop.** `anywaye/notes/deployment.md`'s loop is pull-based (a commit changes a chart, Argo makes the box agree) and only the consume end existed: eight Argo `Application`s pull each chart's own path under `oci://ghcr.io/anywaye/charts` and nothing in the fleet ever ran `helm push`. This workflow packages the chart directory and pushes it to the OCI registry. The chart's **name and version are read from `Chart.yaml`, never inputs** — the OCI tag of a Helm chart IS its `version`, so the push tag and the pull `targetRevision` are one fact written twice. `push` defaults to **false**, exactly as the image workflow's does; the job refuses to publish from a `pull_request`; helm is pinned (`v4.3.0`), not `latest`; the credential is the workflow's own `GITHUB_TOKEN` and **the caller grants `packages: write`**. | A service that ships a chart, via the composed caller below |
 | `.github/workflows/publish.reusable.yml` | **The composition: one caller, two artifacts.** A service publishes the image `config/deploy.yml` deploys and the chart the `Application` pulls; this file calls both `image.reusable.yml` and `chart.reusable.yml` and threads the caller's single `push` input through, so a service's `publish.yml` is one `uses:` and the decision "what does a push publish" is made once, in kit. Its local `uses:` paths are **root-relative** (`./.github/workflows/<file>`) — that is GitHub's grammar, and any other spelling is a run refused at resolution time with no jobs and no logs. It also runs a small `resolve` job that reads `appVersion` from `<chart-dir>/Chart.yaml` and hands it to the image job as `app-version`, so the tag the chart's `values.yaml` pins is a tag the publish produces; empty for a service with an image and no chart, and `sha-<40>` is untouched. It declares the full `contents: read` + `packages: write` set at top level so the nested jobs keep `packages: write` through two levels of `workflow_call`, and its `concurrency.group` is `kit-`-namespaced per the fleet rule. | Called by `templates/publish/publish.yml` |
-| `templates/publish/publish.yml` | **The caller, copied into a service's `.github/workflows/publish.yml`.** `on: push: branches: [master]`, `permissions: contents: read` + `packages: write`, a `concurrency` group that does **not** begin with `kit-` (a colliding group is a job refused before it starts — no check-run, no log line), and one `uses: cafaye/kit/.github/workflows/publish.reusable.yml@master` with `push: true`. | Every service that ships an image or a chart |
-| `bin/publish` + `templates/bin/publish.sh` | **Actions-free publish** — the same image+chart without GitHub Actions. `docker build -t ghcr.io/cafaye/<svc>:<version> -t ghcr.io/cafaye/<svc>:sha-<sha> .` + push, derive `sha256:<64 hex>` digest, stamp `image.digest` into `values.yaml` (replace-or-insert mirroring `chart.reusable.yml`, refusing malformed digest), `helm package` + `helm push` to `oci://ghcr.io/cafaye/charts`. Digest derived never typed, version NOT bumped (Argo `targetRevision` pins it), visibility REMINDED with URL (not API-flippable with a normal token). `--dry-run` prints every command; all network calls bounded via `timeout`. See `docs/publish.md`. | Any machine with docker + a token |
-| `bin/publish-sandbox` + `templates/bin/publish-sandbox.sh` | **One-command sandbox provisioning** for the publish above. Creates or reuses instabox sandbox `cafaye-build` (any name), installs `helm v4.3.0` + `gh` if missing, logs in via `token | ... --password-stdin` (never argv), idempotent. `cat token.txt \| bin/publish --sandbox` provisions+logs-in; `instabox ssh cafaye-build` then `bin/publish`. Wrapper around `bin/publish --sandbox`. See `docs/publish.md`. | A developer needing a remote box |
-| `backends/README.md` + `backends/instabox/` | **The runner for a project's pipeline, and why one sandbox hosts many.** A project writes `ci/pipeline.sh` and names a backend in `ci/backend`; this backend polls and runs it. `provision.sh` takes a **list** of projects (`provision.sh cafaye-build billing courier docs identity`), writes one `~/ci-env.d/<project>.env` and one `~/ci/agents/<project>.sh` binding per project, and starts `supervisor.sh`, which keeps one poller per project alive (a poller that exits on a transient error is a project that silently stops building). The agent and the supervisor each hold an atomic `mkdir` lock, so a restart cannot race its predecessor. The README carries the rollout table and the capacity arithmetic measured against `instabox usage` (4 vCPU / 8 GB / 20 GB, 5 sandboxes; N=4 projects per sandbox planned). | Every service, as `ci/backend` = `instabox` |
+| `templates/publish/publish.yml` | **The caller, copied into a service's `.github/workflows/publish.yml`.** `on: push: branches: [master]`, `permissions: contents: read` + `packages: write`, a `concurrency` group that does **not** begin with `kit-` (a colliding group is a job refused before it starts — no check-run, no log line), and one `uses: anywaye/kit/.github/workflows/publish.reusable.yml@master` with `push: true`. | Every service that ships an image or a chart |
+| `bin/publish` + `templates/bin/publish.sh` | **Actions-free publish** — the same image+chart without GitHub Actions. `docker build -t ghcr.io/anywaye/<svc>:<version> -t ghcr.io/anywaye/<svc>:sha-<sha> .` + push, derive `sha256:<64 hex>` digest, stamp `image.digest` into `values.yaml` (replace-or-insert mirroring `chart.reusable.yml`, refusing malformed digest), `helm package` + `helm push` to `oci://ghcr.io/anywaye/charts`. Digest derived never typed, version NOT bumped (Argo `targetRevision` pins it), visibility REMINDED with URL (not API-flippable with a normal token). `--dry-run` prints every command; all network calls bounded via `timeout`. See `docs/publish.md`. | Any machine with docker + a token |
+| `bin/publish-sandbox` + `templates/bin/publish-sandbox.sh` | **One-command sandbox provisioning** for the publish above. Creates or reuses instabox sandbox `anywaye-build` (any name), installs `helm v4.3.0` + `gh` if missing, logs in via `token | ... --password-stdin` (never argv), idempotent. `cat token.txt \| bin/publish --sandbox` provisions+logs-in; `instabox ssh anywaye-build` then `bin/publish`. Wrapper around `bin/publish --sandbox`. See `docs/publish.md`. | A developer needing a remote box |
+| `backends/README.md` + `backends/instabox/` | **The runner for a project's pipeline, and why one sandbox hosts many.** A project writes `ci/pipeline.sh` and names a backend in `ci/backend`; this backend polls and runs it. `provision.sh` takes a **list** of projects (`provision.sh anywaye-build billing courier docs identity`), writes one `~/ci-env.d/<project>.env` and one `~/ci/agents/<project>.sh` binding per project, and starts `supervisor.sh`, which keeps one poller per project alive (a poller that exits on a transient error is a project that silently stops building). The agent and the supervisor each hold an atomic `mkdir` lock, so a restart cannot race its predecessor. The README carries the rollout table and the capacity arithmetic measured against `instabox usage` (4 vCPU / 8 GB / 20 GB, 5 sandboxes; N=4 projects per sandbox planned). | Every service, as `ci/backend` = `instabox` |
 | `backends/instabox/pipeline.template.sh` | **The `ci/pipeline.sh` a service copies and edits in three marked places.** It reads the environment the backend provides (`WORKSPACE`, `GH_TOKEN`, `CI`), sets up the toolchain the repository pins (`mise install`, then the gate under `mise exec`), runs the gate, publishes with `./bin/publish --service-dir .` when `chart/Chart.yaml` exists, and ends with a line naming what shipped and the commit. Its comments cite `.github/workflows/*.yml` as where the facts come from, and name the three repositories whose gate is **not** `bin/prime`: `box` (`bin/ci`), `keyholder` (`bin/gate`) and `kit`. | Every service, as `ci/pipeline.sh` |
 | `.github/zizmor.yml` | zizmor's reasoned baselines. One entry. `unpinned-uses` is deliberately **absent** — see `DECISIONS.md`. | Every service, copied verbatim |
 | `lint/yamllint.yml` | YAML style, with the three rules Actions forces us to retune. Read at run time via `yamllint -c`, never copied. | Any repo that lints its own YAML; kit's gate uses it on itself |
@@ -150,7 +150,7 @@ than something a green run prints.
 | `templates/kamal/kamal-backup.yml.erb` | What to back up (ONE database, with the content-vs-working-data reasoning written out), where (restic to R2), and for how long (keep-last 7, daily 7, weekly 4, monthly 6, yearly 2 — stated, not inherited from the gem's defaults). | Every service, as `config/kamal-backup.yml` |
 | `templates/kamal/drill.sh` | A restore drill that drops its scratch database on **every** exit path and **asserts** rows rather than printing a count — the two things kamal-backup does not do, both found by reading the gem. | Every service, as `bin/drill` |
 | `templates/deploy/` and `templates/bin/deploy.sh` | **A custom deploy distribution, and it overlaps with Kamal on purpose.** It is NOT a remote deployment — no TLS, no reverse proxy, no multi-host, no zero-downtime — and the first line of `templates/deploy/README.md` says so before anything else. What it does that `kamal` does not is deliver secrets into a tmpfs **over stdin**, so no credential is ever in `Config.Env`, and to redact output **by shape** — a JWT, an AWS key, a PEM header — which kamal-backup's own `Redactor` does not (it knows env values whose *key* looks secret, and URL credentials, and nothing else). `templates/deploy/reference/courier.deploy.yml` is the worked example. Read this row next to `AGENTS.md`'s "Deploy and backup are Kamal's": Kamal is the standard, this is the seam that carries credentials, and the overlap is a recorded trade rather than a recommendation. | A service that deploys without a Ruby toolchain on the operator's machine |
-| `templates/substrate/install.sh` | **The customer substrate — one command, one box.** The executable half of `cafaye/notes/deployment.md`: installs k3s (single node, sqlite), cert-manager, CloudNativePG, Argo CD core, the GHCR image pull secret (**redeemed** per run from the box's own short-lived, box-bound capability — never a long-lived credential), and the first Applications, in that order. Every version pinned exactly. Idempotent (`kit_substrate_guard`), fails loudly and early, `DRY_RUN=1` prints every step and executes nothing. **No long-lived secret is an input**: identity's OIDC signing key is generated on the box, and courier's identity credential is minted, patched and restarted inside the same run. | The customer's box, via `curl https://cafaye.com/box/install \| sh` |
+| `templates/substrate/install.sh` | **The customer substrate — one command, one box.** The executable half of `anywaye/notes/deployment.md`: installs k3s (single node, sqlite), cert-manager, CloudNativePG, Argo CD core, the GHCR image pull secret (**redeemed** per run from the box's own short-lived, box-bound capability — never a long-lived credential), and the first Applications, in that order. Every version pinned exactly. Idempotent (`kit_substrate_guard`), fails loudly and early, `DRY_RUN=1` prints every step and executes nothing. **No long-lived secret is an input**: identity's OIDC signing key is generated on the box, and courier's identity credential is minted, patched and restarted inside the same run. | The customer's box, via `curl https://anywaye.com/box/install \| sh` |
 | `templates/substrate/manifests/applications/` | The eight Argo CD `Application` manifests: the four launch services (identity, gateway, courier, parlor) and the observability set (Alloy, Loki, Grafana, Prometheus). Traces deferred — no Tempo. These are the artifacts a values commit changes and Argo reconciles. | Applied by `install.sh` step 6 |
 | `tests/kamal_test.sh` | The proof: generates the config **from the templates** and runs the **real** `kamal` and the real `kamal-backup` against it. 22 cases, all against the binaries. It exists because a doubled registry host, a missing `builder.arch` and a cross-file secret are all valid YAML that parses clean. | kit |
 | `tests/onecluster_test.sh` | **The one-cluster claim, asked of `bin/dev`.** Runs a real `bin/dev up` with `KIT_POSTGRES_DATABASES=alpha,beta` and asserts on the world afterwards: **exactly one** postgres container, two databases with a non-superuser owner role each, two non-owner `LOGIN` roles with the membership running one way only, **both services answering a real query as their own role** in their own database, and neither reaching the other's — matched against `permission denied for database`, not against a non-zero exit, because a cluster with no second service also refuses. `isolation_test.sh` brings its stack up itself; this one runs the command a developer runs, which no other tier did. | kit's gate (needs docker) |
@@ -168,7 +168,7 @@ than something a green run prints.
 | `templates/tier/README.md` | The normalised result format, the allowlist rules, and what a tier gate **cannot** catch. | Every service |
 | `templates/mise.toml` | Toolchain pins, one per language, commented. | Every service, as `mise.toml` |
 | `templates/AGENTS.md` | Skeleton repo-conventions file. | Every service, as `AGENTS.md` |
-| `core/` | The `cafaye/core` fan-out: a `vendir.yml` per consuming repo, the one shared Renovate policy, and what `core` needs to publish semver tags. | Any repo that consumes core's schemas |
+| `core/` | The `anywaye/core` fan-out: a `vendir.yml` per consuming repo, the one shared Renovate policy, and what `core` needs to publish semver tags. | Any repo that consumes core's schemas |
 | `tests/classify.py` | Classifies a change to a vendored schema set into `FILE`/`PACKAGE`/`WIRE_JSON`/`WIRE`, and **fails closed** on anything `tests/rules.json` does not name. Stdlib only. | Any repo that vendors core |
 | `tests/validate.sh` | kit's own suite — the gate. | kit |
 | `tests/zizmor_gate.sh` | The one zizmor split: `unpinned-uses` recorded, every other audit fatal. | Every service, copied verbatim |
@@ -177,9 +177,9 @@ than something a green run prints.
 | `tests/launch_test.sh` | The shape proof: layout validation, pin behavior, command construction, teardown safety, and the compose/schema invariants — each with a control that must go red — plus the installer split, all with stubbed tools and no daemon. The one real-docker contact is `compose config` (client-side rendering, starts nothing). The teardown claims whose subject is `launch/.env` run against a shadow copy of `launch/` that the suite builds, because the real one is git-ignored and belongs to a stack that may be running. | kit's gate (static phase) |
 | `VERSION` | **The version, and the only place it is written.** One line. Three tiers are derived from it by `stability_tier` — MAJOR is `breaking`, MINOR `additive`, PATCH `invisible` — and `stability_gate_check` gates the release on what the tier owes: a MAJOR needs a `MIGRATIONS.md` section, a `### Breaking` heading is legal only under a version whose MAJOR actually moved, and a version string the derivation cannot place is a red build rather than a guess. | Anyone deciding whether to take a version |
 | `RESERVED` | **Tombstones: a retired name stays dead.** In the `skip-allowlist` dialect, and the fourth hygiene rule is **inverted** — a reserved path that exists in the tree is the failure. buf's `reserved` and k8s's `+k8s:deprecated` are *not* the same mechanism (a wire tombstone vs a lifecycle marker on a still-present field); kit has no encoding, so only the shared weaker half transfers. See `DECISIONS.md` (MD27). | kit's gate; read before reintroducing any path |
-| `LICENSE` | **kit's own grant: MIT, and byte-identical to `cafaye/core/LICENSE`.** The whole grant — the manifest below carries no licence field, so no metadata field can disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
-| `cafaye.yml` | **The manifest.** Added when the grant moved to MIT, because OPS-D2 says no grant means "all rights reserved" and `kit` had no manifest — so a repo can be both unlicensed and undescribed. Same keys as `core`/`pantry`/`cafe`, `language: spec` (the enum has no config member), `dependencies: []` (kit is a dependency *of* the fleet), and `name: kit` — which is on the reserved-name list, the same exception core makes for itself. Validated against `core/schemas/cafaye.manifest.schema.json`. | `cafe contract lint`; anyone resolving what kit is |
-| `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, sends general app fixes upstream to the canonical app as fork + PR (branding stays downstream), and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate) — the two upstream directions kept apart. Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside cafaye |
+| `LICENSE` | **kit's own grant: MIT, and byte-identical to `anywaye/core/LICENSE`.** The whole grant — the manifest below carries no licence field, so no metadata field can disagree with the file. A gate check reads it *and* every root manifest that can carry a licence field, because a licence is only unambiguous when exactly one place can declare one. | Anyone reading or vendoring kit |
+| `anywaye.yml` | **The manifest.** Added when the grant moved to MIT, because OPS-D2 says no grant means "all rights reserved" and `kit` had no manifest — so a repo can be both unlicensed and undescribed. Same keys as `core`/`pantry`/`cafe`, `language: spec` (the enum has no config member), `dependencies: []` (kit is a dependency *of* the fleet), and `name: kit` — which is on the reserved-name list, the same exception core makes for itself. Validated against `core/schemas/anywaye.manifest.schema.json`. | `cafe contract lint`; anyone resolving what kit is |
+| `docs/customer-upstream.md` | **The customer path.** How an external app adopts public Kit (one pinned SHA across `uses:`, `kit-lint-ref` and `kit.ref` — branch comments on the YAML lines, bare SHA in `kit.ref` — moved by Renovate PRs via the `github-digest` datasource, no tags needed), merges template updates without losing local work, sends general app fixes upstream to the canonical app as fork + PR (branding stays downstream), and sends Kit improvements back as fork + PR with narrow local verification (CI owns the full gate) — the two upstream directions kept apart. Checked by `tests/customer_upstream_check.sh`. | Anyone building on Kit outside anywaye |
 
 ## Secrets — what kit checks, and what it does not
 
@@ -197,7 +197,7 @@ the push that introduces it, which is the moment it is cheapest to fix.
 
 **`templates/secrets/`** answers the question zizmor does not: *does a
 credential leave the process while the tests run?* It plants a fake credential
-— `cafaye_canary_` plus 32 bytes, assembled at run time so it is safe to commit
+— `anywaye_canary_` plus 32 bytes, assembled at run time so it is safe to commit
 — and sweeps five vectors: log/stdout/stderr, unknown serialisation fields, the
 whole error chain, keys that are present-but-empty, and Go type coverage. The
 contract is in [`templates/secrets/README.md`](templates/secrets/README.md); the
@@ -205,7 +205,7 @@ Go adapter is in `templates/secrets/go/`, and only Go has one so far.
 
 ## The core fan-out — `core/`
 
-Six repositories copy bytes out of `cafaye/core` and nothing in the fleet makes
+Six repositories copy bytes out of `anywaye/core` and nothing in the fleet makes
 that copy reach them. `core/` is the standard that does, and — as much as
 anything else — the record of what is still unproven about it.
 
@@ -437,7 +437,7 @@ A vendored copy must **say what it is**, and this is the part that is not
 optional:
 
 ```sh
-git clone --depth 1 https://github.com/cafaye/kit.git .kit/stack
+git clone --depth 1 https://github.com/anywaye/kit.git .kit/stack
 git -C .kit/stack checkout "$(cat kit.ref)"
 git -C .kit/stack rev-parse HEAD > .kit/stack/.kit-stack-ref
 ```
@@ -682,7 +682,7 @@ them. Nothing is forked, patched or rebranded — that is the condition the lice
 cares about, and the gate fails on a `build:` stanza on any of the three.
 
 AGPL attaches to the Grafana **server**, not to the applications it observes, so
-this is compatible with cafaye being MIT/Apache. The obligation runs one way: we
+this is compatible with anywaye being MIT/Apache. The obligation runs one way: we
 may use these; a self-hoster using our code is not thereby offered a modified
 Grafana. If you believe a change to one of these is necessary, that is a
 `DECISION NEEDED`, not something to do quietly.
@@ -694,15 +694,15 @@ filled.
 ### kit's own licence
 
 **kit is MIT.** See [LICENSE](LICENSE), which is the whole grant and is
-byte-identical to `cafaye/core/LICENSE` — the text seven cafaye repositories
-already carry (billing, caf, cafaye-py, cafaye-ts, core, darkroom, docs), all at
+byte-identical to `anywaye/core/LICENSE` — the text seven anywaye repositories
+already carry (billing, caf, anywaye-py, anywaye-ts, core, darkroom, docs), all at
 1063 bytes and the same md5, so a reader diffing two framework repos sees no
 grant and only the repository differing. OPS-D2 puts the framework open under
 MIT: their job is adoption.
 
 That is a different question from the AGPL paragraph above, and keeping them
 apart is the point. The four backing services are third-party software we
-*consume*, unmodified, under their own terms. kit is cafaye's own work and is
+*consume*, unmodified, under their own terms. kit is anywaye's own work and is
 granted under MIT. A service adopting kit adopts the conventions under those
 terms and pulls the four backends under AGPL-3.0, and neither obligation runs
 toward the other — MIT is one-way permissive, so it can never acquire AGPL's
@@ -756,10 +756,10 @@ person to add a panel will hit them:
   `otel_status_code`. A matcher on the dotted spelling is a *parse error*, and an
   alert rule that cannot be parsed never fires and never says so.
 - **The counter carries `_total` because the collector adds it.**
-  `transform/cafaye_metrics_labels` renames a metric whose name ends in `calls`
+  `transform/anywaye_metrics_labels` renames a metric whose name ends in `calls`
   to `calls_total`, which is what Prometheus reserves for counters and what stops
-  a `rate()` warning banner on every panel. Query `cafaye_calls_total`, not
-  `cafaye.calls` and not `cafaye_calls`.
+  a `rate()` warning banner on every panel. Query `anywaye_calls_total`, not
+  `anywaye.calls` and not `anywaye_calls`.
 
 **Where `tenant_id` is visible.** It is a *resource* attribute, so it arrives on
 `target_info` and on the resource of every span and log record — and never as a
@@ -813,7 +813,7 @@ who puts a prompt in one.
 
 ## Trace propagation — `templates/otel/`
 
-Every service speaks the same trace context, so a request crossing four cafaye
+Every service speaks the same trace context, so a request crossing four anywaye
 services reads as one trace.
 
 Each language ships four files:
@@ -900,7 +900,7 @@ platform-level state, the central Argo desired state, and the proofs of
 those platform guarantees live here. Services own their runtime code,
 behavior/unit tests, service charts, and chart publication. The selected
 deployment design is k3s + Argo CD + CNPG/Redis/OCI as recorded in
-`cafaye/notes/deployment.md`; kit preserves it and does not re-decide it.
+`anywaye/notes/deployment.md`; kit preserves it and does not re-decide it.
 
 Kit's reusable CI/workflow conventions (`ci.reusable.yml`,
 `image.reusable.yml`, `chart.reusable.yml`, `publish.reusable.yml`) are
@@ -931,7 +931,7 @@ and is never reported as a platform-test pass.
 
 ## How a service repo adopts kit
 
-Building your **own** application on Kit — outside cafaye, keeping your
+Building your **own** application on Kit — outside anywaye, keeping your
 commits, taking Kit updates as a reviewable PR, and sending improvements
 back — is a separate path with its own page:
 [`docs/customer-upstream.md`](docs/customer-upstream.md). It covers the
@@ -955,7 +955,7 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: cafaye/kit/.github/workflows/ci.reusable.yml@master
+    uses: anywaye/kit/.github/workflows/ci.reusable.yml@master
     with:
       language: go          # go | ruby | elixir | python | node | bun | rust | none
       working-dir: .        # the dir holding go.mod / Gemfile / pyproject.toml
@@ -996,11 +996,11 @@ created — no job, no check-run, no log line — while the caller's own jobs ra
 green and the run concluded `failure`:
 
 ```
-$ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+$ gh api repos/anywaye/parlor/actions/runs/37230458669/jobs \
     --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
 typecheck + build | completed/success
 bin/prime         | completed/success
-$ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+$ gh api repos/anywaye/parlor/actions/runs/37230458669 --jq '.conclusion'
 failure
 ```
 
@@ -1040,7 +1040,7 @@ permissions:
   packages: write
 jobs:
   image:
-    uses: cafaye/kit/.github/workflows/image.reusable.yml@master
+    uses: anywaye/kit/.github/workflows/image.reusable.yml@master
     with:
       push: true
 ```
@@ -1268,7 +1268,7 @@ bash <kit>/tests/validate.sh
 
 ### Adoption checklist
 
-- [ ] `.github/workflows/ci.yml` calls `cafaye/kit/.github/workflows/ci.reusable.yml@master`
+- [ ] `.github/workflows/ci.yml` calls `anywaye/kit/.github/workflows/ci.reusable.yml@master`
 - [ ] If `ci.yml` declares `concurrency`, its `group` does **not** begin with
       `kit-`. Any other spelling is fine, including declaring none. This is the
       only caller-side rule kit has, and it is the one whose absence is
@@ -1276,7 +1276,7 @@ bash <kit>/tests/validate.sh
       run is `failure` with green jobs and an empty `--log-failed`. See
       [the caller contract](#how-a-service-repo-adopts-kit).
 - [ ] `.github/workflows/publish.yml` is copied from `templates/publish/publish.yml`
-      and calls `cafaye/kit/.github/workflows/publish.reusable.yml@master` with
+      and calls `anywaye/kit/.github/workflows/publish.reusable.yml@master` with
       `push: true`; the workflow grants `packages: write`. **Without it nothing
       builds the image `config/deploy.yml` deploys and nothing pushes the chart
       the Argo CD `Application` pulls**, and CI stays green the whole time — a
@@ -1344,12 +1344,12 @@ equivalent, and the adoption numbers say so:
 
 | mechanism | live? | adoption |
 |---|---|---|
-| `uses: cafaye/kit/...@master` | **yes** — fetched at run time | **11/11** repos that call it |
+| `uses: anywaye/kit/...@master` | **yes** — fetched at run time | **11/11** repos that call it |
 | `cp <kit>/lint/golangci.yml ./` | **no** — a snapshot | **1/11** — and that one is `identity`, which added its own in the meantime |
 | `cp <kit>/templates/... ./` | no | 1/11 (`bin/dev`), 0/11 (observability) |
 
 Counted, not estimated: a non-worktree directory beside this one that contains a
-workflow with a `uses: cafaye/kit/.github/workflows/ci.reusable.yml` line. The
+workflow with a `uses: anywaye/kit/.github/workflows/ci.reusable.yml` line. The
 eleven are `billing cafe core courier darkroom docs gateway identity kit muse
 parlor`, and `kit` is in the list because it calls its own workflow — the
 repository that defines the standard should be the first repository held to it,
@@ -1428,7 +1428,7 @@ is **removed in Node 22** (`bad option`). So there is no remote-config path to
 weigh, and a flat config must exist as a real file on disk.
 
 **RuboCop does have one, and it works.** A three-line `.rubocop.yml` that says
-`inherit_from: [https://raw.githubusercontent.com/cafaye/kit/master/lint/rubocop.yml]`
+`inherit_from: [https://raw.githubusercontent.com/anywaye/kit/master/lint/rubocop.yml]`
 is genuinely applied — measured, a 17-line method is reported as
 `[17/15]` — and it *propagates*, so it does not rot the way a copy does. A bad URL
 fails loudly (exit 2, `404 "Not Found" while downloading remote config file`)
@@ -1504,7 +1504,7 @@ kit's config is a thing you get shouted at for having. An agreeing copy had to
 
 It is gone for the reason every other fleet check is gone. It found services by
 walking `../*` for a `.github/workflows` directory containing a `uses:
-cafaye/kit/...` line, so a clone of kit — which is what a CI runner is — found
+anywaye/kit/...` line, so a clone of kit — which is what a CI runner is — found
 none and reported SKIP on every run of every commit. `lint/drift-allowlist` held
 its dated divergences with an `owner=` field naming who was supposed to fix each
 one: a file in this repository assigning work to people in other repositories,
@@ -1533,7 +1533,7 @@ it. The test is written. It is not gated. Nobody finds out.
 
 | `language` | Declaration | Collector | Adapter? |
 |---|---|---|---|
-| `rust` | `#[ignore = "cafaye:tier=db reason=…"]` | `cargo test -- --list` | none |
+| `rust` | `#[ignore = "anywaye:tier=db reason=…"]` | `cargo test -- --list` | none |
 | `go` | `//go:build tier_db` | `go test -tags tier_db -list '.*' ./...` | none |
 | `python` | `@pytest.mark.tier_db` | `pytest --collect-only -q -m tier_db` | none |
 | `elixir` | `@tier :db` | none — needs one | ~15 lines |
@@ -1690,7 +1690,7 @@ we wrote them down to be:
   shell variable, so `echo "$VAR"` under `set -euo pipefail` is
   `unbound variable` and exit 1 — which is how
   `image.reusable.yml`'s `stamp provenance` step failed on every run it ever
-  had, and why `ghcr.io/cafaye/site` has never been published. A prefix
+  had, and why `ghcr.io/anywaye/site` has never been published. A prefix
   assignment that is **never** read back in the same block is left alone: the
   command is its only consumer and the command did receive it. Comments are
   stripped before the body is read, so the fix's own comment — which quotes the
@@ -1822,8 +1822,8 @@ than the one being read.
 
 kit is configuration and documentation — no runtime code, no library, nothing
 imported by anything — so the `LICENSE` file is the entire grant. The one
-manifest kit carries, `cafaye.yml`, has no licence field: core's manifest schema
-declares no such key (`core/schemas/cafaye.manifest.schema.json` sets
+manifest kit carries, `anywaye.yml`, has no licence field: core's manifest schema
+declares no such key (`core/schemas/anywaye.manifest.schema.json` sets
 `additionalProperties: false` and enumerates its twelve `properties` in full, and
 none of them is `license`), and a manifest copied out of a Go, Rust or Node
 project would be the one place that could disagree. That is the same shape as Go
@@ -1840,7 +1840,7 @@ ban the manifest; it requires it to agree, which is the difference between a rul
 and a ratchet.
 
 **What that check does not say today is what kit's grant now is.** `license_check`
-in `tests/validate.sh` was written for the Cafaye proprietary grant (m172, recorded
+in `tests/validate.sh` was written for the Anywaye proprietary grant (m172, recorded
 in `REPORT-kit-license-check-m172`) and still asserts the proprietary sentences
 and refuses MIT's permission grant. OPS-D2 re-grants kit, so the check and the
 grant disagree; the grant is the file and the check is what has to move. The gate

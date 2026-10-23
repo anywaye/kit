@@ -27,7 +27,7 @@
 #      against the fetched one.
 #   3. A TRACE arrives in Tempo, with the resource attributes the redaction
 #      boundary is supposed to preserve.
-#   4. A DERIVED METRIC reaches the collector's own stdout, under the `cafaye_`
+#   4. A DERIVED METRIC reaches the collector's own stdout, under the `anywaye_`
 #      namespace the spanmetrics connector mints, with the high-cardinality
 #      dimensions gone. There is no metrics STORE and there has not been one
 #      since it cost 130s of readiness budget per cold start; where the data
@@ -333,7 +333,7 @@ step_up() {
   #
 # `bin/dev`'s 180s is a LAPTOP figure for a cold start on a machine doing
   # nothing else — measured here at 76s with all eight containers coming up.
-  # This is a shared machine: other cafaye workers were running their own stacks
+  # This is a shared machine: other anywaye workers were running their own stacks
   # (a darkroom isolation postgres, an identity gate postgres, a deploy test)
   # while this ran, and a cold Grafana plus a cold Tempo under that contention
   # exceeded 180s.
@@ -430,8 +430,8 @@ fi
 # already has a home.
 db_query() {
   docker compose -p "$PROJECT" exec -T postgres \
-    psql --no-psqlrc --quiet --username "${KIT_POSTGRES_USER:-cafaye}" \
-    --dbname "${KIT_POSTGRES_DB:-cafaye_platform}" --tuples-only --no-align \
+    psql --no-psqlrc --quiet --username "${KIT_POSTGRES_USER:-anywaye}" \
+    --dbname "${KIT_POSTGRES_DB:-anywaye_platform}" --tuples-only --no-align \
     --set=ON_ERROR_STOP=1 --command="$1" 2>/dev/null | tr -d '[:space:]'
 }
 
@@ -464,8 +464,8 @@ fi
 # service design exists to prevent.
 #
 # The trap in reading `datacl`: Postgres does not print the word PUBLIC. A PUBLIC
-# entry is one with an EMPTY grantee — `=c/cafaye` is "PUBLIC has CONNECT, granted
-# by cafaye", while `kit_probe=CT/cafaye` is the role's own two privileges. So
+# entry is one with an EMPTY grantee — `=c/anywaye` is "PUBLIC has CONNECT, granted
+# by anywaye", while `kit_probe=CT/anywaye` is the role's own two privileges. So
 # this matches on the empty-grantee shape (`=`, a privilege letter, `/`) and not
 # on a substring, because a substring check for "PUBLIC" would pass on a database
 # where PUBLIC holds everything.
@@ -538,7 +538,7 @@ cat >"$WORK/traces.json" <<JSON
       "resource": {
         "attributes": [
           { "key": "service.name", "value": { "stringValue": "kitstackprobe" } },
-          { "key": "service.namespace", "value": { "stringValue": "cafaye" } },
+          { "key": "service.namespace", "value": { "stringValue": "anywaye" } },
           { "key": "tenant_id", "value": { "stringValue": "tnt_kit13live" } }
         ]
       },
@@ -578,7 +578,7 @@ cat >"$WORK/metrics.json" <<JSON
       "resource": {
         "attributes": [
           { "key": "service.name", "value": { "stringValue": "kitstackprobe" } },
-          { "key": "service.namespace", "value": { "stringValue": "cafaye" } }
+          { "key": "service.namespace", "value": { "stringValue": "anywaye" } }
         ]
       },
       "scopeMetrics": [
@@ -721,7 +721,7 @@ fi
 # `collector_logs`, got `sh: collector_logs: command not found`, and exited
 # nonzero on the FIRST attempt and on all ninety after it — so the assertion
 # reported that the spanmetrics connector had minted nothing while the very log
-# lines it printed on failure showed `Name: cafaye.calls_total` sitting right
+# lines it printed on failure showed `Name: anywaye.calls_total` sitting right
 # there. A probe that cannot run and a system that is broken look identical from
 # the outside, which is why this is a function AND why the command form is
 # spelled out where `sh` can see it.
@@ -735,11 +735,11 @@ collector_logs() { docker compose -p "$PROJECT" logs --no-color otel-collector 2
 #
 # Spelled as a command `sh` can execute, not as a call to the function above.
 if wait_for "the spanmetrics connector mints a metric" 90 sh -c \
-  "docker compose -p '$PROJECT' logs --no-color otel-collector 2>/dev/null | grep -qE 'cafaye[_.]duration'"; then
-  pass "the spanmetrics connector exported cafaye_duration — the fleet dashboard's source"
+  "docker compose -p '$PROJECT' logs --no-color otel-collector 2>/dev/null | grep -qE 'anywaye[_.]duration'"; then
+  pass "the spanmetrics connector exported anywaye_duration — the fleet dashboard's source"
 else
   fail "the spanmetrics connector minted nothing: the error view would be empty"
-  collector_logs | grep -iE 'cafaye[_.]' | head -5 | sed 's/^/        /' || true
+  collector_logs | grep -iE 'anywaye[_.]' | head -5 | sed 's/^/        /' || true
 fi
 
 # THE INGEST DENY SET, on the real pipeline. This is the assertion the removal

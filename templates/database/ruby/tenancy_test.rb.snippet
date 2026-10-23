@@ -40,7 +40,7 @@ require "pg"
 require_relative "tier" # templates/tier/ruby/tier.rb — for `tier :db`
 
 class AccountIsolationTest < Minitest::Test
-  extend Cafaye::Tier
+  extend Anywaye::Tier
 
   # The tier this file belongs to. The value in a normalised result line's `tier`
   # field, and the suffix of the gate variable: REQUIRED_DB=1.
@@ -62,7 +62,7 @@ class AccountIsolationTest < Minitest::Test
   # differs in all six.
   RESULTS = <<~SQL
     SELECT assertion, expected, actual, verdict, why
-      FROM pg_temp.cafaye_probe_result
+      FROM pg_temp.anywaye_probe_result
      ORDER BY assertion
   SQL
 

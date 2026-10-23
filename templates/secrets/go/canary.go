@@ -15,12 +15,12 @@
 // THE CANARY
 //
 //	A fake credential that is unmistakably fake AND unmistakably a credential:
-//	the `cafaye_canary_` prefix, then 32 bytes. Planted in the service's own
+//	the `anywaye_canary_` prefix, then 32 bytes. Planted in the service's own
 //	configuration, run through the whole suite, and then swept for in every
 //	place it could have gone.
 //
 //	It is BUILT, not written out, and that is a security property rather than a
-//	style one. A committed 46-character `cafaye_canary_…` literal is, to every
+//	style one. A committed 46-character `anywaye_canary_…` literal is, to every
 //	scanner in the world, a high-entropy string with a credential-ish prefix —
 //	it is exactly the thing a secret scanner is built to report, and adding
 //	one to an allowlist to make it go away would be the exact failure the
@@ -60,7 +60,7 @@ import (
 // to log by accident, and to paste into a bug report: nobody reading it can
 // mistake it for a live credential, and a scanner that is pattern-matching on
 // known provider formats will not recognise it as one.
-const CanaryPrefix = "cafaye_canary_"
+const CanaryPrefix = "anywaye_canary_"
 
 // CanaryBytes is how many bytes follow the prefix. 32 is the size of a
 // hex-encoded 128-bit value, which is the shape most real credentials have and

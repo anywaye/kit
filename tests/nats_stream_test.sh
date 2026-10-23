@@ -5,7 +5,7 @@
 #   bash tests/nats_stream_test.sh
 #
 # WHAT THIS IS FOR
-#   Every cafaye service with an outbox publishes each event to a subject equal
+#   Every anywaye service with an outbox publishes each event to a subject equal
 #   to its event type, and a subject no stream claims is a publish the broker
 #   neither acks nor refuses. The stack therefore has to define the stream, once,
 #   idempotently — and "has to" is a claim about a file until something checks
@@ -245,7 +245,7 @@ run 'control: a bare > subject goes red' red check_stream "$fixture_bare" "$EXAM
 
 # A plain, non-idempotent `nats stream add`.
 fixture_plainadd="$WORK/plainadd.yml"
-sed 's#nats stream info cafaye >/dev/null 2>&1 || nats stream add#nats stream add#' \
+sed 's#nats stream info anywaye >/dev/null 2>&1 || nats stream add#nats stream add#' \
   "$COMPOSE" >"$fixture_plainadd"
 run 'control: a plain stream add (no check-then-create) goes red' \
   red check_stream "$fixture_plainadd" "$EXAMPLE"

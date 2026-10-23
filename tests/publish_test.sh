@@ -69,7 +69,7 @@ appVersion: 0.1.0
 EOF
 cat >"$svc/chart/values.yaml" <<'EOF'
 image:
-  repository: ghcr.io/cafaye/testpub
+  repository: ghcr.io/anywaye/testpub
   tag: "0.1.0"
 EOF
 cat >"$svc/chart/templates/_helpers.tpl" <<'EOF'

@@ -10,7 +10,7 @@
 # WHY CORE NEEDS THIS AT ALL
 #
 # The whole fan-out design rests on one sentence: *consumers pin a semver tag
-# rather than a branch*. As of this writing `cafaye/core` has **zero tags**
+# rather than a branch*. As of this writing `anywaye/core` has **zero tags**
 # (`git tag -l` is empty), and that was measured, not assumed. Until the first tag
 # exists, `ref: v0.3.0` fails — verified, by running vendir:
 #
@@ -84,9 +84,9 @@ jobs:
           # default changing silently is the kind of thing that should never be
           # load-bearing.
           curl -fsSL -o /tmp/classify \
-            "https://raw.githubusercontent.com/cafaye/kit/master/tests/classify.py"
+            "https://raw.githubusercontent.com/anywaye/kit/master/tests/classify.py"
           curl -fsSL -o /tmp/rules.json \
-            "https://raw.githubusercontent.com/cafaye/kit/master/tests/rules.json"
+            "https://raw.githubusercontent.com/anywaye/kit/master/tests/rules.json"
 
           if python3 /tmp/classify "$RUNNER_TEMP/old" "$RUNNER_TEMP/new" \
                --tier FILE --rules /tmp/rules.json --json >"$RUNNER_TEMP/report.json"; then

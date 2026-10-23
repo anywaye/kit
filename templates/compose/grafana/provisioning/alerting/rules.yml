@@ -31,7 +31,7 @@ groups:
   # rules would be worse than either — an alert that can never fire is a
   # folder that looks like coverage.
   #
-  # `cafaye_calls_total` is still DERIVED by the collector's spanmetrics
+  # `anywaye_calls_total` is still DERIVED by the collector's spanmetrics
   # connector and still passes the same redaction allowlist. It has nowhere
   # to be QUERIED because Mimir cost 130s of readiness budget per cold start
   # and was removed rather than left half-wired. Restoring these two rules is
@@ -45,11 +45,11 @@ groups:
   # six months from now added `muse.prompt` to an allowlist — because the leak
   # is invisible by construction, which is the point of the boundary.
   - orgId: 1
-    name: cafaye-boundary
-    folder: cafaye
+    name: anywaye-boundary
+    folder: anywaye
     interval: 1m
     rules:
-      - uid: cafaye-no-content-attributes
+      - uid: anywaye-no-content-attributes
         title: "A content-shaped attribute reached Loki"
         condition: C
         for: 0m
@@ -64,7 +64,7 @@ groups:
             watches is a boundary that has already been removed.
         labels:
           severity: critical
-          cafaye_layer: boundary
+          anywaye_layer: boundary
         data:
           - refId: A
             relativeTimeRange:

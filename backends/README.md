@@ -25,7 +25,7 @@ A project's `ci/pipeline.sh` must:
 
    | variable | meaning |
    | --- | --- |
-   | `WORKSPACE` | the directory holding `cafaye/<name>` checkouts |
+   | `WORKSPACE` | the directory holding `anywaye/<name>` checkouts |
    | `GH_TOKEN` | a token that can read the project's private sources |
    | `CI` | `1`, so a pipeline can skip interactivity |
 
@@ -43,7 +43,7 @@ database + `<project>` role for it, so the project's own `bin/dev`-style stack
 is replaced by a fixed server it connects to. Provision it with `--postgres`:
 
 ```sh
-GH_TOKEN=… backends/instabox/provision.sh --postgres cafaye-build billing courier docs identity
+GH_TOKEN=… backends/instabox/provision.sh --postgres anywaye-build billing courier docs identity
 ```
 
 The projects that declare one are read, never invented: each of `identity`,
@@ -158,8 +158,8 @@ projects needs a second sandbox only after the disk is measured, not before.
 
 ### The rollout table
 
-`cafaye-build` already exists and already runs `docs`; `box-4c652a` is the
-test-tier sandbox and is not a CI host. The first wave lands on `cafaye-build`,
+`anywaye-build` already exists and already runs `docs`; `box-4c652a` is the
+test-tier sandbox and is not a CI host. The first wave lands on `anywaye-build`,
 and each following sandbox carries the next four. One project per line, and
 the gate column is the fact a pipeline's MARKED 1 must carry — read from the
 repository's own `.github/workflows/ci.yml`, never assumed. The database column
@@ -169,14 +169,14 @@ is the same kind of fact: a project is `yes` when its `ci.yml` names a
 
 | sandbox | projects | gate entrypoints | database |
 | --- | --- | --- | --- |
-| `cafaye-build` (exists) | `docs`, `billing`, `courier`, `identity` | `./bin/prime` ×4 | `billing`, `courier`, `identity` |
-| `cafaye-release` (new) | `box`, `pantry`, `parlor`, `website` | `bin/ci`, then `./bin/prime` ×3 | `box` |
-| `cafaye-libs` (new) | `gateway`, `cafe`, `core`, `muse` | `./bin/prime` ×4 | none — no `postgres:17-alpine` service in any of the four |
-| `cafaye-rest` (new) | `keyholder`, `darkroom`, `cafaye-ts` | `bin/gate`, then `./bin/prime` ×2 | `darkroom` |
-| *fifth slot* | spare, or the second wave of the three libraries (`cafaye-py`, `cafaye-rb`) | — | `cafaye-rb` (its own `ci.yml` names `postgres:17`, not `-alpine`) |
+| `anywaye-build` (exists) | `docs`, `billing`, `courier`, `identity` | `./bin/prime` ×4 | `billing`, `courier`, `identity` |
+| `anywaye-release` (new) | `box`, `pantry`, `parlor`, `website` | `bin/ci`, then `./bin/prime` ×3 | `box` |
+| `anywaye-libs` (new) | `gateway`, `cafe`, `core`, `muse` | `./bin/prime` ×4 | none — no `postgres:17-alpine` service in any of the four |
+| `anywaye-rest` (new) | `keyholder`, `darkroom`, `anywaye-ts` | `bin/gate`, then `./bin/prime` ×2 | `darkroom` |
+| *fifth slot* | spare, or the second wave of the three libraries (`anywaye-py`, `anywaye-rb`) | — | `anywaye-rb` (its own `ci.yml` names `postgres:17`, not `-alpine`) |
 
 Because some sandboxes carry no database project at all, `--postgres` is given
-on the rows that have one and not on `cafaye-libs`. A project that starts one
+on the rows that have one and not on `anywaye-libs`. A project that starts one
 Postgres per job on Actions (a `services:` block) is exactly the project that
 needs a database here; a project that finds Postgres binaries on the runner
 (`pantry`) is not.
@@ -193,8 +193,8 @@ Beyond the template, these projects need extra material on the sandbox, and
 | `pantry` | PostgreSQL server binaries (`pg_ctl`, `psql`, `initdb`) on the host, for its RLS suite | installs `postgresql`/`postgresql-client` and writes `PANTRY_PG_BIN` into pantry's env |
 | `identity`, `darkroom` | an `<owner>_app` LOGIN role — their account-isolation migration's `protect_table` defaults to `<owner>_app` and refuses to run without it | provision creates `<project>_app` (NOSUPERUSER, LOGIN) and grants CONNECT on the project's database |
 
-`docs` also needs kit's own tree on the sandbox (`$WORKSPACE/cafaye/kit`), for
-the fleet sync that reads every sibling's `cafaye.yml`; provision clones it
+`docs` also needs kit's own tree on the sandbox (`$WORKSPACE/anywaye/kit`), for
+the fleet sync that reads every sibling's `anywaye.yml`; provision clones it
 once and fetches on re-provision.
 
 **Open finding, not yet fixed (identity/darkroom side):** provision creates
@@ -206,7 +206,7 @@ is deliberately not done here — this packet is kit. Tracked as the next
 identity/darkroom packet.
 
 
-`docs` is already on `cafaye-build` under the **single-project** provisioner.
+`docs` is already on `anywaye-build` under the **single-project** provisioner.
 Re-provisioning it with the multi-project form migrates it: the per-project
 env inherits the old `~/.ci-env` (so `DEPLOY_HOST` survives), the supervisor
 takes over the agent, and `ci/pipeline.sh` is not touched.
@@ -223,12 +223,12 @@ takes over the agent, and `ci/pipeline.sh` is not touched.
    malformed one.
 3. **Write `instabox`** into `ci/backend`. Commit and push `master`.
 4. **Provision.** On the operator's machine, logged into `instabox` and `gh`:
-   `GH_TOKEN=… backends/instabox/provision.sh cafaye-build <project>`. A gate
+   `GH_TOKEN=… backends/instabox/provision.sh anywaye-build <project>`. A gate
    that needs Postgres takes `--postgres` —
-   `… provision.sh --postgres cafaye-build billing courier docs identity` —
+   `… provision.sh --postgres anywaye-build billing courier docs identity` —
    and `DATABASE_URL`/`TEST_DATABASE_URL` land in the project's env. A chart
    publisher is logged in once more —
-   `cat token | bin/publish --sandbox --sandbox-name cafaye-build`.
+   `cat token | bin/publish --sandbox --sandbox-name anywaye-build`.
 5. **Watch one green run.** `instabox ssh <sandbox> -- tail -f
    ~/ci-logs/<project>.log` until `agent[<project>]: shipped <sha>` and the
    pipeline's own last line agree on what shipped. That is the whole

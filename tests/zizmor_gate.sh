@@ -12,7 +12,7 @@
 #
 #   `unpinned-uses` findings are RECORDED, and nothing else is.
 #
-#   The fleet calls `cafaye/kit/ci/ci.reusable.yml@master`, so
+#   The fleet calls `anywaye/kit/ci/ci.reusable.yml@master`, so
 #   every `uses:` in every adopting repo is a branch ref and zizmor reports
 #   thirty-odd of them. Two things can be done with that, and only one of them
 #   is honest:
@@ -100,7 +100,7 @@ except Exception as exc:
 RECORDED = {
     "unpinned-uses": (
         "kit and its thirteen adopters call "
-        "cafaye/kit/ci/ci.reusable.yml@master by design. Pinning "
+        "anywaye/kit/ci/ci.reusable.yml@master by design. Pinning "
         "to a SHA is a real cost and a real benefit; both are costed in "
         "DECISIONS.md under MD10, together with the third option (pin, and let "
         "Renovate open the bump PRs). Until that is decided, this finding is "

@@ -6,7 +6,7 @@
 # address. install.sh substitutes the operator's KIT_SUBSTRATE_ACME_EMAIL in a
 # pipe at apply time (`sed … | kubectl apply -f -`), so the value reaches the
 # API server and is never written to disk. A literal here would be wrong, not
-# merely insecure: it would put cafaye's address, or a made-up one, on a
+# merely insecure: it would put anywaye's address, or a made-up one, on a
 # customer's ACME account.
 #
 # THE NAMES ARE A CONTRACT. The generated service charts annotate their

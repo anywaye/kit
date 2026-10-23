@@ -95,7 +95,7 @@ async fn read_results(
     client
         .simple_query(
             "SELECT assertion, expected, actual, verdict, why \
-             FROM pg_temp.cafaye_probe_result ORDER BY assertion",
+             FROM pg_temp.anywaye_probe_result ORDER BY assertion",
         )
         .await?
         .into_iter()
@@ -205,7 +205,7 @@ fn assert_all_pass(results: &[(String, Assertion)]) {
 }
 
 #[tokio::test]
-#[ignore = "cafaye:tier=db reason=needs a live Postgres with the tenancy substrate applied"]
+#[ignore = "anywaye:tier=db reason=needs a live Postgres with the tenancy substrate applied"]
 async fn account_isolation() {
     let dsn = env::var("TEST_DATABASE_URL").unwrap_or_default();
 

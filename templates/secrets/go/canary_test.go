@@ -145,7 +145,7 @@ func TestSetCanaryRefusesUnsafeValues(t *testing.T) {
 			"in the process and report a leak that is not one")
 	}
 	if err := SetCanary("a-real-looking-jwt-goes-here"); err == nil {
-		t.Fatal("SetCanary accepted a value with no cafaye_canary_ prefix; a leak of a real " +
+		t.Fatal("SetCanary accepted a value with no anywaye_canary_ prefix; a leak of a real " +
 			"credential would then be indistinguishable from a leak of this harness")
 	}
 	if err := SetCanary(CanaryPrefix + "custom-planted-value-32-bytes!!"); err != nil {

@@ -49,7 +49,7 @@
 #   be READ; "full" means 80 extensions loaded onto the cluster whether or not
 #   any of them is used, and `max_worker_processes` raised to 64 to accommodate
 #   them. Composing the layers from the official image keeps the base official
-#   and the extension list to the one cafaye actually uses.
+#   and the extension list to the one anywaye actually uses.
 #
 # PINNED, NOT FLOATING. `pgx-pgvector:17` is a moving tag. The versioned form
 # is `pgx-pgvector:17-0.8.6` — note there is NO `v` prefix. pglayers' README

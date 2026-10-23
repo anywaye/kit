@@ -9,15 +9,15 @@ other path — and it produces the same bytes.
 
 | when | how |
 |---|---|
-| Actions minutes exist | `templates/publish/publish.yml` → `cafaye/kit/.github/workflows/publish.reusable.yml@master` (`push: true`) |
+| Actions minutes exist | `templates/publish/publish.yml` → `anywaye/kit/.github/workflows/publish.reusable.yml@master` (`push: true`) |
 | They do not, or you need to publish from a laptop / sandbox / other CI | `bin/publish` (or `templates/bin/publish.sh` copied as `bin/publish`) |
 
 Both publish **two artifacts**:
 
-* **Image** at `ghcr.io/cafaye/<service>:<tag>` (`tag` == `Chart.yaml` version, e.g. `0.1.0`) plus `sha-<git-sha>` — the tag the chart’s `values.yaml` pins (`image.tag`).
-* **Chart** at `oci://ghcr.io/cafaye/charts/<chart>:<version>` — `helm package` then `helm push`. The OCI tag IS the chart’s `version`.
+* **Image** at `ghcr.io/anywaye/<service>:<tag>` (`tag` == `Chart.yaml` version, e.g. `0.1.0`) plus `sha-<git-sha>` — the tag the chart’s `values.yaml` pins (`image.tag`).
+* **Chart** at `oci://ghcr.io/anywaye/charts/<chart>:<version>` — `helm package` then `helm push`. The OCI tag IS the chart’s `version`.
 
-Argo CD’s `Application` pulls `oci://ghcr.io/cafaye/charts/<chart>` at
+Argo CD’s `Application` pulls `oci://ghcr.io/anywaye/charts/<chart>` at
 `targetRevision: <version>`. The version is never bumped by either path — the
 chart’s **content** changes (the pinned `image.digest`) while the tag stays
 `0.1.0`.
@@ -32,7 +32,7 @@ is validated as `sha256:[0-9a-f]{64}`, and refused when malformed — exactly as
 `chart.reusable.yml`’s “pin the image by digest” step does (replace-or-insert
 under the `image:` block, one `digest:` line, `grep -c` check).
 
-A digest cannot move; a tag can. The registry’s `ghcr.io/cafaye/gateway:0.1.0`
+A digest cannot move; a tag can. The registry’s `ghcr.io/anywaye/gateway:0.1.0`
 once held `sha256:c264…37165` while the node ran `sha256:8e60…e79b` for six hours
 with Argo reporting `Synced` — the tag was overwritten, the Deployment was
 textually identical, nothing rolled. A digest-pinned chart is a textual diff
@@ -53,8 +53,8 @@ bin/publish --dry-run
 bin/publish --dry-run --service-dir . --chart-dir chart
 
 # real publish (service dir is build context, chart dir holds Chart.yaml)
-bin/publish --service-dir . --chart-dir chart --image ghcr.io/cafaye/mygateway
-# short form defaults: chart-dir=chart, image=ghcr.io/cafaye/<chart-name>, tag=Chart.yaml version
+bin/publish --service-dir . --chart-dir chart --image ghcr.io/anywaye/mygateway
+# short form defaults: chart-dir=chart, image=ghcr.io/anywaye/<chart-name>, tag=Chart.yaml version
 bin/publish --service-dir .
 
 # multi-arch (workflow builds linux/amd64,linux/arm64)
@@ -63,28 +63,28 @@ bin/publish --platforms linux/amd64,linux/arm64
 # single-arch requires no buildx; multi-arch refuses when buildx is absent
 ```
 
-Flags: `--service-dir`, `--image`, `--chart-dir`, `--registry` (`oci://ghcr.io/cafaye/charts`),
+Flags: `--service-dir`, `--image`, `--chart-dir`, `--registry` (`oci://ghcr.io/anywaye/charts`),
 `--tag` (default from Chart.yaml), `--git-ref` (default HEAD), `--platforms`, `--dry-run`.
 
 Every network call is bounded (`timeout`/`gtimeout`): build 600s, push/package 300s.
 
 ### From an instabox sandbox (one command, idempotent, safe)
 
-The manual precedent was a box named `cafaye-build`. This provisions or reuses
+The manual precedent was a box named `anywaye-build`. This provisions or reuses
 it, installs `helm v4.3.0` + `gh` if missing, and logs in — all idempotently
 (a second run changes nothing and still works). Tokens via stdin, never argv,
 never in logs.
 
 ```sh
 # one command provisions the box (or reuses it), installs tools, prints ssh
-bin/publish --sandbox --sandbox-name cafaye-build --dry-run
+bin/publish --sandbox --sandbox-name anywaye-build --dry-run
 bin/publish --sandbox
 
 # with a token piped — logs in inside the box, still via stdin
 cat token.txt | bin/publish --sandbox
 
 # then publish from inside
-instabox ssh cafaye-build
+instabox ssh anywaye-build
 bin/publish --service-dir .   # from inside the sandbox, with its docker+helm
 
 # wrapper (same as --sandbox)
@@ -103,12 +103,12 @@ can flip visibility. A package created private needs its visibility flipped
 URL after a new package:
 
 ```
-image: https://github.com/orgs/cafaye/packages/container/cafaye%2Fmyservice/settings
-chart: https://github.com/orgs/cafaye/packages/container/cafaye%2Fcharts%2Fmyservice/settings
+image: https://github.com/orgs/anywaye/packages/container/anywaye%2Fmyservice/settings
+chart: https://github.com/orgs/anywaye/packages/container/anywaye%2Fcharts%2Fmyservice/settings
 
 # also reachable as repo packages
-https://github.com/cafaye/myservice/pkgs/container/myservice
-https://github.com/cafaye/charts/pkgs/container/charts%2Fmyservice
+https://github.com/anywaye/myservice/pkgs/container/myservice
+https://github.com/anywaye/charts/pkgs/container/charts%2Fmyservice
 ```
 
 Open it, set to **Public** (or Internal), done. Existing packages need no step.
@@ -138,16 +138,16 @@ and `shellcheck -S warning` clean.
 ## Exact manager commands (from a clean machine)
 
 ```sh
-git clone https://github.com/cafaye/kit.git
-git clone https://github.com/cafaye/<service>.git
+git clone https://github.com/anywaye/kit.git
+git clone https://github.com/anywaye/<service>.git
 cat token.txt | docker login ghcr.io -u USERNAME --password-stdin
 cat token.txt | helm registry login ghcr.io -u USERNAME --password-stdin
 # service has Chart.yaml version 0.1.0, values.yaml with image: block, Dockerfile
 kit/bin/publish --dry-run --service-dir ./<service>
-kit/bin/publish --service-dir ./<service> --image ghcr.io/cafaye/<service>
+kit/bin/publish --service-dir ./<service> --image ghcr.io/anywaye/<service>
 # if image already exists anonymously and only chart needs pushing:
 # kit/bin/publish still builds+pushes image to derive digest; chart digest matches.
 # For a sandbox instead of local docker:
-cat token.txt | kit/bin/publish --sandbox --sandbox-name cafaye-build
-instabox ssh cafaye-build   # then kit/bin/publish --service-dir ./<service>
+cat token.txt | kit/bin/publish --sandbox --sandbox-name anywaye-build
+instabox ssh anywaye-build   # then kit/bin/publish --service-dir ./<service>
 ```

@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/gateway
+    repoURL: oci://ghcr.io/anywaye/charts/gateway
     chart: gateway
     targetRevision: 0.1.0
     # THE TELEMETRY KILL SWITCH, HERE AND NOT IN gateway-secrets.
@@ -64,7 +64,7 @@ spec:
     # `IDENTITY_ISSUER` IS DELIBERATELY NOT SET HERE. It is the PUBLIC origin
     # identity mints `iss` with (`KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER`, which has
     # NO default: unset means identity serves no OIDC surface at all), while the
-    # chart's default is the fleet's production origin `https://auth.cafaye.com`.
+    # chart's default is the fleet's production origin `https://auth.anywaye.com`.
     # A box that sets the installer's issuer must set the SAME origin here — the
     # pair is reported in REPORT-roll-c5-crossns, and it is an operator fact
     # (the customer's own domain) that a static manifest cannot hold.

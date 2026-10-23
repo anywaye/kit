@@ -1,14 +1,14 @@
 // kit-install.mjs — the install host: the Worker that serves install.sh at
-// https://cafaye.com/box/install.
+// https://anywaye.com/box/install.
 //
 // Serves templates/substrate/install.sh — the customer one-command install —
 // at GET /box/install: the exact bytes, content-type text/x-shellscript, no
 // transformation. `curl | sh` executes whatever bytes arrive, so a Worker that
 // reformats, wraps or minifies the script is a Worker that breaks the install.
 //
-// THE PATH IS THE PRODUCT'S FRONT DOOR and it lives under cafaye.com now, not
-// on a host of its own: `curl https://cafaye.com/box/install | sh`. kit.cafaye.com
-// is retired, so the Worker is bound to a route on cafaye.com rather than to a
+// THE PATH IS THE PRODUCT'S FRONT DOOR and it lives under anywaye.com now, not
+// on a host of its own: `curl https://anywaye.com/box/install | sh`. kit.anywaye.com
+// is retired, so the Worker is bound to a route on anywaye.com rather than to a
 // hostname — the same deployment, a different binding, and the binding stays an
 // operator action (see wrangler.jsonc).
 //
@@ -43,7 +43,7 @@ export default {
   async fetch(request) {
     const { pathname } = new URL(request.url);
 
-    // The front door is /box/install, on cafaye.com. The URL parser has
+    // The front door is /box/install, on anywaye.com. The URL parser has
     // already resolved `..` and `%2e%2e` by the time pathname is read, so
     // `/box/install/../secrets` arrives as `/secrets` and 404s like every
     // other path that is not one of the three named here.

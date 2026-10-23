@@ -1,7 +1,7 @@
 -- kit template — the ACCOUNT boundary, graded by the DATABASE.
 --
 --     psql "$MIGRATIONS_DATABASE_URL" -f advisor.sql
---     select * from cafaye.advisor_findings();
+--     select * from anywaye.advisor_findings();
 --
 -- WHAT THIS IS. Ten rules over one function, one output shape: every finding is
 -- a row carrying `(name, level, facing, categories, description, detail,
@@ -82,7 +82,7 @@
 --       "everything" gets it, and a caller that means "my own tables" says so.
 --
 --   `auth.uid()`, `auth.jwt()`, `auth.role()`, `auth.email()`  ->
---       `cafaye.current_account_id()` and `cafaye.current_credential_digest()`.
+--       `anywaye.current_account_id()` and `anywaye.current_credential_digest()`.
 --       These are the substrate's two documented identity seams. Rule 7 looks for
 --       an unwrapped call to either, plus a bare `current_setting(`, which is
 --       the third of the three the substrate exists to remove.
@@ -127,13 +127,13 @@
 -- and friends ship their own tables with their own grants, and reporting a table
 -- this substrate cannot protect trains the reader to ignore the report.
 --
--- IT STANDS ALONE. Nothing here calls a `cafaye.*` function the substrate owns,
+-- IT STANDS ALONE. Nothing here calls a `anywaye.*` function the substrate owns,
 -- and that is deliberate rather than tidy. A checker that only exists where the
 -- thing it checks has already been installed cannot find a service that has NOT
 -- installed it — which is the service that needs it. So rule 5's recognition of a
 -- substrate-written policy, which is the one place the substrate's own naming
 -- convention appears, is inlined rather than delegated to
--- `cafaye.credential_tables()`. What is duplicated is the two PREDICATE SHAPES,
+-- `anywaye.credential_tables()`. What is duplicated is the two PREDICATE SHAPES,
 -- and the comment above each says which catalog it reads.
 --
 -- ---------------------------------------------------------------------------
@@ -145,7 +145,7 @@
 --       exactly right, because "right" is a property of the service's data model
 --       and this function has never read it.
 --
---   * That the service SETS the identity. `cafaye.begin_account/1` is one call in
+--   * That the service SETS the identity. `anywaye.begin_account/1` is one call in
 --       one place. A service that never calls it reads zero rows, which is safe
 --       and loud, and no rule in this file can tell it from a service whose
 --       tables are empty.
@@ -162,11 +162,11 @@
 --       `pg_get_expr`, which deparses a name unqualified whenever the READER's
 --       `search_path` resolves it, so this function's findings are a function of
 --       who runs it. Both spellings are accepted above, which is a mitigation and
---       not a fix: the shape `(cafaye\.)?` accepts is one narrow family, and a
+--       not a fix: the shape `(anywaye\.)?` accepts is one narrow family, and a
 --       third spelling would be missed rather than reported.
 --       `substrate.sql`'s `credential_tables()` had the same defect in the worst
 --       possible form — it reported NO credential table at all to the role whose
---       `"$user"` schema is `cafaye` — and it no longer does, because it resolves
+--       `"$user"` schema is `anywaye` — and it no longer does, because it resolves
 --       the same facts from `pg_depend`. That function can do that here too and
 --       does not: these rules are about what a predicate SAYS, and the predicate
 --       `using (true)` is invisible in every dependency catalog. Closing this
@@ -240,7 +240,7 @@
 --     written by the substrate.
 --
 -- It is an all-of condition and that is the whole design. An allowlist keyed on
--- policy NAMES (`%_cafaye_resolve`) is a ratchet: a service that renames a
+-- policy NAMES (`%_anywaye_resolve`) is a ratchet: a service that renames a
 -- policy gets a red it cannot fix, and a service that adds a THIRD permissive
 -- policy next to the exempt two still passes. Under this exemption the substrate
 -- writes FIVE policies on both of the suite's fixture tables — four from
@@ -259,7 +259,7 @@
 -- nobody notices, or a hand-written policy borrows a substrate's name and is
 -- exempt for ever. Recognising three FORMS is the cheaper of the two mistakes.
 
-create or replace function cafaye.advisor_findings(
+create or replace function anywaye.advisor_findings(
   p_schemas text[] default null
 )
 returns table (
@@ -302,9 +302,9 @@ api_roles as (
 -- (3) EVERY POLICY IN SCOPE, with its expressions RENDERED.
 --
 --     `pg_get_expr` is a pretty-printer, not the text that was executed: the
---     substrate writes `(account_id = (select cafaye.current_account_id()))` and
+--     substrate writes `(account_id = (select anywaye.current_account_id()))` and
 --     the catalog gives back
---     `(account_id = ( SELECT cafaye.current_account_id() AS current_account_id))`
+--     `(account_id = ( SELECT anywaye.current_account_id() AS current_account_id))`
 --     — its own capitalisation, spacing and generated alias. Every regexp below
 --     is written against the RENDERED form, and a regexp written against the
 --     executed form matches nothing here and looks for ever afterwards like a
@@ -317,10 +317,10 @@ api_roles as (
 --
 --         as role `alpha`   search_path = "$user", public   ($user = a schema
 --                           named `alpha`, which does not exist)
---                             -> (account_id = ( SELECT cafaye.current_account_id() …))
+--                             -> (account_id = ( SELECT anywaye.current_account_id() …))
 --
---         as role `cafaye`  search_path = "$user", public   ($user = a schema
---                           named `cafaye`, which DOES exist)
+--         as role `anywaye`  search_path = "$user", public   ($user = a schema
+--                           named `anywaye`, which DOES exist)
 --                             -> (account_id = ( SELECT current_account_id() …))
 --
 --     `"$user"` is the whole mechanism, and it means the cluster's own admin
@@ -328,7 +328,7 @@ api_roles as (
 --     the short form.
 --
 --     So every regexp below accepts BOTH forms, and the comment says why rather
---     than leaving `(cafaye\.)?` looking like sloppiness. Requiring the qualified
+--     than leaving `(anywaye\.)?` looking like sloppiness. Requiring the qualified
 --     form alone makes rule 5 report MD24's credential policy as a hand-written
 --     one to exactly the reader least likely to know why, and makes rule 7
 --     silently miss a bare call for the same reader. A rule that is blind under
@@ -336,13 +336,13 @@ api_roles as (
 --
 --     `substrate.sql`'s `credential_tables()` had exactly this defect and no
 --     longer has it: it read a regexp over this text and returned NOTHING to the
---     `cafaye` role while returning everything to `alpha`, which is an audit
+--     `anywaye` role while returning everything to `alpha`, which is an audit
 --     telling the cluster's own admin role that this database holds no credential
 --     path. It now resolves the same two facts from `pg_depend` — OIDs rather
 --     than spelling — and `tests/tenancy_test.sh` asserts all three roles get one
 --     answer. THIS FILE STILL READS THE TEXT, because every rule here is about
 --     what a predicate SAYS (`using (true)` is a predicate no dependency catalog
---     records as anything but a boolean), so `(cafaye\.)?` stays and the residual
+--     records as anything but a boolean), so `(anywaye\.)?` stays and the residual
 --     limitation is listed under "what this does not find" rather than left for a
 --     reader to infer.
 policies as (
@@ -405,16 +405,16 @@ policy_cmds as (
 
 -- (6) WHICH POLICIES THE SUBSTRATE WROTE, and it is three shapes:
 --
---       the account predicate  `account_id = ( select cafaye.current_account_id()`
---       the credential predicate  `<column> = ( select cafaye.current_credential_digest()`
---       the membership predicate  `<column> = ( select cafaye.current_user_id()`
+--       the account predicate  `account_id = ( select anywaye.current_account_id()`
+--       the credential predicate  `<column> = ( select anywaye.current_credential_digest()`
+--       the membership predicate  `<column> = ( select anywaye.current_user_id()`
 --
---     Inlined rather than delegated to `cafaye.credential_tables()` — see the
+--     Inlined rather than delegated to `anywaye.credential_tables()` — see the
 --     block above: an advisor that only exists where the substrate has been
 --     installed cannot find the service that has not installed it. The second and
 --     third shapes are checked against the FUNCTION FORM rather than against the
 --     COLUMN, because the column is the adopter's choice and the form is the
---     substrate's. All three carry `(cafaye\.)?` for the `search_path` reason
+--     substrate's. All three carry `(anywaye\.)?` for the `search_path` reason
 --     recorded above.
 --
 --     THE THIRD ARM EXISTS BECAUSE THE EXEMPTION IS AN ALL-OF CONDITION, and that
@@ -429,9 +429,9 @@ policy_cmds as (
 --     recognition is of the form, not of the function name alone.
 substrate_written as (
   select pc.*,
-         (pc.qual ~* '^\s*\(?account_id = \(\s*select (cafaye\.)?current_account_id\(\)'
-            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (cafaye\.)?current_credential_digest\(\)'
-            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (cafaye\.)?current_user_id\(\)') as substrate_written
+         (pc.qual ~* '^\s*\(?account_id = \(\s*select (anywaye\.)?current_account_id\(\)'
+            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (anywaye\.)?current_credential_digest\(\)'
+            or pc.qual ~* '^\s*\(?[a-z_][a-z0-9_$]* = \(\s*select (anywaye\.)?current_user_id\(\)') as substrate_written
   from policy_cmds pc
 ),
 
@@ -727,7 +727,7 @@ rule_rls_disabled_in_public as (
          format('Table %I.%I has no row level security, and %s login role(s) can SELECT it: %s.',
                 n.nspname, c.relname, count(*)::text,
                 array_to_string(array_agg(distinct r.rolname order by r.rolname), ', '))::text as detail,
-         format('If the table holds customer rows: ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY; and call cafaye.protect_table(''%I'') from its migration. If it holds none, revoke the grant that makes it reachable — the reachability is the finding, not the missing RLS.', n.nspname, c.relname, c.relname)::text as remediation,
+         format('If the table holds customer rows: ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY; and call anywaye.protect_table(''%I'') from its migration. If it holds none, revoke the grant that makes it reachable — the reachability is the finding, not the missing RLS.', n.nspname, c.relname, c.relname)::text as remediation,
          jsonb_build_object('schema', n.nspname, 'name', c.relname, 'type', 'table',
                             'reachable_by', array_agg(distinct r.rolname order by r.rolname)) as metadata,
          format('rls_disabled_in_public_%s_%s', n.nspname, c.relname)::text as cache_key
@@ -775,7 +775,7 @@ rule_policy_always_true as (
                 case when perm_using and perm_check then ' (both clauses)'
                      when perm_using then ' (the USING clause)'
                      else ' (the WITH CHECK clause is absent on a permissive write policy)' end)::text as detail,
-         format('Rewrite the qualifier so it names what the caller must hold: account_id = (select cafaye.current_account_id()) on an account-scoped table. cafaye.protect_table/2 writes that form; a hand-written `true` is the one predicate no caller can narrow.', polname)::text as remediation,
+         format('Rewrite the qualifier so it names what the caller must hold: account_id = (select anywaye.current_account_id()) on an account-scoped table. anywaye.protect_table/2 writes that form; a hand-written `true` is the one predicate no caller can narrow.', polname)::text as remediation,
          jsonb_build_object('schema', nspname, 'name', relname, 'type', 'policy',
                             'policy_name', polname, 'roles', roles,
                             'qual', qual, 'with_check', with_check) as metadata,
@@ -875,7 +875,7 @@ rule_references_user_metadata as (
                 coalesce(' -- through function ' || array_to_string(
                            array_agg(distinct (select pr.proname from pg_proc pr where pr.oid = prr.via_func)), ', '), ''),
                 coalesce(pg_get_expr(p.polqual, p.polrelid), '(none)'))::text as detail,
-         format('The identity has to arrive from somewhere the caller cannot write. cafaye.begin_account/1 carries it into a transaction-local GUC and cafaye.current_account_id() reads it; a flag table is a request, not an identity. If the qualifier reaches the table through a function, that function has to be SECURITY INVOKER: a SECURITY DEFINER helper runs with its owner''s privileges and with that owner''s exemption from these policies, which is a wider hole than the one this row is about. Deny the grant (REVOKE INSERT, UPDATE ON <that table> FROM <the login role>) and decide from the account instead.', n.nspname, c.relname)::text as remediation,
+         format('The identity has to arrive from somewhere the caller cannot write. anywaye.begin_account/1 carries it into a transaction-local GUC and anywaye.current_account_id() reads it; a flag table is a request, not an identity. If the qualifier reaches the table through a function, that function has to be SECURITY INVOKER: a SECURITY DEFINER helper runs with its owner''s privileges and with that owner''s exemption from these policies, which is a wider hole than the one this row is about. Deny the grant (REVOKE INSERT, UPDATE ON <that table> FROM <the login role>) and decide from the account instead.', n.nspname, c.relname)::text as remediation,
          jsonb_build_object('schema', n.nspname, 'name', c.relname, 'type', 'policy',
                             'policy_name', p.polname,
                             'reads', array_agg(distinct dep_ns.nspname || '.' || dep_c.relname),
@@ -936,7 +936,7 @@ rule_multiple_permissive as (
                 nspname, relname, count(*)::text, rolname, cmd,
                 array_to_string(array_agg(polname order by polname), ', '),
                 array_to_string(array_agg(polname order by polname) filter (where not substrate_written), ', '))::text as detail,
-         format('Keep one permissive policy per role per command, and fold the conditions into it with AND. cafaye.protect_table/2 writes exactly one per command; a second policy on the same (role, command) is the OR that makes the table wider than it reads.')::text as remediation,
+         format('Keep one permissive policy per role per command, and fold the conditions into it with AND. anywaye.protect_table/2 writes exactly one per command; a second policy on the same (role, command) is the OR that makes the table wider than it reads.')::text as remediation,
          jsonb_build_object('schema', nspname, 'name', relname, 'type', 'table',
                             'role', rolname, 'command', cmd,
                             'policies', array_agg(polname order by polname),
@@ -1006,14 +1006,14 @@ rule_security_definer as (
 --    packet's, re-measured rather than repeated. 200,000 rows, a membership table
 --    of 200 rows indexed in BOTH directions, run as a `<service>_app` login with
 --    `FORCE ROW LEVEL SECURITY` on every policy table, through
---    `cafaye.begin_account` / `cafaye.current_account_id()`:
+--    `anywaye.begin_account` / `anywaye.current_account_id()`:
 --
 --        correlated  `X in (select … where m.s = slow_doc.subject_account_id)`
 --                    2000 ms, and the plan's own loop counter reads
 --                    `loops=200000` on the membership scan.
 --
 --        inverted    `slow_doc.subject_account_id in (select … where m.c =
---                    (select cafaye.current_account_id()))`
+--                    (select anywaye.current_account_id()))`
 --                    18 ms, and the loop counter reads `loops=1`.
 --
 --        i.e. 111x on this fixture, where the reference reports 450x on its own
@@ -1025,7 +1025,7 @@ rule_security_definer as (
 --
 --    WHY `protect_table` CANNOT EMIT THIS SHAPE, which is the finding that makes
 --    the rule cheap rather than noisy. `protect_table` writes
---    `account_id = (select cafaye.current_account_id())` — a column comparison
+--    `account_id = (select anywaye.current_account_id())` — a column comparison
 --    against a function, with no membership table anywhere in the predicate. There
 --    is no join to invert because there is no join. The slow shape is only
 --    reachable by a service HAND-WRITING a policy, which is the same population
@@ -1073,7 +1073,7 @@ rule_security_definer as (
 --
 --    THE RESIDUAL LIMITS, in the file's usual place rather than left to be
 --    inferred: this reads the deparsed TEXT, for the same reason every other rule
---    here does and for the same recorded cost (`(cafaye\.)?`-style blindness under
+--    here does and for the same recorded cost (`(anywaye\.)?`-style blindness under
 --    one `search_path`); the `([^()]|\([^()]*\))*` arity is ONE level of nesting
 --    inside the `IN`, so a membership subquery nested two deep is missed rather
 --    than misreported; and it cannot tell a membership check from any other
@@ -1092,7 +1092,7 @@ rule_correlated_membership as (
                 case when qual_hit and check_hit then ' and WITH CHECK' else '' end,
                 '',
                 coalesce(qual, with_check))::text as detail,
-         format('Invert which side is correlated: put the membership in the subquery''s WHERE on the CALLER, and IN the row''s own column against the result — `using (account_id in (select m.account_id from <membership> m where m.user_id = (select cafaye.current_account_id())))`. That is only expressible when this table carries the membership column locally; where it does not, filter the INNER hop instead — measured on this kit, a correlated EXISTS with its inner hop inverted ran 56 ms against the correlated IN''s 2000 ms, because the planner re-associates it into a semi-join. If the column does not exist anywhere on the path, the shape is not fixable by a rewrite: index the correlated column.', polname)::text as remediation,
+         format('Invert which side is correlated: put the membership in the subquery''s WHERE on the CALLER, and IN the row''s own column against the result — `using (account_id in (select m.account_id from <membership> m where m.user_id = (select anywaye.current_account_id())))`. That is only expressible when this table carries the membership column locally; where it does not, filter the INNER hop instead — measured on this kit, a correlated EXISTS with its inner hop inverted ran 56 ms against the correlated IN''s 2000 ms, because the planner re-associates it into a semi-join. If the column does not exist anywhere on the path, the shape is not fixable by a rewrite: index the correlated column.', polname)::text as remediation,
          jsonb_build_object('schema', nspname, 'name', relname, 'type', 'policy',
                             'policy_name', polname, 'qual', qual, 'with_check', with_check,
                             'measured_ratio', '111x on tests/rls_perf_test.sh') as metadata,
@@ -1131,7 +1131,7 @@ rule_correlated_membership as (
 --
 --    The precondition is the source's and it is not optional: wrapping is only
 --    correct when the call does not depend on row data. `account_id =
---    (select cafaye.current_account_id())` is the same value for every row, which
+--    (select anywaye.current_account_id())` is the same value for every row, which
 --    is what makes the InitPlan legal, and `protect_table` only ever writes that
 --    form.
 -- ===========================================================================
@@ -1144,11 +1144,11 @@ rule_initplan as (
                 polname, nspname, relname,
                 case
                   when qual ~ 'current_setting\(' then 'unwrapped: current_setting(...)'
-                  when qual ~ 'current_account_id\(\)' then 'unwrapped: cafaye.current_account_id()'
-                  when qual ~ 'current_credential_digest\(\)' then 'unwrapped: cafaye.current_credential_digest()'
+                  when qual ~ 'current_account_id\(\)' then 'unwrapped: anywaye.current_account_id()'
+                  when qual ~ 'current_credential_digest\(\)' then 'unwrapped: anywaye.current_credential_digest()'
                   else 'unwrapped identity call'
                 end)::text as detail,
-         format('Rewrite it as `(... = ( select cafaye.current_account_id()))`. Only do so when the call does not depend on the row — the InitPlan is correct precisely because it is uncorrelated, so a call that reads the row must stay bare. cafaye.protect_table/2 writes the wrapped form for every policy it creates.')::text as remediation,
+         format('Rewrite it as `(... = ( select anywaye.current_account_id()))`. Only do so when the call does not depend on the row — the InitPlan is correct precisely because it is uncorrelated, so a call that reads the row must stay bare. anywaye.protect_table/2 writes the wrapped form for every policy it creates.')::text as remediation,
          jsonb_build_object('schema', nspname, 'name', relname, 'type', 'policy',
                             'policy_name', polname, 'qual', qual, 'with_check', with_check) as metadata,
          format('auth_rls_initplan_%s_%s_%s', nspname, relname, polname)::text as cache_key
@@ -1158,7 +1158,7 @@ rule_initplan as (
     -- the parenthesised SELECT and not the word `select` somewhere nearby. It is
     -- matched CASE-INSENSITIVELY because the deparser capitalises the keyword
     -- while leaving the function name in lower case: `SELECT
-    -- cafaye.current_account_id()` is what the catalog holds, and a lowercase
+    -- anywaye.current_account_id()` is what the catalog holds, and a lowercase
     -- `select` in the pattern turns this rule into one that fires on every
     -- wrapped policy in the fleet.
     --
@@ -1167,11 +1167,11 @@ rule_initplan as (
     -- genuinely bare call in exactly the session where the name dequalifies,
     -- which is the session of the cluster's own admin role.
     and (
-      (qual ~* '(cafaye\.)?current_account_id\(\)'        and qual !~* '\(\s*select\s+(cafaye\.)?current_account_id\(\)')
-      or (qual ~* '(cafaye\.)?current_credential_digest\(\)' and qual !~* '\(\s*select\s+(cafaye\.)?current_credential_digest\(\)')
+      (qual ~* '(anywaye\.)?current_account_id\(\)'        and qual !~* '\(\s*select\s+(anywaye\.)?current_account_id\(\)')
+      or (qual ~* '(anywaye\.)?current_credential_digest\(\)' and qual !~* '\(\s*select\s+(anywaye\.)?current_credential_digest\(\)')
       or (qual ~* 'current_setting\('                       and qual !~* '\(\s*select\s+current_setting\(')
-      or (with_check ~* '(cafaye\.)?current_account_id\(\)'        and with_check !~* '\(\s*select\s+(cafaye\.)?current_account_id\(\)')
-      or (with_check ~* '(cafaye\.)?current_credential_digest\(\)' and with_check !~* '\(\s*select\s+(cafaye\.)?current_credential_digest\(\)')
+      or (with_check ~* '(anywaye\.)?current_account_id\(\)'        and with_check !~* '\(\s*select\s+(anywaye\.)?current_account_id\(\)')
+      or (with_check ~* '(anywaye\.)?current_credential_digest\(\)' and with_check !~* '\(\s*select\s+(anywaye\.)?current_credential_digest\(\)')
       or (with_check ~* 'current_setting\('                       and with_check !~* '\(\s*select\s+current_setting\(')
     )
 ),
@@ -1190,7 +1190,7 @@ rule_rls_no_policy as (
          array['SECURITY']::text[] as categories,
          'Row level security is enabled and no policy exists, so every role is denied every row. Nothing leaks; the table is simply unreadable, which is a fail-closed outage rather than a breach.'::text as description,
          format('Table %I.%I has row level security enabled and no policy. Every SELECT on it returns no rows, including from the owner.', n.nspname, c.relname)::text as detail,
-         format('Create the policies (cafaye.protect_table(''%I'')) or drop row level security from the table if it was meant to be readable.', c.relname)::text as remediation,
+         format('Create the policies (anywaye.protect_table(''%I'')) or drop row level security from the table if it was meant to be readable.', c.relname)::text as remediation,
          jsonb_build_object('schema', n.nspname, 'name', c.relname, 'type', 'table') as metadata,
          format('rls_enabled_no_policy_%s_%s', n.nspname, c.relname)::text as cache_key
   from pg_class c

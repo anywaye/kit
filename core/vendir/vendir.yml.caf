@@ -4,14 +4,14 @@
 # caf today vendors core's manifest schema at
 #   internal/contract/schemas/manifest-0.2.json
 # and core publishes it as
-#   schemas/cafaye.manifest.schema.json
+#   schemas/anywaye.manifest.schema.json
 #
 # The BYTES are identical — sha256 `9f90b370…` on both sides, measured — but the
 # FILENAME is not, and vendir has no rename. Its content schema
 # (pkg/vendir/config/directory.go) offers `path`, `includePaths`, `excludePaths`,
 # `ignorePaths`, `legalPaths`, `newRootPath` and `permissions`, and nothing that
 # renames a file. Running this config lands the document at
-# `internal/contract/schemas/cafaye.manifest.schema.json`; verified, not assumed.
+# `internal/contract/schemas/anywaye.manifest.schema.json`; verified, not assumed.
 #
 # So caf's migration is a rename plus a commit, not a config drop. The rename
 # touches nine references in six files, and three of them are load-bearing:
@@ -37,8 +37,8 @@ directories:
     contents:
       - path: .
         includePaths:
-          - schemas/cafaye.manifest.schema.json
+          - schemas/anywaye.manifest.schema.json
         newRootPath: schemas
         git:
-          url: https://github.com/cafaye/core.git
+          url: https://github.com/anywaye/core.git
           ref: master

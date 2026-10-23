@@ -1,5 +1,5 @@
 ---
-# kit template — Tempo CONFIGURATION for the local cafaye stack.
+# kit template — Tempo CONFIGURATION for the local anywaye stack.
 #
 # CONFIGURATION, which AGPL-3.0 expressly permits. Mounted read-only over a
 # stock `grafana/tempo` image. Nothing here patches, forks or rebrands a vendor

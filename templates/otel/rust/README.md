@@ -1,6 +1,6 @@
 # W3C traceparent — Rust
 
-Rust's trace propagation, so a request that enters one cafaye service and
+Rust's trace propagation, so a request that enters one anywaye service and
 leaves it another still reads as **one** trace in a trace view rather than two
 unrelated ones.
 

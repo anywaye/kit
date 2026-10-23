@@ -39,7 +39,7 @@ accident:
 | **0** | well-shaped, ours, and every expectation given was met | unchanged |
 | **4** | the image carries **no labels at all** | unchanged, and load-bearing |
 | **5** | an expectation **you gave** was not met | `--expect-source` is new and lands here |
-| **6** | labels present, and they are **not a valid cafaye stamp** | **new** |
+| **6** | labels present, and they are **not a valid anywaye stamp** | **new** |
 
 **4 and 6 are not collapsed and must not be.** A caller testing `== 4` still
 means *this image predates the stamp*; a caller testing `!= 0` is unaffected. A

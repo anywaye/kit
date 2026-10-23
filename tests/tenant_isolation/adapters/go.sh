@@ -151,11 +151,11 @@ adapter_migrate() {
   # FINDING, AND IT IS A GOOD ONE: identity's migrations need a LOGIN ROLE THAT
   # DOES NOT YET EXIST, and they derive its name from the role that is running
   # them. `migrations/00016_account_isolation.sql` calls
-  # `cafaye.protect_table('account_users')` with one argument, and that function
+  # `anywaye.protect_table('account_users')` with one argument, and that function
   # computes `login_role := coalesce(p_login_role, current_user || '_app')` and
   # then RAISES unless such a role already exists and can log in:
   #
-  #     ERROR: cafaye.protect_table(account_users, postgres_app):
+  #     ERROR: anywaye.protect_table(account_users, postgres_app):
   #            postgres_app is not a LOGIN role on this cluster.
   #
   # The hint the migration ships with says what provides it: "kit's cluster
@@ -200,7 +200,7 @@ adapter_migrate() {
               execute format('create role %I login', current_user || '_app');
             end if;
           end \$\$;" >"$KIT_TENANT_WORK/role.log" 2>&1; then
-    printf '  the login role cafaye.protect_table needs could not be provisioned:\n' >&2
+    printf '  the login role anywaye.protect_table needs could not be provisioned:\n' >&2
     sed 's/^/  /' "$KIT_TENANT_WORK/role.log" >&2
     return 1
   fi
@@ -211,7 +211,7 @@ adapter_migrate() {
   # the service's query layer.
   #
   # `postgres` is a superuser and that is load-bearing here for the same reason the
-  # DSN is: migrations/00016 creates the `cafaye` schema, the login role's grants
+  # DSN is: migrations/00016 creates the `anywaye` schema, the login role's grants
   # and every policy, and it installs `FORCE ROW LEVEL SECURITY` on the tables it
   # protects. As the superuser, the exemption from RLS applies to those policies
   # too — which is exactly the point the header above makes.

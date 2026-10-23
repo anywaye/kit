@@ -2,7 +2,7 @@
 #
 # kit's customer substrate — one command, one box.
 #
-#   curl https://cafaye.com/box/install | sh
+#   curl https://anywaye.com/box/install | sh
 #
 # or, from a kit checkout:
 #
@@ -34,7 +34,7 @@
 #      `outbox_events`, which is the failure this step ends.
 #   11. NATS with JetStream (single instance) and the fleet's stream — one
 #      Deployment + Service + PVC in `data`, plus the one-shot stream init
-#      defining stream `cafaye`, mirroring templates/compose's nats-stream-init
+#      defining stream `anywaye`, mirroring templates/compose's nats-stream-init
 #      (same subjects, retention, storage, replicas — the gate refuses drift).
 #   12. courier's identity credential, MINTED ON THE BOX from identity's own
 #      API and patched in place — the install → boot → mint → patch → restart
@@ -65,12 +65,12 @@
 #                                  box's enrolled identity presents to exchange
 #                                  ONE short-lived registry credential. It is
 #                                  never written to disk and never echoed.
-#   KIT_SUBSTRATE_BOX_URL    default https://box.svc.cafaye.com — where a
+#   KIT_SUBSTRATE_BOX_URL    default https://box.svc.anywaye.com — where a
 #                                  capability is redeemed (the box control
 #                                  plane's POST /v1/capabilities/redeem).
 #                                  Configuration, not a secret; a self-hosted
 #                                  fleet points it at its own control plane.
-#   KIT_SUBSTRATE_REGISTRY_URL default https://registry.svc.cafaye.com — where
+#   KIT_SUBSTRATE_REGISTRY_URL default https://registry.svc.anywaye.com — where
 #                                  a capability is EXCHANGED for a
 #                                  dockerconfigjson (the registry service's
 #                                  POST /v1/registry-credentials). A different
@@ -293,7 +293,7 @@ KIT_SUBSTRATE_MANIFESTS_REF="6e1ba05f639cd517e78aff91cf789d7891080d7d"
 # The canonical source, by host and by the tarball route GitHub serves for a
 # public repository with no credentials. No token, no `git`, no account: the
 # repository is public and a box that can reach ghcr.io can reach this.
-KIT_SUBSTRATE_MANIFESTS_URL="https://codeload.github.com/cafaye/kit/tar.gz"
+KIT_SUBSTRATE_MANIFESTS_URL="https://codeload.github.com/anywaye/kit/tar.gz"
 
 # TWO SERVICE URLs, and each is the OTHER service's in-cluster Service. They
 # are constants here for the same reason NATS_URL is — one fact, one line —
@@ -391,18 +391,18 @@ SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)
 : "${KIT_SUBSTRATE_REGISTRY_CAPABILITY:=}"
 
 # KIT_SUBSTRATE_BOX_URL is where a capability is REDEEMED. Configuration,
-# not a secret: a cafaye-operated fleet is the default and a self-hosted one
+# not a secret: a anywaye-operated fleet is the default and a self-hosted one
 # points it at the control plane it runs. No default of `localhost` — a
 # silently local URL is how a box redeems against itself. The door is the box
 # control plane's POST /v1/capabilities/redeem, the one the fleet built; the
 # registry-side exchange (the dockerconfigjson) is a different service,
 # landed separately.
-: "${KIT_SUBSTRATE_BOX_URL:=https://box.svc.cafaye.com}"
+: "${KIT_SUBSTRATE_BOX_URL:=https://box.svc.anywaye.com}"
 
 # KIT_SUBSTRATE_ACME_EMAIL is the ACME account contact address. Read from the
 # environment like the pull secret and validated by shape, but it is not a
 # secret — it is the address Let's Encrypt sends expiry notices to. A literal
-# in the manifests would be wrong, not merely insecure: it would put cafaye's
+# in the manifests would be wrong, not merely insecure: it would put anywaye's
 # address, or a made-up one, on a customer's ACME account. The manifests carry
 # the placeholder ACME_EMAIL_PLACEHOLDER; this script substitutes it in a pipe
 # at apply time and never prints the value.
@@ -553,7 +553,7 @@ RECEIPT_PATH="${KIT_SUBSTRATE_RECEIPT:-/var/lib/kit/substrate-receipt.json}"
 #   a file — `bash templates/substrate/install.sh` from a checkout, or any copy
 #            of it: `manifests/` is this script's own sibling, and SCRIPT_DIR is
 #            the directory holding it.
-#   a pipe — `curl https://cafaye.com/box/install | sh`, the front door and the
+#   a pipe — `curl https://anywaye.com/box/install | sh`, the front door and the
 #            only shape most customers ever run. Under a pipe BASH_SOURCE[0] is
 #            UNSET, and `set -u` turns `${BASH_SOURCE[0]}` into a fatal unbound
 #            variable — measured, `bash: line 433: BASH_SOURCE[0]: unbound
@@ -1316,7 +1316,7 @@ kit_substrate_refuse() {
 #
 #   1. ACME could never complete: `kubectl get challenges -n gateway` showed
 #      `Waiting for HTTP-01 challenge propagation: failed to perform self
-#      check ... dial tcp: lookup api.cafaye.com on 10.43.0.10:53: no such
+#      check ... dial tcp: lookup api.anywaye.com on 10.43.0.10:53: no such
 #      host`. The operator never pointed DNS at the box; the installer
 #      created the Certificates, waited for nothing, and finished.
 #   2. gateway could never be Ready: its /readyz probes identity's JWKS, and
@@ -1340,7 +1340,7 @@ kit_substrate_refuse() {
 # --- dns-split BEGIN
 READINESS_DNS_SPLIT=""
 READINESS_DNS_STATUS=""
-: "${KIT_SUBSTRATE_RESOLVED_CONF:=/etc/systemd/resolved.conf.d/99-cafaye.conf}"
+: "${KIT_SUBSTRATE_RESOLVED_CONF:=/etc/systemd/resolved.conf.d/99-anywaye.conf}"
 kit_substrate_ensure_public_resolver() {
   local hosts
   # The manifest dir is passed explicitly rather than left to the default:
@@ -1366,7 +1366,7 @@ FallbackDNS=1.0.0.1 8.8.4.4"
     kit_substrate_out "      public resolver already configured at $KIT_SUBSTRATE_RESOLVED_CONF (DNS=1.1.1.1 8.8.8.8)"
     return 0
   fi
-  if [ "$(id -u)" -ne 0 ] && [ "$KIT_SUBSTRATE_RESOLVED_CONF" = "/etc/systemd/resolved.conf.d/99-cafaye.conf" ]; then
+  if [ "$(id -u)" -ne 0 ] && [ "$KIT_SUBSTRATE_RESOLVED_CONF" = "/etc/systemd/resolved.conf.d/99-anywaye.conf" ]; then
     kit_substrate_out "      note: would write public resolver to $KIT_SUBSTRATE_RESOLVED_CONF but not running as root (test mode)"
     return 0
   fi
@@ -1460,17 +1460,17 @@ kit_substrate_host_resolves() {
 # resolver (209.126.15.53, Contabo) held a stale negative answer:
 #
 #   Waiting for HTTP-01 challenge propagation: failed to perform self check
-#     GET request 'http://api.cafaye.com/.well-known/acme-challenge/...':
-#     Get "http://api.cafaye.com/...": dial tcp: lookup api.cafaye.com on
+#     GET request 'http://api.anywaye.com/.well-known/acme-challenge/...':
+#     Get "http://api.anywaye.com/...": dial tcp: lookup api.anywaye.com on
 #     10.43.0.10:53: no such host
-#   $ getent hosts api.cafaye.com   (on the box)
+#   $ getent hosts api.anywaye.com   (on the box)
 #   (no output)
-#   $ dig +short @1.1.1.1 api.cafaye.com
+#   $ dig +short @1.1.1.1 api.anywaye.com
 #   169.58.108.209
 #   $ resolvectl status | grep 'Current DNS'
 #   Current DNS Server: 209.126.15.53
 #
-# The fix applied was /etc/systemd/resolved.conf.d/99-cafaye.conf with
+# The fix applied was /etc/systemd/resolved.conf.d/99-anywaye.conf with
 # DNS=1.1.1.1 8.8.8.8, then a CoreDNS restart. This function queries CoreDNS
 # directly at its ClusterIP (10.43.0.10 on k3s, or the IP from kube-dns Service)
 # with dig/nslookup, falling back to the node resolver when neither is available
@@ -1511,15 +1511,15 @@ kit_substrate_cluster_host_resolves() {
 # derivation was blind to.
 #
 # THE EVIDENCE, FROM THE COLD BOX. The box's readiness event named TWO pending
-# hosts — `"tls_pending_hosts":["app.cafaye.com","auth.cafaye.com"]` — while
+# hosts — `"tls_pending_hosts":["app.anywaye.com","auth.anywaye.com"]` — while
 # `kubectl get ingress -A` on the same box held THREE Ingresses, gateway's
-# `api.cafaye.com` among them, and gateway's Certificate had sat READY=False
+# `api.anywaye.com` among them, and gateway's Certificate had sat READY=False
 # for 98 minutes. The number said the box had FEWER conditions than it had,
 # which is the direction that matters.
 #
 # WHY IT WAS MISSED. An Ingress host is a BARE HOSTNAME — `spec.rules.host`,
 # or a chart's `host` value — and the URL pattern the derivation used cannot
-# match one by construction: the pattern requires a scheme. app.cafaye.com
+# match one by construction: the pattern requires a scheme. app.anywaye.com
 # survived only because KIT_SUBSTRATE_APP_BASE_URL happens to name the same
 # host as parlor's Ingress; the coincidence hid the gap for one of three.
 #
@@ -1602,7 +1602,7 @@ kit_substrate_intended_hosts() {
 #
 # THE ONE SOURCE THIS CANNOT READ, stated rather than hidden: an Ingress host
 # that exists ONLY inside a chart's templates. The gateway chart renders
-# api.cafaye.com, and no manifest, no values override and no operator input on
+# api.anywaye.com, and no manifest, no values override and no operator input on
 # this tree names it — a box-side derivation reads the tree the box runs, not
 # the chart's compiled sources. Where a chart's values DO carry the host (an
 # Application's helm.values override) source 3 reads it. Where the host is
@@ -1926,7 +1926,7 @@ kit_substrate_readiness_json() {
 # /etc/ssl/certs/ca-certificates.crt held 122 certificates and not one of the
 # major roots (no ISRG Root X1, no DigiCert Global Root) — a stale or trimmed
 # OS trust store — so `cafe boxd` (a Go client, which reads the SYSTEM store)
-# could not verify `https://box.svc.cafaye.com:8443` and failed with `x509:
+# could not verify `https://box.svc.anywaye.com:8443` and failed with `x509:
 # certificate signed by unknown authority`, while a Mac client with a whole
 # store could. The box was seconds into `curl | sh` and headed for a
 # half-install it could not recover from. The remedy that worked was one
@@ -2536,16 +2536,16 @@ install_argocd() {
   #   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
   #   ["https://grafana.github.io/helm-charts",
   #    "https://prometheus-community.github.io/helm-charts",
-  #    "oci://ghcr.io/cafaye/charts"]
+  #    "oci://ghcr.io/anywaye/charts"]
   # while this repository had already written
-  #   oci://ghcr.io/cafaye/charts/*
+  #   oci://ghcr.io/anywaye/charts/*
   # for the per-chart OCI paths the Applications name. The apply that would
   # have fixed it sat inside `if [ "$argocd_present" -eq 0 ]`, and the guard at
   # the top of this step answered PRESENT — `kubectl get deployment -n argocd
   # argocd-repo-server` succeeds on any box that ever got past step 4 — so the
   # step printed "already installed, skipping" and the fixed file was never
   # applied. Every Application read
-  #   Unknown: repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+  #   Unknown: repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
   #   project 'default'
   # on a box where nothing else was wrong, and the only way to land the fix was
   # to delete Argo CD and re-run. A packet that passes on the next clean box
@@ -2631,7 +2631,7 @@ install_argocd() {
 # secret: it names the service that mints credentials, which is a different
 # service from the box that spends the capability. No default of `localhost` —
 # a silently local URL is how a box exchanges with itself.
-: "${KIT_SUBSTRATE_REGISTRY_URL:=https://registry.svc.cafaye.com}"
+: "${KIT_SUBSTRATE_REGISTRY_URL:=https://registry.svc.anywaye.com}"
 
 # The namespaces that pull the fleet's own images. Five, and the list is
 # asserted by the suite: a namespace added here without a pull secret is a
@@ -2658,8 +2658,8 @@ REGISTRY_CREDENTIAL_MIN_SECONDS=60
 # So step 5 PROBES FIRST and exchanges only when the probe says it must. The
 # list is DERIVED, never flagged: every GHCR chart the Applications name
 # (repoURL/targetRevision out of manifests/applications/*.yaml) plus the image
-# each cafaye chart runs. The image half is the fleet's own convention — the
-# publish path names the image ghcr.io/cafaye/<chart> and tags it with the
+# each anywaye chart runs. The image half is the fleet's own convention — the
+# publish path names the image ghcr.io/anywaye/<chart> and tags it with the
 # chart's version, verified per service in its chart's values.yaml (identity,
 # identity, gateway, courier, parlor: all 0.1.0) — and the probe
 # measures rather than assumes: a chart whose image moves takes the capability
@@ -2699,9 +2699,9 @@ registry_derived_artifacts() {
     [ -n "$rev" ] || continue
     printf '%s %s\n' "$repo" "$rev"
     case "$repo" in
-      cafaye/charts/*)
-        name="${repo#cafaye/charts/}"
-        printf 'cafaye/%s %s\n' "$name" "$rev"
+      anywaye/charts/*)
+        name="${repo#anywaye/charts/}"
+        printf 'anywaye/%s %s\n' "$name" "$rev"
         ;;
     esac
   done
@@ -2968,7 +2968,7 @@ install_pull_secret() {
     # EMPTY AUTHS, NOT NO SECRET — and the shape is the whole reason. No
     # remaining Application names `imagePullSecrets: ghcr-pull-secret` (the
     # three charts that did — box, keyholder, pantry — left with their
-    # Applications: all three are Cafaye-operated and a customer's box
+    # Applications: all three are Anywaye-operated and a customer's box
     # reaches them over HTTPS rather than running them), but the exchange
     # path still needs a same-named object to fill with the minted
     # credential, so the Secret must EXIST in every pulling namespace: a
@@ -3010,7 +3010,7 @@ install_pull_secret() {
 # sidecar to the API server and the install DIED on the FIRST of them, measured
 # live on the box:
 #
-#   error parsing /var/lib/cafaye/substrate/manifests/applications/._identity.yaml:
+#   error parsing /var/lib/anywaye/substrate/manifests/applications/._identity.yaml:
 #   error converting YAML to JSON: yaml: control characters are not allowed
 #
 # `COPYFILE_DISABLE=1 tar --no-xattrs` reduces the sidecars but does not remove
@@ -4369,7 +4369,7 @@ KIT_SUBSTRATE_MIGRATE_MARKER="${KIT_SUBSTRATE_MIGRATE_MARKER:-substrate-migratio
 # A closed list, and the list IS the inventory: adding a service here without a
 # matching `migration_command_for` is a red plan, not a silently skipped step.
 # pantry used to be the third entry; it left with its Application — the
-# operated registry runs on Cafaye infrastructure, so the box migrates
+# operated registry runs on Anywaye infrastructure, so the box migrates
 # nothing for it.
 migration_service_has_schema() {
   case "$1" in
@@ -4606,7 +4606,7 @@ install_migrations() {
 # pin lives in exactly one place and never reaches disk unsubstituted.
 #
 # THE STREAM INIT MIRRORS nats-stream-init. The local one-shot runs
-# check-then-create (`nats stream info cafaye` exits 1 when the stream is
+# check-then-create (`nats stream info anywaye` exits 1 when the stream is
 # absent, so the `add` runs only then — a plain `add` is NOT idempotent), with
 # the same subjects, storage, retention, max-age, discard and replicas. Here
 # the same command runs in an ephemeral pod (`kubectl run` with the nats-box
@@ -4624,7 +4624,7 @@ install_migrations() {
 # The broker's apply is a LOCAL manifest through a pipe, so CLIENT-SIDE — the
 # note above step 2 holds.
 install_nats() {
-  log_step "NATS with JetStream ${NATS_VERSION} and stream cafaye (in the data namespace)"
+  log_step "NATS with JetStream ${NATS_VERSION} and stream anywaye (in the data namespace)"
   if kit_substrate_guard nats; then
     kit_substrate_out "      already installed, skipping the broker (the stream init still runs)"
   elif dry_run "substitute NATS_IMAGE_PLACEHOLDER with nats:${NATS_VERSION} and apply ${DATA_DIR}/nats.yaml, then wait for deployment nats"; then
@@ -4640,7 +4640,7 @@ install_nats() {
       kubectl --kubeconfig="$KUBECONFIG" apply -f -
     kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment nats -n data --timeout=180s
   fi
-  if dry_run "run one-shot pod nats-stream-init (image natsio/nats-box:${NATS_BOX_VERSION}) ensuring stream cafaye"; then
+  if dry_run "run one-shot pod nats-stream-init (image natsio/nats-box:${NATS_BOX_VERSION}) ensuring stream anywaye"; then
     return 0
   fi
   kubectl --kubeconfig="$KUBECONFIG" delete pod nats-stream-init -n data --ignore-not-found >/dev/null
@@ -4648,14 +4648,14 @@ install_nats() {
     --restart=Never \
     --image="natsio/nats-box:${NATS_BOX_VERSION}" \
     --env="NATS_URL=$NATS_URL" \
-    --command -- sh -c 'nats stream info cafaye >/dev/null 2>&1 || nats stream add cafaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
+    --command -- sh -c 'nats stream info anywaye >/dev/null 2>&1 || nats stream add anywaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
   local phase="" tries=24
   while [ "$tries" -gt 0 ]; do
     phase="$(kubectl --kubeconfig="$KUBECONFIG" get pod nats-stream-init -n data -o jsonpath='{.status.phase}' 2>/dev/null || true)"
     case "$phase" in
       Succeeded)
         kubectl --kubeconfig="$KUBECONFIG" delete pod nats-stream-init -n data >/dev/null
-        kit_substrate_out "      stream cafaye exists (created or already present)"
+        kit_substrate_out "      stream anywaye exists (created or already present)"
         return 0
         ;;
       Failed)
@@ -4917,7 +4917,7 @@ mint_courier_identity_token() {
   owner_password="$(openssl rand -hex 24)"
   out="$(curl -fsS -X POST "${base}/v1/users" \
     -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg email "owner+substrate@cafaye.local" \
+    -d "$(jq -nc --arg email "owner+substrate@anywaye.local" \
       --arg password "$owner_password" \
       --argjson timestamp "$mint_timestamp" --arg signature "$mint_signature" \
       '{email: $email, password: $password, website: "", timestamp: $timestamp, signature: $signature}')")" || {
@@ -4927,7 +4927,7 @@ mint_courier_identity_token() {
   local session
   session="$(curl -fsS -X POST "${base}/v1/session" \
     -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg email "owner+substrate@cafaye.local" --arg password "$owner_password" \
+    -d "$(jq -nc --arg email "owner+substrate@anywaye.local" --arg password "$owner_password" \
       '{email: $email, password: $password}')")" || {
     echo "error: identity would not open a session for this box's owner account" >&2
     return 1
@@ -5105,7 +5105,7 @@ mint_courier_identity_token() {
 #
 #   NAME                DESIRED  CURRENT  READY  AGE
 #   gateway-6d5d9495df  1        1        1      2m52s   <-- the digest-pinned RS
-#   gateway-6f9c8bfdd   0        0        0      10h     <-- the bare cafaye/gateway:0.1.0 (Docker Hub) RS
+#   gateway-6f9c8bfdd   0        0        0      10h     <-- the bare anywaye/gateway:0.1.0 (Docker Hub) RS
 #   gateway-7cd45d569   0        0        0      6h52m
 #   gateway-858665c58b  1        1        0      93m     <-- a tag-based RS Argo keeps making current
 #   gateway-8977f6fcb   0        0        0      4m23s   <-- a mis-transcribed digest
@@ -5275,7 +5275,7 @@ main() {
   # HEADLESS STDOUT IS A CHANNEL SOMETHING ELSE OWNS, AND THE WAY THAT IS TRUE
   # IS A FILE DESCRIPTOR RATHER THAN A POLICY.
   #
-  # MEASURED ON THE LOCAL CYCLE (2026-10-14, cluster `cafaye-local`): a headless
+  # MEASURED ON THE LOCAL CYCLE (2026-10-14, cluster `anywaye-local`): a headless
   # run's stdout carried 26 lines of `kubectl apply`'s OWN output between step
   # 3's start event and its done event —
   #     namespace/cnpg-system serverside-applied

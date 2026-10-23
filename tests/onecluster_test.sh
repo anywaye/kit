@@ -224,7 +224,7 @@ PROJECT="kit-onecluster-$$"
 #
 #   Bind for 0.0.0.0:15800 failed: port is already allocated
 #
-# against a developer's own `cafaye` stack running on the same machine, which is
+# against a developer's own `anywaye` stack running on the same machine, which is
 # the situation this whole packet is about: a second checkout beside a first one.
 #
 # So it is worth stating plainly, because templates/compose/docker-compose.yml's
@@ -378,7 +378,7 @@ fi
 # CLAIM 1 — ONE postgres container.
 #
 # Read by compose project label, so this run's stack is counted and nobody else's
-# is. The developer's own `cafaye-postgres-1` is running right now and is not
+# is. The developer's own `anywaye-postgres-1` is running right now and is not
 # part of this claim: the shape of the claim is "one cluster serves two services",
 # not "postgres is installed once on this laptop".
 # ---------------------------------------------------------------------------
@@ -408,7 +408,7 @@ C="$(docker ps --filter "label=com.docker.compose.project=$PROJECT" \
 }
 
 psql_in() { # psql_in <role> <db> <sql>
-  docker exec -e PGPASSWORD=cafaye "$C" \
+  docker exec -e PGPASSWORD=anywaye "$C" \
     psql --no-psqlrc -q -tA -U "$1" -d "$2" -c "$3" 2>&1
 }
 
@@ -429,10 +429,10 @@ docker logs "$C" 2>&1 | grep -E '\[cluster\]' | sed 's/^/   /' \
 
 # CLAIM 2 — a database and an owner role per named service.
 for svc in alpha beta; do
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_database WHERE datname = '$svc'")"
   [ "$got" = "1" ] || fail "expected a database named $svc; found '${got:-<no answer>}'"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '$svc' AND NOT rolsuper AND rolcanlogin")"
   [ "$got" = "1" ] || fail "expected one non-superuser LOGIN role named $svc; found '${got:-<no answer>}'"
 done
@@ -445,10 +445,10 @@ say "   2 databases (alpha, beta), each with a non-superuser owner role of its o
 # every privilege on every table, and undoes templates/database/tenancy/ with one
 # GRANT.
 for svc in alpha beta; do
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '${svc}_app' AND rolcanlogin AND NOT rolsuper")"
   [ "$got" = "1" ] || fail "expected a non-superuser LOGIN role named ${svc}_app; found '${got:-<no answer>}'"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_auth_members m
        JOIN pg_roles member ON member.oid = m.member
        JOIN pg_roles granted ON granted.oid = m.roleid

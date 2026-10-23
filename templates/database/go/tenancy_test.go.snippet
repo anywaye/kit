@@ -110,7 +110,7 @@ func TestAccountIsolation(t *testing.T) {
 	// of a multi-statement batch — which differs in all six.
 	rows, err := conn.Query(ctx, `
 		select assertion, expected, actual, verdict, why
-		  from pg_temp.cafaye_probe_result
+		  from pg_temp.anywaye_probe_result
 		 order by assertion`)
 	if err != nil {
 		t.Fatalf("read the assertion results: %v", err)

@@ -50,7 +50,7 @@ base_schema() {
   cat >"$1" <<'JSON'
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cafaye.dev/schemas/example.schema.json",
+  "$id": "https://anywaye.dev/schemas/example.schema.json",
   "title": "example",
   "description": "a fixture",
   "type": "object",

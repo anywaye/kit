@@ -69,8 +69,8 @@
 #   dump-excluded    a generated pg_dump (`db/structure.sql`) is NOT graded:
 #                    measured on inbox, whose dump re-spells every function and
 #                    would otherwise fail on pg_dump's formatting.
-#   not-adopted      a repository with no cafaye schema passes with a note.
-#   schema-only      a bare `create schema if not exists cafaye` is NOT an
+#   not-adopted      a repository with no anywaye schema passes with a note.
+#   schema-only      a bare `create schema if not exists anywaye` is NOT an
 #                    adopted copy. The docstring claimed the schema line was
 #                    the predicate once; this pins the measured behaviour the
 #                    prose now states.
@@ -143,7 +143,7 @@ expect_no_out() { # expect_no_out <pattern> <label>
 
 expect_count() { # expect_count <want> <file> <label> — anchors each fixture
   local got
-  got="$(grep -c '^create or replace function cafaye[.]' "$2" || true)"
+  got="$(grep -c '^create or replace function anywaye[.]' "$2" || true)"
   if [ "$got" = "$1" ]; then
     pass "$3"
   else
@@ -165,7 +165,7 @@ expect_count() { # expect_count <want> <file> <label> — anchors each fixture
 # drop_functions <names-regex> <out> — name-mining blocks, comment lines above
 # them included (they are part of the copy).
 drop_functions() {
-  awk -v re="^create or replace function cafaye[.]($1)[(]" '
+  awk -v re="^create or replace function anywaye[.]($1)[(]" '
     $0 ~ re { drop = 1 }
     drop { if ($0 == "$caf$;") drop = 0; next }
     { print }
@@ -174,7 +174,7 @@ drop_functions() {
 
 # keep_functions <names-regex> <out> — the complement, for the split fixture.
 keep_functions() {
-  awk -v re="^create or replace function cafaye[.]($1)[(]" '
+  awk -v re="^create or replace function anywaye[.]($1)[(]" '
     $0 ~ re { keep = 1 }
     keep { print }
     keep && $0 == "$caf$;" { keep = 0 }
@@ -216,7 +216,7 @@ mkdir -p "$R/migrations"
   echo
   echo '-- +goose Down'
   cat <<'SQL'
-create or replace function cafaye.credential_tables()
+create or replace function anywaye.credential_tables()
 returns table (table_schema text, table_name text, digest_column text)
 language sql
 stable
@@ -243,19 +243,19 @@ drop_functions 'begin_user' "$WORK/up-without-begin-user.sql"
   echo
   echo '-- +goose Down'
   cat <<'SQL'
-create or replace function cafaye.begin_user(p_user uuid)
+create or replace function anywaye.begin_user(p_user uuid)
 returns void
 language plpgsql
 as $caf$
 begin
-  perform set_config('cafaye.user_id', p_user::text, true);
+  perform set_config('anywaye.user_id', p_user::text, true);
 end
 $caf$;
 SQL
 } >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 1 "a function re-added only in a goose Down section is MISSING"
-expect_out "MISSING function: cafaye.begin_user" "and it is named"
+expect_out "MISSING function: anywaye.begin_user" "and it is named"
 
 # ---------------------------------------------------------------------------
 # missing — darkroom's exact drift.
@@ -267,7 +267,7 @@ expect_count 8 "$R/migrations/0004_account_isolation.sql" "missing fixture holds
 run "$R"
 expect_ec 1 "four absent functions fail the copy"
 for fn in begin_user current_user_id membership_tables protect_membership_table; do
-  expect_out "MISSING function: cafaye.$fn" "the failure names cafaye.$fn"
+  expect_out "MISSING function: anywaye.$fn" "the failure names anywaye.$fn"
 done
 
 # ---------------------------------------------------------------------------
@@ -277,7 +277,7 @@ mkdir -p "$R/migrations"
 sed 's/p_account::text/p_account::varchar/' "$TEMPLATE" >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 1 "a changed SQL token in one body fails"
-expect_out "SEMANTIC DRIFT in cafaye.begin_account" "the drift names the function"
+expect_out "SEMANTIC DRIFT in anywaye.begin_account" "the drift names the function"
 expect_out "first difference at character" "and shows where the normalized bodies diverge"
 
 # ---------------------------------------------------------------------------
@@ -285,13 +285,13 @@ expect_out "first difference at character" "and shows where the normalized bodie
 R="$WORK/comment-only"
 mkdir -p "$R/migrations"
 awk -v note='  -- a locally-true note this service added' \
-  -v anchor="raw := current_setting('cafaye.account_id', true);" \
+  -v anchor="raw := current_setting('anywaye.account_id', true);" \
   '{ print; if (index($0, anchor) > 0) print note }' \
   "$TEMPLATE" >"$R/migrations/0001_substrate.sql"
 expect_count 12 "$R/migrations/0001_substrate.sql" "comment-only fixture is otherwise complete"
 run "$R"
 expect_ec 0 "a comment-only difference passes"
-expect_out "comment-only difference in cafaye.current_account_id" "and is REPORTED by name"
+expect_out "comment-only difference in anywaye.current_account_id" "and is REPORTED by name"
 expect_no_out "SEMANTIC DRIFT" "and is not reported as semantic drift"
 
 # ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ mkdir -p "$R/migrations"
   cat "$TEMPLATE"
   echo
   cat <<'SQL'
-create or replace function cafaye.service_helper()
+create or replace function anywaye.service_helper()
 returns int
 language sql
 stable
@@ -313,7 +313,7 @@ SQL
 } >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 0 "an extra service helper does not fail the copy"
-expect_out "extra function not in kit's template: cafaye.service_helper" "and is REPORTED by name"
+expect_out "extra function not in kit's template: anywaye.service_helper" "and is REPORTED by name"
 
 # ---------------------------------------------------------------------------
 # signature — an argument renamed in the head, body untouched otherwise.
@@ -323,7 +323,7 @@ sed 's/begin_account(p_account uuid)/begin_account(p_acct uuid)/' "$TEMPLATE" \
   >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 1 "a changed signature fails"
-expect_out "SEMANTIC DRIFT in cafaye.begin_account" "the signature drift names the function"
+expect_out "SEMANTIC DRIFT in anywaye.begin_account" "the signature drift names the function"
 expect_out "signature or body" "and says the signature is what moved"
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ awk -v t='$caf$;' '{ if (!done && $0 == t) { done = 1; next } print }' \
   "$TEMPLATE" >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 1 "a body that swallows the next definition fails"
-expect_out "unreadable function block for cafaye.current_account_id" "and names the block whose terminator is gone"
+expect_out "unreadable function block for anywaye.current_account_id" "and names the block whose terminator is gone"
 
 R="$WORK/unreadable-tail"
 mkdir -p "$R/migrations"
@@ -345,7 +345,7 @@ awk -v t='$caf$;' '{ n[NR] = $0; if ($0 == t) last = NR } END { for (i = 1; i <=
   "$TEMPLATE" >"$R/migrations/0001_substrate.sql"
 run "$R"
 expect_ec 1 "a body with no closing dollar tag fails"
-expect_out "unreadable function block for cafaye.unprotected_tables" "and names the block that never closed"
+expect_out "unreadable function block for anywaye.unprotected_tables" "and names the block that never closed"
 
 # ---------------------------------------------------------------------------
 # standalone — the inbox shape, clean and drifted.
@@ -377,7 +377,7 @@ run "$R"
 expect_ec 1 "a standalone copy missing four functions fails"
 expect_out "NOT byte-identical" "and the byte verdict is still reported"
 for fn in begin_user current_user_id membership_tables protect_membership_table; do
-  expect_out "MISSING function: cafaye.$fn" "the standalone failure names cafaye.$fn"
+  expect_out "MISSING function: anywaye.$fn" "the standalone failure names anywaye.$fn"
 done
 
 # ---------------------------------------------------------------------------
@@ -388,7 +388,7 @@ mkdir -p "$R/db/tenancy"
 sed 's/p_account::text/p_account::varchar/' "$TEMPLATE" >"$R/db/tenancy/substrate.sql"
 run "$R"
 expect_ec 1 "a semantic change in a standalone copy fails"
-expect_out "SEMANTIC DRIFT in cafaye.begin_account" "and the standalone drift names the function"
+expect_out "SEMANTIC DRIFT in anywaye.begin_account" "and the standalone drift names the function"
 expect_out "first difference at character" "and shows the normalized-body window"
 
 # ---------------------------------------------------------------------------
@@ -398,12 +398,12 @@ expect_out "first difference at character" "and shows the normalized-body window
 R="$WORK/standalone-comment-only"
 mkdir -p "$R/db/tenancy"
 awk -v note='  -- a locally-true note this service added' \
-  -v anchor="raw := current_setting('cafaye.account_id', true);" \
+  -v anchor="raw := current_setting('anywaye.account_id', true);" \
   '{ print; if (index($0, anchor) > 0) print note }' \
   "$TEMPLATE" >"$R/db/tenancy/substrate.sql"
 run "$R"
 expect_ec 1 "a comment-only standalone difference still fails on bytes"
-expect_out "comment-only difference in cafaye.current_account_id" "and the function pass names it comment-only"
+expect_out "comment-only difference in anywaye.current_account_id" "and the function pass names it comment-only"
 expect_no_out "SEMANTIC DRIFT" "and does not call it semantic drift"
 
 # ---------------------------------------------------------------------------
@@ -416,7 +416,7 @@ mkdir -p "$R/db/tenancy"
   cat "$TEMPLATE"
   echo
   cat <<'SQL'
-create or replace function cafaye.service_helper()
+create or replace function anywaye.service_helper()
 returns int
 language sql
 stable
@@ -427,11 +427,11 @@ SQL
 } >"$R/db/tenancy/substrate.sql"
 run "$R"
 expect_ec 1 "an extra helper in a standalone copy is still a byte failure"
-expect_out "extra function not in kit's template: cafaye.service_helper" "and the extra is reported by name"
+expect_out "extra function not in kit's template: anywaye.service_helper" "and the extra is reported by name"
 
 # ---------------------------------------------------------------------------
 # template-dir — kit's own tree is the template's home, not an adopter.
-# `templates/database/tenancy/advisor.sql` defines cafaye.* functions too, and
+# `templates/database/tenancy/advisor.sql` defines anywaye.* functions too, and
 # grading it as an adopted copy reported all twelve substrate functions
 # MISSING on every fleet run — a FAIL that always fires is a FAIL its reader
 # learns to skip past. The files beside the template are not read, and the
@@ -449,7 +449,7 @@ R="$WORK/dump"
 mkdir -p "$R/db/tenancy" "$R/db"
 cp "$TEMPLATE" "$R/db/tenancy/substrate.sql"
 cat >"$R/db/structure.sql" <<'SQL'
-CREATE FUNCTION cafaye.begin_account(p_other uuid) RETURNS void
+CREATE FUNCTION anywaye.begin_account(p_other uuid) RETURNS void
     LANGUAGE plpgsql
     AS $$
 begin
@@ -471,15 +471,15 @@ expect_out "no adopted copy" "and says so rather than reporting agreement"
 
 # ---------------------------------------------------------------------------
 # schema-only — the predicate the docstring states IS the predicate the code
-# uses. A bare `create schema if not exists cafaye` is not a copy of the
+# uses. A bare `create schema if not exists anywaye` is not a copy of the
 # substrate: treating it as adoption would either report agreement with
 # nothing or fire twelve MISSING FAILs at a repository that never carried it.
 # Measured, and the reason the docstring no longer claims it.
 R="$WORK/schema-only"
 mkdir -p "$R/migrations"
-printf 'create schema if not exists cafaye;\n' >"$R/migrations/0001_schema.sql"
+printf 'create schema if not exists anywaye;\n' >"$R/migrations/0001_schema.sql"
 run "$R"
-expect_ec 0 "a bare cafaye schema is not an adopted copy"
+expect_ec 0 "a bare anywaye schema is not an adopted copy"
 expect_out "no adopted copy" "and it is reported as no adopted copy"
 
 # ---------------------------------------------------------------------------

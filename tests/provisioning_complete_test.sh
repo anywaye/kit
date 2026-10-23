@@ -6,7 +6,7 @@
 # two roles runs in the ONE permitted direction.
 #
 #   bash tests/provisioning_complete_test.sh
-#   bash tests/provisioning_complete_test.sh --cluster cafaye-postgres-1 [--databases a,b]
+#   bash tests/provisioning_complete_test.sh --cluster anywaye-postgres-1 [--databases a,b]
 #
 # WHY THIS EXISTS, AND THE MEASUREMENT THAT PROMPTED IT.
 #
@@ -89,8 +89,8 @@ LAST_SERVICE="billing"
 # the same reason grant_surface_test.sh hardcodes them: the boundary holds while
 # every password in the cluster is public, and a test that read a git-ignored
 # `.env` would refuse to run on a fresh clone.
-PGADMIN=cafaye
-PGADMIN_DB=cafaye_platform
+PGADMIN=anywaye
+PGADMIN_DB=anywaye_platform
 
 # The two role settings 10-cluster.sh applies, from its own defaults. The check
 # does not grade them (grant_surface_test.sh's golden does), but the RESTORE after

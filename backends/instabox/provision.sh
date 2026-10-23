@@ -8,7 +8,7 @@
 # whose gates need one:
 #
 #   kit/backends/instabox/provision.sh --postgres \
-#     cafaye-build billing courier docs identity
+#     anywaye-build billing courier docs identity
 #
 # --postgres AND PER-PROJECT DATABASES. Five projects' gates cannot start
 # without a Postgres (identity, billing, courier, darkroom, box — read from each
@@ -73,12 +73,12 @@
 # `<sandbox> <project> <deploy-host>` — which a project list makes ambiguous:
 # `... docs identity` is two projects, not a project and a host. So a host is
 # now either the DEPLOY_HOST environment variable or a trailing argument that
-# contains a `.` or a `:` (no cafaye project name does). Both spellings work,
+# contains a `.` or a `:` (no anywaye project name does). Both spellings work,
 # and the ones an operator already has keep working.
 #
 # WHAT IT STILL DOES NOT PLACE, and why: a deploy KEY. Keys belong to the
 # project's pipeline, which declares what it needs and writes its own
-# credentials from its env; cafaye/docs writes one from DEPLOY_KEY with
+# credentials from its env; anywaye/docs writes one from DEPLOY_KEY with
 # ci/deploy-key.sh, and that is the pattern to copy. Publishing credentials
 # are the same shape: a chart-publishing sandbox is logged in once by
 # `bin/publish --sandbox` (token via stdin), and neither is provision's to
@@ -114,7 +114,7 @@ DEPLOY_HOST="${DEPLOY_HOST:-}"
 PROJECTS=()
 for arg in "${ARGS[@]:1}"; do
   case "$arg" in
-    # A host, not a project name: no cafaye project carries a `.` or a `:`.
+    # A host, not a project name: no anywaye project carries a `.` or a `:`.
     # See the header for why this heuristic exists at all.
     *.* | *:*) DEPLOY_HOST="$arg" ;;
     *) PROJECTS+=("$arg") ;;
@@ -371,17 +371,17 @@ else
 fi
 
 log "the kit checkout the pipelines read"
-# docs (and any other project whose pipeline references $WORKSPACE/cafaye/kit)
-# needs kit's tree — its cafaye.yml for the fleet sync and its lint/ for the
+# docs (and any other project whose pipeline references $WORKSPACE/anywaye/kit)
+# needs kit's tree — its anywaye.yml for the fleet sync and its lint/ for the
 # gate. The poller only clones the project it polls, so kit is provision's job.
 # Idempotent: clone once, fetch on re-provision, never overwrite local edits.
-ssh_ "mkdir -p \$HOME/workspace/cafaye"
-if ssh_ "test -d \$HOME/workspace/cafaye/kit/.git"; then
-  ssh_ "git -C \$HOME/workspace/cafaye/kit fetch --quiet origin master 2>/dev/null && git -C \$HOME/workspace/cafaye/kit reset --hard origin/master --quiet || true"
+ssh_ "mkdir -p \$HOME/workspace/anywaye"
+if ssh_ "test -d \$HOME/workspace/anywaye/kit/.git"; then
+  ssh_ "git -C \$HOME/workspace/anywaye/kit fetch --quiet origin master 2>/dev/null && git -C \$HOME/workspace/anywaye/kit reset --hard origin/master --quiet || true"
   echo "provision: kit checkout refreshed"
 else
-  ssh_ "git clone --depth 1 \"https://x-access-token:${GH_TOKEN}@github.com/cafaye/kit.git\" \$HOME/workspace/cafaye/kit 2>/dev/null || git clone --depth 1 \"https://x-access-token:${GH_TOKEN}@github.com/cafaye/kit.git\" \$HOME/workspace/cafaye/kit" \
-    && echo "provision: kit cloned into \$HOME/workspace/cafaye/kit" \
+  ssh_ "git clone --depth 1 \"https://x-access-token:${GH_TOKEN}@github.com/anywaye/kit.git\" \$HOME/workspace/anywaye/kit 2>/dev/null || git clone --depth 1 \"https://x-access-token:${GH_TOKEN}@github.com/anywaye/kit.git\" \$HOME/workspace/anywaye/kit" \
+    && echo "provision: kit cloned into \$HOME/workspace/anywaye/kit" \
     || echo "provision: WARN kit clone failed — pipelines that read kit/ will fail"
 fi
 
@@ -416,14 +416,14 @@ for p in "${PROJECTS[@]}"; do
     if grep -qx "PROJECT_NAME=$p" <<<"$legacy"; then
       printf '%s\n' "$legacy"
     fi
-    echo "PROJECT_REPO_URL=https://github.com/cafaye/${p}.git"
+    echo "PROJECT_REPO_URL=https://github.com/anywaye/${p}.git"
     echo "PROJECT_NAME=${p}"
     echo "CI_BRANCH=${CI_BRANCH:-master}"
     echo "CI_POLL_SECONDS=${CI_POLL_SECONDS:-120}"
     echo "GH_TOKEN=${GH_TOKEN}"
     # Per-project golangci-lint cache: three Go gates running at once collide
     # on golangci-lint's lock when they share one cache (the hand-applied fix
-    # that lived on cafaye-build before this). One cache per project removes
+    # that lived on anywaye-build before this). One cache per project removes
     # the contention without serialising the gates.
     echo "GOLANGCI_LINT_CACHE=\$HOME/.cache/golangci-lint/${p}"
     if [ -n "$DEPLOY_HOST" ]; then

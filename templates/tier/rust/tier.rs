@@ -25,7 +25,7 @@
 //   cargo test -- --list --ignored        # the IGNORED subset. 1 test listed.
 //   cargo test                            # a RUN prints the reason:
 //                                       #   test tests::tier_db_needs_postgres
-//                                       #     ... ignored, cafaye:tier=db reason=…
+//                                       #     ... ignored, anywaye:tier=db reason=…
 //
 // `--list --include-ignored` is a trap and is called out here so nobody builds
 // on it: it lists all 3 tests, exactly as `--list` does, so it reads like a
@@ -77,7 +77,7 @@ mod tests {
     /// `reason` field of a normalised `skipped` line, and the thing the skip
     /// allowlist has to name.
     #[test]
-    #[ignore = "cafaye:tier=db reason=needs a live postgres; CI runs this with --ignored and REQUIRED_DB=1"]
+    #[ignore = "anywaye:tier=db reason=needs a live postgres; CI runs this with --ignored and REQUIRED_DB=1"]
     fn tier_db_pool_round_trips() {
         let dsn = dsn().unwrap_or_else(|| {
             assert_eq!(

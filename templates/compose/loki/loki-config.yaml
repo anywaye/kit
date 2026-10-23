@@ -1,5 +1,5 @@
 ---
-# kit template — Loki CONFIGURATION for the local cafaye stack.
+# kit template — Loki CONFIGURATION for the local anywaye stack.
 #
 #   tempo.yaml / loki-config.yaml are CONFIGURATION, which AGPL-3.0
 #   expressly permits. They are mounted read-only over stock `grafana/*` images.

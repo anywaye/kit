@@ -2,7 +2,7 @@
 # NATS with JetStream: the bus the local stack runs, on the box too.
 #
 # The local stack runs `nats:${KIT_NATS_TAG:-2.10.24-alpine}` with `-js` plus
-# the one-shot `nats-stream-init` defining stream `cafaye`; this reproduces
+# the one-shot `nats-stream-init` defining stream `anywaye`; this reproduces
 # the broker half in the `data` namespace beside the Postgres Cluster and
 # Redis. (The stream half lives in install.sh step 10, not here: a manifest
 # cannot express check-then-create, and a Job object would need deleting

@@ -1,5 +1,5 @@
 ---
-# hadolint config for every cafaye repo that ships a Dockerfile.
+# hadolint config for every anywaye repo that ships a Dockerfile.
 #   hadolint -c .hadolint.yaml .
 #
 # kit lints its own seven Dockerfiles with this file (see tests/validate.sh), so

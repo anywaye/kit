@@ -381,7 +381,7 @@ services:
       KIT_OTEL_LOG_LEVEL: debug
       KIT_OTEL_BATCH_TIMEOUT: 1s
       KIT_OTEL_BATCH_SIZE: 8
-      KIT_OTEL_METRIC_NAMESPACE: cafaye
+      KIT_OTEL_METRIC_NAMESPACE: anywaye
       KIT_OTEL_METRICS_FLUSH_INTERVAL: 5s
       KIT_TEMPO_OTLP_ENDPOINT: 127.0.0.1:4317
       KIT_LOKI_OTLP_ENDPOINT: 127.0.0.1:4317
@@ -761,7 +761,7 @@ note "assumes it is scrubbed is the reader who puts a prompt in one."
 # on a run where the connector had simply not flushed yet — which reads as
 # "the connector is not wired" and is really "nobody waited".
 if wait_for "the spanmetrics connector flushes derived metrics" 30 \
-  grep -qi 'span_metrics\|cafaye_span\|duration' "$CAPTURE"; then
+  grep -qi 'span_metrics\|anywaye_span\|duration' "$CAPTURE"; then
   pass "the spanmetrics connector emitted derived metrics from redacted spans"
 else
   note "no spanmetrics output in this capture; the metric assertions cover the direct OTLP path"

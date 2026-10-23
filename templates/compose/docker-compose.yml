@@ -1,5 +1,5 @@
 ---
-# kit template — the local infrastructure every cafaye service joins.
+# kit template — the local infrastructure every anywaye service joins.
 #
 #   IT IS NOT COPIED. `bin/dev` fetches this file, and the rest of this
 #   directory, from a PINNED kit ref, and runs it beside the service's own
@@ -71,7 +71,7 @@
 #   - The collector publishes NO host port on purpose. Services reach it over
 #     the compose network by service name; a host port would expose an OTLP
 #     receiver to anything else on the machine.
-#   - Service names here are infrastructure names, not cafaye service names.
+#   - Service names here are infrastructure names, not anywaye service names.
 #     Hostnames are the adopting repo's business — a template that picks them is
 #     a template six repos disagree with.
 #   - Credentials live in .env (git-ignored), never in this file. .env.example
@@ -175,7 +175,7 @@
 #   time a service is added, and a check that must be edited is one that gets
 #   skipped.
 
-name: ${KIT_STACK_NAME:-cafaye}
+name: ${KIT_STACK_NAME:-anywaye}
 
 networks:
   platform:
@@ -241,12 +241,12 @@ services:
     # checkout builds its own copy of an identical image.
     image: kit-postgres:${KIT_POSTGRES_TAG:-17}
     environment:
-      POSTGRES_USER: ${KIT_POSTGRES_USER:-cafaye}
-      POSTGRES_PASSWORD: ${KIT_POSTGRES_PASSWORD:-cafaye}
+      POSTGRES_USER: ${KIT_POSTGRES_USER:-anywaye}
+      POSTGRES_PASSWORD: ${KIT_POSTGRES_PASSWORD:-anywaye}
       # The cluster's OWN database. It is not a service's: it holds cluster
       # administration state and nothing a service reads. A service that wants
       # a database names itself in KIT_POSTGRES_DATABASES below.
-      POSTGRES_DB: ${KIT_POSTGRES_DB:-cafaye_platform}
+      POSTGRES_DB: ${KIT_POSTGRES_DB:-anywaye_platform}
       # THE DECLARATION. Comma-separated; each name becomes BOTH a role and a
       # database owned by that role. This is the input the init script reads,
       # and it is the single place a service's database and role come from.
@@ -342,7 +342,7 @@ services:
       # entrypoint logged one unread line and moved on. Measured on identity,
       # unfixed: `/docker-entrypoint-initdb.d` empty inside a healthy container,
       # `pg_roles` holding only the superuser, `pg_database` holding only
-      # `cafaye_platform`, and `docker compose up --wait` exiting 0. The
+      # `anywaye_platform`, and `docker compose up --wait` exiting 0. The
       # service asked for a database by name and the cluster agreed, and no
       # role, no database and no boundary was ever created.
       - ${KIT_COMPOSE_DIR:-.}/postgres/initdb:/docker-entrypoint-initdb.d:ro
@@ -423,7 +423,7 @@ services:
   #
   # THE STREAM THE FLEET PUBLISHES TO, DEFINED ONCE, BY THE STACK.
   #
-  # WHY THIS SERVICE EXISTS. Every cafaye service with an outbox publishes each
+  # WHY THIS SERVICE EXISTS. Every anywaye service with an outbox publishes each
   # event to a subject equal to its event type — `identity.user.created`,
   # `billing.subscription.started` — with no mapping table and no prefix
   # rewriting (core/docs/event-outbox.md: "No mapping table, no prefix
@@ -446,7 +446,7 @@ services:
   # service's deploy rather than of the bus everyone shares.
   #
   # THE STREAM'S SHAPE, AND EACH CHOICE:
-  #   name       cafaye — the fleet's name, and this stack's own default.
+  #   name       anywaye — the fleet's name, and this stack's own default.
   #   subjects   identity.>, billing.>, courier.>, muse.>, darkroom.> — one
   #              prefix per publishing service, enumerated rather than a bare
   #              `>`: a bare `>` would also claim `$JS.>`-style JetStream
@@ -488,7 +488,7 @@ services:
   #
   # IDEMPOTENT BY CONSTRUCTION, AND THE MECHANISM. `docker compose up` runs
   # this service every time, so a second run must be a no-op that still exits
-  # 0. The command is a check-then-create: `nats stream info cafaye` exits 1
+  # 0. The command is a check-then-create: `nats stream info anywaye` exits 1
   # when the stream is absent (and 0 when it is present), so the `add` runs
   # only on a broker that does not have the stream yet. A plain
   # `nats stream add` is NOT idempotent — measured, against this image:
@@ -537,13 +537,13 @@ services:
     command:
       - sh
       - -c
-      - 'nats stream info cafaye >/dev/null 2>&1 || nats stream add cafaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
+      - 'nats stream info anywaye >/dev/null 2>&1 || nats stream add anywaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
     healthcheck:
       # The stream exists — the one thing worth waiting for. `nats stream
       # info` exits 1 while it does not (and, without a terminal, refuses to
       # prompt for a stream to select), so a failing probe means "not yet",
       # not "broken".
-      test: ["CMD", "nats", "stream", "info", "cafaye"]
+      test: ["CMD", "nats", "stream", "info", "anywaye"]
       interval: 5s
       timeout: 3s
       retries: 6
@@ -606,7 +606,7 @@ services:
       KIT_OTEL_REDACTION_SUMMARY: ${KIT_OTEL_REDACTION_SUMMARY:-info}
       KIT_OTEL_BATCH_TIMEOUT: ${KIT_OTEL_BATCH_TIMEOUT:-5s}
       KIT_OTEL_BATCH_SIZE: ${KIT_OTEL_BATCH_SIZE:-512}
-      KIT_OTEL_METRIC_NAMESPACE: ${KIT_OTEL_METRIC_NAMESPACE:-cafaye}
+      KIT_OTEL_METRIC_NAMESPACE: ${KIT_OTEL_METRIC_NAMESPACE:-anywaye}
       KIT_OTEL_METRICS_FLUSH_INTERVAL: ${KIT_OTEL_METRICS_FLUSH_INTERVAL:-15s}
       KIT_TEMPO_OTLP_ENDPOINT: ${KIT_TEMPO_OTLP_ENDPOINT:-tempo:4317}
       KIT_LOKI_OTLP_ENDPOINT: ${KIT_LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp}
@@ -744,7 +744,7 @@ services:
   #   - Nothing is overridden onto the vendor's own image contents.
   #
   # AGPL attaches to the Grafana SERVER, not to the applications it observes,
-  # so this is compatible with cafaye being MIT/Apache. The obligation runs in
+  # so this is compatible with anywaye being MIT/Apache. The obligation runs in
   # one direction: we may use these; a self-hoster using our code is not
   # thereby offered a modified Grafana.
   #

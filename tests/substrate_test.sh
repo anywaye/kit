@@ -238,7 +238,7 @@ run 'control: a latest NATS pin goes red under the same check' red check_pins "$
 #     not an unbound-variable crash
 # ===========================================================================
 #
-# THE DEFECT THIS SECTION ENDS. `curl https://cafaye.com/box/install | sh` is
+# THE DEFECT THIS SECTION ENDS. `curl https://anywaye.com/box/install | sh` is
 # the command the website, `cafe box init` and every document print, and it was
 # never exercised end to end: every cycle ran `bash /tmp/kit/…/install.sh` from
 # a git clone, where `manifests/` is the script's own sibling. Served, the
@@ -336,7 +336,7 @@ tar czf "$served_tarball" -C "$WORK/served/src" kit-fixture
 cat >"$served_fetch_bin/curl" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-  *codeload.github.com/cafaye/kit*) exec cat "$served_tarball" ;;
+  *codeload.github.com/anywaye/kit*) exec cat "$served_tarball" ;;
   *) printf 'fake-curl: unexpected call: %s\n' "\$*" >&2; exit 1 ;;
 esac
 EOF
@@ -439,7 +439,7 @@ served_fail_out="$(served_run "$served_fail_bin")" && served_fail_ec=0 || served
 served_refusal_ok=0
 if [ "$served_fail_ec" -ne 0 ]; then
   case "$served_fail_out" in
-    *"could not be fetched from https://codeload.github.com/cafaye/kit/tar.gz/"*)
+    *"could not be fetched from https://codeload.github.com/anywaye/kit/tar.gz/"*)
       case "$served_fail_out" in
         *KIT_SUBSTRATE_BOX_ID*) ;;
         *"[5/13]"*) ;;
@@ -667,7 +667,7 @@ fi
 
 fixture_latest_tag="$WORK/latest-tag"
 mkdir -p "$fixture_latest_tag"
-printf 'image: ghcr.io/cafaye/charts/identity:latest\n' >"$fixture_latest_tag/pod.yaml"
+printf 'image: ghcr.io/anywaye/charts/identity:latest\n' >"$fixture_latest_tag/pod.yaml"
 if grep -rn ':latest' "$fixture_latest_tag" >/dev/null 2>&1; then
   pass 'control: a planted :latest tag is found by the same grep'
 else
@@ -1642,7 +1642,7 @@ run 'control: a chart reading a secret install.sh never creates goes red' red \
 # ===========================================================================
 #
 # The local stack runs NATS with JetStream (`nats` with `-js`, plus the
-# one-shot `nats-stream-init` defining stream `cafaye`); the substrate
+# one-shot `nats-stream-init` defining stream `anywaye`); the substrate
 # installed no broker, so on the box every event with no matching stream is a
 # silent black hole — the exact failure `nats-stream-init`'s comment exists to
 # prevent. Step 10 installs one Deployment + Service + PVC in `data` and
@@ -1774,10 +1774,10 @@ if not re.search(r"(?m)^  install_nats$", code):
 need("    nats)", "the guard has no nats component — a re-run would reinstall the broker")
 need("NATS_IMAGE_PLACEHOLDER", "the broker manifest substitution is missing")
 need("nats:${NATS_VERSION}", "the broker image is not substituted from $NATS_VERSION — the pin lives in two places")
-need("nats stream info cafaye", "the stream is never inspected before creation")
-need("nats stream add cafaye", "the stream cafaye is never created")
+need("nats stream info anywaye", "the stream is never inspected before creation")
+need("nats stream add anywaye", "the stream anywaye is never created")
 if not any(
-    "nats stream info cafaye" in ln and "||" in ln and "nats stream add cafaye" in ln
+    "nats stream info anywaye" in ln and "||" in ln and "nats stream add anywaye" in ln
     for ln in code.splitlines()
 ):
     problems.append(
@@ -1796,7 +1796,7 @@ need("Succeeded", "the wait does not assert the Succeeded phase")
 if problems:
     print("; ".join(problems))
     sys.exit(1)
-print("step 10 applies the broker and defines stream cafaye idempotently")
+print("step 10 applies the broker and defines stream anywaye idempotently")
 PY
 }
 
@@ -1829,9 +1829,9 @@ if cbox and ibox and cbox != ibox:
 
 
 def stream_flags(text, label):
-    i = text.find("nats stream add cafaye")
+    i = text.find("nats stream add anywaye")
     if i < 0:
-        problems.append(f"{label}: no `nats stream add cafaye`")
+        problems.append(f"{label}: no `nats stream add anywaye`")
         return None
     seg = text[i : i + 600]
     out = {}
@@ -1862,7 +1862,7 @@ if cflags and iflags:
 if problems:
     print("; ".join(problems))
     sys.exit(1)
-print(f"broker {itag} + nats-box {ibox}, stream cafaye {cflags['subjects']} storage={cflags['storage']} retention={cflags['retention']} max-age={cflags['max-age']}")
+print(f"broker {itag} + nats-box {ibox}, stream anywaye {cflags['subjects']} storage={cflags['storage']} retention={cflags['retention']} max-age={cflags['max-age']}")
 PY
 }
 
@@ -1881,7 +1881,7 @@ else
   fail 'controls: the NATS fixtures need the real manifest' "$DATA_DIR/nats.yaml is missing — the green check above names what is missing"
 fi
 
-run 'install.sh applies the broker and defines stream cafaye idempotently' green check_nats_install "$SUBSTRATE/install.sh"
+run 'install.sh applies the broker and defines stream anywaye idempotently' green check_nats_install "$SUBSTRATE/install.sh"
 
 # The control: a fixture with one publisher dropped from the subject set. Must
 # go red — a subject list the check cannot see shrink is documentation.
@@ -3948,7 +3948,7 @@ run 'control: an empty capability is refused' red registry_capability_shape_ok "
 #
 # The previous packet proved this step REFUSED, because no service in the fleet
 # traded a redeemed capability for a dockerconfigjson (seam audit §5a-5c). That
-# service now exists — cafaye/registry, the capability exchange — so the
+# service now exists — anywaye/registry, the capability exchange — so the
 # assertions below flip from "it refuses, naming the gap" to the four
 # properties the exchange's own brief names, asserted at the installer's end:
 #   1. it speaks the exchange route, presenting the capability as a bearer and
@@ -4002,7 +4002,7 @@ pull_secret_ec=0
   }
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret.log" 2>&1
 ) || pull_secret_ec=$?
 
@@ -4192,7 +4192,7 @@ set -euo pipefail
 export MOCK_ROOT="$MOCK_ROOT_NS"
 export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
 # shellcheck source=/dev/null
 . "$fixture_sourced"
 # MANIFEST_DIR after the source: the sourced copy's SCRIPT_DIR is $WORK, so
@@ -4291,7 +4291,7 @@ refuse_ec=0
   export MOCK_NAMESPACE_REFUSE="identity"
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_REFUSE/curl-response"
   install_pull_secret >"$WORK/pull-secret-refuse.log" 2>&1
 ) || refuse_ec=$?
@@ -4411,7 +4411,7 @@ set -euo pipefail
 export MOCK_ROOT="$MOCK_ROOT_NONS"
 export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
 # The state the box was ACTUALLY in: step 4 has made argocd, and nothing has
 # made the other five. With that seed the failure this control reproduces lands
 # on the same namespace the live run stopped on, so the evidence is the same
@@ -4561,7 +4561,7 @@ exchange_case() { # <mode> <status> <response-body> <expected-log-substring> <ca
     }
     export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
     export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-    export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+    export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
     install_pull_secret >"$log" 2>&1
   ) || ec=$?
   MOCK_CURL_MODE=""
@@ -4613,7 +4613,7 @@ rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml
   curl() { printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"; cat "$MOCK_ROOT/curl-response"; printf '\n%s\n' "${MOCK_CURL_STATUS:-200}"; }
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_B64_PULL_SECRET"
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret-paste.log" 2>&1
 ) || true
 if grep -q "OLD runbook" "$WORK/pull-secret-paste.log" 2>/dev/null \
@@ -4670,8 +4670,8 @@ spec:
     namespace: $1
 YAML
 }
-probe_app anon-identity oci://ghcr.io/cafaye/charts/identity identity 0.1.0
-probe_app anon-gateway oci://ghcr.io/cafaye/charts/gateway gateway 0.1.0
+probe_app anon-identity oci://ghcr.io/anywaye/charts/identity identity 0.1.0
+probe_app anon-gateway oci://ghcr.io/anywaye/charts/gateway gateway 0.1.0
 probe_app anon-grafana https://grafana.github.io/helm-charts grafana 10.5.15
 
 # mock_probe_curl — GHCR's two anonymous halves, answered from the
@@ -4722,11 +4722,11 @@ derived_ok() {
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
   n="$(printf '%s\n' "$rows" | grep -c .)"
   [ "$n" -eq 10 ] || { printf 'derived %s artifact rows, expected 10\n%s\n' "$n" "$rows"; return 1; }
-  for want in "cafaye/charts/billing 0.1.2" "cafaye/billing 0.1.2" \
-    "cafaye/charts/courier 0.1.0" "cafaye/courier 0.1.0" \
-    "cafaye/charts/gateway 0.1.0" "cafaye/gateway 0.1.0" \
-    "cafaye/charts/identity 0.1.0" "cafaye/identity 0.1.0" \
-    "cafaye/charts/parlor 0.1.0" "cafaye/parlor 0.1.0"; do
+  for want in "anywaye/charts/billing 0.1.2" "anywaye/billing 0.1.2" \
+    "anywaye/charts/courier 0.1.0" "anywaye/courier 0.1.0" \
+    "anywaye/charts/gateway 0.1.0" "anywaye/gateway 0.1.0" \
+    "anywaye/charts/identity 0.1.0" "anywaye/identity 0.1.0" \
+    "anywaye/charts/parlor 0.1.0" "anywaye/parlor 0.1.0"; do
     case "$rows" in
       *"$want"*) ;;
       *) printf 'missing derived row: %s\n%s\n' "$want" "$rows"; return 1 ;;
@@ -4755,7 +4755,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/demo
+    repoURL: oci://ghcr.io/anywaye/charts/demo
     chart: demo
     targetRevision: 2.0.0
 YAML
@@ -4775,7 +4775,7 @@ YAML
 derived_fixture_ok() {
   local rows
   rows="$(MANIFEST_DIR="$PROBE_FIX_DERIVE" registry_derived_artifacts | sort)"
-  [ "$rows" = "$(printf 'cafaye/charts/demo 2.0.0\ncafaye/demo 2.0.0')" ] || {
+  [ "$rows" = "$(printf 'anywaye/charts/demo 2.0.0\nanywaye/demo 2.0.0')" ] || {
     printf 'fixture derivation is not exactly the chart plus its image:\n%s\n' "$rows"
     return 1
   }
@@ -4797,7 +4797,7 @@ anon_ec=0
   export MANIFEST_DIR="$PROBE_APPS"
   export MOCK_TOKEN_DENY="__none__" MOCK_MANIFEST_DENY="__none__"
   export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret-anon.log" 2>&1
   printf 'REGISTRY_PATH=%s\n' "$REGISTRY_PATH" >>"$WORK/pull-secret-anon.log"
 ) || anon_ec=$?
@@ -4870,13 +4870,13 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/priv-fixture
+    repoURL: oci://ghcr.io/anywaye/charts/priv-fixture
     chart: priv-fixture
     targetRevision: 9.9.9
 YAML
 
 # 3. One private artifact, no capability: the step refuses, NAMING it, in the
-# capability's own words. The fixture's image row (cafaye/priv-fixture:9.9.9)
+# capability's own words. The fixture's image row (anywaye/priv-fixture:9.9.9)
 # stays public — the denial names only the chart repo — so the refusal proves
 # per-artifact granularity rather than a blanket private verdict.
 MOCK_ROOT_PRIV="$WORK/pull-secret-priv"
@@ -4889,15 +4889,15 @@ priv_ec=0
   curl() { mock_probe_curl "$@"; }
   export MOCK_ROOT="$MOCK_ROOT_PRIV"
   export MANIFEST_DIR="$PROBE_PRIV"
-  export MOCK_TOKEN_DENY="cafaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
+  export MOCK_TOKEN_DENY="anywaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
   export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret-priv.log" 2>&1
 ) || priv_ec=$?
 priv_ok() {
   [ "$priv_ec" -ne 0 ] || { printf 'the step succeeded with a private artifact and no capability\n'; return 1; }
   case "$(cat "$WORK/pull-secret-priv.log")" in
-    *"cafaye/charts/priv-fixture:9.9.9"*) ;;
+    *"anywaye/charts/priv-fixture:9.9.9"*) ;;
     *) printf 'the refusal does not name the private artifact\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
   esac
   case "$(cat "$WORK/pull-secret-priv.log")" in
@@ -4905,7 +4905,7 @@ priv_ok() {
     *) printf 'the refusal is not in the capability words\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
   esac
   case "$(cat "$WORK/pull-secret-priv.log")" in
-    *"public: cafaye/priv-fixture:9.9.9"*) ;;
+    *"public: anywaye/priv-fixture:9.9.9"*) ;;
     *) printf 'the public image row was not measured public\n%s\n' "$(cat "$WORK/pull-secret-priv.log")"; return 1 ;;
   esac
   printf 'refused in the capability words, naming the one private artifact'
@@ -4927,7 +4927,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/identity
+    repoURL: oci://ghcr.io/anywaye/charts/identity
     chart: identity
     targetRevision: 0.0.0-no-such-tag
 YAML
@@ -4943,13 +4943,13 @@ tag_ec=0
   export MANIFEST_DIR="$PROBE_TAG"
   export MOCK_TOKEN_DENY="__none__" MOCK_MANIFEST_DENY="0.0.0-no-such-tag"
   export KIT_SUBSTRATE_BOX_ID="" KIT_SUBSTRATE_REGISTRY_CAPABILITY=""
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret-tag.log" 2>&1
 ) || tag_ec=$?
 tag_ok() {
   [ "$tag_ec" -ne 0 ] || { printf 'the step went anonymous on a token-answered, manifest-missing artifact\n'; return 1; }
   case "$(cat "$WORK/pull-secret-tag.log")" in
-    *"cafaye/charts/identity:0.0.0-no-such-tag"*) ;;
+    *"anywaye/charts/identity:0.0.0-no-such-tag"*) ;;
     *) printf 'the refusal does not name the unfetchable artifact\n%s\n' "$(cat "$WORK/pull-secret-tag.log")"; return 1 ;;
   esac
   printf 'a token with a missing manifest is still private'
@@ -4971,10 +4971,10 @@ cap_ec=0
   curl() { mock_probe_curl "$@"; }
   export MOCK_ROOT="$MOCK_ROOT_CAP"
   export MANIFEST_DIR="$PROBE_PRIV"
-  export MOCK_TOKEN_DENY="cafaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
+  export MOCK_TOKEN_DENY="anywaye/charts/priv-fixture" MOCK_MANIFEST_DENY="__none__"
   export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
   export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
-  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test"
+  export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
   install_pull_secret >"$WORK/pull-secret-cap.log" 2>&1
   printf 'REGISTRY_PATH=%s\n' "$REGISTRY_PATH" >>"$WORK/pull-secret-cap.log"
 ) || cap_ec=$?
@@ -6090,9 +6090,9 @@ migrate_seed_fixture() {
   mock_seed data postgres-role-billing-app password "app-billing-pw"
   # The Deployments Argo synced from step 6 — step 10 reads the image off them,
   # so there is no second pin to keep in step.
-  mock_seed identity deploy-identity image "ghcr.io/cafaye/identity:0.1.0"
-  mock_seed courier deploy-courier image "ghcr.io/cafaye/courier:0.1.0"
-  mock_seed billing deploy-billing image "ghcr.io/cafaye/billing:0.1.0"
+  mock_seed identity deploy-identity image "ghcr.io/anywaye/identity:0.1.0"
+  mock_seed courier deploy-courier image "ghcr.io/anywaye/courier:0.1.0"
+  mock_seed billing deploy-billing image "ghcr.io/anywaye/billing:0.1.0"
   # billing-secrets' SECRET_KEY_BASE, read back by the migrate env: the
   # schema Job boots Rails in production, which refuses without one.
   mock_seed billing billing-secrets SECRET_KEY_BASE "base64-secret-for-the-gate"
@@ -6144,17 +6144,17 @@ else
     "argv did not carry the app DSN"
 fi
 # The image comes from the Deployment, not a literal in install.sh.
-if grep -q -- '--image=ghcr.io/cafaye/identity:0.1.0' "$migrate_argv" 2>/dev/null &&
-   grep -q -- '--image=ghcr.io/cafaye/courier:0.1.0' "$migrate_argv" 2>/dev/null &&
-   grep -q -- '--image=ghcr.io/cafaye/billing:0.1.0' "$migrate_argv" 2>/dev/null; then
+if grep -q -- '--image=ghcr.io/anywaye/identity:0.1.0' "$migrate_argv" 2>/dev/null &&
+   grep -q -- '--image=ghcr.io/anywaye/courier:0.1.0' "$migrate_argv" 2>/dev/null &&
+   grep -q -- '--image=ghcr.io/anywaye/billing:0.1.0' "$migrate_argv" 2>/dev/null; then
   pass 'step 10 migrates in each service own RUNNING image (read off the Deployment)'
 else
   fail 'step 10 migrates in each service own RUNNING image (read off the Deployment)' \
     "argv images: $(grep -o -- '--image=[^ ]*' "$migrate_argv" 2>/dev/null | sort -u | tr '\n' ' ')"
 fi
-if [ "$(mock_get data substrate-migrations identity)" = "ghcr.io/cafaye/identity:0.1.0" ] &&
-   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/cafaye/courier:0.1.0" ] &&
-   [ "$(mock_get data substrate-migrations billing)" = "ghcr.io/cafaye/billing:0.1.0" ]; then
+if [ "$(mock_get data substrate-migrations identity)" = "ghcr.io/anywaye/identity:0.1.0" ] &&
+   [ "$(mock_get data substrate-migrations courier)" = "ghcr.io/anywaye/courier:0.1.0" ] &&
+   [ "$(mock_get data substrate-migrations billing)" = "ghcr.io/anywaye/billing:0.1.0" ]; then
   pass 'step 10 records the applied image per service (the re-run marker)'
 else
   fail 'step 10 records the applied image per service (the re-run marker)' \
@@ -8275,18 +8275,18 @@ mint_step() {
     fi
     # MINT_SEED_COMPLETE=1 plants the live-box state: a COMPLETE seven-key
     # block — the pair plus all five link templates derived from
-    # https://app.cafaye.com, the box that boots and sends all four recovery
+    # https://app.anywaye.com, the box that boots and sends all four recovery
     # messages. With no base URL this run cannot rewrite it, so the sweep
     # must leave every key in place and say so.
     if [ "${MINT_SEED_COMPLETE:-}" = "1" ]; then
       printf '%s\n' \
         'mock_seed identity identity-secrets COURIER_BASE_URL "http://courier.courier.svc.cluster.local:4000"' \
         'mock_seed identity identity-secrets COURIER_TOKEN "live-box-working-token"' \
-        'mock_seed identity identity-secrets PASSWORD_RESET_LINK_TEMPLATE "https://app.cafaye.com/reset-password?token={token}"' \
-        'mock_seed identity identity-secrets EMAIL_VERIFICATION_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
-        'mock_seed identity identity-secrets EMAIL_CHANGE_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
-        'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://app.cafaye.com/verify-email/confirm?token={token}"' \
-        'mock_seed identity identity-secrets INVITATION_LINK_TEMPLATE "https://app.cafaye.com/invitations/{token}"'
+        'mock_seed identity identity-secrets PASSWORD_RESET_LINK_TEMPLATE "https://app.anywaye.com/reset-password?token={token}"' \
+        'mock_seed identity identity-secrets EMAIL_VERIFICATION_LINK_TEMPLATE "https://app.anywaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets EMAIL_CHANGE_LINK_TEMPLATE "https://app.anywaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://app.anywaye.com/verify-email/confirm?token={token}"' \
+        'mock_seed identity identity-secrets INVITATION_LINK_TEMPLATE "https://app.anywaye.com/invitations/{token}"'
     fi
     # MINT_SEED_LEGACY_RECOVERY=1 is the default, not a flag: every set-branch
     # run plants the pre-fix box state — a RECOVERY_LINK_TEMPLATE an older
@@ -8936,7 +8936,7 @@ fi
 #
 # THE LIVE DEFECT. The Contabo box carries a COMPLETE seven-key courier block
 # — COURIER_BASE_URL and COURIER_TOKEN both present, five link templates
-# derived from https://app.cafaye.com — and identity boots and reports
+# derived from https://app.anywaye.com — and identity boots and reports
 # "account recovery can send all four messages through courier". The sweep as
 # it stood collected all seven keys into `orphans` and deleted them, printing
 # "leftovers from an installer that wrote half a pair": a provenance the
@@ -8968,7 +8968,7 @@ check_mint_keeps_complete_pair() {
   # without the rewriting variable being set. (A box written by the new
   # installer carries no RECOVERY at all — the required set above is six keys,
   # and absence there is the proved end-state, not a deletion.)
-  if [ "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" != "https://app.cafaye.com/verify-email/confirm?token={token}" ]; then
+  if [ "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" != "https://app.anywaye.com/verify-email/confirm?token={token}" ]; then
     printf 'the sweep touched the legacy default on a kept mail path — keep means keep: %s\n' \
       "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || echo '<missing>')"
     return 1
@@ -9315,7 +9315,7 @@ PY
 # INCLUDED, to the API server, so it read `._identity.yaml` and the install
 # DIED on the first sidecar:
 #
-#   error parsing /var/lib/cafaye/substrate/manifests/applications/._identity.yaml:
+#   error parsing /var/lib/anywaye/substrate/manifests/applications/._identity.yaml:
 #   error converting YAML to JSON: yaml: control characters are not allowed
 #
 # `COPYFILE_DISABLE=1 tar --no-xattrs` reduces the sidecars but does not remove
@@ -9503,7 +9503,7 @@ run 'control: removing the glob filter lets AppleDouble break the apply again' g
 # (sourceRepos *, destinations */*, clusterResourceWhitelist */*); kit ships
 # the least-privilege one in manifests/argocd/appproject.yaml — sourceRepos
 # the two upstream Helm repoURLs plus the chart-path glob
-# oci://ghcr.io/cafaye/charts/*, destinations exactly the six namespaces they
+# oci://ghcr.io/anywaye/charts/*, destinations exactly the six namespaces they
 # deploy into on https://kubernetes.default.svc, and a clusterResourceWhitelist
 # of exactly the three cluster-scoped kinds the observability charts render
 # (see §28) — and step 4 applies it right after Argo CD is Available and
@@ -9518,11 +9518,11 @@ run 'control: removing the glob filter lets AppleDouble break the apply again' g
 # AND THE SECOND SEAM THIS PACKET EXISTS FOR: the AppProject's sourceRepos and
 # the Applications' source.repoURL are TWO SETS OVER ONE FACT, and they drifted.
 # A sibling packet moved each Application from the registry ROOT to its own
-# chart's PATH (oci://ghcr.io/cafaye/charts/gateway, …/courier, …/identity,
+# chart's PATH (oci://ghcr.io/anywaye/charts/gateway, …/courier, …/identity,
 # …/parlor) because Argo resolves an OCI source's revision against the full
 # path; appproject.yaml still listed the bare root, so the controller refused
 # every Application with
-#   application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+#   application repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
 #   project 'default'
 # The name-equality check above cannot see it — the project is named `default`
 # and the Applications name `default`, so it is green on the exact box that is
@@ -9611,7 +9611,7 @@ if shipped != apps_project:
 # being the boundary the packet exists to tighten, so the least-privilege
 # half is asserted here too — the same way the static phase's allowlist
 # hygiene refuses an entry matching nothing. A glob that is a PATH under a
-# repo this project owns (`oci://ghcr.io/cafaye/charts/*`) is not a bare `*`
+# repo this project owns (`oci://ghcr.io/anywaye/charts/*`) is not a bare `*`
 # and is allowed; the check is exact membership, so `"*" == repo` is what it
 # refuses, not any repo containing a `*`.
 spec = proj_doc.get("spec", {})
@@ -9648,9 +9648,9 @@ run 'control: an Application naming a different project goes red' red \
 
 # The second control: the shipped project renamed. Must go red the same way —
 # a check satisfied by a file that contains the right name somewhere would
-# pass on a project named `default` and an Application naming `cafaye`.
+# pass on a project named `default` and an Application naming `anywaye`.
 fixture_project_renamed="$WORK/appproject-renamed.yaml"
-sed 's/name: default/name: cafaye/' "$APP_PROJECT" >"$fixture_project_renamed"
+sed 's/name: default/name: anywaye/' "$APP_PROJECT" >"$fixture_project_renamed"
 run 'control: a shipped AppProject with a different name goes red' red \
   check_appproject "$MANIFESTS" "$fixture_project_renamed"
 
@@ -9788,16 +9788,16 @@ run 'every Application source.repoURL is permitted by the AppProject sourceRepos
 # RED CONTROL 1 — the historical PAIR. appproject.yaml used to list the bare
 # registry ROOT while the Applications name per-chart PATHS, which is the exact
 # refusal measured on the box:
-#   application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+#   application repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
 #   project 'default'
 # Rebuild the pre-fix project and require the check to see it.
 fixture_project_bare_root="$WORK/appproject-bare-root.yaml"
-sed 's|^    - oci://ghcr.io/cafaye/charts/\*$|    - oci://ghcr.io/cafaye/charts|' \
+sed 's|^    - oci://ghcr.io/anywaye/charts/\*$|    - oci://ghcr.io/anywaye/charts|' \
   "$APP_PROJECT" >"$fixture_project_bare_root"
 # The guard reads the LIST ITEM, not a substring of the file: the comment above
 # the list explains the glob and names it, so a whole-file grep would find the
 # explanation and call a correct fixture unbuilt.
-if grep -qE '^ +- oci://ghcr\.io/cafaye/charts/\*' "$fixture_project_bare_root"; then
+if grep -qE '^ +- oci://ghcr\.io/anywaye/charts/\*' "$fixture_project_bare_root"; then
   fail 'control fixture: the bare-root AppProject was not built' \
     "the sed did not strip the chart glob from sourceRepos, so the control would prove nothing"
 else
@@ -9809,9 +9809,9 @@ fi
 fixture_foreign_repo="$WORK/apps-foreign-repo"
 mkdir -p "$fixture_foreign_repo"
 cp "$MANIFESTS"/*.yaml "$fixture_foreign_repo/"
-sed -i '' 's|repoURL: oci://ghcr.io/cafaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
+sed -i '' 's|repoURL: oci://ghcr.io/anywaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
   "$fixture_foreign_repo/courier.yaml" 2>/dev/null || \
-  sed -i 's|repoURL: oci://ghcr.io/cafaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
+  sed -i 's|repoURL: oci://ghcr.io/anywaye/charts/courier|repoURL: oci://ghcr.io/evil/charts/courier|' \
   "$fixture_foreign_repo/courier.yaml"
 if grep -q 'oci://ghcr.io/evil/charts/courier' "$fixture_foreign_repo/courier.yaml"; then
   run 'control: an Application naming a repo the project does not permit goes red' red \
@@ -9827,9 +9827,9 @@ fi
 fixture_nested_repo="$WORK/apps-nested-repo"
 mkdir -p "$fixture_nested_repo"
 cp "$MANIFESTS"/*.yaml "$fixture_nested_repo/"
-sed -i '' 's|repoURL: oci://ghcr.io/cafaye/charts/identity|repoURL: oci://ghcr.io/cafaye/charts/nested/identity|' \
+sed -i '' 's|repoURL: oci://ghcr.io/anywaye/charts/identity|repoURL: oci://ghcr.io/anywaye/charts/nested/identity|' \
   "$fixture_nested_repo/identity.yaml" 2>/dev/null || \
-  sed -i 's|repoURL: oci://ghcr.io/cafaye/charts/identity|repoURL: oci://ghcr.io/cafaye/charts/nested/identity|' \
+  sed -i 's|repoURL: oci://ghcr.io/anywaye/charts/identity|repoURL: oci://ghcr.io/anywaye/charts/nested/identity|' \
   "$fixture_nested_repo/identity.yaml"
 if grep -q 'charts/nested/identity' "$fixture_nested_repo/identity.yaml"; then
   run 'control: a nested OCI path is refused (the `*` cannot cross a `/`)' red \
@@ -9848,7 +9848,7 @@ mkdir -p "$fixture_fifth_chart"
 cp "$MANIFESTS"/*.yaml "$fixture_fifth_chart/"
 # A new Application, assembled rather than sed'ed from an existing one so its
 # name and chart agree. The example is a hypothetical `ledger`, never pantry:
-# pantry is Cafaye-operated and the §28b boundary refuses it — a "fifth
+# pantry is Anywaye-operated and the §28b boundary refuses it — a "fifth
 # chart" control naming pantry would prove the glob by re-adding the one
 # service the packet removes.
 cat >"$fixture_fifth_chart/ledger.yaml" <<'YAML'
@@ -9860,7 +9860,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/ledger
+    repoURL: oci://ghcr.io/anywaye/charts/ledger
     chart: ledger
     targetRevision: 0.1.0
   destination:
@@ -10666,10 +10666,10 @@ fi
 #   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
 #   ["https://grafana.github.io/helm-charts",
 #    "https://prometheus-community.github.io/helm-charts",
-#    "oci://ghcr.io/cafaye/charts"]                    <- the ROOT, on the box
-#   oci://ghcr.io/cafaye/charts/*                      <- in appproject.yaml
+#    "oci://ghcr.io/anywaye/charts"]                    <- the ROOT, on the box
+#   oci://ghcr.io/anywaye/charts/*                      <- in appproject.yaml
 #
-# and every Application read `Unknown: repo oci://ghcr.io/cafaye/charts/gateway
+# and every Application read `Unknown: repo oci://ghcr.io/anywaye/charts/gateway
 # is not permitted in project 'default'`. The only way to land the fix was to
 # delete Argo CD. A packet that passes on the next clean box and cannot reach a
 # warm one is not a fix, and the industrial-scale verification ("challenge the
@@ -10744,7 +10744,7 @@ spec:
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts
-    - oci://ghcr.io/cafaye/charts
+    - oci://ghcr.io/anywaye/charts
 YAML
   rm -f "$WARM_DIR/argv"
 }
@@ -10862,11 +10862,11 @@ old_repos="${old_repos% }"
 warm_is_prefix_list=0
 while IFS= read -r warm_repo; do
   [ -n "$warm_repo" ] || continue
-  if [ "$warm_repo" = "oci://ghcr.io/cafaye/charts" ]; then
+  if [ "$warm_repo" = "oci://ghcr.io/anywaye/charts" ]; then
     warm_is_prefix_list=1
   fi
   case "$warm_repo" in
-    "oci://ghcr.io/cafaye/charts/*") warm_has_glob=1 ;;
+    "oci://ghcr.io/anywaye/charts/*") warm_has_glob=1 ;;
     *) warm_has_glob="${warm_has_glob:-0}" ;;
   esac
 done < <(mock_get_appproject)
@@ -11062,7 +11062,7 @@ fi
 # exited 0 while Argo showed gateway Synced/Degraded and gateway's pods
 # logged `Readiness probe failed: HTTP probe failed with statuscode: 503`
 # 1564 times over four hours. Two independent causes, both silent:
-# ACME could never complete (`... lookup api.cafaye.com ...: no such host` —
+# ACME could never complete (`... lookup api.anywaye.com ...: no such host` —
 # DNS never pointed at the box) and gateway could never be Ready (its
 # /readyz probes identity's JWKS, served only when
 # KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER is set, and it was not). Neither is
@@ -11277,7 +11277,7 @@ spec:
     server: https://kubernetes.default.svc
     namespace: svc
 YAML
-  printf '# the fleet default is https://auth.cafaye.com but this box does not set it\n' >>"$adir/svc.yaml"
+  printf '# the fleet default is https://auth.anywaye.com but this box does not set it\n' >>"$adir/svc.yaml"
   local src="$WORK/honest-sourced.sh"
   sed '/^main "$@"/d' "$script" >"$src"
   local out ec=0
@@ -11299,7 +11299,7 @@ YAML
     *'kubernetes.default.svc'*) printf 'the destination server is listed as served\n'; return 1 ;;
   esac
   case "$out" in
-    *'auth.cafaye.com'*) printf 'a URL from a comment is listed as intended\n'; return 1 ;;
+    *'auth.anywaye.com'*) printf 'a URL from a comment is listed as intended\n'; return 1 ;;
   esac
   case "$out" in
     *'svc.cluster.local'*) printf 'an in-cluster host is listed as public\n'; return 1 ;;
@@ -11354,13 +11354,13 @@ esac
 # ===========================================================================
 #
 # THE DEFECT, MEASURED ON THE BOX. The readiness event named 2 pending hosts
-# (app.cafaye.com, auth.cafaye.com) on a box whose `kubectl get ingress -A`
-# held THREE — gateway's api.cafaye.com among them — and gateway's
+# (app.anywaye.com, auth.anywaye.com) on a box whose `kubectl get ingress -A`
+# held THREE — gateway's api.anywaye.com among them — and gateway's
 # Certificate had sat READY=False for 98 minutes. The installer reported a
 # box with FEWER conditions than it had. WHY: an Ingress host is a BARE
 # hostname (`spec.rules.host`, or a chart's `host` value) and the URL grep
 # the derivation used cannot match one by construction — the pattern
-# requires a scheme. app.cafaye.com survived only because
+# requires a scheme. app.anywaye.com survived only because
 # KIT_SUBSTRATE_APP_BASE_URL happens to name the same host as parlor's
 # Ingress; the coincidence hid the gap for one of three.
 #
@@ -11386,7 +11386,7 @@ metadata:
   name: gw
 spec:
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/gateway
+    repoURL: oci://ghcr.io/anywaye/charts/gateway
     chart: gateway
     helm:
       values: |
@@ -11481,7 +11481,7 @@ metadata:
   name: dual
 spec:
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/dual
+    repoURL: oci://ghcr.io/anywaye/charts/dual
     chart: dual
     helm:
       values: |
@@ -11524,7 +11524,7 @@ metadata:
   name: svc
 spec:
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/svc
+    repoURL: oci://ghcr.io/anywaye/charts/svc
     chart: svc
     helm:
       values: |
@@ -11571,7 +11571,7 @@ YAML
 
 # 4. Green, real tree: a host NAMED BY NO MANIFEST is not added. The fixture's
 # chart values carry the host in a comment — the shape a chart default
-# deliberately not set takes (auth.cafaye.com in gateway's values is exactly
+# deliberately not set takes (auth.anywaye.com in gateway's values is exactly
 # this) — and the derivation must not probe it: a check reporting a condition
 # that does not exist is the check an operator learns to ignore. The fixture
 # also carries a live host, because an extractor listing nothing would
@@ -11586,7 +11586,7 @@ metadata:
   name: ghost
 spec:
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/ghost
+    repoURL: oci://ghcr.io/anywaye/charts/ghost
     chart: ghost
     helm:
       values: |
@@ -11927,23 +11927,23 @@ def rs_list(ns, items):
     os.makedirs(os.path.join(root, ns), exist_ok=True)
     json.dump({"items": out}, open(os.path.join(root, ns, "rs.json"), "w"), indent=2)
 
-deploy("gateway", "gateway", 1, 1, "ghcr.io/cafaye/gateway@sha256:NEWLABEL")
+deploy("gateway", "gateway", 1, 1, "ghcr.io/anywaye/gateway@sha256:NEWLABEL")
 rs_list("gateway", [
-    ("gateway-aaaaaa", "gateway", "AAAAAA", True, "ghcr.io/cafaye/gateway@sha256:NEWLABEL", "2026-10-14T10:00:00Z"),
-    ("gateway-bbbbbb", "gateway", "BBBBBB", True, "ghcr.io/cafaye/gateway:0.1.0", "2026-10-13T01:00:00Z"),
-    ("gateway-cccccc", "gateway", "CCCCCC", False, "ghcr.io/cafaye/gateway:0.0.9", "2026-10-12T01:00:00Z"),
+    ("gateway-aaaaaa", "gateway", "AAAAAA", True, "ghcr.io/anywaye/gateway@sha256:NEWLABEL", "2026-10-14T10:00:00Z"),
+    ("gateway-bbbbbb", "gateway", "BBBBBB", True, "ghcr.io/anywaye/gateway:0.1.0", "2026-10-13T01:00:00Z"),
+    ("gateway-cccccc", "gateway", "CCCCCC", False, "ghcr.io/anywaye/gateway:0.0.9", "2026-10-12T01:00:00Z"),
 ])
-deploy("identity", "identity", 1, 1, "ghcr.io/cafaye/identity@sha256:I1LABEL")
+deploy("identity", "identity", 1, 1, "ghcr.io/anywaye/identity@sha256:I1LABEL")
 rs_list("identity", [
-    ("identity-xxxxxx", "identity", "XXXXXX", True, "ghcr.io/cafaye/identity@sha256:I1LABEL", "2026-10-14T09:00:00Z"),
+    ("identity-xxxxxx", "identity", "XXXXXX", True, "ghcr.io/anywaye/identity@sha256:I1LABEL", "2026-10-14T09:00:00Z"),
 ])
-deploy("parlor", "parlor", 0, 0, "ghcr.io/cafaye/parlor@sha256:P1LABEL")
+deploy("parlor", "parlor", 0, 0, "ghcr.io/anywaye/parlor@sha256:P1LABEL")
 rs_list("parlor", [
-    ("parlor-pppppp", "parlor", "PPPPPP", True, "ghcr.io/cafaye/parlor@sha256:P0LABEL", "2026-10-13T05:00:00Z"),
+    ("parlor-pppppp", "parlor", "PPPPPP", True, "ghcr.io/anywaye/parlor@sha256:P0LABEL", "2026-10-13T05:00:00Z"),
 ])
-deploy("courier", "courier", 1, 0, "ghcr.io/cafaye/courier@sha256:C1LABEL")
+deploy("courier", "courier", 1, 0, "ghcr.io/anywaye/courier@sha256:C1LABEL")
 rs_list("courier", [
-    ("courier-oooooo", "courier", "OOOOOO", True, "ghcr.io/cafaye/courier:0.1.0", "2026-10-14T08:00:00Z"),
+    ("courier-oooooo", "courier", "OOOOOO", True, "ghcr.io/anywaye/courier:0.1.0", "2026-10-14T08:00:00Z"),
 ])
 print("standard RS store seeded")
 PY
@@ -11970,7 +11970,7 @@ check_rs_converge() {
   )" || ec=$?
   [ "$ec" -eq 0 ] || { printf 'converge exited %s\n%s' "$ec" "$out"; return 1; }
   case "$out" in
-    *'residual gateway/gateway-bbbbbb'*'(deployment gateway'*'ghcr.io/cafaye/gateway:0.1.0'*'2026-10-13T01:00:00Z'*) ;;
+    *'residual gateway/gateway-bbbbbb'*'(deployment gateway'*'ghcr.io/anywaye/gateway:0.1.0'*'2026-10-13T01:00:00Z'*) ;;
     *) printf 'the residual is not reported with its image, its age and its Deployment\n%s' "$out"; return 1 ;;
   esac
   case "$(cat "$MOCK_ROOT/scaled" 2>/dev/null || true)" in
@@ -12246,7 +12246,7 @@ deploy = {
     "spec": {"replicas": 1,
              "template": {"metadata": {"labels": {"app": "gateway"}},
                           "spec": {"containers": [{"name": "gateway",
-                                                   "image": "ghcr.io/cafaye/gateway@sha256:ONLYLABEL"}]}}},
+                                                   "image": "ghcr.io/anywaye/gateway@sha256:ONLYLABEL"}]}}},
     "status": {"replicas": 1, "updatedReplicas": 1, "availableReplicas": 1},
 }
 json.dump(deploy, open(os.path.join(root, "gateway", "deploy-gateway.json"), "w"), indent=2)
@@ -12259,7 +12259,7 @@ rs = {"metadata": {"name": "gateway-only", "namespace": "gateway",
                "template": {"metadata": {"labels": {"app": "gateway",
                                                     "pod-template-hash": "ONLYHASH"}},
                             "spec": {"containers": [{"name": "gateway",
-                                                     "image": "ghcr.io/cafaye/gateway@sha256:ONLYLABEL"}]}}}}
+                                                     "image": "ghcr.io/anywaye/gateway@sha256:ONLYLABEL"}]}}}}
 json.dump({"items": [rs]}, open(os.path.join(root, "gateway", "rs.json"), "w"), indent=2)
 PY
 run 'a box whose only live RS is current is converged to nothing' green \
@@ -12592,7 +12592,7 @@ run 'control: empty apps directory goes red (vacuity guard)' red \
 # observability ones never could.
 #
 # THE SHAPE. Each Application declares the cluster-scoped kinds its chart
-# creates in the `cafaye.io/cluster-resources` annotation (absent means none
+# creates in the `anywaye.io/cluster-resources` annotation (absent means none
 # — the service Applications and the pin below assert that). The AppProject
 # whitelists exactly the union, one {group, kind} per need with the reason
 # beside it. The checks:
@@ -12663,13 +12663,13 @@ for f in files:
     if not isinstance(doc, dict):
         problems.append(f"{f}: not a mapping")
         continue
-    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("cafaye.io/cluster-resources", "")
+    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("anywaye.io/cluster-resources", "")
     declared = set()
     if ann and ann.strip():
         for item in ann.split(","):
             item = item.strip()
             if item.count("/") != 1 or item.startswith("/") or item.endswith("/"):
-                problems.append(f"{f}: annotation cafaye.io/cluster-resources entry {item!r} is not 'group/kind'")
+                problems.append(f"{f}: annotation anywaye.io/cluster-resources entry {item!r} is not 'group/kind'")
                 continue
             group, kind = item.split("/")
             declared.add((group.strip(), kind.strip()))
@@ -12768,7 +12768,7 @@ for f in files:
     except yaml.YAMLError as e:
         problems.append(f"{f}: does not parse ({e})")
         continue
-    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("cafaye.io/cluster-resources", "")
+    ann = ((doc.get("metadata") or {}).get("annotations") or {}).get("anywaye.io/cluster-resources", "")
     declared = set()
     if ann and ann.strip():
         for item in ann.split(","):
@@ -12862,8 +12862,8 @@ path = sys.argv[1]
 docs = list(yaml.safe_load_all(open(path, encoding="utf-8")))
 doc = docs[0]
 ann = (doc.setdefault("metadata", {}).setdefault("annotations", {}))
-have = ann.get("cafaye.io/cluster-resources", "")
-ann["cafaye.io/cluster-resources"] = (have + ", admissionregistration.k8s.io/MutatingWebhookConfiguration").lstrip(", ")
+have = ann.get("anywaye.io/cluster-resources", "")
+ann["anywaye.io/cluster-resources"] = (have + ", admissionregistration.k8s.io/MutatingWebhookConfiguration").lstrip(", ")
 yaml.safe_dump_all(docs, open(path, "w", encoding="utf-8"), default_flow_style=False)
 PY
 if grep -q 'admissionregistration.k8s.io/MutatingWebhookConfiguration' "$fixture_apps_grown/grafana.yaml"; then
@@ -12904,25 +12904,25 @@ run 'control: empty apps directory goes red (vacuity guard)' red \
 # 28b. The substrate carries only what a customer runs
 # ===========================================================================
 #
-# THE BOUNDARY. Cafaye Box is the place a customer sets up their box to run
-# cafaye services from the pantry; Box Pro is the paid layer on top. The
+# THE BOUNDARY. Anywaye Box is the place a customer sets up their box to run
+# anywaye services from the pantry; Box Pro is the paid layer on top. The
 # substrate therefore carries the services a customer RUNS on their own
 # machine — identity, gateway, courier, parlor, plus the observability
-# three — and never the services Cafaye OPERATES, which the box reaches over
-# HTTPS: pantry at https://pantry.cafaye.com, the registry exchange at
-# KIT_SUBSTRATE_REGISTRY_URL (default https://registry.svc.cafaye.com), the
+# three — and never the services Anywaye OPERATES, which the box reaches over
+# HTTPS: pantry at https://pantry.anywaye.com, the registry exchange at
+# KIT_SUBSTRATE_REGISTRY_URL (default https://registry.svc.anywaye.com), the
 # control plane at KIT_SUBSTRATE_BOX_URL.
 #
 # THREE SERVICES, THREE REASONS, each in its own repository:
 #   pantry    proprietary by decision (OPS-D10): "the operated registry … it
-#             runs on Cafaye infrastructure. Nothing here may be run as a
+#             runs on Anywaye infrastructure. Nothing here may be run as a
 #             second, forked catalog."
 #   box       proprietary by decision (OPS-D2): "never part of … the Kit
 #             deployment substrate" — the operated control plane.
 #   keyholder BSL-1.1, so a licence check PASSES it — and it is excluded by
 #             the flow argument instead: the installer's step 5 exchanges a
 #             capability at KIT_SUBSTRATE_REGISTRY_URL, and keyholder IS that
-#             exchange (its chart serves host registry.svc.cafaye.com; its
+#             exchange (its chart serves host registry.svc.anywaye.com; its
 #             manifest requires box). A box running keyholder would exchange
 #             against itself, and would need its own GitHub App — exactly
 #             what the capability design exists to avoid.
@@ -12936,7 +12936,7 @@ run 'control: empty apps directory goes red (vacuity guard)' red \
 #       refused; anything else failed closed);
 #   (3) deployment role — a fleet Application whose service manifest declares
 #       a load-bearing dependency on a licence-refused (operated) service is
-#       itself operated-side. Keyed on the service's own cafaye.yml, not on
+#       itself operated-side. Keyed on the service's own anywaye.yml, not on
 #       a list in kit: the anchor set is derived from the licences, so no
 #       service name is typed here.
 # Plus (4): gateway's ROUTE_TABLE names the operated pantry origin for both
@@ -12965,7 +12965,7 @@ for f in sorted(os.listdir(apps_dir)):
     if stem in OPERATED:
         problems.append(
             f"{f}: names an operated service — pantry, box and keyholder are "
-            "Cafaye-operated and reached over HTTPS, never deployed to the box"
+            "Anywaye-operated and reached over HTTPS, never deployed to the box"
         )
         continue
     try:
@@ -13047,9 +13047,9 @@ cp "$MANIFESTS"/*.yaml "$fixture_apps_operated/"
 for svc in pantry keyholder box; do
   sed "s/courier/$svc/g" "$MANIFESTS/courier.yaml" >"$fixture_apps_operated/$svc.yaml"
 done
-if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/pantry' "$fixture_apps_operated/pantry.yaml" && \
-   grep -q 'repoURL: oci://ghcr.io/cafaye/charts/keyholder' "$fixture_apps_operated/keyholder.yaml" && \
-   grep -q 'repoURL: oci://ghcr.io/cafaye/charts/box' "$fixture_apps_operated/box.yaml"; then
+if grep -q 'repoURL: oci://ghcr.io/anywaye/charts/pantry' "$fixture_apps_operated/pantry.yaml" && \
+   grep -q 'repoURL: oci://ghcr.io/anywaye/charts/keyholder' "$fixture_apps_operated/keyholder.yaml" && \
+   grep -q 'repoURL: oci://ghcr.io/anywaye/charts/box' "$fixture_apps_operated/box.yaml"; then
   run 'control: the master shape (operated Applications present) fails the absence check' red \
     check_substrate_operated_absent "$fixture_apps_operated"
 else
@@ -13060,7 +13060,7 @@ fi
 # The licence half: BSL-1.1 with its Change Date and Change License is the
 # runnable shape; EITHER proprietary operated sentence is refused — box's
 # "never part of … the Kit deployment substrate" and pantry's "runs on
-# Cafaye infrastructure … never … a second, forked catalog", each matched on
+# Anywaye infrastructure … never … a second, forked catalog", each matched on
 # its wording rather than on the service's name. Anything else — or an
 # unreadable licence — fails closed. Only Applications pulling the fleet's
 # own registry are classified; the observability three are counted and
@@ -13075,7 +13075,7 @@ import sys
 import yaml
 
 apps_dir, fleet_dir = sys.argv[1:3]
-FLEET_ROOT = "oci://ghcr.io/cafaye/charts/"
+FLEET_ROOT = "oci://ghcr.io/anywaye/charts/"
 
 def classify(text):
     stripped = text.lstrip()
@@ -13085,7 +13085,7 @@ def classify(text):
     lowered = text.lower()
     if "never part of" in lowered and "deployment substrate" in lowered:
         return "refused"
-    if "runs on cafaye infrastructure" in lowered and \
+    if "runs on anywaye infrastructure" in lowered and \
             ("forked catalog" in lowered or "operated registry" in lowered):
         return "refused"
     return "unclassifiable"
@@ -13142,7 +13142,7 @@ for f, svc in fleet_apps:
         runnable.append(svc)
     elif verdict == "refused":
         problems.append(
-            f"{f}: the {svc} licence names it Cafaye-operated — a customer's box has no licence to run it"
+            f"{f}: the {svc} licence names it Anywaye-operated — a customer's box has no licence to run it"
         )
     else:
         problems.append(
@@ -13176,17 +13176,17 @@ Business Source License 1.1
 
 Parameters
 
-Licensor:             Cafaye
+Licensor:             Anywaye
 Additional Use Grant: None
 Change Date:          2030-10-10
 Change License:       Apache-2.0
 LICENSE
 done
 cat >"$fixture_fleet/box/LICENSE" <<'LICENSE'
-Copyright (c) 2026 Cafaye. All rights reserved.
+Copyright (c) 2026 Anywaye. All rights reserved.
 
-Box is Cafaye-proprietary, and it is closed by decision rather than by
-omission. It is the operated control plane. It runs on Cafaye
+Box is Anywaye-proprietary, and it is closed by decision rather than by
+omission. It is the operated control plane. It runs on Anywaye
 infrastructure, is never part of a customer source bundle, a customer
 install or the Kit deployment substrate, and no Box code may assume
 otherwise.
@@ -13194,10 +13194,10 @@ otherwise.
 There is no Business Source Licence in this file and no Change Date.
 LICENSE
 cat >"$fixture_fleet/pantry/LICENSE" <<'LICENSE'
-Copyright (c) 2026 Cafaye. All rights reserved.
+Copyright (c) 2026 Anywaye. All rights reserved.
 
-Pantry is Cafaye-proprietary, and it is closed by decision rather than by
-omission. It is the operated registry. It runs on Cafaye infrastructure.
+Pantry is Anywaye-proprietary, and it is closed by decision rather than by
+omission. It is the operated registry. It runs on Anywaye infrastructure.
 Nothing here may be run as a second, forked catalog.
 
 There is no Business Source Licence in this file and no Change Date.
@@ -13213,7 +13213,7 @@ if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
   rm -rf "$fixture_apps_pantry"
   mkdir -p "$fixture_apps_pantry"
   sed 's/courier/pantry/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_pantry/pantry.yaml"
-  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/pantry' "$fixture_apps_pantry/pantry.yaml"; then
+  if grep -q 'repoURL: oci://ghcr.io/anywaye/charts/pantry' "$fixture_apps_pantry/pantry.yaml"; then
     run 'control: pantry under its proprietary operated licence fails the licence check' red \
       check_substrate_licences "$fixture_apps_pantry" "$fixture_fleet"
   else
@@ -13225,7 +13225,7 @@ if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
   rm -rf "$fixture_apps_box"
   mkdir -p "$fixture_apps_box"
   sed 's/courier/box/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_box/box.yaml"
-  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/box' "$fixture_apps_box/box.yaml"; then
+  if grep -q 'repoURL: oci://ghcr.io/anywaye/charts/box' "$fixture_apps_box/box.yaml"; then
     run 'control: box under its proprietary substrate licence fails the licence check' red \
       check_substrate_licences "$fixture_apps_box" "$fixture_fleet"
   else
@@ -13234,14 +13234,14 @@ if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
   fi
   # RED CONTROL 3 — an unclassifiable licence fails closed.
   mkdir -p "$fixture_fleet/stranger"
-  printf 'Copyright (c) 2026 Cafaye. All rights reserved. Ask nicely.\n' >"$fixture_fleet/stranger/LICENSE"
+  printf 'Copyright (c) 2026 Anywaye. All rights reserved. Ask nicely.\n' >"$fixture_fleet/stranger/LICENSE"
   fixture_apps_stranger="$WORK/apps-stranger-licence"
   rm -rf "$fixture_apps_stranger"
   mkdir -p "$fixture_apps_stranger"
   sed 's/courier/stranger/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_stranger/stranger.yaml"
-  sed -i.bak 's|repoURL: oci://ghcr.io/cafaye/charts/stranger|repoURL: oci://ghcr.io/cafaye/charts/stranger|' "$fixture_apps_stranger/stranger.yaml"
+  sed -i.bak 's|repoURL: oci://ghcr.io/anywaye/charts/stranger|repoURL: oci://ghcr.io/anywaye/charts/stranger|' "$fixture_apps_stranger/stranger.yaml"
   rm -f "$fixture_apps_stranger/stranger.yaml.bak"
-  if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/stranger' "$fixture_apps_stranger/stranger.yaml"; then
+  if grep -q 'repoURL: oci://ghcr.io/anywaye/charts/stranger' "$fixture_apps_stranger/stranger.yaml"; then
     run 'control: an unclassifiable licence fails the licence check' red \
       check_substrate_licences "$fixture_apps_stranger" "$fixture_fleet"
   else
@@ -13256,7 +13256,7 @@ fi
 # The deployment-role half: a fleet Application whose service manifest
 # declares a load-bearing dependency on a licence-refused (operated)
 # service is itself operated-side. keyholder is the shape: BSL-1.1, so
-# the licence half passes it — but its cafaye.yml requires box, the
+# the licence half passes it — but its anywaye.yml requires box, the
 # operated control plane it exchanges capabilities against, so a box
 # running keyholder would exchange against itself. The anchor set is
 # DERIVED from the sibling licences (the same classifier as above), so no
@@ -13271,7 +13271,7 @@ import sys
 import yaml
 
 apps_dir, fleet_dir = sys.argv[1:3]
-FLEET_ROOT = "oci://ghcr.io/cafaye/charts/"
+FLEET_ROOT = "oci://ghcr.io/anywaye/charts/"
 
 def classify(text):
     stripped = text.lstrip()
@@ -13281,7 +13281,7 @@ def classify(text):
     lowered = text.lower()
     if "never part of" in lowered and "deployment substrate" in lowered:
         return "refused"
-    if "runs on cafaye infrastructure" in lowered and \
+    if "runs on anywaye infrastructure" in lowered and \
             ("forked catalog" in lowered or "operated registry" in lowered):
         return "refused"
     return "unclassifiable"
@@ -13327,18 +13327,18 @@ for f in sorted(os.listdir(apps_dir)):
         continue
     if svc is None:
         continue
-    manifest = os.path.join(fleet_dir, svc, "cafaye.yml")
+    manifest = os.path.join(fleet_dir, svc, "anywaye.yml")
     if not os.path.isfile(manifest):
-        notes.append(f"{svc}: no sibling cafaye.yml under {fleet_dir} — not asserted")
+        notes.append(f"{svc}: no sibling anywaye.yml under {fleet_dir} — not asserted")
         continue
     try:
         man = yaml.safe_load(open(manifest, encoding="utf-8"))
     except yaml.YAMLError as e:
-        problems.append(f"{f}: the {svc} cafaye.yml does not parse ({e}) — an unreadable manifest is not a permission")
+        problems.append(f"{f}: the {svc} anywaye.yml does not parse ({e}) — an unreadable manifest is not a permission")
         continue
     deps = (man.get("dependencies") or []) if isinstance(man, dict) else []
     if not isinstance(deps, list):
-        problems.append(f"{f}: the {svc} cafaye.yml dependencies is not a list — an unreadable manifest is not a permission")
+        problems.append(f"{f}: the {svc} anywaye.yml dependencies is not a list — an unreadable manifest is not a permission")
         continue
     graded.append(svc)
     for dep in deps:
@@ -13347,7 +13347,7 @@ for f in sorted(os.listdir(apps_dir)):
         name = dep.get("name")
         if dep.get("required", True) and name in refused:
             problems.append(
-                f"{f}: {svc} requires {name}, which its licence names Cafaye-operated — "
+                f"{f}: {svc} requires {name}, which its licence names Anywaye-operated — "
                 "a service that needs the operated plane at runtime is operated-side, not box-run"
             )
 
@@ -13373,7 +13373,7 @@ fixture_apps_ledger="$WORK/apps-ledger-role"
 rm -rf "$fixture_apps_ledger"
 mkdir -p "$fixture_apps_ledger"
 sed 's/courier/ledger/g' "$MANIFESTS/courier.yaml" >"$fixture_apps_ledger/ledger.yaml"
-cat >"$fixture_fleet/ledger/cafaye.yml" <<'YAML'
+cat >"$fixture_fleet/ledger/anywaye.yml" <<'YAML'
 name: ledger
 description: A BSL service that requires the operated control plane.
 language: go
@@ -13383,14 +13383,14 @@ dependencies:
     version: ^0.1.0
     required: true
 repository:
-  url: git@github.com:cafaye/ledger.git
+  url: git@github.com:anywaye/ledger.git
   visibility: private
 owner:
   team: ledger
-  contact: ledger@cafaye.com
+  contact: ledger@anywaye.com
 YAML
-if grep -q 'repoURL: oci://ghcr.io/cafaye/charts/ledger' "$fixture_apps_ledger/ledger.yaml" && \
-   grep -q 'name: box' "$fixture_fleet/ledger/cafaye.yml" && \
+if grep -q 'repoURL: oci://ghcr.io/anywaye/charts/ledger' "$fixture_apps_ledger/ledger.yaml" && \
+   grep -q 'name: box' "$fixture_fleet/ledger/anywaye.yml" && \
    grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE"; then
   run 'control: a BSL service requiring an operated service fails the deployment-role check' red \
     check_substrate_deployment_role "$fixture_apps_ledger" "$fixture_fleet"
@@ -13404,7 +13404,7 @@ fi
 # (http://pantry*) is the shape that produced the live 503 — a route at an
 # address no box serves. An absent gateway checkout is a note, not a
 # verdict (the §11b precedent); a present checkout is graded.
-OPERATED_PANTRY_ORIGIN="https://pantry.cafaye.com"
+OPERATED_PANTRY_ORIGIN="https://pantry.anywaye.com"
 check_gateway_operated_pantry() {
   "$PY" - "$1" "$2" <<'PY'
 import json
@@ -13441,15 +13441,15 @@ for prefix in ("/v1/pantry", "/v1/pantry-writes"):
         problems.append(f"{prefix} is not a routed entry — the published pantry surface moved without its origin")
         continue
     base = entry.get("baseUrl", "")
-    if base != "https://pantry.cafaye.com":
+    if base != "https://pantry.anywaye.com":
         problems.append(
-            f"{prefix} names {base!r}, want the operated origin https://pantry.cafaye.com — "
+            f"{prefix} names {base!r}, want the operated origin https://pantry.anywaye.com — "
             "an in-cluster pantry is the live 503 again"
         )
 if problems:
     print("; ".join(problems))
     sys.exit(1)
-print("both pantry routes name the operated origin https://pantry.cafaye.com, from the one ROUTE_TABLE value")
+print("both pantry routes name the operated origin https://pantry.anywaye.com, from the one ROUTE_TABLE value")
 PY
 }
 
@@ -13568,7 +13568,7 @@ lc_cycle() {
   # plane's chain with the openssl BINARY — and through the resolved `timeout`
   # binary, so a shell function cannot intercept it. The fake verifies, so the
   # preflight reaches step 1; without it this cycle would depend on the real
-  # cafaye hosts and a real trust store, which is neither offline nor
+  # anywaye hosts and a real trust store, which is neither offline nor
   # deterministic.
   mkdir -p "$dir/bin"
   {
@@ -13585,7 +13585,7 @@ lc_cycle() {
       export PATH="$dir/bin:$PATH"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
       export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
-      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@anywaye.test'
       export HEADLESS=1
       export DRY_RUN=0
       export LC_NO_NODE="$no_node"
@@ -13698,7 +13698,7 @@ lc_unsets_the_input() {
       export MOCK_ROOT="$dir"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
       export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
-      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@anywaye.test'
       export HEADLESS=1
       unset KIT_SUBSTRATE_KUBECONFIG
       # shellcheck source=/dev/null
@@ -13742,7 +13742,7 @@ lc_stdout_is_jsonl() {
       export MOCK_ROOT="$dir"
       export KIT_SUBSTRATE_RECEIPT="$dir/receipt.json"
       export KIT_SUBSTRATE_DATABASES='identity,gateway,courier,parlor,billing'
-      export KIT_SUBSTRATE_ACME_EMAIL='dev@cafaye.test'
+      export KIT_SUBSTRATE_ACME_EMAIL='dev@anywaye.test'
       export KIT_SUBSTRATE_KUBECONFIG="$3"
       export HEADLESS=1
       export DRY_RUN=0
@@ -13882,20 +13882,20 @@ run 'the installer has no k3d dependency' green installer_has_no_k3d "$SUBSTRATE
 # on port 80, but cert-manager's self check failed:
 #
 #   Waiting for HTTP-01 challenge propagation: failed to perform self check
-#     GET request 'http://api.cafaye.com/.well-known/acme-challenge/...':
-#     Get "http://api.cafaye.com/...": dial tcp: lookup api.cafaye.com on
+#     GET request 'http://api.anywaye.com/.well-known/acme-challenge/...':
+#     Get "http://api.anywaye.com/...": dial tcp: lookup api.anywaye.com on
 #     10.43.0.10:53: no such host
 #
 # 10.43.0.10 is k3s's CoreDNS. The box's own resolver could not either:
 #
-#   $ getent hosts api.cafaye.com   (no output)
-#   $ dig +short @1.1.1.1 api.cafaye.com
+#   $ getent hosts api.anywaye.com   (no output)
+#   $ dig +short @1.1.1.1 api.anywaye.com
 #   169.58.108.209
 #   $ resolvectl status | grep 'Current DNS'
 #   Current DNS Server: 209.126.15.53   (Contabo)
 #
 # Contabo's resolver held a stale NXDOMAIN for minutes after 1.1.1.1 answered.
-# The fix: /etc/systemd/resolved.conf.d/99-cafaye.conf with DNS=1.1.1.1 8.8.8.8,
+# The fix: /etc/systemd/resolved.conf.d/99-anywaye.conf with DNS=1.1.1.1 8.8.8.8,
 # then a CoreDNS restart, then recreating the challenges — both Certificates
 # went True.
 #
@@ -13906,7 +13906,7 @@ run 'the installer has no k3d dependency' green installer_has_no_k3d "$SUBSTRATE
 #   * resolve through the cluster's DNS as well as the node's, reporting as
 #     resolving only when BOTH answer; a split is a pending condition with its
 #     own sentence (node-resolves/cluster-does-not is the live-box shape);
-#   * either write a public resolver (99-cafaye.conf) when the box serves
+#   * either write a public resolver (99-anywaye.conf) when the box serves
 #     public names, or detect and name the stale answer — shape 1 chosen here
 #     because it fixes the provider dependency at the substrate rather than
 #     reporting it for the operator to fix;
@@ -14228,7 +14228,7 @@ run 'control: a fixture where CoreDNS answers and node does not is not reported 
 # trimmed OS trust store — /etc/ssl/certs/ca-certificates.crt held 122
 # certificates and not one major root (no ISRG Root X1, no DigiCert Global
 # Root) — so `cafe boxd` (a Go client, reading the SYSTEM store) could not
-# verify https://box.svc.cafaye.com:8443 and failed with `x509: certificate
+# verify https://box.svc.anywaye.com:8443 and failed with `x509: certificate
 # signed by unknown authority`, while a Mac client with a whole store could.
 # The remedy that worked was one command: `apt-get install --reinstall
 # ca-certificates && update-ca-certificates --fresh`.
@@ -14419,8 +14419,8 @@ trust_reset_logs() {
   : >"$WORK/trust-child-curl.log"
 }
 
-TRUST_BOX_URL="https://box.svc.cafaye.test"
-TRUST_REGISTRY_URL="https://registry.svc.cafaye.test"
+TRUST_BOX_URL="https://box.svc.anywaye.test"
+TRUST_REGISTRY_URL="https://registry.svc.anywaye.test"
 TRUST_CHILD_ARGS=""
 TRUST_DRY_RUN=0
 TRUST_HEADLESS=0
@@ -14436,26 +14436,26 @@ check_trust_verified() {
   : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=0 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -eq 0 ] || { printf 'a verifiable box was refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }
   case "$out" in
-    *'TLS chain verified against the system trust store: https://box.svc.cafaye.test'*) ;;
+    *'TLS chain verified against the system trust store: https://box.svc.anywaye.test'*) ;;
     *) printf 'the control-plane origin is not reported verified\n%s\n' "$out"; return 1 ;;
   esac
   case "$out" in
-    *'TLS chain verified against the system trust store: https://registry.svc.cafaye.test'*) ;;
+    *'TLS chain verified against the system trust store: https://registry.svc.anywaye.test'*) ;;
     *) printf 'the registry origin is not reported verified\n%s\n' "$out"; return 1 ;;
   esac
   [ -s "$olog" ] || { printf 'openssl was never invoked — the check is not a check\n'; return 1; }
   case "$(cat "$olog")" in
-    *"-connect box.svc.cafaye.test:443 -servername box.svc.cafaye.test"*) ;;
+    *"-connect box.svc.anywaye.test:443 -servername box.svc.anywaye.test"*) ;;
     *) printf 'openssl was not asked to verify the control-plane origin\n%s\n' "$(cat "$olog")"; return 1 ;;
   esac
   case "$(cat "$olog")" in
-    *"-connect registry.svc.cafaye.test:443 -servername registry.svc.cafaye.test"*) ;;
+    *"-connect registry.svc.anywaye.test:443 -servername registry.svc.anywaye.test"*) ;;
     *) printf 'openssl was not asked to verify the registry origin\n%s\n' "$(cat "$olog")"; return 1 ;;
   esac
   [ ! -s "$alog" ] || { printf 'the remedy ran on a box that verified\n'; return 1; }
@@ -14472,26 +14472,26 @@ check_trust_remedied() {
   rm -f "$marker"; : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
-    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" FAKE_TRUST_MARKER="$marker" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.anywaye.test" FAKE_TRUST_MARKER="$marker" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=0 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -eq 0 ] || { printf 'a box fixable by a refresh was refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }
   case "$out" in
-    *'TLS chain NOT verifiable: https://box.svc.cafaye.test'*) ;;
+    *'TLS chain NOT verifiable: https://box.svc.anywaye.test'*) ;;
     *) printf 'the failing chain was not reported\n%s\n' "$out"; return 1 ;;
   esac
   case "$out" in
-    *'trust store refreshed: https://box.svc.cafaye.test now verifies'*) ;;
+    *'trust store refreshed: https://box.svc.anywaye.test now verifies'*) ;;
     *) printf 'the refresh was not reported as fixing the chain\n%s\n' "$out"; return 1 ;;
   esac
   # Both openSSL calls for the failing origin: the one that failed, and the
   # RE-CHECK. A remedy without a re-check is a hope, and this is the assertion
   # that would catch it.
-  [ "$(grep -c 'box.svc.cafaye.test' "$olog")" -ge 2 ] || {
+  [ "$(grep -c 'box.svc.anywaye.test' "$olog")" -ge 2 ] || {
     printf 'the failing origin was verified only %s time(s) — the remedy was not re-checked\n' \
-      "$(grep -c 'box.svc.cafaye.test' "$olog")"
+      "$(grep -c 'box.svc.anywaye.test' "$olog")"
     return 1
   }
   [ -s "$alog" ] || { printf 'the remedy was never attempted\n'; return 1; }
@@ -14509,14 +14509,14 @@ check_trust_refused() {
   : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
-    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.anywaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=0 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -ne 0 ] || { printf 'an unverifiable chain did not refuse\n%s\n' "$out"; return 1; }
   case "$out" in
-    *'https://box.svc.cafaye.test'*) ;;
+    *'https://box.svc.anywaye.test'*) ;;
     *) printf 'the refusal does not name the failing origin\n%s\n' "$out"; return 1 ;;
   esac
   case "$out" in
@@ -14527,7 +14527,7 @@ check_trust_refused() {
   # The registry origin is never reached: a refusal STOPS the install, and the
   # second origin being unchecked is what that means.
   case "$(cat "$olog")" in
-    *registry.svc.cafaye.test*) printf 'the run continued to the registry origin after refusing\n'; return 1 ;;
+    *registry.svc.anywaye.test*) printf 'the run continued to the registry origin after refusing\n'; return 1 ;;
   esac
   printf 'an unfixable chain refuses, naming the origin and the verification error\n'
 }
@@ -14546,14 +14546,14 @@ check_trust_unreachable() {
   : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
-    FAKE_OPENSSL_UNREACHABLE_HOST="box.svc.cafaye.test" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    FAKE_OPENSSL_UNREACHABLE_HOST="box.svc.anywaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=0 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -ne 0 ] || { printf 'an origin that never answered did not refuse\n%s\n' "$out"; return 1; }
   case "$out" in
-    *'https://box.svc.cafaye.test'*) ;;
+    *'https://box.svc.anywaye.test'*) ;;
     *) printf 'the refusal does not name the failing origin\n%s\n' "$out"; return 1 ;;
   esac
   case "$out" in
@@ -14580,9 +14580,9 @@ check_trust_remedy_failure() {
   : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" FAKE_APT_FAIL_ON="install" \
-    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.anywaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=0 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -ne 0 ] || { printf 'a failed remedy and a still-broken chain did not refuse\n%s\n' "$out"; return 1; }
@@ -14613,7 +14613,7 @@ check_trust_preflight() {
       out="${out#*$'\n'}"
       [ "$ec" -eq 0 ] || { printf 'preflight refused a verifiable box (exit %s):\n%s\n' "$ec" "$out"; return 1; }
       case "$(cat "$olog")" in
-        *"-connect box.svc.cafaye.test:443"*) ;;
+        *"-connect box.svc.anywaye.test:443"*) ;;
         *) printf 'preflight did not open the control-plane origin\n%s\n' "$(cat "$olog")"; return 1 ;;
       esac
       case "$(cat "$clog")" in
@@ -14623,13 +14623,13 @@ check_trust_preflight() {
       printf 'preflight verifies both origins and continues to the ghcr.io probe\n'
       ;;
     stops)
-      TRUST_CHILD_ARGS='export FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test"'
+      TRUST_CHILD_ARGS='export FAKE_OPENSSL_FAIL_HOST="box.svc.anywaye.test"'
       out="$(trust_run "$script" 'preflight')"
       ec="${out%%$'\n'*}"
       out="${out#*$'\n'}"
       [ "$ec" -ne 0 ] || { printf 'preflight continued past an unverifiable origin\n%s\n' "$out"; return 1; }
       case "$out" in
-        *'cannot verify the TLS chain of https://box.svc.cafaye.test'*) ;;
+        *'cannot verify the TLS chain of https://box.svc.anywaye.test'*) ;;
         *) printf 'preflight did not refuse naming the origin\n%s\n' "$out"; return 1 ;;
       esac
       # Nothing is created past a refusal, and ghcr.io is the next probe the
@@ -14660,9 +14660,9 @@ check_trust_dry_run() {
   : >"$olog"; : >"$alog"
   out="$(env PATH="$trust_fakebin:$PATH" \
     FAKE_OPENSSL_LOG="$olog" FAKE_APT_LOG="$alog" \
-    FAKE_OPENSSL_FAIL_HOST="box.svc.cafaye.test" \
-    KIT_SUBSTRATE_BOX_URL="https://box.svc.cafaye.test" \
-    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.cafaye.test" \
+    FAKE_OPENSSL_FAIL_HOST="box.svc.anywaye.test" \
+    KIT_SUBSTRATE_BOX_URL="https://box.svc.anywaye.test" \
+    KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test" \
     DRY_RUN=1 HEADLESS=0 \
     bash -c '. "$1"; kit_substrate_trust_preflight' bash "$src" 2>&1)" || ec=$?
   [ "$ec" -eq 0 ] || { printf 'DRY_RUN refused (exit %s):\n%s\n' "$ec" "$out"; return 1; }

@@ -15,8 +15,8 @@
 // alone leaves the other to fail.
 //
 // WHAT WAS ACTUALLY WRONG, because the reported diagnosis was wrong and the
-// wrong one is worth recording. The failure in cafaye/site run 37236386666 and
-// cafaye/parlor run 37230458669 was
+// wrong one is worth recording. The failure in anywaye/site run 37236386666 and
+// anywaye/parlor run 37230458669 was
 //
 //   Error: Error while loading rule '@typescript-eslint/await-thenable':
 //   You have used a rule which requires type information, but don't have
@@ -45,7 +45,7 @@
 // be constructed; the whole `recommendedTypeChecked` set is affected, and the
 // run dies at exit 2 before reporting a single finding.
 //
-// Both cafaye/site and cafaye/parlor carry three `.mts` files each at the repo
+// Both anywaye/site and anywaye/parlor carry three `.mts` files each at the repo
 // root — vitest.config.mts, vite.config.mts, vite.node.config.mts — which is
 // why this was never a marginal case.
 //

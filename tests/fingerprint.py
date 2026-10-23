@@ -27,7 +27,7 @@ THE SCHEMA, and why each field is in it
   schema    int, bumped BY HAND. A record written under a different schema is
             REFUSED BY NAME rather than parsed under rules it was not written
             under. Same rule, same reason as `cafe lock`'s `LockVersion`
-            (cafaye/caf/internal/lock/doc.go): "an older lock says so by name
+            (anywaye/caf/internal/lock/doc.go): "an older lock says so by name
             rather than being parsed under rules it was not written under."
   tool      kit's VERSION file content at write time. A record from another kit
             build is refused outright, because the check it recorded may not be
@@ -46,7 +46,7 @@ THE SCHEMA, and why each field is in it
 WHY SHA-256 OF BYTES, AND WHY THAT IS NOT A SECOND IMPLEMENTATION
 
   `cafe lock` already made this exact decision in this fleet and wrote down why
-  (cafaye/caf/internal/lock/doc.go, "The hash is of the bytes, and the lock is
+  (anywaye/caf/internal/lock/doc.go, "The hash is of the bytes, and the lock is
   not about git"): no git blob ids, no index hashes, because a pin that can only
   be verified inside a checkout cannot be verified in the tarball a release
   ships or in a Docker build context. This file uses `hashlib.sha256` — the

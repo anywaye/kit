@@ -47,13 +47,13 @@ directories:
         # for a whole subtree (`schemas/telemetry/**`). A bare directory name
         # matches no file and vendir fails loudly — see the README.
         includePaths:
-          - schemas/cafaye.manifest.schema.json
+          - schemas/anywaye.manifest.schema.json
         # TODO(3): the upstream directory to strip. This is what lets a document
         # live at a different path in your repository than in core, which is the
         # courier asymmetry and the reason this field is not optional.
         newRootPath: schemas
         git:
-          url: https://github.com/cafaye/core.git
+          url: https://github.com/anywaye/core.git
           # TODO(1): a semver tag. `master` is a moving target that produces a
           # PR nobody reads; a tag is the reviewable unit, and semver gives the
           # additive-vs-breaking axis for free.

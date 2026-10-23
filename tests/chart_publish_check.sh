@@ -10,7 +10,7 @@
 # the chart name/version are not inputs, and the pull_request refusal is
 # present. Plus its RED CONTROLS under the same assertions: a fixture whose
 # repoURL is the registry root (the shape that never synced — measured:
-# `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403, because Argo
+# `HEAD https://ghcr.io/v2/anywaye/charts/manifests/0.1.0` → 403, because Argo
 # resolves an OCI revision against repoURL itself and the registry root is not
 # an artifact), a fixture whose repoURL path disagrees with `chart:`, a
 # fixture whose registry prefix drifted, and a fixture with `push`'s default
@@ -105,9 +105,9 @@ elif push.get("default") is not False:
 # source's revision against repoURL ITSELF — the artifact it HEADs is
 # <repoURL>:<targetRevision> — so a repoURL that is the registry root asks for
 # an artifact named after nothing. Measured on the fleet's first end-to-end
-# install: `HEAD https://ghcr.io/v2/cafaye/charts/manifests/0.1.0` → 403 and
+# install: `HEAD https://ghcr.io/v2/anywaye/charts/manifests/0.1.0` → 403 and
 # every Application stuck un-synced, because the published packages are
-# `cafaye/charts/<name>` and the root is not an artifact. The push appends the
+# `anywaye/charts/<name>` and the root is not an artifact. The push appends the
 # chart name (`helm push "$PACKAGE" "$REGISTRY"`), so the pull must name it too.
 # Observability Applications (alloy, grafana, loki, prometheus) point at
 # upstream chart repositories by design and are skipped here — asserting them
@@ -214,7 +214,7 @@ mutate_gateway() {
 # sync 403s: this is precisely the defect the check exists to catch.
 root_fixture="$TMP/chart-publish-root"
 mutate_gateway "$root_fixture" \
-  's|^\( *\)repoURL: oci://ghcr.io/cafaye/charts/gateway$|\1repoURL: oci://ghcr.io/cafaye/charts|'
+  's|^\( *\)repoURL: oci://ghcr.io/anywaye/charts/gateway$|\1repoURL: oci://ghcr.io/anywaye/charts|'
 if "$PY" "$checker" "$workflow" "$root_fixture" >/dev/null 2>&1; then
   printf 'chart publish: control (a) the registry-root control did not go red — a repoURL that is the registry root is not being caught\n'
   exit 1
@@ -225,7 +225,7 @@ fi
 # one and leaves the other, so exactly one property is violated.
 disagree_fixture="$TMP/chart-publish-disagree"
 mutate_gateway "$disagree_fixture" \
-  's|^\( *\)repoURL: oci://ghcr.io/cafaye/charts/gateway$|\1repoURL: oci://ghcr.io/cafaye/charts/gateway-drifted|'
+  's|^\( *\)repoURL: oci://ghcr.io/anywaye/charts/gateway$|\1repoURL: oci://ghcr.io/anywaye/charts/gateway-drifted|'
 if "$PY" "$checker" "$workflow" "$disagree_fixture" >/dev/null 2>&1; then
   printf 'chart publish: control (b) the path/name control did not go red — a repoURL path that disagrees with `chart:` is not being caught\n'
   exit 1
@@ -237,7 +237,7 @@ fi
 # a check that can catch one but not the other is a check with a blind side.
 drift_fixture="$TMP/chart-publish-drift"
 mutate_gateway "$drift_fixture" \
-  's|oci://ghcr.io/cafaye/charts/gateway|oci://ghcr.io/cafaye/charts-drifted/gateway|'
+  's|oci://ghcr.io/anywaye/charts/gateway|oci://ghcr.io/anywaye/charts-drifted/gateway|'
 if "$PY" "$checker" "$workflow" "$drift_fixture" >/dev/null 2>&1; then
   printf 'chart publish: control (c) the drifted-registry control did not go red — the registry comparison is not measuring what it claims\n'
   exit 1

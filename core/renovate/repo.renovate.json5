@@ -13,6 +13,6 @@
   // the pin without re-copying the bytes. Starting disabled and being switched on
   // by the PR that adds the lockfile is the ordering that cannot produce that.
   $schema: 'https://docs.renovatebot.com/renovate-schema.json',
-  extends: ['local>cafaye/renovate-config'],
+  extends: ['local>anywaye/renovate-config'],
   enabled: false,
 }

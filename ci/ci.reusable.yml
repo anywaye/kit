@@ -15,9 +15,9 @@
 # the executable CI is measured against, and the day this file stops being
 # that, the checks move with it.
 ---
-# kit — the CI path every cafaye service repo runs.
+# kit — the CI path every anywaye service repo runs.
 #
-# Consumers do not copy this file; they call it (repo: github.com/cafaye/<svc>):
+# Consumers do not copy this file; they call it (repo: github.com/anywaye/<svc>):
 #
 #   # ci/ci.yml
 #   name: ci
@@ -26,7 +26,7 @@
 #     contents: read
 #   jobs:
 #     ci:
-#       uses: cafaye/kit/ci/ci.reusable.yml@master
+#       uses: anywaye/kit/ci/ci.reusable.yml@master
 #       with:
 #         language: go
 #         working-dir: .
@@ -64,7 +64,7 @@
 #     file pushes, so a token left on disk after a checkout is a credential that
 #     outlives the job for no reason, and every job here runs `upload-artifact`
 #     — which is the combination zizmor's `artipacked` audit exists to catch.
-#   - Every step that can run offline does. Nothing here reaches a cafaye
+#   - Every step that can run offline does. Nothing here reaches a anywaye
 #     service, so this workflow needs no secrets of its own and consumes none
 #     from the caller.
 name: ci
@@ -103,20 +103,20 @@ on:
       # workflow file itself was fetched at.
       #
       # These are two different things and the difference is the whole reason
-      # this input exists. `uses: cafaye/kit/ci/ci.reusable.yml@X`
+      # this input exists. `uses: anywaye/kit/ci/ci.reusable.yml@X`
       # pins the WORKFLOW at X. GitHub does not hand a called workflow its own
       # ref — `github.workflow_ref` inside a reusable workflow is the CALLER's
       # workflow, and `GITHUB_ACTION_PATH` is documented as composite-action-only
       # — so the configs have to be fetched by a name, and the name has to be an
       # input. Defaulting it to `master` matches every caller in the fleet,
-      # which is written `uses: cafaye/kit/...@master`.
+      # which is written `uses: anywaye/kit/...@master`.
       #
       # THIS PARAGRAPH WAS RIGHT AND EVERY `run:` BODY CONTRADICTED IT. The
       # `zizmor` and `telemetry` jobs reached into kit's tree with
       # `${GITHUB_ACTION_PATH}` — the variable this comment names as unavailable —
       # and did so under `set -euo pipefail`, where an unset variable is not an
       # empty path but a fatal on the step's first line. Measured in
-      # `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669. The
+      # `anywaye/site` run 37236386666 and `anywaye/parlor` run 37230458669. The
       # reasoning above was applied to the lint configs and not to those run:
       # bodies, which is the whole of it: a rule written down once, obeyed in
       # one place, and contradicted in another by nobody reading the other
@@ -214,7 +214,7 @@ on:
           Command the Ruby job runs BEFORE its test step, to put the database
           in the state the suite expects. Empty ('') by default, so a repository
           whose suite needs no preparation is unaffected.
-          MEASURED, on cafaye/box — the first Rails caller of this job: the job
+          MEASURED, on anywaye/box — the first Rails caller of this job: the job
           provisions a Postgres service (the service block below) and the suite
           then failed with 'Database not found: box_test', because a fresh
           Postgres has no database in it. box's own gate runs
@@ -321,7 +321,7 @@ on:
       # and a red build is the assertion being wrong. The opt-in IS the gate —
       # a repo that has not adopted `tenancy.yml` leaves the input at 'false'
       # and is not graded, which is the whole of "without turning the fleet red".
-      # Measured 2026-10-06 across the sixteen repositories under cafaye/:
+      # Measured 2026-10-06 across the sixteen repositories under anywaye/:
       # exactly one (identity) is green today and can turn this on now.
       #
       # THE FINDINGS LAND ON THE REPOSITORY THAT CAN FIX THEM. That is the
@@ -329,7 +329,7 @@ on:
       # repositories: MD36's first reason (a finding nobody in this repository
       # can fix is not this gate's finding) does not apply to a step whose
       # subject is the caller, and the alternative — thirteen hand-rolled
-      # fetches of cafaye/core, each pinning its own ref — is the drift this
+      # fetches of anywaye/core, each pinning its own ref — is the drift this
       # repository exists to prevent. The fetch is written once and the pin is
       # one input, below.
       tenancy:
@@ -384,14 +384,14 @@ permissions:
 # The called workflow's request is refused, or cancels the holder, and the `uses:`
 # job produces NO job, NO check-run and NO log line.
 #
-# The signature is the reason it survived. In cafaye/parlor, run 37230458669:
+# The signature is the reason it survived. In anywaye/parlor, run 37230458669:
 #
-#     $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+#     $ gh api repos/anywaye/parlor/actions/runs/37230458669/jobs \
 #         --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
 #     typecheck + build | completed/success
 #     bin/prime         | completed/success
 #
-#     $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+#     $ gh api repos/anywaye/parlor/actions/runs/37230458669 --jq '.conclusion'
 #     failure
 #
 # Both jobs green, the run red, `gh run view --log-failed` empty — because no step
@@ -762,7 +762,7 @@ jobs:
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
-          repository: cafaye/kit
+          repository: anywaye/kit
           ref: ${{ inputs.kit-lint-ref }}
           path: ${{ env.KIT_LINT_DIR }}
           sparse-checkout: lint
@@ -1022,7 +1022,7 @@ jobs:
     #   No such file or directory
     #
     # The `none` job above has carried this service since it was written; the
-    # ruby job never did, because until `cafaye/box` adopted it every Ruby
+    # ruby job never did, because until `anywaye/box` adopted it every Ruby
     # repository in the fleet was Elixir or Node (`courier` is Elixir,
     # `parlor` is Node) and no caller needed it. box's own gate provisions its
     # own Postgres — which is why `bin/ci` is green while this job was red on a
@@ -1075,7 +1075,7 @@ jobs:
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
-          repository: cafaye/kit
+          repository: anywaye/kit
           ref: ${{ inputs.kit-lint-ref }}
           path: ${{ env.KIT_LINT_DIR }}
           sparse-checkout: lint
@@ -1398,7 +1398,7 @@ jobs:
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
-          repository: cafaye/kit
+          repository: anywaye/kit
           ref: ${{ inputs.kit-lint-ref }}
           path: ${{ env.KIT_LINT_DIR }}
           sparse-checkout: lint
@@ -1704,7 +1704,7 @@ jobs:
       #
       # It is a guard rather than a quirk — the action cleans up after itself and
       # persists credentials relative to the workspace — and NO input relaxes it.
-      # Measured in `cafaye/parlor` run 37249271580, job `ci (kit, node) /
+      # Measured in `anywaye/parlor` run 37249271580, job `ci (kit, node) /
       # secrets`:
       #
       #   ##[error]Repository path '/home/runner/work/_temp/kit' is not under
@@ -1722,7 +1722,7 @@ jobs:
       # any gate step that walks the tree. `$RUNNER_TEMP` is per-job scratch
       # space, emptied when the job ends — the lifetime this file needs.
       #
-      # CREDENTIALS. `cafaye/kit` is PUBLIC, so this clone needs no token — which
+      # CREDENTIALS. `anywaye/kit` is PUBLIC, so this clone needs no token — which
       # is a stronger position than the `persist-credentials: false` the action
       # was given, because nothing is written to `.git/config` to be cleaned up.
       # `GIT_TERMINAL_PROMPT=0` is set so a future private repo fails instead of
@@ -1736,7 +1736,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           KIT_TREE_DIR="$RUNNER_TEMP/kit"
           git init --quiet "$KIT_TREE_DIR"
-          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
+          git -C "$KIT_TREE_DIR" remote add origin https://github.com/anywaye/kit.git
           git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
           git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
           git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
@@ -1838,7 +1838,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           KIT_TREE_DIR="$RUNNER_TEMP/kit"
           git init --quiet "$KIT_TREE_DIR"
-          git -C "$KIT_TREE_DIR" remote add origin https://github.com/cafaye/kit.git
+          git -C "$KIT_TREE_DIR" remote add origin https://github.com/anywaye/kit.git
           git -C "$KIT_TREE_DIR" sparse-checkout set --no-cone "$KIT_SPARSE"
           git -C "$KIT_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$KIT_REF"
           git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
@@ -1872,7 +1872,7 @@ jobs:
   # finding lands on the repository that owns `tenancy.yml` and can fix it,
   # which is the finding MD36's first reason excludes (a finding nobody in this
   # repository can fix). The alternative — thirteen adopting repositories each
-  # hand-rolling a fetch of cafaye/core and each pinning its own ref — is the
+  # hand-rolling a fetch of anywaye/core and each pinning its own ref — is the
   # drift this repository exists to prevent, and it is strictly worse than the
   # one fetch and one pin this job makes.
   #
@@ -1914,7 +1914,7 @@ jobs:
       # `$RUNNER_TEMP` scratch, a pin that is an input.
       #
       # WHAT IT SPARSE-CHECKS OUT, and why `harness` and not the whole tree: the
-      # wrapper resolves `tenancy_check.py` and `cafaye_contract.py` beside
+      # wrapper resolves `tenancy_check.py` and `anywaye_contract.py` beside
       # itself, and the schema's constraints are re-implemented in the Python
       # (the file is stdlib-only), so `harness/` is the whole of what this job
       # reads. A full clone of core on every opt-in push is a cost paid for
@@ -1928,7 +1928,7 @@ jobs:
           export GIT_TERMINAL_PROMPT=0
           CORE_TREE_DIR="$RUNNER_TEMP/core"
           git init --quiet "$CORE_TREE_DIR"
-          git -C "$CORE_TREE_DIR" remote add origin https://github.com/cafaye/core.git
+          git -C "$CORE_TREE_DIR" remote add origin https://github.com/anywaye/core.git
           git -C "$CORE_TREE_DIR" sparse-checkout set --no-cone "$CORE_SPARSE"
           git -C "$CORE_TREE_DIR" fetch --depth 1 --filter=blob:none --quiet origin "$CORE_REF"
           git -C "$CORE_TREE_DIR" checkout --quiet FETCH_HEAD

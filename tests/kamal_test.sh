@@ -110,7 +110,7 @@ with_secrets() {
 # ---------------------------------------------------------------------------
 SERVICE_NAME=kitprobe
 REPO=kitprobe
-ORG=cafaye
+ORG=anywaye
 DOMAIN=kitprobe.invalid
 WEB_HOST=198.51.100.7
 

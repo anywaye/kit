@@ -1,7 +1,7 @@
 ---
 # vendir.yml for `muse` — python.
 #
-# Proven by running vendir 0.46.2 against cafaye/core: the file this produces is
+# Proven by running vendir 0.46.2 against anywaye/core: the file this produces is
 # byte-identical (sha256) to the copy muse has committed today, at
 # src/muse/schemas/telemetry/traces.schema.json.
 #
@@ -38,5 +38,5 @@ directories:
           - schemas/telemetry/traces.schema.json
         newRootPath: schemas/telemetry
         git:
-          url: https://github.com/cafaye/core.git
+          url: https://github.com/anywaye/core.git
           ref: master

@@ -99,8 +99,8 @@ LAST_SERVICE="billing"
 # point of the boundary is that it holds while every password in the cluster is
 # public, and a test that read the values from a git-ignored .env would refuse
 # to run on a fresh clone.
-PGADMIN=cafaye
-PGADMIN_DB=cafaye_platform
+PGADMIN=anywaye
+PGADMIN_DB=anywaye_platform
 
 # One name for the whole run; every namespace this suite touches is derived
 # from it, for the reason tests/isolation_test.sh documents: a compose project

@@ -74,8 +74,8 @@ RUN chmod +x /usr/local/lib/kit/provenance.sh \
 LABEL org.opencontainers.image.source="${KIT_PROVENANCE_SOURCE}" \
       org.opencontainers.image.revision="${KIT_PROVENANCE_REVISION}" \
       org.opencontainers.image.created="${KIT_PROVENANCE_BUILT_AT}" \
-      com.cafaye.kit.source.dirty="${KIT_PROVENANCE_SOURCE_DIRTY}" \
-      com.cafaye.kit.template.version="${KIT_PROVENANCE_TEMPLATE_VERSION}"
+      com.anywaye.kit.source.dirty="${KIT_PROVENANCE_SOURCE_DIRTY}" \
+      com.anywaye.kit.template.version="${KIT_PROVENANCE_TEMPLATE_VERSION}"
 
 # node_modules is copied from the build stage rather than reinstalled: a second
 # `bun install` in the runtime stage is a second chance for the resolved tree to

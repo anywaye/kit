@@ -193,7 +193,7 @@ C="$PROJECT-postgres-1"
 
 # psql_in <role> <db> <sql>
 psql_in() {
-  docker exec -e PGPASSWORD=cafaye "$C" psql -U "$1" -d "$2" -tAX -c "$3"
+  docker exec -e PGPASSWORD=anywaye "$C" psql -U "$1" -d "$2" -tAX -c "$3"
 }
 
 # Wait for the INIT SCRIPT to finish, not for the server to answer.
@@ -212,8 +212,8 @@ psql_in() {
 wait_for_provisioning() { # wait_for_provisioning <container> <role> <db>
   local container="$1" role="$2" db="$3" out
   for _ in $(seq 1 90); do
-    out="$(docker exec -e PGPASSWORD=cafaye "$container" \
-      psql -U "$role" -d cafaye_platform -tAX -c \
+    out="$(docker exec -e PGPASSWORD=anywaye "$container" \
+      psql -U "$role" -d anywaye_platform -tAX -c \
       "SELECT count(*) FROM pg_database WHERE datname = '$db'" 2>/dev/null || true)"
     if [ "$out" = "1" ]; then
       return 0
@@ -270,7 +270,7 @@ if ! docker compose --project-name "$PROJECT" -f "$WORK/compose/docker-compose.y
 fi
 
 # `--wait` is necessary and not sufficient — see wait_for_provisioning.
-if ! wait_for_provisioning "$C" cafaye "$BETA"; then
+if ! wait_for_provisioning "$C" anywaye "$BETA"; then
   say "FAIL: the cluster came up but initdb/10-cluster.sh never created a database named $BETA."
   say "      Container log:"
   docker logs "$C" 2>&1 | tail -25 | sed 's/^/       /'
@@ -297,13 +297,13 @@ docker logs "$C" 2>&1 | grep -E '\[cluster\]' | sed 's/^/   /' \
 # system: the refusal in assertion 2 has to be attributable to the boundary and
 # not to a missing database.
 for svc in "$ALPHA" "$BETA"; do
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_database WHERE datname = '$svc'")"
   [ "$got" = "1" ] || fail "expected a database named $svc; found $got"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '$svc' AND NOT rolsuper")"
   [ "$got" = "1" ] || fail "expected one non-superuser role named $svc; found $got"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '$svc' AND rolconnlimit > 0")"
   [ "$got" = "1" ] || fail "$svc has no per-role CONNECTION LIMIT; blast radius is unbounded"
   # The LOGIN role, which is the other half of the account boundary and is not
@@ -315,10 +315,10 @@ for svc in "$ALPHA" "$BETA"; do
   # Three properties and the direction of the membership is the one that matters:
   # a login role that is a member of the OWNOR holds every privilege the owner
   # has, which is the whole of templates/database/tenancy/ undone by one GRANT.
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '${svc}_app' AND rolcanlogin AND NOT rolsuper")"
   [ "$got" = "1" ] || fail "expected one non-superuser LOGIN role named ${svc}_app; found $got"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_auth_members m
        JOIN pg_roles member ON member.oid = m.member
        JOIN pg_roles granted ON granted.oid = m.roleid
@@ -332,7 +332,7 @@ say "             2 non-owner LOGIN roles, membership in one direction only"
 # the reason AGENTS.md gives about vendor configs: `CREATE EXTENSION` succeeding
 # and the extension working are different claims.
 for svc in "$ALPHA" "$BETA"; do
-  got="$(psql_in cafaye "$svc" \
+  got="$(psql_in anywaye "$svc" \
     "SELECT '[1,2,3]'::vector <=> '[1,2,4]'::vector < 1")"
   [ "$got" = "t" ] || fail "$svc: pgvector is not answering a real query (got '$got')"
 done
@@ -389,7 +389,7 @@ say "   REFUSED at the door: permission denied for database \"$ALPHA\""
 # And PUBLIC itself, which is the mechanism rather than one of its symptoms. If
 # this is the only row that says true, the boundary is not being applied by
 # construction and is relying on the grant list above it.
-leaks="$(psql_in cafaye cafaye_platform \
+leaks="$(psql_in anywaye anywaye_platform \
   "SELECT string_agg(datname, ',') FROM pg_database
     WHERE NOT datistemplate AND has_database_privilege('public', datname, 'CONNECT')")"
 [ -z "$leaks" ] || fail "PUBLIC still holds CONNECT on: $leaks. The boundary is not exhaustive."
@@ -437,7 +437,7 @@ CONTROL
 docker rm -f "$CONTROL_C" >/dev/null 2>&1 || true
 docker volume rm "$CONTROL_V" >/dev/null 2>&1 || true
 docker run -d --name "$CONTROL_C" \
-  -e POSTGRES_PASSWORD=cafaye -e POSTGRES_USER=cafaye -e POSTGRES_DB=cafaye_platform \
+  -e POSTGRES_PASSWORD=anywaye -e POSTGRES_USER=anywaye -e POSTGRES_DB=anywaye_platform \
   -e KIT_ALPHA="$ALPHA" -e KIT_BETA="$BETA" \
   -v "$WORK/norevoke/10-norevoke.sh:/docker-entrypoint-initdb.d/10-norevoke.sh:ro" \
   -v "$CONTROL_V":/var/lib/postgresql/data \
@@ -450,7 +450,7 @@ docker run -d --name "$CONTROL_C" \
 # wait declares the cluster ready too early; the query below then lands in the
 # entrypoint's stop-temporary/start-real restart window and fails with a
 # connection error that reads exactly like a refused control.
-if ! wait_for_provisioning "$CONTROL_C" cafaye "$BETA"; then
+if ! wait_for_provisioning "$CONTROL_C" anywaye "$BETA"; then
   say "FAIL: the control cluster never provisioned a database named $BETA."
   docker logs "$CONTROL_C" 2>&1 | tail -20 | sed 's/^/       /'
   fail "control cluster did not come up"
@@ -467,7 +467,7 @@ fi
 ctl_connect=""; ctl_ec=1
 say "   \$ psql -U $ALPHA -d $BETA -c 'SELECT current_database()'   (no REVOKE applied)"
 for _ in $(seq 1 30); do
-  ctl_connect="$(docker exec -e PGPASSWORD=cafaye "$CONTROL_C" \
+  ctl_connect="$(docker exec -e PGPASSWORD=anywaye "$CONTROL_C" \
     psql -U "$ALPHA" -d "$BETA" -tAX -c 'SELECT current_database()' 2>&1)" \
     && ctl_ec=0 || ctl_ec=$?
   [ "$ctl_ec" -eq 0 ] && break

@@ -52,7 +52,7 @@ subpath so the `uses:` string reads nicely.
 
 **What it costs:** nothing, and that is the argument. GitHub documents that
 subdirectories of the workflows directory are not supported, so
-`cafaye/kit/workflows/ci.reusable.yml@master` resolves to nothing and every
+`anywaye/kit/workflows/ci.reusable.yml@master` resolves to nothing and every
 caller who copied it has a red build. The file lives where GitHub can call it.
 
 **Enforced by:** the `callable path` check in `tests/validate.sh`, which fails
@@ -192,7 +192,7 @@ it *replaces* the official `postgres` image with a community build, permanently,
 for every service — and because "full" means 80 extensions and a raised
 `max_worker_processes` on the cluster whether or not any is used. Composing one
 layer onto the official image keeps the base official and the extension list to
-the one cafaye uses.
+the one anywaye uses.
 
 **What this depends on:** pglayers is a community project, **not** a PostgreSQL
 project. It layers onto the *official* images, which is a weaker claim than being
@@ -396,7 +396,7 @@ half-measure. Three reasons:
 1. **The predicate is what makes the query indexable.** Postgres evaluates a
    policy per candidate row; a query that relies on the policy alone is a
    sequential scan the moment the planner cannot push the qual down. Measured:
-   `cafaye.protect_table` creates an index on the policy column precisely because
+   `anywaye.protect_table` creates an index on the policy column precisely because
    of this, and the predicate is the second half of the same problem.
 2. **The predicate is what catches a mistake in the policy expression.** A `with
    check` written against the wrong column is refused by no test that does not
@@ -417,7 +417,7 @@ protected three-row table, read as the owner carrying another tenant's identity:
 | without it | **3** — every tenant's |
 
 `FORCE` is not documented in Supabase's row-level-security guide, and **before
-this packet no lint anywhere in cafaye checked for it** — verified across all nine
+this packet no lint anywhere in anywaye checked for it** — verified across all nine
 account-scoped services: zero `ROW LEVEL SECURITY`, zero `CREATE POLICY`, zero
 non-owner login roles. A team that ships policies, enables RLS, declares victory,
 and is silently wrong on exactly the tables it owns is the failure this decision
@@ -447,7 +447,7 @@ tenant B is handed it, and tenant B reads tenant A's rows. Transaction-local
 cannot outlive the request, so a leak needs the caller to forget a transaction,
 which is a different bug with a different symptom.
 
-**Why the seam is a function and not a token format.** `cafaye.begin_account/1`
+**Why the seam is a function and not a token format.** `anywaye.begin_account/1`
 takes a uuid. How a service turns the credential in its hand into an account is
 that service's business — `identity` issues opaque session tokens and `gateway`
 verifies JWKS bearer JWTs — and a template that picked one of those would be
@@ -491,22 +491,22 @@ they are one property of the design.
 qualifier of that policy is the *digest the caller presented*:
 
 ```sql
-select cafaye.protect_credential_table('api_keys', 'token_digest');
+select anywaye.protect_credential_table('api_keys', 'token_digest');
 ```
 
 which installs, alongside `protect_table`'s four account-scoped policies, a fifth:
 
 ```sql
-create policy api_keys_cafaye_resolve on api_keys
+create policy api_keys_anywaye_resolve on api_keys
   for select to <owner>, <service>_app
-  using (token_digest = (select cafaye.current_credential_digest()))
+  using (token_digest = (select anywaye.current_credential_digest()))
 ```
 
 and the caller opens its resolution the way it opens its account:
 
 ```sql
 begin;
-select cafaye.begin_credential($1);                        -- the digest it computed
+select anywaye.begin_credential($1);                        -- the digest it computed
 select … from api_keys where token_digest = $1;            -- the row returns
 commit;
 ```
@@ -576,7 +576,7 @@ table. That is asserted, not argued: `credential/resolution-cannot-browse` and
    one resolution's digest to the next connection) and it is set in exactly one
    function, so a service has exactly one place that writes it.
 5. **Runtime audit is Postgres's job, not this one's.** What is auditable here is
-   the *scope*: `cafaye.credential_tables()` names every table carrying a
+   the *scope*: `anywaye.credential_tables()` names every table carrying a
    resolution path, so "which tables in this database can be read without an
    account" is one query and not a code search. It answers that **the same to
    every role that asks**, which it has to be given rather than have by default:
@@ -584,7 +584,7 @@ table. That is asserted, not argued: `credential/resolution-cannot-browse` and
    because `pg_get_expr` deparses a name unqualified whenever the *reader's*
    `search_path` resolves it and `"$user"` is a `search_path` entry — the version
    that read the text reported no credential table at all to the cluster's own
-   admin role, whose `"$user"` schema is `cafaye`. Auditing *who* resolved is not
+   admin role, whose `"$user"` schema is `anywaye`. Auditing *who* resolved is not
    claimed — the GUC is transaction-local and leaves nothing behind, and a claim
    kit cannot honour is a comment pretending to be a control.
 
@@ -662,7 +662,7 @@ one function, asserted against a published table of ten pairs, and gated on.
 **Why three tiers and not four, and not a boolean.** The tiers are the three
 sizes of change there are, and the rule of thumb is that the number you do not
 have to read is the size of the promise. A fourth tier would be a claim about
-the CONSUMER's code, which kit does not have. A boolean — what cafaye has today
+the CONSUMER's code, which kit does not have. A boolean — what anywaye has today
 — answers "did anything break?" with one bit, so it cannot say WHICH surface
 broke, so a reader still opens the diff; the tier is derived from the number the
 consumer already holds, which is the property that makes it checkable at all.
@@ -1355,7 +1355,7 @@ cross-repo reporter parses correctly is a suite about the reporter.
 
 The lint-drift check went for the reason its neighbours did. It discovered
 services by walking `../*` for a `.github/workflows` directory containing a
-`uses: cafaye/kit/...` line, and compared each one's `.golangci.yml` to kit's. A
+`uses: anywaye/kit/...` line, and compared each one's `.golangci.yml` to kit's. A
 clone of kit has no siblings, so it took the SKIP branch on every CI run of every
 commit — the same unreachable-green as `fleet_check.py`. Its allowlist,
 `lint/drift-allowlist`, held dated debts **in other people's repositories**, with
@@ -1441,17 +1441,17 @@ that was never expressible.
 qualifier of that policy is *who is asking*:
 
 ```sql
-select cafaye.protect_membership_table('account_users', 'user_id');
+select anywaye.protect_membership_table('account_users', 'user_id');
 ```
 
 ```sql
-create policy account_users_cafaye_members on account_users
+create policy account_users_anywaye_members on account_users
   for select to <owner>, <service>_app
-  using (user_id = (select cafaye.current_user_id()));
+  using (user_id = (select anywaye.current_user_id()));
 ```
 
 and the caller names itself the way it names an account — which means the
-substrate needed a **third transaction-local GUC**, `cafaye.begin_user/1`, and
+substrate needed a **third transaction-local GUC**, `anywaye.begin_user/1`, and
 that is the part of this decision that is not a copy of MD24.
 
 **Why a third scope and not a looser policy.** Every alternative was a way of
@@ -1485,8 +1485,8 @@ saying something false:
    A service can run a long time in that state and the only symptom is a list that
    is always empty. It looks exactly like a permission nobody granted, and nothing
    in a log fails.
-3. **A second audit.** `cafaye.membership_tables()`, deliberately a separate
-   function from `cafaye.credential_tables()`. There are now two ways a policy can
+3. **A second audit.** `anywaye.membership_tables()`, deliberately a separate
+   function from `anywaye.credential_tables()`. There are now two ways a policy can
    stop requiring an account, so one query can no longer answer "can anything here
    be read without an account" — and merging them would report a membership table
    as resolvable by anybody who guesses a digest, which is the same conflation MD24

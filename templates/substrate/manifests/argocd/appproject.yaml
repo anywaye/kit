@@ -4,7 +4,7 @@ metadata:
   name: default
   namespace: argocd
 spec:
-  # The default project for the cafaye substrate — the only project the seven
+  # The default project for the anywaye substrate — the only project the seven
   # Applications name. core-install.yaml ships the AppProject CRD but no
   # AppProject object (neither does the full install.yaml — both are CRD-only;
   # the controller auto-creates a maximal default in some installs, but the
@@ -26,9 +26,9 @@ spec:
   #   sourceRepos        what the seven Applications name and no other: the
   #                      two upstream Helm repos for the observability three,
   #                      and a chart-path GLOB for the four service charts
-  #                      (oci://ghcr.io/cafaye/charts/*) — because each
+  #                      (oci://ghcr.io/anywaye/charts/*) — because each
   #                      Application names its own chart's PATH
-  #                      (oci://ghcr.io/cafaye/charts/gateway, …/courier, …),
+  #                      (oci://ghcr.io/anywaye/charts/gateway, …/courier, …),
   #                      not the registry root. A project that allows * lets an
   #                      Application pull from a repo this repository never
   #                      reviewed; this project refuses it before a chart is
@@ -42,7 +42,7 @@ spec:
   #   per-chart paths is exactly the seam where a second list drifts. Argo CD's
   #   `sourceRepos` is glob-aware, and the `*` here does NOT open the project:
   #   it is anchored after the registry and org this repo owns
-  #   (`oci://ghcr.io/cafaye/charts/`), and Argo matches with `/` as the glob
+  #   (`oci://ghcr.io/anywaye/charts/`), and Argo matches with `/` as the glob
   #   separator, so `*` matches ONE chart-name segment and cannot cross a `/`
   #   into a different registry, org or nested path.
   #
@@ -55,12 +55,12 @@ spec:
   #   `util/glob.Match(pattern, value, '/')` — gobwas/glob with `/` as the
   #   separator. So `*` matches any run of characters that is not a `/`. The
   #   normaliser leaves the wildcard intact:
-  #   `oci://ghcr.io/cafaye/charts/*` → `oci://ghcr.io/cafaye/charts/*`.
+  #   `oci://ghcr.io/anywaye/charts/*` → `oci://ghcr.io/anywaye/charts/*`.
   #   Measured against gobwas/glob (the library that tag imports):
-  #     oci://ghcr.io/cafaye/charts/gateway   matches
-  #     oci://ghcr.io/cafaye/charts/courier   matches
-  #     oci://ghcr.io/cafaye/charts/a/b       does NOT (a `*` cannot cross a `/`)
-  #     oci://ghcr.io/cafaye/other/gateway    does NOT
+  #     oci://ghcr.io/anywaye/charts/gateway   matches
+  #     oci://ghcr.io/anywaye/charts/courier   matches
+  #     oci://ghcr.io/anywaye/charts/a/b       does NOT (a `*` cannot cross a `/`)
+  #     oci://ghcr.io/anywaye/other/gateway    does NOT
   #     oci://ghcr.io/evil/charts/gateway     does NOT
   #   tests/substrate_test.sh §21 asserts every Application's source.repoURL is
   #   permitted by these patterns, with the pre-fix bare-root spelling as a red
@@ -70,14 +70,14 @@ spec:
   #                      (observability, identity, gateway, courier, parlor,
   #                      billing)
   #                      — pantry, box and keyholder are deliberately NOT
-  #                      among them. All three are Cafaye-operated services
+  #                      among them. All three are Anywaye-operated services
   #                      the box reaches over HTTPS (pantry at
-  #                      https://pantry.cafaye.com, the registry exchange at
+  #                      https://pantry.anywaye.com, the registry exchange at
   #                      KIT_SUBSTRATE_REGISTRY_URL, the control plane at
   #                      KIT_SUBSTRATE_BOX_URL); a customer's box runs the
   #                      four services above and talks to the three below.
   #                      pantry's own licence says it best: "it runs on
-  #                      Cafaye infrastructure. Nothing here may be run as a
+  #                      Anywaye infrastructure. Nothing here may be run as a
   #                      second, forked catalog."
   #                      on the one cluster this substrate runs
   #                      (https://kubernetes.default.svc). A project that
@@ -105,7 +105,7 @@ spec:
   #                          ClusterRoleBinding x2 (kube-state-metrics,
   #                          server; no CRDs)
   #                      Each Application declares its own kinds in the
-  #                      `cafaye.io/cluster-resources` annotation beside
+  #                      `anywaye.io/cluster-resources` annotation beside
   #                      the chart version that was rendered; the three
   #                      entries below are exactly the union of those
   #                      declarations — each with its reason, none `*/*`.
@@ -122,14 +122,14 @@ spec:
   # If the maximal shape is ever needed again, the reason must be written
   # beside it — a project that allows * is a project that has stopped being
   # a boundary.
-  description: "The default project for the cafaye substrate — the seven Applications' project"
+  description: "The default project for the anywaye substrate — the seven Applications' project"
   sourceRepos:
     - https://grafana.github.io/helm-charts
     - https://prometheus-community.github.io/helm-charts
     # One chart-name segment under the registry root this repo owns; NOT `*`
     # (see "WHY A GLOB" above). Argo v3.5.4 matches this with `/` as the glob
     # separator, so it permits `…/gateway` and refuses `…/a/b`.
-    - oci://ghcr.io/cafaye/charts/*
+    - oci://ghcr.io/anywaye/charts/*
   destinations:
     - namespace: observability
       server: https://kubernetes.default.svc

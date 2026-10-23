@@ -32,7 +32,7 @@
 # minitest prints it under `--verbose` — so the declared reason exists in Ruby
 # without any new syntax, which is more than bun offers.
 
-module Cafaye
+module Anywaye
   # Tiers are declared per test class, because a class is Ruby's unit of suite.
   module Tier
     # tier :db — declares that every test in this class needs a real database.
@@ -53,7 +53,7 @@ module Cafaye
 end
 
 class TierDbTest < Minitest::Test
-  extend Cafaye::Tier
+  extend Anywaye::Tier
 
   tier :db
 

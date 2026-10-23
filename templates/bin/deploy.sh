@@ -805,7 +805,7 @@ prepare_deploy() {
 }
 
 cmd_up() {
-  local tag="${IMAGE:-cafaye-deploy/$SERVICE:latest}"
+  local tag="${IMAGE:-anywaye-deploy/$SERVICE:latest}"
   local rc=0
   prepare_deploy
 

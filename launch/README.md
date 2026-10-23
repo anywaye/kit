@@ -1,7 +1,7 @@
 # The launch harness — Kit's developer-only five-service stack
 
-> Kit owns this. `cafaye/website` does not carry launcher code, and the old
-> `cafaye/site` launcher this is derived from is retired, not mirrored.
+> Kit owns this. `anywaye/website` does not carry launcher code, and the old
+> `anywaye/site` launcher this is derived from is retired, not mirrored.
 
 ## What this is
 
@@ -70,13 +70,13 @@ The five services are built from source, so their checkouts must exist.
 Defaults assume the fleet layout — every service beside the Kit checkout:
 
 ```
-cafaye/
+anywaye/
 ├── kit/         # this repository
 ├── identity/
 ├── gateway/
 ├── courier/
 ├── parlor/      # the customer-stack app. NOT website: website is the
-                 # Cafaye app derived from Parlor and is never built here.
+                 # Anywaye app derived from Parlor and is never built here.
 └── billing/     # the money service. Its port is its OWN (3000), not one of
                  # the shared 15000-15999 block's slots — billing is a service
                  # contract, not shared infrastructure.
@@ -134,7 +134,7 @@ control (`kit/launch` never holds one):
 
 | Variable | Where it comes from |
 |----------|--------------------|
-| `STRIPE_API_KEY` | the Stripe CLI's test-mode secret key (`stripe config --list`, profile `cafaye`) |
+| `STRIPE_API_KEY` | the Stripe CLI's test-mode secret key (`stripe config --list`, profile `anywaye`) |
 | `STRIPE_WEBHOOK_SECRET` | `stripe listen --forward-to http://127.0.0.1:3000/v1/webhooks/stripe --print-secret` |
 
 Without them billing refuses to boot — the compose file marks both `:?`, so
@@ -210,7 +210,7 @@ identity is up to mint it, and identity will not boot without the key:
    identity's migrations from the host (psql on the host — see
    Prerequisites), mint the courier key (register → session → account →
    api-key, with the signup-timestamp pair aged past `signup.MinAge`).
-2. `nats` up, the `cafaye` JetStream stream created by Kit's one-shot
+2. `nats` up, the `anywaye` JetStream stream created by Kit's one-shot
    (`compose run --rm nats-stream-init`, bounded, required), then the full
    long-running set — explicitly named, never a blanket wait that would
    re-enlist the completed one-shot — plus courier's migrations inside its

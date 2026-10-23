@@ -68,7 +68,7 @@ deploy down     --service courier --file <compose file> [--purge]
 every other input, including a path:
 
 ```sh
-SERVICE_NAME=courier KIT_DEPLOY_IMAGE=cafaye-kit16/courier:35c6a27 \
+SERVICE_NAME=courier KIT_DEPLOY_IMAGE=anywaye-kit16/courier:35c6a27 \
   3< <(vault read -format=json ... | jq -r 'to_entries[]|"\(.key)=\(.value)"') \
   templates/bin/deploy.sh up --service courier \
     --file templates/deploy/reference/courier.deploy.yml --secrets-fd 3

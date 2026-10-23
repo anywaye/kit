@@ -9,7 +9,7 @@ metadata:
     # grafana-clusterrole, ClusterRoleBinding grafana-clusterrolebinding, no
     # CRDs. The AppProject whitelists exactly these; §28 fails the run when
     # the two disagree.
-    cafaye.io/cluster-resources: "rbac.authorization.k8s.io/ClusterRole, rbac.authorization.k8s.io/ClusterRoleBinding"
+    anywaye.io/cluster-resources: "rbac.authorization.k8s.io/ClusterRole, rbac.authorization.k8s.io/ClusterRoleBinding"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

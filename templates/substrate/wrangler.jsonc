@@ -1,6 +1,6 @@
 {
   // kit-install — the install host: the Worker behind
-  // cafaye.com/box/install.
+  // anywaye.com/box/install.
   //
   // Serves templates/substrate/install.sh at GET /box/install: the exact
   // bytes, content-type text/x-shellscript, no transformation. GET / and GET
@@ -28,7 +28,7 @@
   // hash comparison is what proves the two never drift.
   //
   // NO `routes` BLOCK, matching the fleet: measured, site/wrangler.jsonc
-  // carries none, so the cafaye.com/box/install route is bound outside the
+  // carries none, so the anywaye.com/box/install route is bound outside the
   // repositories and this Worker follows the same shape. Binding the route
   // is a Cloudflare route/custom-domain action — an operator step, not a
   // value this repository can verify.

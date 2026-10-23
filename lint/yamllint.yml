@@ -1,5 +1,5 @@
 ---
-# yamllint config for every cafaye repo that keeps YAML in the tree.
+# yamllint config for every anywaye repo that keeps YAML in the tree.
 #   yamllint -c .yamllint.yml .
 #
 # STRICTNESS NOTES

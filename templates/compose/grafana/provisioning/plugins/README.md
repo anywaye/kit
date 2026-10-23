@@ -9,4 +9,4 @@ first impression and a bad thing to grep for at 2am.
 This file exists so the directory exists. Git does not track empty directories,
 so the README is the mechanism rather than a workaround.
 
-cafaye ships no plugin provisioning of its own, and needs none.
+anywaye ships no plugin provisioning of its own, and needs none.

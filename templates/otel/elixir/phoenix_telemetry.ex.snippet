@@ -83,7 +83,7 @@ defmodule Courier.Telemetry do
   @default_endpoint "http://otel-collector:4318"
 
   # SIGNALS. `OTEL_SDK_DISABLED` is the OpenTelemetry spec's OWN kill switch and
-  # it is what core's otel-endpoint schema pins the no-op to — not a cafaye
+  # it is what core's otel-endpoint schema pins the no-op to — not a anywaye
   # reimplementation. Re-implementing "disabled" in six languages is how six
   # services acquire six different definitions of it, and the difference between
   # them is somebody's production incident.
@@ -99,7 +99,7 @@ defmodule Courier.Telemetry do
   "go nowhere and try".
 
   `OTEL_EXPORTER_OTLP_ENDPOINT` is honoured as a fallback so the release also
-  works with generic OTel tooling, and the cafaye name wins when both are set:
+  works with generic OTel tooling, and the anywaye name wins when both are set:
   the precedence is written down here rather than discovered later, because a
   contract with an undocumented precedence order is a bug report.
   """
@@ -271,7 +271,7 @@ defmodule Courier.Observability do
   that cannot be filtered out, and a route with an id in it is a cardinality
   explosion with a GET attached. core's span-naming schema caps every segment
   at fifteen characters, which is what makes an interpolated id impossible to
-  spell even by accident — the grammar says nothing about cafaye id formats, it
+  spell even by accident — the grammar says nothing about anywaye id formats, it
   just says no segment is longer than fifteen characters.
   """
   def span_name(operation, target \\ nil, qualifier \\ nil) do

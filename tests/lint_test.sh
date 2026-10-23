@@ -592,7 +592,7 @@ EOF
     # ===========================================================================
     # THE `.mts` / `.cts` GLOB, which is the defect that actually shipped.
     #
-    # Measured in cafaye/site run 37236386666 and cafaye/parlor run 37230458669,
+    # Measured in anywaye/site run 37236386666 and anywaye/parlor run 37230458669,
     # both of which carry three `.mts` files at the repo root:
     #
     #   Error: Error while loading rule '@typescript-eslint/await-thenable':

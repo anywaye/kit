@@ -1,7 +1,7 @@
 == roles: pg_roles, predefined pg_* rows excluded ==
 billing|f|f|f|f|t|t|10|f
 billing_app|f|f|f|f|t|t|-1|f
-cafaye|t|t|t|t|t|t|-1|t
+anywaye|t|t|t|t|t|t|-1|t
 courier|f|f|f|f|t|t|10|f
 courier_app|f|f|f|f|t|t|-1|f
 identity|f|f|f|f|t|t|10|f
@@ -29,36 +29,36 @@ billing|billing|CREATE
 billing|billing|TEMPORARY
 billing|billing_app|CONNECT
 billing|billing_app|TEMPORARY
-billing|cafaye|CONNECT
-billing|cafaye|TEMPORARY
-cafaye_platform|cafaye|CONNECT
-cafaye_platform|cafaye|CREATE
-cafaye_platform|cafaye|TEMPORARY
-courier|cafaye|CONNECT
-courier|cafaye|TEMPORARY
+billing|anywaye|CONNECT
+billing|anywaye|TEMPORARY
+anywaye_platform|anywaye|CONNECT
+anywaye_platform|anywaye|CREATE
+anywaye_platform|anywaye|TEMPORARY
+courier|anywaye|CONNECT
+courier|anywaye|TEMPORARY
 courier|courier|CONNECT
 courier|courier|CREATE
 courier|courier|TEMPORARY
 courier|courier_app|CONNECT
 courier|courier_app|TEMPORARY
-identity|cafaye|CONNECT
-identity|cafaye|TEMPORARY
+identity|anywaye|CONNECT
+identity|anywaye|TEMPORARY
 identity|identity|CONNECT
 identity|identity|CREATE
 identity|identity|TEMPORARY
 identity|identity_app|CONNECT
 identity|identity_app|TEMPORARY
-postgres|cafaye|CONNECT
-postgres|cafaye|CREATE
-postgres|cafaye|TEMPORARY
+postgres|anywaye|CONNECT
+postgres|anywaye|CREATE
+postgres|anywaye|TEMPORARY
 == schema public: billing ==
 billing|PUBLIC|USAGE
 billing|pg_database_owner|CREATE
 billing|pg_database_owner|USAGE
-== schema public: cafaye_platform ==
-cafaye_platform|PUBLIC|USAGE
-cafaye_platform|pg_database_owner|CREATE
-cafaye_platform|pg_database_owner|USAGE
+== schema public: anywaye_platform ==
+anywaye_platform|PUBLIC|USAGE
+anywaye_platform|pg_database_owner|CREATE
+anywaye_platform|pg_database_owner|USAGE
 == schema public: courier ==
 courier|PUBLIC|USAGE
 courier|pg_database_owner|CREATE

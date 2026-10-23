@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/cafaye/charts/parlor
+    repoURL: oci://ghcr.io/anywaye/charts/parlor
     chart: parlor
     targetRevision: 0.1.0
     # PARLOR'S ONE CROSS-NAMESPACE ADDRESS, AND WITHOUT IT PARLOR DOES NOT RUN.

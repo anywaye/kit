@@ -64,7 +64,7 @@ log() { printf '[launch] %s\n' "$1"; }
 # Defaults assume the fleet layout: every service beside this kit checkout.
 # Any other layout works by exporting the variables — Website and Site are
 # never required and never consulted. The front door is PARLOR, the
-# customer-stack app; Website is the Cafaye app derived from Parlor and is
+# customer-stack app; Website is the Anywaye app derived from Parlor and is
 # not a service this harness builds. BILLING is the money service and its
 # port is its OWN (3000) rather than one of the shared block's slots.
 LAUNCH_IDENTITY_DIR="${LAUNCH_IDENTITY_DIR:-$KIT_ROOT/../identity}"
@@ -417,7 +417,7 @@ env_set_once APP_BASE_URL "http://127.0.0.1:$PARLOR_PORT"
 # rest with the real key in place.
 log "phase 1: postgres + identity (building from source on first run)"
 # `--build` IS NOT OPTIONAL: `compose up` builds an image ONLY when the tag
-# does not already exist, so a machine holding a stale `cafaye/identity:dev`
+# does not already exist, so a machine holding a stale `anywaye/identity:dev`
 # silently serves the OLD code and the launch tier's subject ("built from the
 # checkouts the LAUNCH_*_DIR variables name") is violated with no error
 # anywhere. The build cache makes the rebuild cheap after the first.
@@ -451,7 +451,7 @@ done
 # identity's own — the same files, the same order.
 POSTGRES_PORT="${KIT_POSTGRES_PORT:-15500}"
 log "applying identity's migrations from the host"
-DATABASE_URL="postgres://identity:${KIT_POSTGRES_PASSWORD:-cafaye}@127.0.0.1:$POSTGRES_PORT/identity?sslmode=disable" \
+DATABASE_URL="postgres://identity:${KIT_POSTGRES_PASSWORD:-anywaye}@127.0.0.1:$POSTGRES_PORT/identity?sslmode=disable" \
   "$LAUNCH_IDENTITY_DIR/bin/migrate" ||
   die "identity's migrations failed. Its message is above."
 
@@ -477,7 +477,7 @@ DATABASE_URL="postgres://identity:${KIT_POSTGRES_PASSWORD:-cafaye}@127.0.0.1:$PO
 # requires one: `owner+launch@localhost` is refused with a 422 invalid_format,
 # and the mint dies on the first call. `.local` is the conventional domain
 # for a stack that is not reachable from the internet.
-MINT_EMAIL="owner+launch@cafaye.local"
+MINT_EMAIL="owner+launch@anywaye.local"
 MINT_PASSWORD=$(openssl rand -hex 24)
 
 log "minting the courier key from identity's API"
@@ -543,7 +543,7 @@ log "courier key: minted from identity's API and written to launch/.env"
 # 5. PHASE 2 — the bus, then the one-shot, then the full stack. THREE
 #    commands and not one, because the one-shot cannot be in a wait set.
 # ---------------------------------------------------------------------------
-# Kit's `nats-stream-init` is `restart: "no"`: it creates the `cafaye`
+# Kit's `nats-stream-init` is `restart: "no"`: it creates the `anywaye`
 # JetStream stream and exits 0. A completed container is not a running one,
 # and a wait set containing one fails by the orchestrator's own accounting —
 # measured twice, two ways, on the tier this harness is derived from. So every
@@ -559,16 +559,16 @@ log "phase 2a: NATS (the bus the stream is created on)"
 # for the reason phase 1's comment gives.
 compose up -d --wait nats
 
-log "phase 2b: creating the cafaye JetStream stream (one-shot, bounded)"
+log "phase 2b: creating the anywaye JetStream stream (one-shot, bounded)"
 # Kit's own check-then-create (`stream info … || stream add …`): idempotent,
 # exit 0 whether the stream already exists or was just created. Attached, so a
 # failure's output is inline in this log; `--rm` so no container survives it.
 # The broker is healthy by 2a (kit's own ordering needs the same), so a
 # non-zero exit here names the initializer and nothing else.
 if ! compose run --rm nats-stream-init; then
-  die "nats-stream-init failed: the cafaye JetStream stream was not created. The initializer's own output is above; identity's outbox publishes block until the stream exists."
+  die "nats-stream-init failed: the anywaye JetStream stream was not created. The initializer's own output is above; identity's outbox publishes block until the stream exists."
 fi
-log "the cafaye JetStream stream exists"
+log "the anywaye JetStream stream exists"
 
 log "phase 2c: the full launch stack (identity and courier restart with the real key)"
 # `--build` for the reason phase 1's comment gives: the launch services are

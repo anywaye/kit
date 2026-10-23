@@ -41,7 +41,7 @@
 -- TWO CONTROLS, because a green answer from a check that cannot see its own
 -- defect is worse than no answer at all:
 --
---   `sweep/names-an-unprotected-table`      `cafaye.unprotected_tables()` really
+--   `sweep/names-an-unprotected-table`      `anywaye.unprotected_tables()` really
 --                                            does report a table with an
 --                                            `account_id` column and no policies.
 --                                            Without it, the sweep's empty result
@@ -86,7 +86,7 @@ begin;
 -- ---------------------------------------------------------------------------
 do $preflight$
 begin
-  if to_regprocedure('cafaye.protect_table(regclass,text)') is null then
+  if to_regprocedure('anywaye.protect_table(regclass,text)') is null then
     raise exception 'the tenancy substrate is not installed in this database.'
       using errcode = 'undefined_function',
             hint = 'Apply templates/database/tenancy/substrate.sql first.';
@@ -111,10 +111,10 @@ $preflight$;
 -- assertions run AS the login role and the result table belongs to the session
 -- that started the proof. A SECURITY INVOKER helper would be writing a table it
 -- has no privilege on for most of this file's cases, and the failure would be
--- `permission denied for table cafaye_probe_result` rather than an assertion.
+-- `permission denied for table anywaye_probe_result` rather than an assertion.
 -- It is not a privilege escalation: a `pg_temp` function cannot outlive the
 -- session, and its owner is the role that created it.
-create or replace function pg_temp.cafaye_assert(
+create or replace function pg_temp.anywaye_assert(
   p_assertion text, p_expected text, p_actual text, p_why text
 ) returns void
 language plpgsql
@@ -123,12 +123,12 @@ as $fn$
 declare
   seen text := coalesce(p_actual, '<null>');
 begin
-  insert into pg_temp.cafaye_probe_result (assertion, expected, actual, verdict, why)
+  insert into pg_temp.anywaye_probe_result (assertion, expected, actual, verdict, why)
   values (p_assertion, p_expected, seen,
           case when seen = p_expected then 'pass' else 'fail' end, p_why);
 end
 $fn$;
-alter function pg_temp.cafaye_assert(text, text, text, text) owner to current_user;
+alter function pg_temp.anywaye_assert(text, text, text, text) owner to current_user;
 
 -- For the three shapes that RAISE rather than return nothing. Everything else in
 -- this file is an empty result, because core's D33 says a cross-tenant access
@@ -146,10 +146,10 @@ alter function pg_temp.cafaye_assert(text, text, text, text) owner to current_us
 -- it. That is not hypothetical: it is what the first version of this file did,
 -- and it reported three failures whose only common cause was its own harness.
 --
--- So the caller sets the role (outside any exception block, see `cafaye_as`),
+-- So the caller sets the role (outside any exception block, see `anywaye_as`),
 -- calls this, resets the role, and records the answer as the session role — which
 -- is the one role with privilege on the result table.
-create or replace function pg_temp.cafaye_observed(p_sql text)
+create or replace function pg_temp.anywaye_observed(p_sql text)
 returns text
 language plpgsql
 as $fn$
@@ -171,7 +171,7 @@ $fn$;
 -- handler that caught the error, and every assertion after it runs as the wrong
 -- role and passes for the wrong reason. This function has no exception block of
 -- its own for that reason, and neither does anything that calls it.
-create or replace function pg_temp.cafaye_as(p_role text)
+create or replace function pg_temp.anywaye_as(p_role text)
 returns void
 language plpgsql
 as $fn$
@@ -182,23 +182,23 @@ $fn$;
 
 -- The two tenants, as constants rather than generated, so every expected count
 -- below is readable and a red row can be diagnosed by eye.
-create or replace function pg_temp.cafaye_alpha() returns uuid
+create or replace function pg_temp.anywaye_alpha() returns uuid
 language sql immutable as $fn$ select '11111111-1111-1111-1111-111111111111'::uuid $fn$;
 
-create or replace function pg_temp.cafaye_beta() returns uuid
+create or replace function pg_temp.anywaye_beta() returns uuid
 language sql immutable as $fn$ select '22222222-2222-2222-2222-222222222222'::uuid $fn$;
 
 -- Two MEMBERS, as constants for the same reason the two tenants are. They are
 -- not tenants — a person belongs to accounts rather than being one — and the
 -- distinction is load-bearing in the block below: the assertions there are about
 -- a query that must read across the account boundary, not inside it.
-create or replace function pg_temp.cafaye_member_one() returns uuid
+create or replace function pg_temp.anywaye_member_one() returns uuid
 language sql immutable as $fn$ select 'aaaaaaaa-1111-1111-1111-111111111111'::uuid $fn$;
 
-create or replace function pg_temp.cafaye_member_two() returns uuid
+create or replace function pg_temp.anywaye_member_two() returns uuid
 language sql immutable as $fn$ select 'bbbbbbbb-2222-2222-2222-222222222222'::uuid $fn$;
 
-create temp table pg_temp.cafaye_probe_result (
+create temp table pg_temp.anywaye_probe_result (
   assertion text primary key,
   expected text not null,
   actual text not null,
@@ -211,26 +211,26 @@ create temp table pg_temp.cafaye_probe_result (
 -- `pg_temp` so it never appears in the service's real schema. Two tables: one
 -- protected, one deliberately not.
 -- ---------------------------------------------------------------------------
-create temp table cafaye_probe_things (
+create temp table anywaye_probe_things (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null,
   label text not null
 ) on commit drop;
 
-insert into cafaye_probe_things (account_id, label) values
-  (pg_temp.cafaye_alpha(), 'alpha-1'),
-  (pg_temp.cafaye_alpha(), 'alpha-2'),
-  (pg_temp.cafaye_beta(),  'beta-1');
+insert into anywaye_probe_things (account_id, label) values
+  (pg_temp.anywaye_alpha(), 'alpha-1'),
+  (pg_temp.anywaye_alpha(), 'alpha-2'),
+  (pg_temp.anywaye_beta(),  'beta-1');
 
 -- The control table. An `account_id` column and NO policies: the state a service
 -- reaches by adding a column to a new table and forgetting the substrate. It
 -- exists for the sweep's positive control and for nothing else.
-create temp table cafaye_probe_unprotected (
+create temp table anywaye_probe_unprotected (
   id int primary key,
   account_id uuid not null
 ) on commit drop;
 
-select cafaye.protect_table('pg_temp.cafaye_probe_things');
+select anywaye.protect_table('pg_temp.anywaye_probe_things');
 
 -- The CREDENTIAL fixture. A second account-scoped table whose access path is
 -- "find the row by a value you present and learn the account from it" — the
@@ -246,17 +246,17 @@ select cafaye.protect_table('pg_temp.cafaye_probe_things');
 --
 -- The digests are constants rather than generated, like the tenant ids, so every
 -- expected count below is readable and a red row can be diagnosed by eye.
-create temp table cafaye_probe_credentials (
+create temp table anywaye_probe_credentials (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null,
   token_digest text not null
 ) on commit drop;
 
-insert into cafaye_probe_credentials (account_id, token_digest) values
-  (pg_temp.cafaye_alpha(), 'probe_digest_alpha'),
-  (pg_temp.cafaye_beta(),  'probe_digest_beta');
+insert into anywaye_probe_credentials (account_id, token_digest) values
+  (pg_temp.anywaye_alpha(), 'probe_digest_alpha'),
+  (pg_temp.anywaye_beta(),  'probe_digest_beta');
 
-select cafaye.protect_credential_table('pg_temp.cafaye_probe_credentials', 'token_digest');
+select anywaye.protect_credential_table('pg_temp.anywaye_probe_credentials', 'token_digest');
 
 -- The MEMBERSHIP fixture. The third access path, and the one this directory
 -- could not previously express at all.
@@ -281,19 +281,19 @@ select cafaye.protect_credential_table('pg_temp.cafaye_probe_credentials', 'toke
 -- that spread: MEMBER ONE owns alpha and is a member of beta, MEMBER TWO owns
 -- beta, and the two roles for MEMBER ONE are not a contradiction because they are
 -- in DIFFERENT accounts.
-create temp table cafaye_probe_memberships (
+create temp table anywaye_probe_memberships (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null,
   user_id uuid not null,
   role text not null
 ) on commit drop;
 
-insert into cafaye_probe_memberships (account_id, user_id, role) values
-  (pg_temp.cafaye_alpha(), pg_temp.cafaye_member_one(), 'owner'),
-  (pg_temp.cafaye_beta(),  pg_temp.cafaye_member_one(), 'member'),
-  (pg_temp.cafaye_beta(),  pg_temp.cafaye_member_two(), 'owner');
+insert into anywaye_probe_memberships (account_id, user_id, role) values
+  (pg_temp.anywaye_alpha(), pg_temp.anywaye_member_one(), 'owner'),
+  (pg_temp.anywaye_beta(),  pg_temp.anywaye_member_one(), 'member'),
+  (pg_temp.anywaye_beta(),  pg_temp.anywaye_member_two(), 'owner');
 
-select cafaye.protect_membership_table('pg_temp.cafaye_probe_memberships', 'user_id');
+select anywaye.protect_membership_table('pg_temp.anywaye_probe_memberships', 'user_id');
 
 -- ===========================================================================
 -- THE SPINE. Three denials and one allowance, per role.
@@ -307,52 +307,52 @@ begin
     -- `owner` is the role this script's migrations run as, which is the role
     -- FORCE is about. Both must be denied.
     if r = 'login' then
-      perform pg_temp.cafaye_as(current_user || '_app');
+      perform pg_temp.anywaye_as(current_user || '_app');
     else
-      perform pg_temp.cafaye_as(current_user);
+      perform pg_temp.anywaye_as(current_user);
     end if;
 
     -- (1) NO IDENTITY READS ZERO ROWS.
-    perform cafaye.begin_account(null);
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(null);
+    perform pg_temp.anywaye_assert(
       r || '/no-identity-reads-no-rows', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_things),
+      (select count(*)::text from pg_temp.anywaye_probe_things),
       'a request with no account set must see nothing at all: not one tenant, not an error, and not a hint that the table has rows'
     );
 
     -- (2) ANOTHER TENANT'S VALID IDENTITY, ON THAT TENANT'S OWN ROWS, READS ZERO.
-    perform cafaye.begin_account(pg_temp.cafaye_beta());
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(pg_temp.anywaye_beta());
+    perform pg_temp.anywaye_assert(
       r || '/another-tenants-rows-read-as-none', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_things where account_id = pg_temp.cafaye_alpha()),
+      (select count(*)::text from pg_temp.anywaye_probe_things where account_id = pg_temp.anywaye_alpha()),
       'a request carrying another tenant''s VALID identity must not read that tenant''s rows. This is the assertion an unenforced table fails, and the only one that does'
     );
 
     -- (3) ITS OWN IDENTITY READS ITS OWN ROWS. The allowance, and the half that
     -- stops the two above from being satisfied by a table nobody can read.
-    perform cafaye.begin_account(pg_temp.cafaye_alpha());
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(pg_temp.anywaye_alpha());
+    perform pg_temp.anywaye_assert(
       r || '/own-rows-are-visible', '2',
-      (select count(*)::text from pg_temp.cafaye_probe_things where account_id = pg_temp.cafaye_alpha()),
+      (select count(*)::text from pg_temp.anywaye_probe_things where account_id = pg_temp.anywaye_alpha()),
       'a request carrying its own identity must read its own rows. Without this, "reads zero rows" is satisfied by a policy that denies everything'
     );
 
     -- (4) AND ONLY ITS OWN. The count of an UNQUALIFIED read, which is the shape
     -- a listing endpoint issues, and which stops assertion 3 from being satisfied
     -- by a policy that permits everything.
-    perform pg_temp.cafaye_assert(
+    perform pg_temp.anywaye_assert(
       r || '/own-identity-reads-only-its-own-rows', '2',
-      (select count(*)::text from pg_temp.cafaye_probe_things),
+      (select count(*)::text from pg_temp.anywaye_probe_things),
       'an unqualified read as alpha must return alpha''s two rows and not beta''s third: this is what a listing endpoint issues'
     );
 
     -- (5) THE MIRROR OF 4, because one direction could be an accident: a policy
     -- mis-scoped so that alpha happens to see everything and beta happens to see
     -- nothing is still one broken direction.
-    perform cafaye.begin_account(pg_temp.cafaye_beta());
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(pg_temp.anywaye_beta());
+    perform pg_temp.anywaye_assert(
       r || '/another-identity-reads-only-its-own-rows', '1',
-      (select count(*)::text from pg_temp.cafaye_probe_things),
+      (select count(*)::text from pg_temp.anywaye_probe_things),
       'an unqualified read as beta must return beta''s single row: the other direction of assertion 4'
     );
 
@@ -373,7 +373,7 @@ $spine$;
 -- request presenting a scoped token reads ZERO rows and authenticates as 401
 -- "not found" — the quietest possible failure, and one a green suite cannot see.
 --
--- So the mechanism is `cafaye.protect_credential_table`: a fifth policy,
+-- So the mechanism is `anywaye.protect_credential_table`: a fifth policy,
 -- `for select`, whose qualifier is the digest the CALLER PRESENTED. Its honest
 -- semantics, and every row below is one clause of it:
 --
@@ -398,19 +398,19 @@ declare
 begin
   foreach r in array array['login', 'owner'] loop
     if r = 'login' then
-      perform pg_temp.cafaye_as(current_user || '_app');
+      perform pg_temp.anywaye_as(current_user || '_app');
     else
-      perform pg_temp.cafaye_as(current_user);
+      perform pg_temp.anywaye_as(current_user);
     end if;
 
     -- (1) NO RESOLUTION CONTEXT READS NOTHING. The fail-closed default, and the
     --     row a substrate without the mechanism satisfies — which is the whole
     --     reason the next six exist.
-    perform cafaye.begin_account(null);
-    perform cafaye.begin_credential(null);
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(null);
+    perform anywaye.begin_credential(null);
+    perform pg_temp.anywaye_assert(
       r || '/credential-no-context-reads-no-rows', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_credentials
+      (select count(*)::text from pg_temp.anywaye_probe_credentials
         where token_digest = 'probe_digest_alpha'),
       'a request that has not opened a resolution must read no credential rows at all, by digest or otherwise. This is the state `identity` measured as zero rows and turned into a 401'
     );
@@ -418,10 +418,10 @@ begin
     -- (2) A RESOLUTION BY DIGEST, WITH NO ACCOUNT IDENTITY. The packet's finding,
     --     proven, and the account is explicitly NULL throughout: this is the state
     --     a request presenting a scoped token is actually in.
-    perform cafaye.begin_credential('probe_digest_alpha');
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_credential('probe_digest_alpha');
+    perform pg_temp.anywaye_assert(
       r || '/credential-resolves-by-digest-with-no-account-identity', '1',
-      (select count(*)::text from pg_temp.cafaye_probe_credentials
+      (select count(*)::text from pg_temp.anywaye_probe_credentials
         where token_digest = 'probe_digest_alpha'),
       'a resolution by an unguessable digest must return its row with NO account identity set, because the account is what the query is for and cannot also be what it is scoped by. This is the assertion that does not exist anywhere else in this file'
     );
@@ -430,20 +430,20 @@ begin
     --     rather than a bypass, and the only one of the six that a policy saying
     --     "a credential session may select this table" would fail. Two fixture rows
     --     on purpose: with one, this assertion is satisfied by a table-wide SELECT.
-    perform pg_temp.cafaye_assert(
+    perform pg_temp.anywaye_assert(
       r || '/credential-resolution-cannot-browse', '1',
-      (select count(*)::text from pg_temp.cafaye_probe_credentials),
+      (select count(*)::text from pg_temp.anywaye_probe_credentials),
       'an UNQUALIFIED read inside a resolution session must return the one row whose digest was presented and not the whole table. Policies combine permissively, so a policy that merely permitted the select would return both rows here and hand the caller every credential in the database'
     );
 
     -- (4) A DIGEST YOU DID NOT PRESENT RESOLVES NOTHING. The mirror of 3, because
     --     one direction can be an accident: a context that leaked the whole table
     --     would also pass a check that only looked at the row you asked for.
-    perform cafaye.begin_credential(null);
-    perform cafaye.begin_credential('probe_digest_beta');
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_credential(null);
+    perform anywaye.begin_credential('probe_digest_beta');
+    perform pg_temp.anywaye_assert(
       r || '/credential-wrong-digest-resolves-nothing', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_credentials
+      (select count(*)::text from pg_temp.anywaye_probe_credentials
         where token_digest = 'probe_digest_alpha'),
       'a resolution session presenting BETA''s digest must not read ALPHA''s credential. The resolution is scoped by the value the caller presented, not by the fact that a resolution happened'
     );
@@ -451,30 +451,30 @@ begin
     -- (5) IT DOES NOT OPEN ANOTHER TABLE. The other half of "not a general
     --     bypass", and the assertion a BYPASSRLS role or a table-wide predicate
     --     fails while every other row in this block passes.
-    perform pg_temp.cafaye_assert(
+    perform pg_temp.anywaye_assert(
       r || '/credential-resolution-does-not-open-another-table', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_things),
+      (select count(*)::text from pg_temp.anywaye_probe_things),
       'a resolution session must read ZERO rows from every other protected table. The mechanism is a policy on ONE named table; if resolving a credential also opened account_users or assets, it would be the ambient bypass this directory exists to prevent, wearing a credential-shaped name'
     );
 
     -- (6) IT CANNOT WRITE. The resolve policy is `for select` and nothing else, so
     --     a resolution session meets the ordinary write policies, whose `with
     --     check` still demands an account identity. Measured as 42501 by
-    --     `cafaye_observed` rather than asserted as a shape: "the mechanism has no
+    --     `anywaye_observed` rather than asserted as a shape: "the mechanism has no
     --     write half" is a claim about a catalog, and the catalog is not the only
     --     way to be wrong.
     --
-    --     `cafaye_observed` is SECURITY INVOKER, so the statement runs as
+    --     `anywaye_observed` is SECURITY INVOKER, so the statement runs as
     --     whatever role this loop iteration is already set to — which is the only
     --     way to measure this: a SECURITY DEFINER recorder would run it as the
     --     owner, and the owner half would be reported as the login half's answer.
     --
     --     Run last in the loop, so the row this makes cannot perturb a count that
     --     has not been taken yet. Under FORCE it makes none: the insert is refused.
-    seen := pg_temp.cafaye_observed(
-      'insert into pg_temp.cafaye_probe_credentials (account_id, token_digest) values ('''
-      || pg_temp.cafaye_alpha()::text || ''', ''probe_digest_minted'')');
-    perform pg_temp.cafaye_assert(
+    seen := pg_temp.anywaye_observed(
+      'insert into pg_temp.anywaye_probe_credentials (account_id, token_digest) values ('''
+      || pg_temp.anywaye_alpha()::text || ''', ''probe_digest_minted'')');
+    perform pg_temp.anywaye_assert(
       r || '/credential-cannot-write-in-a-resolution-context', '42501', seen,
       'a resolution session must be unable to MINT a credential. The resolve policy is `for select` and no write counterpart exists, so the insert meets the ordinary `with check` and a NULL identity is refused. A mechanism that could write while resolving is how a lookup becomes a factory'
     );
@@ -491,21 +491,21 @@ $credential$;
 -- The expected value names the credential fixture AND ITS COLUMN, and the
 -- aggregate is over the whole database — so an implementation that reported
 -- nothing, or that also reported the non-credential fixture, fails here.
-select pg_temp.cafaye_assert(
-  'credential/the-mechanism-is-auditable', 'cafaye_probe_credentials:token_digest',
+select pg_temp.anywaye_assert(
+  'credential/the-mechanism-is-auditable', 'anywaye_probe_credentials:token_digest',
   (select string_agg(table_name || ':' || digest_column, ',' order by table_name)
-     from cafaye.credential_tables()),
-  'cafaye.credential_tables() must name every table carrying a credential resolution path, and the column each one resolves by. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing; and it is the only audit this mechanism claims — the digest is transaction-local, so WHO resolved is not auditable here and is not claimed'
+     from anywaye.credential_tables()),
+  'anywaye.credential_tables() must name every table carrying a credential resolution path, and the column each one resolves by. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing; and it is the only audit this mechanism claims — the digest is transaction-local, so WHO resolved is not auditable here and is not claimed'
 );
 
 -- The resolve policy is written like every other policy in this file, and neither
 -- property is visible in what it returns.
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'credential/resolve-policy-names-the-roles', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_credentials'::regclass
-      and p.polname = 'cafaye_probe_credentials_cafaye_resolve'
+    where p.polrelid = 'pg_temp.anywaye_probe_credentials'::regclass
+      and p.polname = 'anywaye_probe_credentials_anywaye_resolve'
       and (p.polroles = '{0}'::oid[]
            or not (p.polroles @> ARRAY[
                  (select oid from pg_roles where rolname = current_user || '_app')::oid,
@@ -514,12 +514,12 @@ select pg_temp.cafaye_assert(
   'the credential resolve policy must name the login role and the owner explicitly, exactly as the four account policies do. A policy left at the default is TO PUBLIC, which evaluates it for every role on the cluster'
 );
 
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'credential/resolve-policy-is-written-for-the-init-plan', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_credentials'::regclass
-      and p.polname = 'cafaye_probe_credentials_cafaye_resolve'
+    where p.polrelid = 'pg_temp.anywaye_probe_credentials'::regclass
+      and p.polname = 'anywaye_probe_credentials_anywaye_resolve'
       and strpos(
             replace(replace(replace(
               lower(coalesce(pg_get_expr(p.polqual, p.polrelid), '')),
@@ -563,20 +563,20 @@ declare
 begin
   foreach r in array array['login', 'owner'] loop
     if r = 'login' then
-      perform pg_temp.cafaye_as(current_user || '_app');
+      perform pg_temp.anywaye_as(current_user || '_app');
     else
-      perform pg_temp.cafaye_as(current_user);
+      perform pg_temp.anywaye_as(current_user);
     end if;
 
     -- (1) NO CALLER CONTEXT READS NOTHING. The fail-closed default, and what a
     --     substrate with `protect_table` alone already satisfies — which is why
     --     the defect this block exists for produced no red anywhere.
-    perform cafaye.begin_account(null);
-    perform cafaye.begin_user(null);
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_account(null);
+    perform anywaye.begin_user(null);
+    perform pg_temp.anywaye_assert(
       r || '/membership-no-user-context-reads-no-rows', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_memberships
-        where user_id = pg_temp.cafaye_member_one()),
+      (select count(*)::text from pg_temp.anywaye_probe_memberships
+        where user_id = pg_temp.anywaye_member_one()),
       'a request that has named no user must read no membership rows at all, by user id or otherwise. This is the state `identity` was in for every caller, and the reason the product screen said "you are not a member of any account"'
     );
 
@@ -584,11 +584,11 @@ begin
     --     exist anywhere else in this file, and the one whose absence is the
     --     whole bug: the account is what this query is FOR, so it cannot also be
     --     what the query is scoped by.
-    perform cafaye.begin_user(pg_temp.cafaye_member_one());
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_user(pg_temp.anywaye_member_one());
+    perform pg_temp.anywaye_assert(
       r || '/membership-discovers-accounts-with-no-account-identity', '2',
-      (select count(*)::text from pg_temp.cafaye_probe_memberships
-        where user_id = pg_temp.cafaye_member_one()),
+      (select count(*)::text from pg_temp.anywaye_probe_memberships
+        where user_id = pg_temp.anywaye_member_one()),
       'a signed-in person must be able to find the accounts they belong to with NO account identity set, because they are not standing in an account yet — that is what makes them a caller rather than a tenant. This is the assertion that does not exist anywhere else in this file'
     );
 
@@ -596,29 +596,29 @@ begin
     --     rather than a bypass. Member one is in TWO accounts on purpose: with
     --     one membership each, "my rows" and "the table" would be the same set
     --     and this assertion would be satisfied by a table-wide SELECT.
-    perform pg_temp.cafaye_assert(
+    perform pg_temp.anywaye_assert(
       r || '/membership-discovery-cannot-browse', '2',
-      (select count(*)::text from pg_temp.cafaye_probe_memberships),
+      (select count(*)::text from pg_temp.anywaye_probe_memberships),
       'an UNQUALIFIED read inside a discovery must return the two rows naming this caller and not the third, which names somebody else. Policies combine permissively, so a policy that merely permitted the select would return all three and hand a signed-in person every membership in the database'
     );
 
     -- (4) SOMEBODY ELSE'S MEMBERSHIPS RESOLVE NOTHING. The mirror of 3, because
     --     one direction can be an accident: a context that leaked the whole table
     --     would also pass a check that only looked at the rows you asked for.
-    perform cafaye.begin_user(pg_temp.cafaye_member_two());
-    perform pg_temp.cafaye_assert(
+    perform anywaye.begin_user(pg_temp.anywaye_member_two());
+    perform pg_temp.anywaye_assert(
       r || '/membership-another-user-resolves-nothing', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_memberships
-        where user_id = pg_temp.cafaye_member_one()),
+      (select count(*)::text from pg_temp.anywaye_probe_memberships
+        where user_id = pg_temp.anywaye_member_one()),
       'a caller named by MEMBER TWO must not read MEMBER ONE''s memberships. Discovery is scoped by the identity the caller was resolved to, not by the fact that a discovery happened — which is what a predicate of the form "a user context may select this table" would get wrong'
     );
 
     -- (5) IT DOES NOT OPEN ANOTHER TABLE. The other half of "not a general
     --     bypass", and the assertion a BYPASSRLS role or a table-wide predicate
     --     fails while every other row in this block passes.
-    perform pg_temp.cafaye_assert(
+    perform pg_temp.anywaye_assert(
       r || '/membership-discovery-does-not-open-another-table', '0',
-      (select count(*)::text from pg_temp.cafaye_probe_things),
+      (select count(*)::text from pg_temp.anywaye_probe_things),
       'a discovery session must read ZERO rows from every other protected table. The mechanism is a policy on ONE named table; if naming the caller also opened `assets` or `api_keys`, it would be the ambient bypass this directory exists to prevent, wearing a membership-shaped name'
     );
 
@@ -630,14 +630,14 @@ begin
     --     names the user to get its accounts list, and then assumes the table is
     --     open.
     --
-    --     Measured as 42501 by `cafaye_observed` rather than asserted as a
+    --     Measured as 42501 by `anywaye_observed` rather than asserted as a
     --     shape, for the reason the credential half's row 6 gives. Run last in
     --     the loop so the row it makes cannot perturb a count not yet taken.
-    seen := pg_temp.cafaye_observed(
-      'insert into pg_temp.cafaye_probe_memberships (account_id, user_id, role) values ('''
-      || pg_temp.cafaye_alpha()::text || ''', '''
-      || pg_temp.cafaye_member_one()::text || ''', ''owner'')');
-    perform pg_temp.cafaye_assert(
+    seen := pg_temp.anywaye_observed(
+      'insert into pg_temp.anywaye_probe_memberships (account_id, user_id, role) values ('''
+      || pg_temp.anywaye_alpha()::text || ''', '''
+      || pg_temp.anywaye_member_one()::text || ''', ''owner'')');
+    perform pg_temp.anywaye_assert(
       r || '/membership-discovery-cannot-write', '42501', seen,
       'naming yourself must not let you add yourself to an account. The discover policy is `for select` with no write counterpart, so the insert meets the ordinary `with check` and a NULL account identity is refused. Being able to see which accounts you are in is not the ability to change who is in them'
     );
@@ -652,21 +652,21 @@ $membership$;
 -- discovery path whose scope is only knowable by reading the source is an ambient
 -- path with a good name — and there are now two exemptions, so one query could no
 -- longer answer "can anything here be read without an account".
-select pg_temp.cafaye_assert(
-  'membership/the-mechanism-is-auditable', 'cafaye_probe_memberships:user_id',
+select pg_temp.anywaye_assert(
+  'membership/the-mechanism-is-auditable', 'anywaye_probe_memberships:user_id',
   (select string_agg(table_name || ':' || user_column, ',' order by table_name)
-     from cafaye.membership_tables()),
-  'cafaye.membership_tables() must name every table carrying a caller-discovery path, and the column each one discovers by. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing, and it is deliberately NOT cafaye.credential_tables(): the two exemptions are different claims, and one query answering both would report a membership table as resolvable by anybody who guesses a digest'
+     from anywaye.membership_tables()),
+  'anywaye.membership_tables() must name every table carrying a caller-discovery path, and the column each one discovers by. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing, and it is deliberately NOT anywaye.credential_tables(): the two exemptions are different claims, and one query answering both would report a membership table as resolvable by anybody who guesses a digest'
 );
 
 -- The discover policy is written like every other policy in this file, and neither
 -- property is visible in what it returns.
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'membership/discover-policy-names-the-roles', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_memberships'::regclass
-      and p.polname = 'cafaye_probe_memberships_cafaye_members'
+    where p.polrelid = 'pg_temp.anywaye_probe_memberships'::regclass
+      and p.polname = 'anywaye_probe_memberships_anywaye_members'
       and (p.polroles = '{0}'::oid[]
            or not (p.polroles @> ARRAY[
                  (select oid from pg_roles where rolname = current_user || '_app')::oid,
@@ -675,12 +675,12 @@ select pg_temp.cafaye_assert(
   'the membership discover policy must name the login role and the owner explicitly, exactly as the four account policies and the credential resolve policy do. A policy left at the default is TO PUBLIC, which evaluates it for every role on the cluster'
 );
 
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'membership/discover-policy-is-written-for-the-init-plan', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_memberships'::regclass
-      and p.polname = 'cafaye_probe_memberships_cafaye_members'
+    where p.polrelid = 'pg_temp.anywaye_probe_memberships'::regclass
+      and p.polname = 'anywaye_probe_memberships_anywaye_members'
       and strpos(
             replace(replace(replace(
               lower(coalesce(pg_get_expr(p.polqual, p.polrelid), '')),
@@ -706,40 +706,40 @@ declare
   updated integer;
   deleted integer;
 begin
-  perform pg_temp.cafaye_as(current_user || '_app');
-  perform cafaye.begin_account(pg_temp.cafaye_beta());
+  perform pg_temp.anywaye_as(current_user || '_app');
+  perform anywaye.begin_account(pg_temp.anywaye_beta());
 
-  update pg_temp.cafaye_probe_things set label = 'stolen'
-    where account_id = pg_temp.cafaye_alpha();
+  update pg_temp.anywaye_probe_things set label = 'stolen'
+    where account_id = pg_temp.anywaye_alpha();
   get diagnostics updated = row_count;
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login/update-of-another-tenants-row-affects-no-rows', '0', updated::text,
     'an UPDATE aimed at another account''s rows must match nothing. It does not raise — that is the shape of a `using` denial — so the row count is the only thing that says it was refused'
   );
 
-  delete from pg_temp.cafaye_probe_things where account_id = pg_temp.cafaye_alpha();
+  delete from pg_temp.anywaye_probe_things where account_id = pg_temp.anywaye_alpha();
   get diagnostics deleted = row_count;
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login/delete-of-another-tenants-row-affects-no-rows', '0', deleted::text,
     'a DELETE aimed at another account''s rows must match nothing'
   );
 
   reset role;
-  perform cafaye.begin_account(pg_temp.cafaye_alpha());
+  perform anywaye.begin_account(pg_temp.anywaye_alpha());
 
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login/denied-writes-left-the-other-tenants-rows-intact', 'alpha-1,alpha-2',
     (select string_agg(label, ',' order by label)::text
-       from pg_temp.cafaye_probe_things where account_id = pg_temp.cafaye_alpha()),
+       from pg_temp.anywaye_probe_things where account_id = pg_temp.anywaye_alpha()),
     'both denied writes must have left the other account''s rows exactly as they were. Read back as alpha, because the role that made the attempt cannot see the rows it was aiming at'
   );
 
   -- ...and the attempter's own rows are still its own, which is what stops the
   -- pair above from being satisfied by a policy that refuses every write.
-  perform cafaye.begin_account(pg_temp.cafaye_beta());
-  perform pg_temp.cafaye_assert(
+  perform anywaye.begin_account(pg_temp.anywaye_beta());
+  perform pg_temp.anywaye_assert(
     'login/own-rows-survive-its-own-writes', 'beta-1',
-    (select label::text from pg_temp.cafaye_probe_things where account_id = pg_temp.cafaye_beta()),
+    (select label::text from pg_temp.anywaye_probe_things where account_id = pg_temp.anywaye_beta()),
     'the denied writes must not have disturbed the caller''s own rows'
   );
 
@@ -767,40 +767,40 @@ do $role_half$
 declare
   seen text;
 begin
-  perform pg_temp.cafaye_as(current_user || '_app');
+  perform pg_temp.anywaye_as(current_user || '_app');
 
   -- An INSERT naming ANOTHER account. This is the write-side twin of the read
   -- denial, and the only cross-tenant write in this file that can raise.
-  seen := pg_temp.cafaye_observed(format(
-    'insert into pg_temp.cafaye_probe_things (account_id, label) values (%L, %L)',
-    pg_temp.cafaye_alpha()::text, 'intruder'));
+  seen := pg_temp.anywaye_observed(format(
+    'insert into pg_temp.anywaye_probe_things (account_id, label) values (%L, %L)',
+    pg_temp.anywaye_alpha()::text, 'intruder'));
   reset role;
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login/insert-into-another-tenants-account-is-refused', '42501', seen,
     'an INSERT naming another account must be refused outright. There is no `using` on an INSERT, so `with check` is the whole boundary, and this is the only cross-tenant write that can raise rather than match nothing');
 
-  perform pg_temp.cafaye_as(current_user || '_app');
-  seen := pg_temp.cafaye_observed(
-    'alter table pg_temp.cafaye_probe_things disable row level security');
+  perform pg_temp.anywaye_as(current_user || '_app');
+  seen := pg_temp.anywaye_observed(
+    'alter table pg_temp.anywaye_probe_things disable row level security');
   reset role;
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login-role/cannot-disable-row-level-security', '42501', seen,
     'the login role must be REFUSED the ability to switch the boundary off. No catalog can report this, and it is the whole reason the login role owns nothing: a role that could disable RLS would need no privilege at all to become unbounded');
 
-  perform pg_temp.cafaye_as(current_user || '_app');
-  seen := pg_temp.cafaye_observed(
-    'drop policy cafaye_probe_things_cafaye_select on pg_temp.cafaye_probe_things');
+  perform pg_temp.anywaye_as(current_user || '_app');
+  seen := pg_temp.anywaye_observed(
+    'drop policy anywaye_probe_things_anywaye_select on pg_temp.anywaye_probe_things');
   reset role;
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_assert(
     'login-role/cannot-drop-a-policy', '42501', seen,
     'the login role must be REFUSED the ability to remove a policy. A role that could drop a policy needs no privilege at all to become unbounded, and there is no FORCE against it');
 end
 $role_half$;
 
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'login-role/is-not-the-table-owner', 'true',
   (select (pg_get_userbyid(c.relowner) <> current_user || '_app')::text
-     from pg_class c where c.oid = 'pg_temp.cafaye_probe_things'::regclass),
+     from pg_class c where c.oid = 'pg_temp.anywaye_probe_things'::regclass),
   'the login role must not own the table. The two refusals above are the only thing standing between it and every account''s rows, and FORCE does not provide them'
 );
 
@@ -809,13 +809,13 @@ select pg_temp.cafaye_assert(
 -- row the count below is looking for.
 do $insert_ok$
 begin
-  perform pg_temp.cafaye_as(current_user || '_app');
-  perform cafaye.begin_account(pg_temp.cafaye_beta());
-  insert into pg_temp.cafaye_probe_things (account_id, label)
-  values (pg_temp.cafaye_beta(), 'beta-2');
-  perform pg_temp.cafaye_assert(
+  perform pg_temp.anywaye_as(current_user || '_app');
+  perform anywaye.begin_account(pg_temp.anywaye_beta());
+  insert into pg_temp.anywaye_probe_things (account_id, label)
+  values (pg_temp.anywaye_beta(), 'beta-2');
+  perform pg_temp.anywaye_assert(
     'login/insert-into-its-own-account-is-allowed', '1',
-    (select count(*)::text from pg_temp.cafaye_probe_things where label = 'beta-2'),
+    (select count(*)::text from pg_temp.anywaye_probe_things where label = 'beta-2'),
     'an INSERT into the caller''s own account must succeed. Without this, the refusal above is satisfied by a policy that refuses every write, which is a state a service reaches by accident when a `with check` is written against the wrong column');
   reset role;
 end
@@ -829,11 +829,11 @@ $insert_ok$;
 -- Supabase's guide's first rule, and the one everybody skips: name the roles in
 -- the policy. An unnamed policy is `TO PUBLIC`, which means it is evaluated for
 -- every role on the cluster including the nine other services'.
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'policies/name-the-roles', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_things'::regclass
+    where p.polrelid = 'pg_temp.anywaye_probe_things'::regclass
       and (p.polroles = '{0}'::oid[]
            or not (p.polroles @> ARRAY[
                  (select oid from pg_roles where rolname = current_user || '_app')::oid,
@@ -850,11 +850,11 @@ select pg_temp.cafaye_assert(
 -- The rendering is normalised the way Supabase's own permissive-policy lint
 -- normalises it (strip spaces, newlines and tabs, lowercase) because `pg_get_expr`
 -- is a pretty-printer and its output is not a stable string.
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'policies/written-for-the-init-plan', '0',
   (select count(*)::text
      from pg_policy p
-    where p.polrelid = 'pg_temp.cafaye_probe_things'::regclass
+    where p.polrelid = 'pg_temp.anywaye_probe_things'::regclass
       and strpos(
             replace(replace(replace(
               lower(coalesce(pg_get_expr(p.polqual, p.polrelid), '')
@@ -871,15 +871,15 @@ select pg_temp.cafaye_assert(
 -- The control. Without it, an empty sweep is satisfied by a sweep that reports
 -- nothing, which is the same shape as an isolation test that only asserts "no
 -- identity reads zero rows".
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'sweep/names-an-unprotected-table', '1',
-  (select count(*)::text from cafaye.unprotected_tables()
-    where table_name = 'cafaye_probe_unprotected'),
-  'cafaye.unprotected_tables() must actually report a table with an account_id column and no policies. If it does not, the assertion below is satisfied by a sweep that reports nothing at all'
+  (select count(*)::text from anywaye.unprotected_tables()
+    where table_name = 'anywaye_probe_unprotected'),
+  'anywaye.unprotected_tables() must actually report a table with an account_id column and no policies. If it does not, the assertion below is satisfied by a sweep that reports nothing at all'
 );
 
 -- The sweep itself, over the schemas THE SUBSTRATE OWNS: every schema holding a
--- table `cafaye.protect_table` protected, plus the `cafaye` schema and this
+-- table `anywaye.protect_table` protected, plus the `anywaye` schema and this
 -- session's temporary one. This is the assertion that keeps a service honest as
 -- it grows: a table added next month with an account_id column and no policies,
 -- IN A SCHEMA THE SERVICE ALREADY USES, is named here on the next run.
@@ -892,12 +892,12 @@ select pg_temp.cafaye_assert(
 -- a count that moved with how many neighbouring tests were mid-flight (5 on one
 -- run, 21 on the next). The scope is the substrate's own, because the property
 -- this asserts is about the tables the SERVICE INSTALLED. See the block above
--- `cafaye.unprotected_tables()` in substrate.sql for why the scope is derived
+-- `anywaye.unprotected_tables()` in substrate.sql for why the scope is derived
 -- from the catalog rather than recorded in a table this file's adopters would
 -- have had to migrate first.
-select pg_temp.cafaye_assert(
+select pg_temp.anywaye_assert(
   'sweep/every-account-scoped-table-is-protected', '1',
-  (select count(*)::text from cafaye.unprotected_tables()),
+  (select count(*)::text from anywaye.unprotected_tables()),
   'every account-scoped table in every schema the substrate was applied in must be enabled, FORCED and carrying policies. Exactly one is expected to be reported: the control table this file created on purpose'
 );
 
@@ -906,10 +906,10 @@ select pg_temp.cafaye_assert(
 -- unordered aggregate is a red on a correct database whenever the planner is in
 -- a different mood — which is the same class of defect as an assertion whose
 -- tolerance hides another tenant's rows.
-select pg_temp.cafaye_assert(
-  'sweep/the-only-finding-is-the-control', 'cafaye_probe_unprotected:row level security is not enabled',
+select pg_temp.anywaye_assert(
+  'sweep/the-only-finding-is-the-control', 'anywaye_probe_unprotected:row level security is not enabled',
   (select string_agg(table_name || ':' || why, ',' order by table_schema, table_name)
-     from cafaye.unprotected_tables()),
+     from anywaye.unprotected_tables()),
   'the sweep must name the control table and nothing else, with a reason. A sweep that reported a real table as well would mean this file''s own fixture was not protected'
 );
 
@@ -919,5 +919,5 @@ select pg_temp.cafaye_assert(
 -- these rows first.
 -- ---------------------------------------------------------------------------
 select assertion, expected, actual, verdict, why
-  from pg_temp.cafaye_probe_result
+  from pg_temp.anywaye_probe_result
  order by assertion;

@@ -29,12 +29,12 @@ So this had to be built. What follows is the smallest thing that is not a toy.
 ## The canary
 
 A fake credential that is **unmistakably fake** and **unmistakably a
-credential**: the prefix `cafaye_canary_` followed by 32 bytes. Plant it in the
+credential**: the prefix `anywaye_canary_` followed by 32 bytes. Plant it in the
 service's own configuration, run the whole suite, then sweep for it everywhere it
 could have gone.
 
 **It is assembled at run time, never written as a literal.** That is a security
-property, not a style one. A committed 46-character `cafaye_canary_…` is, to
+property, not a style one. A committed 46-character `anywaye_canary_…` is, to
 every scanner in the world, a high-entropy credential-shaped string — it is
 exactly what this repository's own `secrets` job is built to report, and
 allowlisting it would be the precise failure the allowlist's

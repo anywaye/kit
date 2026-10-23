@@ -12,7 +12,7 @@
 #      process. This is the enforcement point core's redaction.schema.json
 #      names as `enforcedAt: collector`.
 #   3a. DROPS THE HIGH-CARDINALITY DIMENSIONS AT INGEST, BY NAME. The
-#      allowlist above works by omission; `transform/cafaye_metrics_ingest_drop`
+#      allowlist above works by omission; `transform/anywaye_metrics_ingest_drop`
 #      writes the deny set down — `tenant_id`, `account_id`, `request_id`,
 #      `user_id`, `email`, `url.full`, `error.message` and their OpenTelemetry
 #      twins — so the coverage is legible and so a later widening is a line
@@ -154,7 +154,7 @@ processors:
   # independent controls, because the realistic way this leaks is one of them
   # being removed by a well-meaning change and nobody noticing for a month.
   # -------------------------------------------------------------------------
-  redaction/cafaye_traces:
+  redaction/anywaye_traces:
     allow_all_keys: false
     # THE RESOURCE EXEMPTION, AND IT IS NOT OPTIONAL.
     #
@@ -174,7 +174,7 @@ processors:
     # resource — and `ignored_keys` cannot tell the two apart: it is one flat
     # list, so exempting `tenant_id` for the resource would also exempt it on
     # every data point, which is precisely the cardinality bomb the metric
-    # exists to prevent. The stash/restore pair in `transform/cafaye_resource_*`
+    # exists to prevent. The stash/restore pair in `transform/anywaye_resource_*`
     # below is what exempts a resource attribute WITHOUT exempting the
     # measurement of the same name.
     #
@@ -183,12 +183,12 @@ processors:
     # reason this is written down — the canary test found the gap by failing,
     # and the first version of this config had no `ignored_keys` at all.
     #
-    # `cafaye.stashed.*` MUST be here, and this line is load-bearing in a way
+    # `anywaye.stashed.*` MUST be here, and this line is load-bearing in a way
     # that is invisible until a trace is read back. Those two names are the
     # carrier the stash writes and the restore reads; a name this processor
     # does not exempt is a name it DELETES. So with the stash running and the
     # redaction processor omitting this pair, the sequence is: stash writes
-    # `cafaye.stashed.tenant_id` — redaction deletes it — restore reads nothing
+    # `anywaye.stashed.tenant_id` — redaction deletes it — restore reads nothing
     # and puts `tenant_id` back from an empty source. Every trace then arrives
     # with no `tenant_id` and no `account_id` on its resource, silently, while
     # the metrics pipeline keeps both, because the metrics processor is the one
@@ -209,8 +209,8 @@ processors:
       - telemetry.sdk.name
       - telemetry.sdk.language
       - telemetry.sdk.version
-      - cafaye.stashed.tenant_id
-      - cafaye.stashed.account_id
+      - anywaye.stashed.tenant_id
+      - anywaye.stashed.account_id
     allowed_keys:
       - http.request.method
       - http.response.status_code
@@ -250,7 +250,7 @@ processors:
     # to publish.
     summary: ${env:KIT_OTEL_REDACTION_SUMMARY}
 
-  redaction/cafaye_logs:
+  redaction/anywaye_logs:
     allow_all_keys: false
     # Same resource exemption as the traces processor, for the same reason. A
     # log record with no `service.name` on its resource is a record no label can
@@ -260,7 +260,7 @@ processors:
     # traces: one flat `ignored_keys` list cannot exempt a resource without also
     # exempting the measurement.
     #
-    # `cafaye.stashed.*` here for the same reason as on traces, and the failure
+    # `anywaye.stashed.*` here for the same reason as on traces, and the failure
     # mode is the same: without them the redaction processor deletes the
     # carrier the restore is about to read, so no log record arrives with
     # `tenant_id` on its resource and the per-tenant log view is empty.
@@ -273,8 +273,8 @@ processors:
       - telemetry.sdk.name
       - telemetry.sdk.language
       - telemetry.sdk.version
-      - cafaye.stashed.tenant_id
-      - cafaye.stashed.account_id
+      - anywaye.stashed.tenant_id
+      - anywaye.stashed.account_id
     allowed_keys:
       - log.severity
       - service.name
@@ -286,7 +286,7 @@ processors:
       - "[Bb]earer[ ]+[A-Za-z0-9._-]{16,}"
     summary: ${env:KIT_OTEL_REDACTION_SUMMARY}
 
-  redaction/cafaye_metrics:
+  redaction/anywaye_metrics:
     allow_all_keys: false
     # THE RESOURCE EXEMPTION IS THE WHOLE POINT ON THIS SIGNAL, and it is worth
     # reading twice. core's metrics schema is not being pedantic when it requires
@@ -299,8 +299,8 @@ processors:
     # Strip the resource attributes and that mechanism is gone, silently, and
     # the dashboard keeps rendering.
     #
-    # `cafaye.stashed.*` is the only `ignored_keys` entry that is not a real
-    # cafaye attribute, and it exists because of the asymmetry named above: the
+    # `anywaye.stashed.*` is the only `ignored_keys` entry that is not a real
+    # anywaye attribute, and it exists because of the asymmetry named above: the
     # stash/restore pair moves `tenant_id` under a private name, the redaction
     # processor is told to ignore the private name, and the restore puts
     # `tenant_id` back on the RESOURCE only. Verified against the pinned image
@@ -317,8 +317,8 @@ processors:
       - telemetry.sdk.name
       - telemetry.sdk.language
       - telemetry.sdk.version
-      - cafaye.stashed.tenant_id
-      - cafaye.stashed.account_id
+      - anywaye.stashed.tenant_id
+      - anywaye.stashed.account_id
     # The MEASUREMENT dimensions, and nothing else. This list is what core's
     # 2000-combination argument turns on: every entry is bounded by an enum,
     # a length cap or a small range, so the product of the cardinalities is a
@@ -338,7 +338,7 @@ processors:
       - db.operation
       - messaging.system
       - error.type
-      # `otel.status_code`, put back by `transform/cafaye_metrics` from the
+      # `otel.status_code`, put back by `transform/anywaye_metrics` from the
       # connector's `status.code` and NOT by any decision to widen this list.
       # core's metrics schema does not name it, which is a gap in core and a
       # DECISION NEEDED in kit's report; core's TRACES schema does allow it, and
@@ -374,71 +374,71 @@ processors:
   # Order is load-bearing in both directions: the stash MUST come before the
   # redaction processor or there is nothing left to stash, and the restore MUST
   # come after it or the private name is what gets exported instead.
-  transform/cafaye_resource_stash:
+  transform/anywaye_resource_stash:
     error_mode: ignore
     trace_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["cafaye.stashed.tenant_id"], attributes["tenant_id"])
+            set(attributes["anywaye.stashed.tenant_id"], attributes["tenant_id"])
             where attributes["tenant_id"] != nil
           - >-
-            set(attributes["cafaye.stashed.account_id"], attributes["account_id"])
+            set(attributes["anywaye.stashed.account_id"], attributes["account_id"])
             where attributes["account_id"] != nil
     log_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["cafaye.stashed.tenant_id"], attributes["tenant_id"])
+            set(attributes["anywaye.stashed.tenant_id"], attributes["tenant_id"])
             where attributes["tenant_id"] != nil
           - >-
-            set(attributes["cafaye.stashed.account_id"], attributes["account_id"])
+            set(attributes["anywaye.stashed.account_id"], attributes["account_id"])
             where attributes["account_id"] != nil
     metric_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["cafaye.stashed.tenant_id"], attributes["tenant_id"])
+            set(attributes["anywaye.stashed.tenant_id"], attributes["tenant_id"])
             where attributes["tenant_id"] != nil
           - >-
-            set(attributes["cafaye.stashed.account_id"], attributes["account_id"])
+            set(attributes["anywaye.stashed.account_id"], attributes["account_id"])
             where attributes["account_id"] != nil
 
-  transform/cafaye_resource_restore:
+  transform/anywaye_resource_restore:
     error_mode: ignore
     trace_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["tenant_id"], attributes["cafaye.stashed.tenant_id"])
-            where attributes["cafaye.stashed.tenant_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.tenant_id")'
+            set(attributes["tenant_id"], attributes["anywaye.stashed.tenant_id"])
+            where attributes["anywaye.stashed.tenant_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.tenant_id")'
           - >-
-            set(attributes["account_id"], attributes["cafaye.stashed.account_id"])
-            where attributes["cafaye.stashed.account_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.account_id")'
+            set(attributes["account_id"], attributes["anywaye.stashed.account_id"])
+            where attributes["anywaye.stashed.account_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.account_id")'
     log_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["tenant_id"], attributes["cafaye.stashed.tenant_id"])
-            where attributes["cafaye.stashed.tenant_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.tenant_id")'
+            set(attributes["tenant_id"], attributes["anywaye.stashed.tenant_id"])
+            where attributes["anywaye.stashed.tenant_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.tenant_id")'
           - >-
-            set(attributes["account_id"], attributes["cafaye.stashed.account_id"])
-            where attributes["cafaye.stashed.account_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.account_id")'
+            set(attributes["account_id"], attributes["anywaye.stashed.account_id"])
+            where attributes["anywaye.stashed.account_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.account_id")'
     metric_statements:
       - context: resource
         statements:
           - >-
-            set(attributes["tenant_id"], attributes["cafaye.stashed.tenant_id"])
-            where attributes["cafaye.stashed.tenant_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.tenant_id")'
+            set(attributes["tenant_id"], attributes["anywaye.stashed.tenant_id"])
+            where attributes["anywaye.stashed.tenant_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.tenant_id")'
           - >-
-            set(attributes["account_id"], attributes["cafaye.stashed.account_id"])
-            where attributes["cafaye.stashed.account_id"] != nil
-          - 'delete_key(attributes, "cafaye.stashed.account_id")'
+            set(attributes["account_id"], attributes["anywaye.stashed.account_id"])
+            where attributes["anywaye.stashed.account_id"] != nil
+          - 'delete_key(attributes, "anywaye.stashed.account_id")'
 
   # SPAN EVENTS ARE NOT ATTRIBUTES, and the redaction processor does not reach
   # them.
@@ -463,7 +463,7 @@ processors:
   # "something threw" and "something threw a ProviderAuthError". The migration
   # this implements moves the RECORD to logs; it does not make the old span
   # event useless, it makes the message in it unshippable.
-  transform/cafaye_span_events:
+  transform/anywaye_span_events:
     error_mode: ignore
     trace_statements:
       - context: spanevent
@@ -489,7 +489,7 @@ processors:
   # status Error, not error.type", and the fleet dashboard filters on it. The
   # `spanmetrics` connector projects a span's status onto a metric datapoint
   # attribute called `status_code` — and that attribute is on NOBODY's
-  # allowlist, so `redaction/cafaye_metrics` deleted it, and every panel
+  # allowlist, so `redaction/anywaye_metrics` deleted it, and every panel
   # filtering on `status_code="STATUS_CODE_ERROR"` returned nothing.
   #
   # That is the whole of the finding: the redaction boundary, working exactly as
@@ -511,7 +511,7 @@ processors:
   # `otel.status_code`, because the spanmetrics connector is how this fleet gets
   # its metrics and the status predicate has to live on a measurement
   # somewhere.
-  transform/cafaye_metrics:
+  transform/anywaye_metrics:
     error_mode: ignore
     metric_statements:
       - context: datapoint
@@ -536,7 +536,7 @@ processors:
   # STORAGE only for what a human chose to keep.
   #
   # So this collector has always been drop-by-default too, because
-  # `redaction/cafaye_metrics` is `allow_all_keys: false` with seven bounded
+  # `redaction/anywaye_metrics` is `allow_all_keys: false` with seven bounded
   # `allowed_keys`. What it did not have is the DENY SET written out. That is not
   # the same property, for a reason this file has already been bitten by twice: a
   # filter that works by omission is a filter whose coverage is invisible, and a
@@ -546,7 +546,7 @@ processors:
   #
   # Naming the drop is what makes it checkable, and what makes a future widening
   # deliberate: a name added here, or to `spanmetrics.dimensions`, or to
-  # `redaction/cafaye_metrics.allowed_keys`, is now a line somebody read.
+  # `redaction/anywaye_metrics.allowed_keys`, is now a line somebody read.
   #
   # WHY DATAPOINT CONTEXT AND NOT THE RESOURCE, which is the subtle bit. In this
   # collector `tenant_id` is stashed onto the RESOURCE and restored onto the
@@ -593,13 +593,13 @@ processors:
   # IT IS NOT THE ONLY LINE, and it is not being trusted as one. The three
   # `redaction/*` processors already drop every one of these names by omission,
   # and the `spanmetrics` connector sits at the END of the traces pipeline, so it
-  # only ever sees spans `redaction/cafaye_traces` has already emptied. This
+  # only ever sees spans `redaction/anywaye_traces` has already emptied. This
   # transform is the explicit, legible statement of a property the allowlist also
   # provides, plus the coverage the allowlist cannot express: the OTel twins,
   # which are on no schema here at all, and would be added to one by a future
   # core change with nobody reading this file.
   # -------------------------------------------------------------------------
-  transform/cafaye_metrics_ingest_drop:
+  transform/anywaye_metrics_ingest_drop:
     error_mode: ignore
     metric_statements:
       - context: datapoint
@@ -658,7 +658,7 @@ processors:
   # first version of this config put these three statements in the
   # pre-redaction transform and the labels came through unchanged, which is
   # exactly the kind of thing a comment can prevent and a test cannot.
-  transform/cafaye_metrics_labels:
+  transform/anywaye_metrics_labels:
     error_mode: ignore
     metric_statements:
       # THE `_total` SUFFIX, and its absence is a warning on every panel.
@@ -678,18 +678,18 @@ processors:
         statements:
           # `Concat`'s second argument is the DELIMITER, not a prefix — the
           # first version passed `":"` and produced a metric called
-          # `cafaye_calls:_total`, which is worse than no suffix at all because
+          # `anywaye_calls:_total`, which is worse than no suffix at all because
           # it looks deliberate.
           #
           # AND THE ESCAPING IS THE WHOLE STORY. The pattern used to read
           # `IsMatch(name, "\\.calls$")` — inside a YAML SINGLE-QUOTED scalar,
           # where a backslash is not an escape character, so OTTL received a
           # regex of `\\.calls$`: a literal BACKSLASH followed by any character
-          # followed by `calls`. The connector emits `cafaye.calls`, which that
+          # followed by `calls`. The connector emits `anywaye.calls`, which that
           # does not match, so the rename never fired on any metric, ever.
           #
           # This processor was wired into the metrics pipeline and documented at
-          # length, and every dashboard panel queries `cafaye_calls_total` (Mimir
+          # length, and every dashboard panel queries `anywaye_calls_total` (Mimir
           # mangles the dot to an underscore on OTLP ingestion), so every panel
           # on both dashboards rendered "No data" against a stack that was
           # working perfectly. Found by asking Mimir what series it actually
@@ -707,7 +707,7 @@ processors:
           - 'delete_key(attributes, "redaction.redacted.keys")'
           - 'delete_key(attributes, "redaction.ignored.count")'
 
-  transform/cafaye_logs:
+  transform/anywaye_logs:
     error_mode: ignore
     log_statements:
       - context: log
@@ -745,7 +745,7 @@ connectors:
   # dashboards that have to be compared by eye.
   #
   # It sits at the END of the traces pipeline, so the spans it has already
-  # been through `redaction/cafaye_traces`. A dimension the redaction
+  # been through `redaction/anywaye_traces`. A dimension the redaction
   # processor stripped produces a metric whose label is permanently empty —
   # a column that looks like "no traffic" and is really "your filter ran
   # first" — so every dimension below is asserted to be an allowed key.
@@ -895,7 +895,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      # `transform/cafaye_span_events` before the redaction processor and not
+      # `transform/anywaye_span_events` before the redaction processor and not
       # after: the event attributes are outside the processor's reach, so this
       # has to happen whether or not the allowlist later decides anything.
       #
@@ -904,10 +904,10 @@ service:
       # `tenant_id` on the resource without also exempting it on the span.
       processors:
         - memory_limiter
-        - transform/cafaye_span_events
-        - transform/cafaye_resource_stash
-        - redaction/cafaye_traces
-        - transform/cafaye_resource_restore
+        - transform/anywaye_span_events
+        - transform/anywaye_resource_stash
+        - redaction/anywaye_traces
+        - transform/anywaye_resource_restore
         - batch
       # spanmetrics is an exporter here and a receiver in the metrics pipeline
       # below, which is what a connector is. Tempo, ClickStack and the local
@@ -926,19 +926,19 @@ service:
       # derive the attributes the allowlist is about to judge, then let it judge.
       processors:
         - memory_limiter
-        - transform/cafaye_metrics
+        - transform/anywaye_metrics
         # The high-cardinality deny set, BEFORE anything else in this pipeline
-        # sees a datapoint. `redaction/cafaye_metrics` below drops the same
+        # sees a datapoint. `redaction/anywaye_metrics` below drops the same
         # names by omission and is the load-bearing line; this one makes the
         # drop explicit, names it, and covers the OpenTelemetry spellings core's
         # schema has never heard of. Order relative to the redaction processor
         # is therefore not load-bearing — both run before `batch`, therefore
         # before every exporter, and that IS load-bearing.
-        - transform/cafaye_metrics_ingest_drop
-        - transform/cafaye_resource_stash
-        - redaction/cafaye_metrics
-        - transform/cafaye_metrics_labels
-        - transform/cafaye_resource_restore
+        - transform/anywaye_metrics_ingest_drop
+        - transform/anywaye_resource_stash
+        - redaction/anywaye_metrics
+        - transform/anywaye_metrics_labels
+        - transform/anywaye_resource_restore
         - batch
       # ClickStack is the store; see the note above the `debug` exporter for
       # why it is this and not Mimir, and why `debug` is still on this list.
@@ -953,15 +953,15 @@ service:
       # the allowlist decide what survives. The other way round computes a
       # severity and then immediately drops it.
       #
-      # `cafaye_resource_stash` is here for the same reason as on the other two
+      # `anywaye_resource_stash` is here for the same reason as on the other two
       # signals, and the crash layer is where it matters most: a log record with
       # no service label is a record nothing can be filtered by, and a metric
       # with a tenant on the data point is a cardinality bomb.
       processors:
         - memory_limiter
-        - transform/cafaye_logs
-        - transform/cafaye_resource_stash
-        - redaction/cafaye_logs
-        - transform/cafaye_resource_restore
+        - transform/anywaye_logs
+        - transform/anywaye_resource_stash
+        - redaction/anywaye_logs
+        - transform/anywaye_resource_restore
         - batch
       exporters: [otlphttp/loki, otlp/clickstack]

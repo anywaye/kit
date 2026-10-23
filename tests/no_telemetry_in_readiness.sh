@@ -173,7 +173,7 @@ services:
       KIT_OTEL_REDACTION_SUMMARY: info
       KIT_OTEL_BATCH_TIMEOUT: 1s
       KIT_OTEL_BATCH_SIZE: 16
-      KIT_OTEL_METRIC_NAMESPACE: cafaye
+      KIT_OTEL_METRIC_NAMESPACE: anywaye
       KIT_OTEL_METRICS_FLUSH_INTERVAL: 5s
       # A URL, with a scheme, for the `otlphttp` exporter — and that is not
       # a style detail. The `otlphttp` component parses its endpoint as a URL
@@ -280,7 +280,7 @@ while True:
 PY
 
   cat >"$WORK/probe/svc.py" <<'PY'
-# Stands in for a cafaye service: /healthz unconditional, /readyz a real check.
+# Stands in for a anywaye service: /healthz unconditional, /readyz a real check.
 #
 # The OTLP endpoint is read and deliberately never dialled. A service that
 # resolved it would be a service with a telemetry dependency; the whole claim is

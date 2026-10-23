@@ -22,7 +22,7 @@ assertions.txt    the manifest. What the proof is supposed to assert, by name.
 isolation.sql     the assertion set. Run it; it answers with one row per
                   assertion, and a driver compares the NAMES against the manifest.
 advisor.sql       the DATABASE grading itself. Load it; call
-                  cafaye.advisor_findings(); it answers with one row per
+                  anywaye.advisor_findings(); it answers with one row per
                   finding, each naming a rule, the object it fired on, and the
                   SQL that fixes it.
 README.md         this file.
@@ -60,11 +60,11 @@ holds many accounts has two boundaries, and the inner one was the one nobody had
 ## Adopting this
 
 1. Copy `substrate.sql` and `isolation.sql` and `assertions.txt` into your
-   migrations and your test fixtures, and call `cafaye.protect_table` from the
+   migrations and your test fixtures, and call `anywaye.protect_table` from the
    migration that creates each account-scoped table:
 
    ```sql
-   select cafaye.protect_table('assets');
+   select anywaye.protect_table('assets');
    ```
 
    That is the only call **for an ordinary account-scoped table**. There are two
@@ -83,12 +83,12 @@ holds many accounts has two boundaries, and the inner one was the one nobody had
    templates is unaffected: `<service>` is unchanged and still owns everything it
    always did.
 
-3. Call `cafaye.begin_account/1` once per request, inside your transaction, from
+3. Call `anywaye.begin_account/1` once per request, inside your transaction, from
    whatever already authenticates the request:
 
    ```sql
    begin;
-   select cafaye.begin_account($1);   -- the account your token resolved to
+   select anywaye.begin_account($1);   -- the account your token resolved to
    select * from assets;              -- scoped, whether or not the query says so
    commit;
    ```
@@ -106,17 +106,17 @@ holds many accounts has two boundaries, and the inner one was the one nobody had
    half already existed and is unaffected.
 
 6. **If a table is resolved by an unguessable value** — an API key, an invitation
-   token — call `cafaye.protect_credential_table('<table>', '<digest_column>')`
+   token — call `anywaye.protect_credential_table('<table>', '<digest_column>')`
    *instead of* `protect_table`, and open the resolution with
-   `cafaye.begin_credential($1)` in the same transaction as the lookup. One call,
+   `anywaye.begin_credential($1)` in the same transaction as the lookup. One call,
    same size as `protect_table`'s, and it is not an extra step: without it every
    scoped credential in the service authenticates as 401 "not found". Read
    [the section below](#the-third-trap-a-credential-table-cannot-be-scoped-by-an-account-it-does-not-have-yet)
    first, including the list of what it cannot do.
 
 7. **If a table maps people to accounts** — a membership table, `account_users` —
-   call `cafaye.protect_membership_table('<table>', '<user_column>')` *instead of*
-   `protect_table`, and open the caller with `cafaye.begin_user($1)` in the same
+   call `anywaye.protect_membership_table('<table>', '<user_column>')` *instead of*
+   `protect_table`, and open the caller with `anywaye.begin_user($1)` in the same
    transaction as the lookup. Same size, same shape, same protections; the only
    thing it adds is a fifth `for select` policy predicated on the CALLER rather
    than on an account. Read
@@ -139,7 +139,7 @@ it is trying to compute. `identity` measured this against its real protected
 | identity = the credential's own account | 1 |
 | identity = another tenant's identity | 0 |
 
-The first line is the finding. A request presenting `cafaye_…` has not resolved
+The first line is the finding. A request presenting `anywaye_…` has not resolved
 the token yet, so it has no account, so the lookup authenticating it reads nothing,
 `ErrNoRows` becomes "not found", and the HTTP layer answers **401**. Every machine
 credential, refused as though it did not exist — the quietest possible failure, and
@@ -149,7 +149,7 @@ ALL` has no policies at all.
 ### The mechanism: one policy whose qualifier is the digest you presented
 
 ```sql
-select cafaye.protect_credential_table('api_keys', 'token_digest');
+select anywaye.protect_credential_table('api_keys', 'token_digest');
 ```
 
 One call, the same size as `protect_table`'s. It protects the table exactly as
@@ -157,16 +157,16 @@ One call, the same size as `protect_table`'s. It protects the table exactly as
 on `account_id` — and then adds a fifth:
 
 ```sql
-create policy api_keys_cafaye_resolve on api_keys
+create policy api_keys_anywaye_resolve on api_keys
   for select to <owner>, <service>_app
-  using (token_digest = (select cafaye.current_credential_digest()))
+  using (token_digest = (select anywaye.current_credential_digest()))
 ```
 
 and the caller opens the resolution the way it opens the account:
 
 ```sql
 begin;
-select cafaye.begin_credential($1);          -- the digest it already computed
+select anywaye.begin_credential($1);          -- the digest it already computed
 select … from api_keys where token_digest = $1;   -- the row returns
 commit;                                     -- the digest expires with it
 ```
@@ -210,7 +210,7 @@ Every other table reads zero rows.
    transaction-local and leaves nothing behind. What *is* auditable is the scope:
 
    ```sql
-   select * from cafaye.credential_tables();
+   select * from anywaye.credential_tables();
    --  table_schema | table_name | digest_column
    ```
 
@@ -223,13 +223,13 @@ Every other table reads zero rows.
    unqualified whenever the *reader's* `search_path` resolves it, and `"$user"` is
    a search_path entry — so an audit written against the rendered policy text
    returns everything to the owner's role and **nothing at all** to the cluster's
-   admin role, whose `"$user"` schema is the `cafaye` schema itself. "This database
+   admin role, whose `"$user"` schema is the `anywaye` schema itself. "This database
    has no credential path" is the most expensive sentence in this file to be wrong
    about, so the function resolves the digest function and the column it is
    compared against from `pg_depend`, which records them as OIDs, and
    `tests/tenancy_test.sh` reads it as three roles and requires one answer.
 
-### What it was instead of, and why — `cafaye/notes/decisions.md` (MD24)
+### What it was instead of, and why — `anywaye/notes/decisions.md` (MD24)
 
 - **A `BYPASSRLS` role.** This is Supabase's answer, and it is right for Supabase's
   topology: `service_role` is created `nologin noinherit bypassrls`, granted only
@@ -275,13 +275,13 @@ the credential trap is loud (a 401) and this one is silent, because "denied" and
 ### The mechanism: one policy whose qualifier is who is asking
 
 ```sql
-select cafaye.protect_membership_table('account_users', 'user_id');
+select anywaye.protect_membership_table('account_users', 'user_id');
 ```
 
 and, in the same transaction, before the query:
 
 ```sql
-select cafaye.begin_user($1);   -- the users.id your session resolved to
+select anywaye.begin_user($1);   -- the users.id your session resolved to
 ```
 
 One call, the same size as `protect_table`'s. It protects the table exactly as
@@ -290,9 +290,9 @@ One call, the same size as `protect_table`'s. It protects the table exactly as
 whose qualifier is the caller:
 
 ```sql
-create policy account_users_cafaye_members on account_users
+create policy account_users_anywaye_members on account_users
   for select to identity, identity_app
-  using (user_id = (select cafaye.current_user_id()));
+  using (user_id = (select anywaye.current_user_id()));
 ```
 
 So the table answers both questions it has: *your account's members* (the four
@@ -317,9 +317,9 @@ memberships* (this one, and a caller who has not chosen an account yet does not)
 
 ### It is a second audit, and deliberately not an extension of the first
 
-`cafaye.membership_tables()` answers "which tables in this database can be read
+`anywaye.membership_tables()` answers "which tables in this database can be read
 with no account because of WHO IS ASKING", and it is a separate function rather
-than a parameter of `cafaye.credential_tables()`. One query answering both would
+than a parameter of `anywaye.credential_tables()`. One query answering both would
 report a membership table as resolvable by anybody who guesses a digest, and that
 is the same conflation this directory refuses everywhere else — two different
 exemptions are two different claims about who may read what.
@@ -372,8 +372,8 @@ proves nothing about it.
 ## THE OTHER TRAP: `(select …)` costs nothing to get right
 
 ```sql
-using (      cafaye.current_account_id() = account_id )      -- per ROW
-using ( (select cafaye.current_account_id()) = account_id )  -- per STATEMENT
+using (      anywaye.current_account_id() = account_id )      -- per ROW
+using ( (select anywaye.current_account_id()) = account_id )  -- per STATEMENT
 ```
 
 Postgres hoists an uncorrelated scalar subquery into an **InitPlan** and evaluates
@@ -458,7 +458,7 @@ of the wrong 54.
 
 ## Cross-tenant access is absence, not refusal
 
-`cafaye.current_account_id()` returns NULL when no account has been set, so every
+`anywaye.current_account_id()` returns NULL when no account has been set, so every
 policy reads zero rows rather than raising. A `403` tells an attacker the id
 exists; `nil`/`[]`/an empty result tells them nothing. This is core's D33
 (`core/docs/tenancy.md`) arriving from the other end, and the one place a
@@ -472,7 +472,7 @@ about the account.
    `FORCE` removed its exemption and no policy names it without one. That is the
    correct posture and it is the adoption cost: a migration that backfills rows
    sets the identity (`set local role <service>_app; select
-   cafaye.begin_account(…)`) and reads exactly one account's rows. It fails loudly
+   anywaye.begin_account(…)`) and reads exactly one account's rows. It fails loudly
    and immediately, which is the good direction.
 
    **It does not get better with a `SECURITY DEFINER` function**, which is the
@@ -560,7 +560,7 @@ been a ratchet instead of an exemption.
   **honest zero** and needs none of this.
 - **That a schema the substrate was never applied to holds no account-scoped
   table.** The sweep's scope is the schemas `protect_table` protected, plus
-  `cafaye` and the session's temporary schema, so customer rows in a schema no
+  `anywaye` and the session's temporary schema, so customer rows in a schema no
   `protect_table` call named are outside it. The alternative — a whole-database
   scan — was measured on `identity` and it reports **every other test's fixture
   schema**: its test helper clones tables with `LIKE … INCLUDING ALL`, which does

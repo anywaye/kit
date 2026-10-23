@@ -119,7 +119,7 @@ const defaultEndpoint = "http://otel-collector:4317"
 //	                            request, no dial at boot. See NoOpReason.
 //
 // The standard `OTEL_EXPORTER_OTLP_ENDPOINT` is honoured as a fallback so the
-// service also works with any generic OTel tooling, but the cafaye name wins
+// service also works with any generic OTel tooling, but the anywaye name wins
 // when both are set. That ordering is written down here rather than discovered
 // later: a contract with an undocumented precedence order is a bug report.
 func Endpoint() string {

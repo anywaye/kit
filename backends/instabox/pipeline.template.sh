@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci/pipeline.sh — a cafaye service's pipeline, on the instabox backend or any
+# ci/pipeline.sh — a anywaye service's pipeline, on the instabox backend or any
 # other. COPY THIS FILE to `ci/pipeline.sh`, edit the MARKED places, delete
 # this paragraph, and write `instabox` into `ci/backend`.
 #
@@ -168,7 +168,7 @@ if [ -f chart/Chart.yaml ]; then
   log "publish image + chart"
   # `--service-dir .` because we are already at the root; the tool derives the
   # image name, reads the chart's name and version from Chart.yaml, stamps the
-  # chart with the PUSHED image's digest, and pushes to oci://ghcr.io/cafaye/charts.
+  # chart with the PUSHED image's digest, and pushes to oci://ghcr.io/anywaye/charts.
   # It needs a registry login already in place — the operator does that once
   # with `bin/publish --sandbox` (token via stdin); see backends/README.md.
   ./bin/publish --service-dir .

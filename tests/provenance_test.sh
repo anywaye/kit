@@ -83,16 +83,16 @@ refuse() {
 }
 
 # A developer's email. Nothing in the grammar set admits '@'.
-refuse source 'kaka@cafaye.com' 'a developer identity, and an email-shaped string'
+refuse source 'kaka@anywaye.com' 'a developer identity, and an email-shaped string'
 # An absolute local path. Six segments and a leading slash; `source` has a budget
 # of exactly ONE slash.
 refuse source '/Users/kaka/Code/any/moon' 'a local working directory'
 # An internal hostname with a port. `source` carries NO host at all.
 refuse source 'pg.corp.internal:5432' 'an internal hostname'
 # A full URL. Two slashes over budget, and a scheme the field does not admit.
-refuse source 'https://github.corp/cafaye/identity' 'a URL, so a host we do not control'
+refuse source 'https://github.corp/anywaye/identity' 'a URL, so a host we do not control'
 # A relative path.
-refuse source '../cafaye/identity' 'a relative path'
+refuse source '../anywaye/identity' 'a relative path'
 # A credential. Not hex-40, and not two clean segments.
 refuse revision 'ghp_16C7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'a credential in the revision field'
 # A branch in the REVISION field — refused, unlike in `source`.
@@ -104,7 +104,7 @@ refuse revision '0123456' 'a short sha, which git prints by default'
 # consumers can disagree about.
 refuse revision '0123456789ABCDEF0123456789ABCDEF01234567' 'uppercase hex, which two consumers would spell differently'
 # An email in the timestamp field.
-refuse built_at 'kaka@cafaye.com' 'a developer identity in the timestamp field'
+refuse built_at 'kaka@anywaye.com' 'a developer identity in the timestamp field'
 # A local-time timestamp with a zone offset: ambiguous in a label nobody parses
 # carefully, and `date -u` is one flag.
 refuse built_at '2026-10-03 09:20:00+01:00' 'a non-RFC3339, zone-offset timestamp'
@@ -159,8 +159,8 @@ fi
 expected_labels='org.opencontainers.image.source
 org.opencontainers.image.revision
 org.opencontainers.image.created
-com.cafaye.kit.source.dirty
-com.cafaye.kit.template.version'
+com.anywaye.kit.source.dirty
+com.anywaye.kit.template.version'
 
 env -u KIT_PROVENANCE_SOURCE -u KIT_PROVENANCE_REVISION -u KIT_PROVENANCE_BUILT_AT \
   -u KIT_PROVENANCE_SOURCE_DIRTY -u KIT_PROVENANCE_TEMPLATE_VERSION \
@@ -192,7 +192,7 @@ for lang in $langs; do
   # Comment lines are stripped first, per the same rule `strip_shell_comments`
   # exists for: a comment that NAMES a label key is documentation, not a label.
   got="$(grep -v '^[[:space:]]*#' "$df" |
-    grep -oE '(org\.opencontainers\.image\.[a-z]+|com\.cafaye\.kit\.[a-z.]+)=' |
+    grep -oE '(org\.opencontainers\.image\.[a-z]+|com\.anywaye\.kit\.[a-z.]+)=' |
     sed 's/=$//' | sort -u | tr '\n' ' ')"
   want="$(printf '%s\n' "$expected_labels" | sort | tr '\n' ' ')"
   if [ "$got" != "$want" ]; then
@@ -203,14 +203,14 @@ for lang in $langs; do
   # empty — and an empty label is a stamp that is present and says nothing.
   missing=''
   for key in org.opencontainers.image.source org.opencontainers.image.revision \
-    org.opencontainers.image.created com.cafaye.kit.source.dirty \
-    com.cafaye.kit.template.version; do
+    org.opencontainers.image.created com.anywaye.kit.source.dirty \
+    com.anywaye.kit.template.version; do
     case "$key" in
       org.opencontainers.image.source) arg='KIT_PROVENANCE_SOURCE' ;;
       org.opencontainers.image.revision) arg='KIT_PROVENANCE_REVISION' ;;
       org.opencontainers.image.created) arg='KIT_PROVENANCE_BUILT_AT' ;;
-      com.cafaye.kit.source.dirty) arg='KIT_PROVENANCE_SOURCE_DIRTY' ;;
-      com.cafaye.kit.template.version) arg='KIT_PROVENANCE_TEMPLATE_VERSION' ;;
+      com.anywaye.kit.source.dirty) arg='KIT_PROVENANCE_SOURCE_DIRTY' ;;
+      com.anywaye.kit.template.version) arg='KIT_PROVENANCE_TEMPLATE_VERSION' ;;
     esac
     grep -q "^ARG $arg=" "$df" || missing="$missing $arg"
   done
@@ -266,7 +266,7 @@ else
   # `-f` gets an ABSOLUTE path: `docker build -f docker/Dockerfile` resolved
   # against something other than the context and read a 2-byte file on this box.
   if docker build -q -f "$fixture/docker/Dockerfile.go" -t "$GOOD_IMAGE" \
-    --build-arg KIT_PROVENANCE_SOURCE=cafaye/identity \
+    --build-arg KIT_PROVENANCE_SOURCE=anywaye/identity \
     --build-arg KIT_PROVENANCE_REVISION="$GO" \
     --build-arg KIT_PROVENANCE_BUILT_AT=2026-10-03T09:20:00Z \
     --build-arg KIT_PROVENANCE_SOURCE_DIRTY=clean \
@@ -364,7 +364,7 @@ cat >"$STUB/docker" <<'STUBEOF'
 case "$3" in
   null) printf 'null\n'; exit 0 ;;
   inherit)
-    # EXACTLY what `cafaye/gateway:e2e` carries: an image built FROM oven/bun,
+    # EXACTLY what `anywaye/gateway:e2e` carries: an image built FROM oven/bun,
     # measured from the real image on the machine that wrote this suite.
     printf '%s\n' '{"org.opencontainers.image.created":"2026-04-10T03:06:38.682Z","org.opencontainers.image.revision":"700fc117a2fd01ac0201deaa6fa69c5557acb04f","org.opencontainers.image.source":"https://github.com/oven-sh/bun"}'
     exit 0 ;;
@@ -380,18 +380,18 @@ case "$3" in
     #
     # So this one is a base image that stamps its OCI labels in kit's OWN
     # grammar: `owner/repo`, 40 hex, RFC3339 to the second, and nothing in
-    # `com.cafaye.kit.*`. Every field PASSES shape. The one thing wrong with it
+    # `com.anywaye.kit.*`. Every field PASSES shape. The one thing wrong with it
     # is that nobody in kit wrote it, and only the namespace check can say so.
     # Real publishers do this: the grammar kit chose is the grammar these labels
     # use when they are not a URL, which is precisely why shape cannot be the
     # thing that catches them.
     printf '%s\n' '{"org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"oven-sh/bun"}'
     exit 0 ;;
-  ours) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"cafaye/gateway"}'
+  ours) printf '%s\n' '{"com.anywaye.kit.source.dirty":"clean","com.anywaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"anywaye/gateway"}'
     exit 0 ;;
-  foreign) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"oven-sh/bun"}'
+  foreign) printf '%s\n' '{"com.anywaye.kit.source.dirty":"clean","com.anywaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"oven-sh/bun"}'
     exit 0 ;;
-  badshape) printf '%s\n' '{"com.cafaye.kit.source.dirty":"clean","com.cafaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"https://github.com/cafaye/gateway"}'
+  badshape) printf '%s\n' '{"com.anywaye.kit.source.dirty":"clean","com.anywaye.kit.template.version":"v0.1.0","org.opencontainers.image.created":"2026-10-03T09:20:00Z","org.opencontainers.image.revision":"0123456789abcdef0123456789abcdef01234567","org.opencontainers.image.source":"https://github.com/anywaye/gateway"}'
     exit 0 ;;
   *) printf 'stub: unhandled fixture %s\n' "$3" >&2; exit 127 ;;
 esac
@@ -445,16 +445,16 @@ verify_says() {
   pass "verify/$label: exits $want and names \"$needle\""
 }
 
-# THE WITNESS. `inherit` is the real `cafaye/gateway:e2e` label set, byte for byte
+# THE WITNESS. `inherit` is the real `anywaye/gateway:e2e` label set, byte for byte
 # off the image on the machine that wrote this suite, and it is the one case
 # that was green before this packet's fix.
 verify_exits 6 'D1 inherited base-image labels are refused with NO flags at all' inherit
 verify_says 'oven-sh/bun' 'D1b the refusal NAMES Bun rather than us' 6 inherit
-verify_exits 6 'D2 inherited labels are refused even asserting our own repo' inherit --expect-source cafaye/gateway
+verify_exits 6 'D2 inherited labels are refused even asserting our own repo' inherit --expect-source anywaye/gateway
 
 # THE CASE THAT ONLY OWNERSHIP CAN SEE, and the one that makes breakage 103
 # provable. Every field here passes the shape grammar — `owner/repo`, 40 hex,
-# RFC3339 to the second — and there is nothing in `com.cafaye.kit.*`. So the
+# RFC3339 to the second — and there is nothing in `com.anywaye.kit.*`. So the
 # shape loop finds nothing to complain about and the namespace check is the ONLY
 # thing that can refuse it.
 #
@@ -469,7 +469,7 @@ verify_says 'BASE' 'D2b and the refusal is the NAMESPACE one, not shape and not 
 # A FOREIGN BUT WELL-FORMED source: `oven-sh/bun` is two clean lowercase
 # segments with exactly one slash, so it passes every grammar in the file. This
 # is the case shape cannot see and the reason `--expect-source` exists.
-verify_exits 5 'D3 a well-formed FOREIGN source fails --expect-source' foreign --expect-source cafaye/gateway
+verify_exits 5 'D3 a well-formed FOREIGN source fails --expect-source' foreign --expect-source anywaye/gateway
 # THE OVERRULE, asserted rather than asserted-against: no `--expect-source` is a
 # loud WARNING at exit 0, and the warning says in words that ownership was not
 # established. If a successor hardens this to a failure, D4 goes red and the
@@ -482,18 +482,18 @@ verify_says 'unknown was expected' 'D5 asserting `unknown` fails and names the e
 # own namespace and asserts the right repository, and the source is a URL — over
 # the one-slash budget, with a scheme, a host and a port. The authoring path
 # already refuses it; this asserts the VERIFY path does too.
-verify_exits 6 'D6 a source violating the shape grammar fails on shape' badshape --expect-source cafaye/gateway
-verify_says 'it must be owner/repo' 'D7 and the failure carries the expect_* line' 6 badshape --expect-source cafaye/gateway
+verify_exits 6 'D6 a source violating the shape grammar fails on shape' badshape --expect-source anywaye/gateway
+verify_says 'it must be owner/repo' 'D7 and the failure carries the expect_* line' 6 badshape --expect-source anywaye/gateway
 
 # A correct stamp with a matching expectation exits 0. Without this control a
 # verifier that refused everything would pass every refusal above.
-verify_exits 0 'D8 a correct stamp with matching --expect-source and --expect-revision' ours --expect-source cafaye/gateway --expect-revision 0123456789abcdef0123456789abcdef01234567
+verify_exits 0 'D8 a correct stamp with matching --expect-source and --expect-revision' ours --expect-source anywaye/gateway --expect-revision 0123456789abcdef0123456789abcdef01234567
 verify_says 'no labels at all' 'D9 an image with NO labels still exits 4, not 6' 4 null
 
 # `--expect-source` is a stamp value, so it is checked against the source
 # grammar before it judges anything: a caller who writes a URL as the
 # expectation must be refused, not told their correctly stamped image is wrong.
-bad_expect="$(PATH="$STUB:$PATH" sh "$STAMP" --verify ours --expect-source 'https://github.com/cafaye/kit' 2>&1)"
+bad_expect="$(PATH="$STUB:$PATH" sh "$STAMP" --verify ours --expect-source 'https://github.com/anywaye/kit' 2>&1)"
 bad_expect_ec=$?
 if [ "$bad_expect_ec" -ne 0 ] && contains "$bad_expect" 'refusing to ASSERT source'; then
   pass "verify/D10 --expect-source is itself grammar-checked, so a URL expectation is refused rather than reported as a mismatch"
@@ -505,8 +505,8 @@ fi
 # matters most: a stamp with every field present must print NO absent note, or
 # the note has stopped carrying information. The other direction — an absent
 # identity field is a refusal and an absent metadata field is a note — is what
-# D1, D2 and the `cafaye/e2e-parlor:local` measurement cover.
-stub_verify ours --expect-source cafaye/gateway
+# D1, D2 and the `anywaye/e2e-parlor:local` measurement cover.
+stub_verify ours --expect-source anywaye/gateway
 if contains "$STUB_OUT" '<absent>'; then
   fail "verify/D11 a fully stamped image reported an absent field: [$STUB_OUT]"
 elif contains "$STUB_OUT" 'note:'; then

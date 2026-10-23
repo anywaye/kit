@@ -81,7 +81,7 @@ not rely on.**
 | role | logs in | owns | may |
 |---|---|---|---|
 | `<service>` | yes — **for migrations** | the database, and every table in it | anything, including switching RLS off on its own tables |
-| `<service>_app` | yes — **this is your application** | nothing | `select`/`insert`/`update`/`delete` on the tables `cafaye.protect_table` has protected |
+| `<service>_app` | yes — **this is your application** | nothing | `select`/`insert`/`update`/`delete` on the tables `anywaye.protect_table` has protected |
 
 `<service>` is unchanged, and a service that adopts nothing here is unaffected.
 `<service>_app` exists because **Postgres exempts a table's owner from its own
@@ -272,7 +272,7 @@ Two consequences worth stating:
   regardless, so a per-service grant would only have governed who pays the disk
   cost.
 
-`cafaye/notes/decisions.md` carries the rest.
+`anywaye/notes/decisions.md` carries the rest.
 
 ## Adopting this
 
@@ -284,7 +284,7 @@ Two consequences worth stating:
 3. Copy `templates/database/<lang>/` from the ref your `kit.ref` names, and change
    the service name in it.
 4. If you hold customer rows, adopt `templates/database/tenancy/`: apply
-   `substrate.sql`, call `cafaye.protect_table` from each account-scoped table's
+   `substrate.sql`, call `anywaye.protect_table` from each account-scoped table's
    migration, point the application at `<service>_app`, and copy the
    per-language `tenancy_test.*` beside `isolation.sql` and `assertions.txt` with
    `REQUIRED_DB=1`. A service holding **no** customer rows is core's honest zero

@@ -143,7 +143,7 @@ var (
 // Every verdict is written out. The cell for a value field says "every verb",
 // because that is what was measured and it is one fact rather than eleven.
 func TestFmtTruthTable(t *testing.T) {
-	const secret = "cafaye_canary_truth_table"
+	const secret = "anywaye_canary_truth_table"
 
 	// A leak is the credential appearing in ANY reversible encoding, in either
 	// hex case. A test that looked only for the literal bytes would call `%X`
@@ -322,7 +322,7 @@ func TestTheReferenceTypeLeaksUnderBadVerbs(t *testing.T) {
 	// counter-example to the rule the whole rest of this file states. It is the
 	// fake canary today; the rule has to hold on the day it is not.
 	//
-	// It WAS printed in full the first time. `grep -c cafaye_canary_` over the
+	// It WAS printed in full the first time. `grep -c anywaye_canary_` over the
 	// gate's own output is what caught it — a harness whose own output is never
 	// swept is a harness that leaks in the one place nobody thought to look, and
 	// that is precisely the place this file exists to talk about.
@@ -384,7 +384,7 @@ func TestAFuncFieldCannotBeSerialised(t *testing.T) {
 // redaction helper that had to be clever about it would be a second thing to get
 // wrong in the one place the output is trusted.
 func redactForReport(s string) string {
-	return strings.ReplaceAll(s, Canary(), "cafaye_canary_REDACTED")
+	return strings.ReplaceAll(s, Canary(), "anywaye_canary_REDACTED")
 }
 
 // TestTheSuiteNeverPrintsTheCanary is the harness sweeping itself.
@@ -444,7 +444,7 @@ func TestTheSuiteNeverPrintsTheCanary(t *testing.T) {
 // would be reaching them any more, and a type that cannot print anything is not a
 // safe type. This one fails in that world, and says which measurement broke.
 func TestAnUnredactedTokenIsPrintable(t *testing.T) {
-	const secret = "cafaye_canary_control"
+	const secret = "anywaye_canary_control"
 	holder := valueUnexported{subject: "s", tok: probeToken{secret}}
 	if !strings.Contains(fmt.Sprintf("%v", holder), secret) {
 		t.Fatalf("an unexported field of an unredacted type did NOT print its value: this Go " +

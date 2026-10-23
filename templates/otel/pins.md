@@ -105,7 +105,7 @@ row to check first when the first rust service lands.
 Same rule as `templates/mise.toml`: **a service pins to the version it
 deploys.** When you copy a snippet into your repo, raise these to the current
 release in your language's own ecosystem and record the choice in your
-`CHANGELOG.md`. A version that is right for every cafaye service is a version
+`CHANGELOG.md`. A version that is right for every anywaye service is a version
 that is right for none of them a year from now.
 
 What is *not* a placeholder is the rule each version encodes:

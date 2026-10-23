@@ -30,7 +30,7 @@
 #                   migrations. UNCHANGED: adopting the tenancy templates does not
 #                   change how a service builds its schema.
 #   <service>_app   the LOGIN the application uses. Owns nothing. Granted DML per
-#                   account-scoped table by `cafaye.protect_table`, and nothing
+#                   account-scoped table by `anywaye.protect_table`, and nothing
 #                   else: no ownership, no DDL, no ability to alter a policy.
 #
 # `FORCE ROW LEVEL SECURITY` is the other half and it is deliberately NOT done
@@ -224,7 +224,7 @@ SQL
   #
   # It is created here, with everything else, because `templates/database/README.md`
   # already says a role is created in exactly one place and this is that place. It
-  # has no privilege beyond CONNECT on its own database; `cafaye.protect_table`
+  # has no privilege beyond CONNECT on its own database; `anywaye.protect_table`
   # grants the DML, per table, in the service's own migrations.
   #
   # `GRANT "…"_app TO "…"` is the membership that lets the OWNER impersonate the

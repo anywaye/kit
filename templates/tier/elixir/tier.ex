@@ -19,7 +19,7 @@
 # vocabulary. So for Elixir the declared reason is a tag, not a new syntax, and
 # the adapter is a filter over tags ExUnit already reports.
 
-defmodule Cafaye.Tier.DbTest do
+defmodule Anywaye.Tier.DbTest do
   use ExUnit.Case, async: false
 
   # The declaration. The value in a normalised result line's `tier` field, and

@@ -46,11 +46,11 @@
 #      prove it is selective.                (a detective that has never fired is
 #      a detective you cannot trust; one that fires on everything is a detective
 #      nobody reads)
-#   9. THE AUDIT ANSWERS EVERY ROLE THE SAME. `cafaye.credential_tables()` is
+#   9. THE AUDIT ANSWERS EVERY ROLE THE SAME. `anywaye.credential_tables()` is
 #      read as the owner, as the cluster's admin role and as the non-owner LOGIN
 #      role; the three answers must be identical AND non-empty.  (8: an audit
 #      whose answer depends on the reader's `search_path` reports "no credential
-#      path in this database" to the one role whose `"$user"` schema is `cafaye`,
+#      path in this database" to the one role whose `"$user"` schema is `anywaye`,
 #      which is the most expensive reading in the file to believe)
 #
 #   Assertion 2 is the expensive and the important one. It is the control this
@@ -201,14 +201,14 @@ mkdir -p "$WORK"
 C="$PROJECT-postgres-1"
 
 psql_in() { # psql_in <role> <db> <sql>
-  docker exec -e PGPASSWORD=cafaye "$C" psql -U "$1" -d "$2" -tAX -c "$3"
+  docker exec -e PGPASSWORD=anywaye "$C" psql -U "$1" -d "$2" -tAX -c "$3"
 }
 
 # psql as the OWNER with the whole script, because the assertions need the simple
 # query protocol (a script is a batch) and need the transaction the script opens
 # for itself.
 run_script() { # run_script <db> <sql-file>
-  docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$1" -A -t -F'@' \
+  docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$1" -A -t -F'@' \
     -v ON_ERROR_STOP=1 -f "$2" 2>&1
 }
 
@@ -219,8 +219,8 @@ run_script() { # run_script <db> <sql-file>
 wait_for_provisioning() { # wait_for_provisioning <container> <role> <db>
   local container="$1" role="$2" db="$3" out
   for _ in $(seq 1 90); do
-    out="$(docker exec -e PGPASSWORD=cafaye "$container" \
-      psql -U "$role" -d cafaye_platform -tAX -c \
+    out="$(docker exec -e PGPASSWORD=anywaye "$container" \
+      psql -U "$role" -d anywaye_platform -tAX -c \
       "SELECT count(*) FROM pg_database WHERE datname = '$db'" 2>/dev/null || true)"
     if [ "$out" = "1" ]; then
       return 0
@@ -261,7 +261,7 @@ if ! docker compose --project-name "$PROJECT" -f "$WORK/compose/docker-compose.y
   fail "cluster bring-up"
 fi
 
-if ! wait_for_provisioning "$C" cafaye "$BETA"; then
+if ! wait_for_provisioning "$C" anywaye "$BETA"; then
   say "FAIL: the cluster came up but initdb/10-cluster.sh never created a database named $BETA."
   docker logs "$C" 2>&1 | tail -25 | sed 's/^/       /'
   fail "init script did not complete"
@@ -283,23 +283,23 @@ docker logs "$C" 2>&1 | grep -E '\[cluster\]' | sed 's/^/   /' \
 say ""
 say "== assertion 0: the topology the templates require is present"
 for svc in "$ALPHA" "$BETA"; do
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_database WHERE datname = '$svc'")"
   [ "$got" = "1" ] || fail "expected a database named $svc; found $got"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '${svc}_app' AND rolcanlogin AND NOT rolsuper")"
   [ "$got" = "1" ] || fail "expected one non-superuser LOGIN role named ${svc}_app; found $got"
   # The membership, in the one direction that is allowed. The reverse is what
   # would undo the design, so it is asserted absent here as well as present:
   # a claim that a direction is allowed is worthless without the claim that the
   # other one is not.
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_auth_members m
        JOIN pg_roles member ON member.oid = m.member
        JOIN pg_roles granted ON granted.oid = m.roleid
       WHERE member.rolname = '$svc' AND granted.rolname = '${svc}_app'")"
   [ "$got" = "1" ] || fail "$svc cannot impersonate ${svc}_app, so nothing can prove the boundary from outside it"
-  got="$(psql_in cafaye cafaye_platform \
+  got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_auth_members m
        JOIN pg_roles member ON member.oid = m.member
        JOIN pg_roles granted ON granted.oid = m.roleid
@@ -315,14 +315,14 @@ say "   topology: 2 databases, 2 owner roles, 2 non-owner LOGIN roles, membershi
 say ""
 say "== applying templates/database/tenancy/substrate.sql, as the OWNER role"
 docker cp "$SUBSTRATE" "$C:/tmp/substrate.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/substrate.sql >"$WORK/substrate.log" 2>&1; then
   say "FAIL: the substrate did not install. Last lines:"
   tail -20 "$WORK/substrate.log" | sed 's/^/       /'
   fail "substrate install"
 fi
 docker cp "$ISOLATION" "$C:/tmp/isolation.sql" >/dev/null
-say "   installed: schema cafaye, current_account_id/0, begin_account/1, protect_table/2, unprotected_tables/0"
+say "   installed: schema anywaye, current_account_id/0, begin_account/1, protect_table/2, unprotected_tables/0"
 
 # ---------------------------------------------------------------------------
 # ASSERTION 0b — AN ADOPTER'S FIXTURE SCHEMA, PLANTED BEFORE THE PROOF RUNS.
@@ -378,7 +378,7 @@ got="$(psql_in "$ALPHA" "$ALPHA" "
 # than inferring it from the proof's verdicts, so a failure here says "the sweep
 # reached into a foreign schema" instead of "some assertion went red".
 leaked="$(psql_in "$ALPHA" "$ALPHA" \
-  "SELECT count(*) FROM cafaye.unprotected_tables() WHERE table_schema = 'kit_neighbour_fixture'")"
+  "SELECT count(*) FROM anywaye.unprotected_tables() WHERE table_schema = 'kit_neighbour_fixture'")"
 [ "$leaked" = "0" ] || fail "the sweep named $leaked table(s) in an adopter's fixture schema. It is scoped to the schemas the substrate was applied in, and kit_neighbour_fixture is not one of them."
 say "   2 unprotected account-scoped tables in kit_neighbour_fixture, and the sweep names neither."
 say "   identity's whole-suite failure was exactly this, with the count moving per run."
@@ -470,7 +470,7 @@ grep -q "FORCE ROW LEVEL SECURITY is still required" "$WORK/noforce/substrate.sq
   || fail "the control's mutation also deleted the substrate's own explanation of why FORCE is required"
 docker cp "$WORK/noforce/substrate.sql" "$C:/tmp/substrate-noforce.sql" >/dev/null
 
-ctl="$(docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+ctl="$(docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/substrate-noforce.sql >/dev/null 2>&1; \
   run_script "$ALPHA" /tmp/isolation.sql)"
 ctl_failures="$(printf '%s\n' "$ctl" | grep -c '@fail@' || true)"
@@ -514,7 +514,7 @@ say "   template with no FORCE at all."
 # Assertion 0b proves the scope is narrow enough. This proves narrowing it did
 # not turn the sweep into a green constant — which is the failure mode of every
 # tempting version of this fix. Scope the sweep to `pg_temp` alone, or to
-# `cafaye` alone, and all three sweep assertions pass forever while naming no
+# `anywaye` alone, and all three sweep assertions pass forever while naming no
 # real table in any adopter: `sweep/names-an-unprotected-table` finds the
 # control, `sweep/every-account-scoped-table-is-protected` counts it, and
 # `sweep/the-only-finding-is-the-control` matches it. Three greens, zero
@@ -560,7 +560,7 @@ say "   sweep/the-only-finding-is-the-control both went red. The scope is narrow
 say "   an adopter (assertion 0b) and still able to fail (this)."
 
 # Put the substrate back so anything after this sees the real thing.
-docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/substrate.sql >/dev/null 2>&1
 
 # ---------------------------------------------------------------------------
@@ -601,7 +601,7 @@ select 'bare' as form, (select n from counter) as calls;
 rollback;
 INITPLAN
 docker cp "$WORK/initplan.sql" "$C:/tmp/initplan.sql" >/dev/null
-plan_out="$(docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+plan_out="$(docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -A -t -F' ' -v ON_ERROR_STOP=1 -f /tmp/initplan.sql 2>/dev/null | grep -E '^(wrapped|bare) ')"
 wrapped_calls="$(printf '%s\n' "$plan_out" | awk '$1=="wrapped"{print $2}')"
 bare_calls="$(printf '%s\n' "$plan_out" | awk '$1=="bare"{print $2}')"
@@ -648,13 +648,13 @@ say ""
 say "== assertion 6: templates/database/tenancy/advisor.sql, against this cluster"
 
 docker cp "$ADVISOR" "$C:/tmp/advisor.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/advisor.sql >"$WORK/advisor.log" 2>&1; then
   say "FAIL: advisor.sql did not install. Last lines:"
   tail -20 "$WORK/advisor.log" | sed 's/^/       /'
   fail "advisor install"
 fi
-say "   installed: cafaye.advisor_findings(p_schemas text[])"
+say "   installed: anywaye.advisor_findings(p_schemas text[])"
 
 # Two tables, created exactly as a service's migrations create them: a
 # membership one, and a credential one. The second is the whole point — it is
@@ -681,10 +681,10 @@ psql_in "$ALPHA" "$ALPHA" "
 " >/dev/null
 psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
-  select cafaye.protect_membership_table('public.account_users', 'user_id')" >/dev/null
+  select anywaye.protect_membership_table('public.account_users', 'user_id')" >/dev/null
 psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
-  select cafaye.protect_credential_table('public.api_keys', 'token_digest')" >/dev/null
+  select anywaye.protect_credential_table('public.api_keys', 'token_digest')" >/dev/null
 
 # Five from protect_membership_table and five from protect_credential_table, each
 # being four from protect_table plus one of its own. Counted, because everything
@@ -703,19 +703,19 @@ scoped="$(psql_in "$ALPHA" "$ALPHA" "
     from pg_namespace n
     join pg_class c on c.relnamespace = n.oid
     join pg_policy p on p.polrelid = c.oid
-   where p.polname ~ '_cafaye_(select|insert|update|delete)$'")"
+   where p.polname ~ '_anywaye_(select|insert|update|delete)$'")"
 scoped="${scoped#\{}"
 scoped="${scoped%\}}"
 # The derived list is turned into an array by the SERVER rather than pasted into a
 # literal here. A hand-assembled `'{a, b}'` is a second place the scope can be
 # wrong, and it is wrong in the direction that matters: a malformed array literal
 # is an error, while a malformed one that happens to parse is a quiet scope.
-scoped="${scoped// /},cafaye"
+scoped="${scoped// /},anywaye"
 say "   scope, read back from the policies protect_table wrote: ${scoped//,/, }"
 
 adv="$(psql_in "$ALPHA" "$ALPHA" "
   select level || '@' || name || '@' || coalesce(metadata->>'name', '') || '@' || detail
-    from cafaye.advisor_findings(string_to_array('$scoped', ',')::text[])
+    from anywaye.advisor_findings(string_to_array('$scoped', ',')::text[])
    order by cache_key")"
 
 if [ -n "$adv" ]; then
@@ -776,7 +776,7 @@ psql_in "$ALPHA" "$ALPHA" "
     for select to public using (true)" >/dev/null
 
 md24="$(psql_in "$ALPHA" "$ALPHA" "
-  select detail from cafaye.advisor_findings(string_to_array('public,cafaye', ',')::text[])
+  select detail from anywaye.advisor_findings(string_to_array('public,anywaye', ',')::text[])
    where name = 'multiple_permissive_policies'
      and metadata->>'name' = 'api_keys'")"
 [ -n "$md24" ] || {
@@ -804,7 +804,7 @@ say "   that let them coexist is still letting exactly them coexist."
 psql_in "$ALPHA" "$ALPHA" \
   "set client_min_messages = warning; drop policy hand_written_extra on public.api_keys" >/dev/null
 still="$(psql_in "$ALPHA" "$ALPHA" "
-  select count(*) from cafaye.advisor_findings(string_to_array('public,cafaye', ',')::text[])
+  select count(*) from anywaye.advisor_findings(string_to_array('public,anywaye', ',')::text[])
    where level in ('ERROR', 'WARN')")"
 [ "$still" = "0" ] || fail "removing the hand-written policy left $still finding(s); the control's cleanup did not restore a clean advisor run"
 say "   policy dropped, and the advisor is clean again: 0 ERROR, 0 WARN."
@@ -829,7 +829,7 @@ say "   policy dropped, and the advisor is clean again: 0 ERROR, 0 WARN."
 # and only one of them is a control.
 #
 # AND IT IS ALSO WHAT PROVES THE ADVISOR STANDS ALONE. Nothing here calls a
-# `cafaye.*` function the substrate owns except the two identity seams a policy
+# `anywaye.*` function the substrate owns except the two identity seams a policy
 # has to be written against — so these fixtures are a schema on a database where
 # the substrate was applied to `public` and nothing else, which is the shape of
 # the service that has not finished adopting.
@@ -848,14 +848,14 @@ alter table kit_advisor_fixture.always_true enable row level security;
 create policy fixture_write_all on kit_advisor_fixture.always_true
   for all to public using (true) with check (true);
 create policy fixture_read on kit_advisor_fixture.always_true
-  for select to public using (account_id = (select cafaye.current_account_id()));
+  for select to public using (account_id = (select anywaye.current_account_id()));
 
 -- (1) policy_exists_rls_disabled: a policy that is inert. This reads as correct
 -- in review — the policies exist — and enforces nothing.
 create table kit_advisor_fixture.policies_without_rls (
   id int primary key, account_id uuid not null);
 create policy fixture_only on kit_advisor_fixture.policies_without_rls
-  for select to public using (account_id = (select cafaye.current_account_id()));
+  for select to public using (account_id = (select anywaye.current_account_id()));
 
 -- (2) rls_disabled_in_public: no RLS, and a login role can read it. The grant is
 -- part of the fixture, not a detail: without it the table is unreachable and
@@ -958,7 +958,7 @@ create table kit_advisor_fixture.bare_call (
   id int primary key, account_id uuid not null);
 alter table kit_advisor_fixture.bare_call enable row level security;
 create policy fixture_bare on kit_advisor_fixture.bare_call for select to public
-  using (account_id = cafaye.current_account_id());
+  using (account_id = anywaye.current_account_id());
 
 -- (7b) rls_policy_correlated_membership. The subquery inside the IN references
 -- this table's own row, so the membership lookup runs once per candidate row
@@ -973,7 +973,7 @@ create table kit_advisor_fixture.membership (
   account_id uuid not null, member_of_account uuid not null);
 create policy fixture_correlated on kit_advisor_fixture.correlated_membership
   for select to public
-  using ((select cafaye.current_account_id()) in
+  using ((select anywaye.current_account_id()) in
          (select m.account_id from kit_advisor_fixture.membership m
            where m.member_of_account = correlated_membership.member_of_account));
 
@@ -990,7 +990,7 @@ create policy fixture_inverted on kit_advisor_fixture.inverted_membership
   for select to public
   using (inverted_membership.member_of_account in
          (select m.member_of_account from kit_advisor_fixture.membership m
-           where m.account_id = (select cafaye.current_account_id())));
+           where m.account_id = (select anywaye.current_account_id())));
 
 -- THE OTHER NEGATIVE, and the reason the rule does not fire on correlation in
 -- general. An EXISTS whose OUTER hop is correlated and cannot be inverted — this
@@ -1009,7 +1009,7 @@ create policy fixture_linked on kit_advisor_fixture.linked_only
                   where l.linked_id = linked_only.id
                     and l.member_of_account in
                         (select m.member_of_account from kit_advisor_fixture.membership m
-                          where m.account_id = (select cafaye.current_account_id()))));
+                          where m.account_id = (select anywaye.current_account_id()))));
 
 -- (8) rls_enabled_no_policy: RLS on, no policy, every row hidden. INFO and not a
 -- breach — a fail-closed outage is still an outage, and the catalog is where it
@@ -1060,7 +1060,7 @@ alter table kit_advisor_fixture.silent enable row level security;
 --      owner role, `has_table_privilege('alpha', …, 'SELECT')` is TRUE through
 --      the membership and the rule fires, correctly.
 --
--- So the fixture is built by `cafaye`, the cluster's admin role, which is
+-- So the fixture is built by `anywaye`, the cluster's admin role, which is
 -- excluded from `api_roles` by exactly the predicate every other rule here uses
 -- (`not rolsuper`). A superuser-owned view that no login role can reach is a
 -- real and common shape — and it is the shape a reporting view has when it is
@@ -1088,7 +1088,7 @@ alter table kit_advisor_fixture.protected_accounts enable row level security;
 alter table kit_advisor_fixture.protected_accounts force row level security;
 create policy fixture_scoped on kit_advisor_fixture.protected_accounts
   for select to public
-  using (account_id = (select cafaye.current_account_id()));
+  using (account_id = (select anywaye.current_account_id()));
 
 drop table if exists kit_advisor_fixture.unprotected_reads cascade;
 create table kit_advisor_fixture.unprotected_reads (id int primary key);
@@ -1143,7 +1143,7 @@ FIXTURE
 say ""
 say "== assertion 7: every rule, on a fixture built to trip it"
 docker cp "$WORK/advisor_fixture.sql" "$C:/tmp/advisor_fixture.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/advisor_fixture.sql >"$WORK/fixture.log" 2>&1; then
   say "FAIL: the advisor's negative fixtures did not install. Last lines:"
   tail -20 "$WORK/fixture.log" | sed 's/^/       /'
@@ -1161,7 +1161,7 @@ fi
 #      owner's privileges. `has_table_privilege('alpha', ..., 'SELECT')` is then
 #      TRUE through the membership.
 #
-# So `cafaye` builds it. `cafaye` is excluded from `api_roles` by the same
+# So `anywaye` builds it. `anywaye` is excluded from `api_roles` by the same
 # `not rolsuper` predicate every other rule here uses, and a superuser-owned view
 # no login role can reach is a real shape: it is a reporting view owned by the
 # migration role that nobody was granted SELECT on.
@@ -1174,7 +1174,7 @@ alter table kit_advisor_fixture.owner_protected enable row level security;
 alter table kit_advisor_fixture.owner_protected force row level security;
 create policy fixture_owner_scoped on kit_advisor_fixture.owner_protected
   for select to public
-  using (account_id = (select cafaye.current_account_id()));
+  using (account_id = (select anywaye.current_account_id()));
 drop view if exists kit_advisor_fixture.definer_no_grant;
 create view kit_advisor_fixture.definer_no_grant as
   select id, account_id from kit_advisor_fixture.owner_protected;
@@ -1184,7 +1184,7 @@ revoke all on kit_advisor_fixture.definer_no_grant from public;
 revoke all on kit_advisor_fixture.owner_protected from public;
 UNREACHABLE
 docker cp "$WORK/advisor_unreachable_fixture.sql" "$C:/tmp/advisor_unreachable_fixture.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U cafaye -d "$ALPHA" \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U anywaye -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/advisor_unreachable_fixture.sql >"$WORK/unreach.log" 2>&1; then
   say "FAIL: the unreachable-view fixture did not install. Last lines:"
   tail -20 "$WORK/unreach.log" | sed 's/^/       /'
@@ -1197,7 +1197,7 @@ say "   reachable by membership, and the rule was right about both."
 
 neg="$(psql_in "$ALPHA" "$ALPHA" "
   select name || '@' || coalesce(metadata->>'name', '')
-    from cafaye.advisor_findings(string_to_array('kit_advisor_fixture', ',')::text[])
+    from anywaye.advisor_findings(string_to_array('kit_advisor_fixture', ',')::text[])
    order by cache_key")"
 
 # Every rule, and the fixture that must trip it. A rule that has gone quiet here
@@ -1270,7 +1270,7 @@ for pair in 'helper_routed:may_read_admin' 'direct_policy:'; do
   fn="${pair#*:}"
   row="$(psql_in "$ALPHA" "$ALPHA" "
     select coalesce((metadata->'via_functions')::text, '(null)') || ' | ' || detail
-      from cafaye.advisor_findings(string_to_array('kit_advisor_fixture', ',')::text[])
+      from anywaye.advisor_findings(string_to_array('kit_advisor_fixture', ',')::text[])
      where name = 'rls_references_user_metadata'
        and metadata->>'name' = '$obj'")"
   [ -n "$row" ] || fail "no rls_references_user_metadata finding for $obj at all"
@@ -1363,7 +1363,7 @@ say "   kit_advisor_fixture dropped, asserted gone."
 # ---------------------------------------------------------------------------
 # ASSERTION 8 — THE AUDIT ANSWERS THE SAME TO EVERY ROLE THAT ASKS.
 #
-# `cafaye.credential_tables()` is the one query that answers "which tables in this
+# `anywaye.credential_tables()` is the one query that answers "which tables in this
 # database can be read with no account", and `isolation.sql` asserts it as the
 # session's own role — which on a real cluster is the owner's, a role with no
 # schema of its own. So the audit was only ever measured from the one reader it
@@ -1372,9 +1372,9 @@ say "   kit_advisor_fixture dropped, asserted gone."
 # The trap is the READER, not the SQL. `pg_get_expr` drops the schema from a name
 # the reader can resolve, and what a reader can resolve is their `search_path` —
 # and `"$user"` is a search_path entry. So the SAME policy deparses
-# `cafaye.current_credential_digest()` for `alpha` (no `alpha` schema exists) and
-# `current_credential_digest()` for `cafaye` (whose `"$user"` schema IS the
-# `cafaye` schema the substrate creates). An audit written against that text
+# `anywaye.current_credential_digest()` for `alpha` (no `alpha` schema exists) and
+# `current_credential_digest()` for `anywaye` (whose `"$user"` schema IS the
+# `anywaye` schema the substrate creates). An audit written against that text
 # returns everything to one role and NOTHING to the cluster's own admin role,
 # which reads as "this database has no credential path at all" to exactly the
 # reader most likely to act on it.
@@ -1401,29 +1401,29 @@ say "== assertion 8: the credential audit reports the same tables to every role"
 audit_deparse="select coalesce(pg_get_expr(polqual, polrelid), '')
                    from pg_policy
                   where polrelid = 'public.api_keys'::regclass
-                    and polname = 'api_keys_cafaye_resolve'"
+                    and polname = 'api_keys_anywaye_resolve'"
 audit_rows="select coalesce(string_agg(table_schema || '.' || table_name || ' -> ' || digest_column,
                                         ', ' order by table_name),
                            '(no rows)')
-              from cafaye.credential_tables()"
+              from anywaye.credential_tables()"
 
 alpha_deparse="$(psql_in "$ALPHA" "$ALPHA" "$audit_deparse")"
-admin_deparse="$(psql_in cafaye "$ALPHA" "$audit_deparse")"
+admin_deparse="$(psql_in anywaye "$ALPHA" "$audit_deparse")"
 alpha_rows="$(psql_in "$ALPHA" "$ALPHA" "$audit_rows")"
-admin_rows="$(psql_in cafaye "$ALPHA" "$audit_rows")"
+admin_rows="$(psql_in anywaye "$ALPHA" "$audit_rows")"
 login_rows="$(psql_in "${ALPHA}_app" "$ALPHA" "$audit_rows")"
 
 say "   as $ALPHA (owner, \"\$user\" schema does not exist):"
 say "     policy reads   : $alpha_deparse"
 say "     the audit says : $alpha_rows"
-say "   as cafaye (cluster admin, \"\$user\" schema IS cafaye):"
+say "   as anywaye (cluster admin, \"\$user\" schema IS anywaye):"
 say "     policy reads   : $admin_deparse"
 say "     the audit says : $admin_rows"
 say "   as ${ALPHA}_app (non-owner LOGIN, owns nothing):"
 say "     the audit says : $login_rows"
 
 case "$admin_rows" in
-  '(no rows)') say ""; say "FAIL: cafaye.credential_tables() returned NOTHING to the cluster's admin role."
+  '(no rows)') say ""; say "FAIL: anywaye.credential_tables() returned NOTHING to the cluster's admin role."
     say "      That is the reading this assertion exists to prevent: an admin auditing"
     say "      credentials is told the database has no table resolvable without an"
     say "      account, because \"\$user\" is a search_path entry and the substrate's"
@@ -1435,7 +1435,7 @@ esac
 [ "$alpha_rows" = "$admin_rows" ] || {
   say ""; say "FAIL: the credential audit disagrees with itself about the same database."
   say "      as $ALPHA: $alpha_rows"
-  say "      as cafaye: $admin_rows"
+  say "      as anywaye: $admin_rows"
   say "      An audit whose answer depends on WHO ASKS is not an audit; it is a"
   say "      function of the reader's search_path."
   fail "the credential audit depends on the role reading it"
@@ -1452,11 +1452,11 @@ say "   NON-EMPTY, because three roles agreeing on nothing proves only that the"
 say "   audit has stopped working."
 
 case "$admin_deparse" in
-  *cafaye.current_credential_digest*) admin_qualified=1 ;;
+  *anywaye.current_credential_digest*) admin_qualified=1 ;;
   *) admin_qualified=0 ;;
 esac
 case "$alpha_deparse" in
-  *cafaye.current_credential_digest*) alpha_qualified=1 ;;
+  *anywaye.current_credential_digest*) alpha_qualified=1 ;;
   *) alpha_qualified=0 ;;
 esac
 if [ "$alpha_qualified" = "$admin_qualified" ]; then
@@ -1467,11 +1467,11 @@ if [ "$alpha_qualified" = "$admin_qualified" ]; then
   say "      nothing about it. Either Postgres changed how it qualifies a name a"
   say "      reader can resolve — in which case this control needs rewriting, because"
   say "      its reason has changed — or the fixture is not the policy it claims to be."
-  say "      as cafaye: qualified=$admin_qualified   as $ALPHA: qualified=$alpha_qualified"
+  say "      as anywaye: qualified=$admin_qualified   as $ALPHA: qualified=$alpha_qualified"
   fail "the reader-dependence control cannot fire"
 fi
 say "   control: the trap is LIVE on this cluster — one policy, two renderings, and"
-say "     as cafaye: $admin_deparse     (qualified=$admin_qualified)"
+say "     as anywaye: $admin_deparse     (qualified=$admin_qualified)"
 say "     as $ALPHA: $alpha_deparse   (qualified=$alpha_qualified)"
 say "   and the audit above is identical for both anyway. That is the whole"
 say "   assertion: the function no longer reads the text that differs."
@@ -1495,29 +1495,29 @@ say "== assertion 8b: the membership audit reports the same tables to every role
 m_deparse="select coalesce(pg_get_expr(polqual, polrelid), '')
                    from pg_policy
                   where polrelid = 'public.account_users'::regclass
-                    and polname = 'account_users_cafaye_members'"
+                    and polname = 'account_users_anywaye_members'"
 m_rows="select coalesce(string_agg(table_schema || '.' || table_name || ' -> ' || user_column,
                                    ', ' order by table_name),
                           '(no rows)')
-         from cafaye.membership_tables()"
+         from anywaye.membership_tables()"
 
 m_alpha_deparse="$(psql_in "$ALPHA" "$ALPHA" "$m_deparse")"
-m_admin_deparse="$(psql_in cafaye "$ALPHA" "$m_deparse")"
+m_admin_deparse="$(psql_in anywaye "$ALPHA" "$m_deparse")"
 m_alpha_rows="$(psql_in "$ALPHA" "$ALPHA" "$m_rows")"
-m_admin_rows="$(psql_in cafaye "$ALPHA" "$m_rows")"
+m_admin_rows="$(psql_in anywaye "$ALPHA" "$m_rows")"
 m_login_rows="$(psql_in "${ALPHA}_app" "$ALPHA" "$m_rows")"
 
 say "   as $ALPHA (owner, \"\$user\" schema does not exist):"
 say "     policy reads   : $m_alpha_deparse"
 say "     the audit says : $m_alpha_rows"
-say "   as cafaye (cluster admin, \"\$user\" schema IS cafaye):"
+say "   as anywaye (cluster admin, \"\$user\" schema IS anywaye):"
 say "     policy reads   : $m_admin_deparse"
 say "     the audit says : $m_admin_rows"
 say "   as ${ALPHA}_app (non-owner LOGIN, owns nothing):"
 say "     the audit says : $m_login_rows"
 
 case "$m_admin_rows" in
-  '(no rows)') say ""; say "FAIL: cafaye.membership_tables() returned NOTHING to the cluster's admin role."
+  '(no rows)') say ""; say "FAIL: anywaye.membership_tables() returned NOTHING to the cluster's admin role."
     say "      The same reading assertion 8 exists to prevent, reached by a different"
     say "      function. An admin auditing discoverability is told this database has no"
     say "      caller-scoped read path at all, which is false for every service that"
@@ -1528,7 +1528,7 @@ esac
 [ "$m_alpha_rows" = "$m_admin_rows" ] || {
   say ""; say "FAIL: the membership audit disagrees with itself about the same database."
   say "      as $ALPHA: $m_alpha_rows"
-  say "      as cafaye: $m_admin_rows"
+  say "      as anywaye: $m_admin_rows"
   fail "the membership audit depends on the role reading it"
 }
 [ "$m_alpha_rows" = "$m_login_rows" ] || {
@@ -1543,11 +1543,11 @@ esac
 # could be rewritten to read text while `credential_tables` kept reading
 # dependencies, and every other row here would still pass.
 case "$m_admin_deparse" in
-  *cafaye.current_user_id*) m_admin_qualified=1 ;;
+  *anywaye.current_user_id*) m_admin_qualified=1 ;;
   *) m_admin_qualified=0 ;;
 esac
 case "$m_alpha_deparse" in
-  *cafaye.current_user_id*) m_alpha_qualified=1 ;;
+  *anywaye.current_user_id*) m_alpha_qualified=1 ;;
   *) m_alpha_qualified=0 ;;
 esac
 if [ "$m_alpha_qualified" = "$m_admin_qualified" ]; then
@@ -1556,12 +1556,12 @@ if [ "$m_alpha_qualified" = "$m_admin_qualified" ]; then
   say "      the SAME way for both roles, so half A above is asserting nothing about"
   say "      the mechanism it names — either Postgres changed how it qualifies a name"
   say "      a reader can resolve, or the fixture is not the policy it claims to be."
-  say "      as cafaye: qualified=$m_admin_qualified   as $ALPHA: qualified=$m_alpha_qualified"
+  say "      as anywaye: qualified=$m_admin_qualified   as $ALPHA: qualified=$m_alpha_qualified"
   fail "the reader-dependence control cannot fire for the membership audit"
 fi
 say "   three roles, one answer — and not the empty answer."
 say "   control: the trap is live here too, on this cluster, for this policy:"
-say "     as cafaye: $m_admin_deparse     (qualified=$m_admin_qualified)"
+say "     as anywaye: $m_admin_deparse     (qualified=$m_admin_qualified)"
 say "     as $ALPHA: $m_alpha_deparse   (qualified=$m_alpha_qualified)"
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@
 #   CI runner and a laptop on a train get the same answer, and a flaky network
 #   can never be mistaken for a broken gate.
 #
-#   The network path itself (https://github.com/cafaye/kit) is NOT proven here
+#   The network path itself (https://github.com/anywaye/kit) is NOT proven here
 #   and the report says so: it is one `git ls-remote` away from being, but a
 #   gate that depends on github.com is a gate that goes red when github is down.
 #
@@ -863,7 +863,7 @@ chmod +x "$WORK/fakebin-prune/docker"
     # Replicate generation_home / generation_keep / mount_sources / generation_is_mounted
     # minimally for this assertion (same semantics as dev.sh, stdlib only).
     stack_setting() { local n="$1" f="${2:-}"; local v; v="$(eval "printf '\''%s'\'' \"\${$n:-}\"")"; [ -n "$v" ] && { printf "%s" "$v"; return 0; }; v="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$n=" .env 2>/dev/null | tail -1 | cut -d= -f2- | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*\$//" -e "s/^\"\(.*\)\"$/\1/" -e "s/^\x27\(.*\)\x27$/\1/" || true)"; [ -n "$v" ] || v="$f"; printf "%s" "$v"; }
-    stack_home() { stack_setting KIT_STACK_HOME "${XDG_CACHE_HOME:-$HOME/.cache}/cafaye/kit"; }
+    stack_home() { stack_setting KIT_STACK_HOME "${XDG_CACHE_HOME:-$HOME/.cache}/anywaye/kit"; }
     generation_home() { printf "%s/.retired" "$(stack_home)"; }
     generation_keep() { local n; n="$(stack_setting KIT_STACK_KEEP_GENERATIONS 3)"; case "$n" in ""|*[!0-9]*|0) printf "3";; *) printf "%s" "$n";; esac; }
     mount_sources() { command -v docker >/dev/null 2>&1 || return 1; docker info >/dev/null 2>&1 || return 1; ids="$(docker ps -aq 2>/dev/null)" || return 1; [ -n "$ids" ] || return 0; docker inspect --format "{{range .Mounts}}{{println .Source}}{{end}}" $ids 2>/dev/null; }

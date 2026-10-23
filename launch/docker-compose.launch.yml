@@ -7,7 +7,7 @@
 # ---------------------------------------------------------------------------
 # WHAT THIS FILE IS, AND WHAT IT IS NOT
 # ---------------------------------------------------------------------------
-# It is an OVERRIDE on kit's stack, in exactly the shape every cafaye
+# It is an OVERRIDE on kit's stack, in exactly the shape every anywaye
 # service's own `docker-compose.yml` is: kit ships the infrastructure (one
 # Postgres cluster, NATS with JetStream, Redis, the OTel collector), and this
 # file adds the four launch services and the one thing the launch needs that
@@ -107,7 +107,7 @@
 # literal would be wrong here: against this file's project directory it would
 # name a directory INSIDE the kit checkout. The app selection is explicit in
 # the same place: the front door is PARLOR, the customer-stack app. Website
-# is the Cafaye app derived from Parlor and is never built by this file.
+# is the Anywaye app derived from Parlor and is never built by this file.
 #
 # ---------------------------------------------------------------------------
 # THE CREDENTIALS, AND WHERE THEY LIVE
@@ -229,7 +229,7 @@ services:
       dockerfile: Dockerfile
       args:
         SERVICE_NAME: identity
-    image: cafaye/identity:dev
+    image: anywaye/identity:dev
     environment:
       PORT: "8080"
       LOG_LEVEL: debug
@@ -269,7 +269,7 @@ services:
       # THE PASSWORD IS THE CLUSTER'S, interpolated from kit's own variable
       # rather than hard-coded: isolation here is by privilege and never by
       # secret.
-      DATABASE_URL: "postgres://identity_app:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/identity?sslmode=disable"
+      DATABASE_URL: "postgres://identity_app:${KIT_POSTGRES_PASSWORD:-anywaye}@postgres:5432/identity?sslmode=disable"
       # The outbox bus. kit's NATS with JetStream (`-js`): without it a service
       # that publishes and then crashes loses the message, and courier's
       # at-least-once guarantee quietly becomes at-most-once. The broker being
@@ -430,7 +430,7 @@ services:
       dockerfile: Dockerfile
       args:
         GO_VERSION: "1.26"
-    image: cafaye/gateway:dev
+    image: anywaye/gateway:dev
     environment:
       PORT: "8080"
       NODE_ENV: production
@@ -491,7 +491,7 @@ services:
     build:
       context: ${LAUNCH_COURIER_DIR:-../../courier}
       dockerfile: Dockerfile
-    image: cafaye/courier:dev
+    image: anywaye/courier:dev
     environment:
       PORT: "4000"
       # Over the compose network, by service name. THE RUNTIME ROLE IS
@@ -500,10 +500,10 @@ services:
       # running as the role that owns its own tables would bypass every
       # row-level-security policy in the migrations. The password is the
       # cluster's, interpolated from kit's variable.
-      DATABASE_URL: "ecto://courier_app:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/courier"
+      DATABASE_URL: "ecto://courier_app:${KIT_POSTGRES_PASSWORD:-anywaye}@postgres:5432/courier"
       # THE OWNER, FOR MIGRATIONS ONLY. Read by `Courier.OwnerRepo` and by
       # nothing else — the application never opens a connection with it.
-      COURIER_OWNER_DATABASE_URL: "ecto://courier:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/courier"
+      COURIER_OWNER_DATABASE_URL: "ecto://courier:${KIT_POSTGRES_PASSWORD:-anywaye}@postgres:5432/courier"
       # THE BUS, AND IT IS WHAT MAKES THIS SERVICE A CONSUMER HERE RATHER
       # THAN AN ACCUMULATOR. courier's own `docker-compose.yml` leaves
       # `NATS_URL` unset on purpose — its README says so ("the local stack
@@ -606,7 +606,7 @@ services:
     build:
       context: ${LAUNCH_PARLOR_DIR:-../../parlor}
       dockerfile: Dockerfile
-    image: cafaye/parlor:dev
+    image: anywaye/parlor:dev
     environment:
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
@@ -685,7 +685,7 @@ services:
   # shared infrastructure, and billing lands on it the way every other service
   # in this file does — the cluster's database list above (one role+DB per
   # name by initdb, `PUBLIC` revoked everywhere), the bus's `billing.>`
-  # subjects (the `cafaye` stream already claims them, so outbox rows
+  # subjects (the `anywaye` stream already claims them, so outbox rows
   # publish without a second stream being defined), the collector (whose OTLP
   # path is the traces URL, and the Ruby exporter needs the path to be
   # present — a bare host raised "HTTP request path is empty" once per
@@ -701,7 +701,7 @@ services:
     build:
       context: ${LAUNCH_BILLING_DIR:-../../billing}
       dockerfile: Dockerfile
-    image: cafaye/billing:dev
+    image: anywaye/billing:dev
     environment:
       RAILS_ENV: development
       PORT: "3000"
@@ -722,7 +722,7 @@ services:
       # before the server. The two-role split is production's (kit's
       # tenancy rule: the pool must not be the owner row-level security
       # exempts); nothing here is deployed with it.
-      DATABASE_URL: postgresql://billing:${KIT_POSTGRES_PASSWORD:-cafaye}@postgres:5432/billing
+      DATABASE_URL: postgresql://billing:${KIT_POSTGRES_PASSWORD:-anywaye}@postgres:5432/billing
       # The bus, and setting it is what makes the outbox relay start. Unset
       # would leave billing publishing into its own table forever and the
       # receipts nobody sends would be invisible — the walk measured the
@@ -772,7 +772,7 @@ services:
     networks: [platform]
 
   # NO `nats-stream-init` BLOCK, and the absence is the fix. Kit's one-shot
-  # (`restart: "no"`, exits 0 once the `cafaye` stream exists) is run bounded
+  # (`restart: "no"`, exits 0 once the `anywaye` stream exists) is run bounded
   # by `bin/launch` instead, and every wait set in that script names its
   # long-running services explicitly, so there is no set for a completed
   # container to fail. A wait set containing a completed container exits 1 by

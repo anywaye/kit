@@ -11,9 +11,9 @@
 apiVersion: 1
 
 providers:
-  - name: cafaye
+  - name: anywaye
     orgId: 1
-    folder: cafaye
+    folder: anywaye
     type: file
     # Absolute, and mounted read-only by docker-compose.yml. The UID is
     # stable so a dashboard's links from the error view to the overview keep

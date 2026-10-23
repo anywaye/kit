@@ -11,7 +11,7 @@
 - **Language / toolchain:** `<go | ruby | elixir | python | node | rust>` — pinned in `mise.toml`
 - **Owns:** `<the one responsibility, in one sentence>`
 - **Does not own:** `<the neighbouring services it must not grow into>`
-- **Upstream specs:** `core`'s `cafaye.yml` manifest, OpenAPI, and event
+- **Upstream specs:** `core`'s `anywaye.yml` manifest, OpenAPI, and event
   schemas. The spec is the source of truth; the code follows it, never the
   reverse.
 
@@ -84,8 +84,8 @@ is in it wins and everything you did not mention still comes from kit.
   This is measured, not folklore, and kit's gate fails on it.
 - **Your account boundary is Postgres, not your `WHERE` clauses.** If this service
   holds rows belonging to a customer, `templates/database/tenancy/` applies:
-  `cafaye.protect_table('<table>')` in each account-scoped table's migration,
-  `cafaye.begin_account/1` once per request inside your transaction, and the
+  `anywaye.protect_table('<table>')` in each account-scoped table's migration,
+  `anywaye.begin_account/1` once per request inside your transaction, and the
   application connecting as **`<service>_app`** rather than `<service>`. The
   `<service>_app` role is provisioned for you and owns nothing, which is what
   stops it turning its own policies off.
@@ -135,7 +135,7 @@ redaction allowlist still runs before anything would be stored.
 - **Turning telemetry off is one variable.** Unset it and the exporter is a
   genuine no-op: no queue, no retry loop against a dead endpoint, no warning per
   request, no dial at boot. Implement that with `OTEL_SDK_DISABLED` — the
-  OpenTelemetry spec's own switch — rather than a cafaye reimplementation, and
+  OpenTelemetry spec's own switch — rather than a anywaye reimplementation, and
   check `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and
   `OTEL_LOGS_EXPORTER` too. A no-op that only covers traces still phones home
   for metrics, and that is the failure a customer's invoice finds first.

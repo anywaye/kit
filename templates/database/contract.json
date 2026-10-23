@@ -63,19 +63,19 @@
           "why": "FORCE without ENABLE is a no-op and ENABLE without FORCE is the trap. Both, in this order, each asserted rather than assumed — and the two are asserted by the same statement list, so a substrate that enabled without forcing is caught by the token above rather than by a rule about which came first."
         },
         {
-          "token": "(select cafaye.current_account_id())",
+          "token": "(select anywaye.current_account_id())",
           "why": "The `(select ...)` wrapping: one call per statement against one per candidate row. Measured on this kit, five rows and one query, 1 call wrapped and 5 bare. It is a required STRING rather than a rule because the correct spelling is one literal in one function, and a rule about parsing rendered policy qualifiers would be a second parser for a value this repository already owns."
         },
         {
-          "token": "create or replace function cafaye.protect_table",
+          "token": "create or replace function anywaye.protect_table",
           "why": "One entry point. A substrate that also offered a weaker way to protect a table is a substrate the weaker way gets chosen from, and nothing about the weaker one would look weaker."
         },
         {
-          "token": "create or replace function cafaye.begin_account",
+          "token": "create or replace function anywaye.begin_account",
           "why": "The seam, and the half that is transaction-local. One function a service calls once per request means one place in a codebase writes the identity GUC, and `is_local = true` is what makes a pooled connection safe: a session-level tenant variable survives the pool and hands one tenant's rows to another."
         },
         {
-          "token": "create or replace function cafaye.current_account_id",
+          "token": "create or replace function anywaye.current_account_id",
           "why": "The read side of the seam, and the half whose NULL is load-bearing. No identity and an identity that owns nothing must be indistinguishable, or the boundary is an enumeration oracle — core's D33 arriving from the other end."
         },
         {
@@ -87,43 +87,43 @@
           "why": "PUBLIC holds no table privilege by default, and one statement makes the answer to \"who can read this\" not be \"whoever the last migration remembered\"."
         },
         {
-          "token": "create or replace function cafaye.unprotected_tables",
+          "token": "create or replace function anywaye.unprotected_tables",
           "why": "The sweep, and the only thing that keeps a service honest as it grows: a table added next month with an account_id column and no policies is named on the next run, which is the moment before it matters."
         },
         {
-          "token": "create or replace function cafaye.protect_credential_table",
+          "token": "create or replace function anywaye.protect_credential_table",
           "why": "THE CREDENTIAL ENTRY POINT, and it is ONE call that protects the table exactly as `protect_table` does and then adds a fifth `for select` policy whose qualifier is the digest the caller presented. A table whose access path is \u2018find the row by an unguessable value and learn the account from it\u2019 cannot be scoped by an account it has not computed yet: `identity` measured zero rows, and a 401, for every scoped token. The policy carries the SAME predicate the caller\u2019s query carries, which is what makes `select *` return that one row rather than the whole table. DECISIONS.md MD24 records the BYPASSRLS-role and SECURITY-DEFINER alternatives as dead for this substrate, with the reasons."
         },
         {
-          "token": "create or replace function cafaye.begin_credential",
+          "token": "create or replace function anywaye.begin_credential",
           "why": "The second transaction-local GUC, and the cost of the credential path stated rather than hidden: a pool must not hand one resolution\u2019s digest to the next connection, exactly as `begin_account/1` must not hand one tenant\u2019s identity to the next. It takes a text digest the caller has ALREADY computed, so Postgres never learns the secret and gains no ability to derive one."
         },
         {
-          "token": "(select cafaye.current_credential_digest())",
+          "token": "(select anywaye.current_credential_digest())",
           "why": "The `(select ...)` wrapping on the fifth policy too, for the same measured reason as the four account policies: one evaluation per statement against one per candidate row. Required as a string because the correct spelling is one literal in one function, and a rule about parsing rendered qualifiers would be a second parser for a value this repository already owns."
         },
         {
-          "token": "create or replace function cafaye.credential_tables",
-          "why": "THE AUDIT, and the reason the mechanism\u2019s scope is auditable rather than ambient: one query answers \u2018which tables in this database can be read with no account\u2019. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing, and it reads them through pg_depend rather than through pg_get_expr, so the answer does not depend on the reader\u2019s search_path \u2014 the dependence that made this audit report NO credential table at all to the one role whose \"$user\" schema is cafaye. It deliberately does NOT answer who resolved \u2014 the digest is transaction-local \u2014 because a claim this file cannot honour is a comment pretending to be a control."
+          "token": "create or replace function anywaye.credential_tables",
+          "why": "THE AUDIT, and the reason the mechanism\u2019s scope is auditable rather than ambient: one query answers \u2018which tables in this database can be read with no account\u2019. It reads the POLICIES rather than a list, so it cannot be satisfied by a mechanism that records nothing, and it reads them through pg_depend rather than through pg_get_expr, so the answer does not depend on the reader\u2019s search_path \u2014 the dependence that made this audit report NO credential table at all to the one role whose \"$user\" schema is anywaye. It deliberately does NOT answer who resolved \u2014 the digest is transaction-local \u2014 because a claim this file cannot honour is a comment pretending to be a control."
         },
         {
           "token": "not c.relforcerowsecurity",
           "why": "The sweep reads pg_class itself rather than trusting that protect_table ran. A sweep that only knew about tables it had created itself would be satisfied by a sweep that creates nothing."
         },
         {
-          "token": "create or replace function cafaye.protect_membership_table",
+          "token": "create or replace function anywaye.protect_membership_table",
           "why": "THE MEMBERSHIP ENTRY POINT, and the reason it sits beside the credential one rather than being folded into `protect_table`. A membership table is read two ways and the ordinary predicate can only do one of them: `protect_table` answers \"which rows belong to the account I am standing in\", which is true, useless, and exactly wrong for \"which accounts am I in\" — a query that runs before any account is being stood in. Measured against a real `account_users` under identity's 00016, that query returned an empty list while every policy read as correctly installed: a green suite and an empty product screen. The policy added here is `for select` only, so a caller can discover where it belongs without gaining the ability to change who is there, and that difference is what `membership/discovery-cannot-write` exists to hold."
         },
         {
-          "token": "create or replace function cafaye.begin_user",
+          "token": "create or replace function anywaye.begin_user",
           "why": "THE THIRD TRANSACTION-LOCAL GUC, and the reason the substrate needed one at all. Naming the CALLER is what makes a user-scoped predicate expressible; the alternatives were a SECURITY DEFINER bypass (already dead for credentials in MD24, for the same reason) or a policy that cannot say WHICH caller is asking and therefore reads every membership in the fleet. Same `is_local = true` argument as `begin_account/1`, and it inherits its cost: outside an explicit transaction the setting expires at the end of the statement that set it, so a caller that forgets the transaction reads zero memberships rather than somebody else’s."
         },
         {
-          "token": "(select cafaye.current_user_id())",
+          "token": "(select anywaye.current_user_id())",
           "why": "The `(select ...)` wrapping on the discover policy too, for the same measured reason as the four account policies and the credential policy: one evaluation per statement against one per candidate row. Required as a string because the correct spelling is one literal in one function, and a rule about parsing rendered policy qualifiers would be a second parser for a value this repository already owns."
         },
         {
-          "token": "create or replace function cafaye.membership_tables",
+          "token": "create or replace function anywaye.membership_tables",
           "why": "THE SECOND AUDIT, and its being SEPARATE from `credential_tables` is the point rather than duplication. There are now two ways a policy can stop requiring an account, so one query could no longer answer \"can anything here be read without an account\" — and merging them would report a membership table as resolvable by anybody who guesses a digest, which is the same conflation this repository keeps refusing elsewhere. Both read the POLICIES rather than a list, and both read them through pg_depend rather than pg_get_expr, so the answer does not depend on the reader’s search_path."
         }
       ],
@@ -145,21 +145,21 @@
       "file": "templates/database/tenancy/isolation.sql",
       "required": [
         "set local role",
-        "cafaye.begin_account",
-        "cafaye.unprotected_tables()",
-        "pg_temp.cafaye_assert",
-        "cafaye.begin_credential",
-        "cafaye.begin_user"
+        "anywaye.begin_account",
+        "anywaye.unprotected_tables()",
+        "pg_temp.anywaye_assert",
+        "anywaye.begin_credential",
+        "anywaye.begin_user"
       ],
       "requiredWhy": [
         "`set local role` is how the two halves of the assertion set are reached — the login role and the owner — and both halves are load-bearing and neither is obvious. Without the LOCAL form the role change refuses to run at all. Inside a transaction it is undone by any `exception` block it was issued from, which is a harness that silently tests the wrong role and reports a green proof; the first version of this file made exactly that mistake, by wrapping the refusals in a SECURITY DEFINER recorder that ran them as the OWNER and so succeeded at disabling the boundary it was asserting nobody could disable.",
-        "`cafaye.begin_account` is the identity seam being USED rather than read about. Every read denial in the file is meaningless without it: with no identity set, every row is hidden and every denial assertion passes.",
-        "`cafaye.unprotected_tables()` is the sweep being exercised rather than trusted, and it carries the assertion set's only POSITIVE CONTROL: that the sweep really does report a table with an account_id column and no policies. Without it the sweep's empty result is satisfied by a sweep that reports nothing at all, which is the same shape as an isolation test that only asserts \"no identity reads zero rows\".",
-        "`pg_temp.cafaye_assert` is the file's own recorder. Required by name because the results are collected by a function this file defines in `pg_temp`, and a proof whose results are collected by something else is a proof whose result format is whatever that something else produces — which is precisely what the six drivers would then have to know about."
+        "`anywaye.begin_account` is the identity seam being USED rather than read about. Every read denial in the file is meaningless without it: with no identity set, every row is hidden and every denial assertion passes.",
+        "`anywaye.unprotected_tables()` is the sweep being exercised rather than trusted, and it carries the assertion set's only POSITIVE CONTROL: that the sweep really does report a table with an account_id column and no policies. Without it the sweep's empty result is satisfied by a sweep that reports nothing at all, which is the same shape as an isolation test that only asserts \"no identity reads zero rows\".",
+        "`pg_temp.anywaye_assert` is the file's own recorder. Required by name because the results are collected by a function this file defines in `pg_temp`, and a proof whose results are collected by something else is a proof whose result format is whatever that something else produces — which is precisely what the six drivers would then have to know about."
         ,
-        "`cafaye.begin_credential` is the credential seam being USED, and it is in this list because the credential half of the assertion set is meaningless as prose without it: with no digest open, every credential read is denied and the twelve rows that prove a resolution works would pass for the same wrong reason the first four would. Every read denial in this file is a claim about what a session MAY do AFTER it opens a context, and the context is the part that is easiest to leave out."
+        "`anywaye.begin_credential` is the credential seam being USED, and it is in this list because the credential half of the assertion set is meaningless as prose without it: with no digest open, every credential read is denied and the twelve rows that prove a resolution works would pass for the same wrong reason the first four would. Every read denial in this file is a claim about what a session MAY do AFTER it opens a context, and the context is the part that is easiest to leave out."
         ,
-        "`cafaye.begin_user` is the caller seam being USED, and it is in this list for a reason the other two do not share. Those two are guards against a harness that forgets to OPEN a context and then calls every row a denial. This one guards against the opposite and quieter failure: the membership half's first row is satisfied by a substrate with no mechanism at all — which is exactly the state identity shipped in, where every assertion was green and `GET /v1/accounts` answered `[]` to an owner. So the twelve rows that prove a discovery works have to name a caller to be about anything."
+        "`anywaye.begin_user` is the caller seam being USED, and it is in this list for a reason the other two do not share. Those two are guards against a harness that forgets to OPEN a context and then calls every row a denial. This one guards against the opposite and quieter failure: the membership half's first row is satisfied by a substrate with no mechanism at all — which is exactly the state identity shipped in, where every assertion was green and `GET /v1/accounts` answered `[]` to an owner. So the twelve rows that prove a discovery works have to name a caller to be about anything."
       ],
       "spine": [
         "login/no-identity-reads-no-rows",
@@ -187,7 +187,7 @@
       ],
       "mustReadWhy": "Checked on the SAME LINE as one of the language's own read forms, which is the whole difficulty. A first version asked only whether the file mentioned the name, and every driver mentions both in its own header comment — the header is WHY the driver is thin — so a driver whose read had been deleted was reported clean. A second version asked whether the file contained a read ANYWHERE, and every driver satisfies that by reading isolation.sql, so a driver that had stopped reading assertions.txt was still clean. Both were satisfied by the exact edit they exist to catch. What this check cannot show is that the driver EXECUTES the script it read rather than reading it and running its own query; that limit is recorded in the report rather than papered over.",
       "mustCarry": [
-        "pg_temp.cafaye_probe_result"
+        "pg_temp.anywaye_probe_result"
       ],
       "mustCarryWhy": "The result table isolation.sql creates. It is in code rather than in a comment because it is the thing a driver queries AFTER running the proof, and a driver that never asks for it is not running this proof at all. Every other list this check iterates has an empty-list guard for the same reason: a list that is empty makes the loop over it a no-op that passes, which is how a check ends up green having read nothing."
     }

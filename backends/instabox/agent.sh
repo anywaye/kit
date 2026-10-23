@@ -83,8 +83,8 @@ fi
 echo "$$" >"$LOCK_DIR/pid"
 trap 'rm -rf "$LOCK_DIR"' EXIT
 
-mkdir -p "$WORKSPACE/cafaye"
-PROJECT_DIR="$WORKSPACE/cafaye/$PROJECT_NAME"
+mkdir -p "$WORKSPACE/anywaye"
+PROJECT_DIR="$WORKSPACE/anywaye/$PROJECT_NAME"
 
 # The serial gate lock. Two projects' gates running at once is normal and fine
 # on this backend — their databases are separate, so they share nothing. A
@@ -134,13 +134,13 @@ run_pipeline() {
   bash "$PROJECT_DIR/ci/pipeline.sh" >"$RUN_LOG" 2>&1
 }
 
-cd "$WORKSPACE/cafaye"
+cd "$WORKSPACE/anywaye"
 if [ -d "$PROJECT_DIR/.git" ]; then
   echo "agent[$AGENT_NAME]: found $PROJECT_DIR"
 else
   echo "agent[$AGENT_NAME]: cloning $PROJECT_REPO_URL"
-  git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/cafaye/${PROJECT_NAME}.git" "$PROJECT_DIR" 2>/dev/null \
-    || git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/cafaye/${PROJECT_NAME}.git" "$PROJECT_DIR"
+  git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/anywaye/${PROJECT_NAME}.git" "$PROJECT_DIR" 2>/dev/null \
+    || git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/anywaye/${PROJECT_NAME}.git" "$PROJECT_DIR"
 fi
 
 last=""

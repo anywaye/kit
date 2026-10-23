@@ -7,15 +7,15 @@ called**, and that separation is the whole reason another language is an adapter
 away rather than a second harness.
 
 **Two adapters exist: `elixir.sh` and `go.sh`.** The other four fleet languages —
-Ruby (cafaye-rb), TypeScript (cafaye-ts, gateway, parlor, site), Python
-(cafaye-py), Rust (darkroom) — are **unproven**. Not "covered by the same
+Ruby (anywaye-rb), TypeScript (anywaye-ts, gateway, parlor, site), Python
+(anywaye-py), Rust (darkroom) — are **unproven**. Not "covered by the same
 rules", not "nominally supported": unproven, and the report says so in those
 words.
 
 **TypeScript is unproven for a different reason from the other three, and the
 reason is measured.** A third adapter was attempted against `parlor` and
 withdrawn, because **no TypeScript service in the fleet holds a database**:
-across `cafaye-ts`, `gateway`, `parlor`, `site` and `docs` there is not one import
+across `anywaye-ts`, `gateway`, `parlor`, `site` and `docs` there is not one import
 of a postgres or ORM driver, not one declared driver, and not one `.sql` outside
 an `e2e/` fixture. There is therefore nothing for `adapter_migrate` to apply, no
 write path to seed two accounts through, and no query layer for
@@ -98,8 +98,8 @@ and the honest claim now, after Go was added the same way and measured the same
 way, is:
 
 > cross-tenant isolation is **proven for Elixir and Go**, on services that scope
-> correctly. **Four languages remain unproven** — Ruby (cafaye-rb), TypeScript
-> (cafaye-ts, gateway, parlor, site), Python (cafaye-py), Rust (darkroom). For
+> correctly. **Four languages remain unproven** — Ruby (anywaye-rb), TypeScript
+> (anywaye-ts, gateway, parlor, site), Python (anywaye-py), Rust (darkroom). For
 > TypeScript this is a stronger statement than for the others: no TypeScript
 > service holds a database at all, so there is no query layer for this harness
 > to measure, and the number cannot move until one does.
@@ -124,7 +124,7 @@ adapter needed went through variables the contract already granted it:
 
 The one thing that did NOT fit was in identity's migrations, not in the harness,
 and it is written up as a finding in `REPORT-kit-tenant-adapter-go-01`:
-`cafaye.protect_table` refuses to install a policy unless a LOGIN role it derives
+`anywaye.protect_table` refuses to install a policy unless a LOGIN role it derives
 from `current_user` already exists, so the substrate a migration installs can
 depend on infrastructure outside the migration.
 

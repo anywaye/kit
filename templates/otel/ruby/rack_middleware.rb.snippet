@@ -69,7 +69,7 @@ module Kit
 
     # SIGNALS, in the order they are checked. `OTEL_SDK_DISABLED` is the
     # OpenTelemetry spec's OWN kill switch and it is what core's
-    # otel-endpoint schema pins the no-op to — not a cafaye reimplementation.
+    # otel-endpoint schema pins the no-op to — not a anywaye reimplementation.
     # Re-implementing "disabled" in six languages is how six services acquire
     # six different definitions of it, and the difference between them is
     # somebody's production incident.
@@ -85,7 +85,7 @@ module Kit
     # bring-your-own is a *supported deployment*, not a degraded mode. Unset —
     # go nowhere at all, not "go nowhere and try". `OTEL_EXPORTER_OTLP_ENDPOINT`
     # is honoured as a fallback so the service also works with generic OTel
-    # tooling, and the cafaye name wins when both are set: the precedence is
+    # tooling, and the anywaye name wins when both are set: the precedence is
     # written down here rather than discovered later, because a contract with an
     # undocumented precedence order is a bug report.
     def endpoint

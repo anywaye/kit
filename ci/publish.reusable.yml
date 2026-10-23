@@ -15,7 +15,7 @@
 # the executable CI is measured against, and the day this file stops being
 # that, the checks move with it.
 ---
-# kit — the publish path every cafaye service repo runs, both halves in one call.
+# kit — the publish path every anywaye service repo runs, both halves in one call.
 #
 # Consumers do not copy this file; they call it, exactly as they call
 # `ci/ci.reusable.yml`:
@@ -33,7 +33,7 @@
 #     cancel-in-progress: true
 #   jobs:
 #     publish:
-#       uses: cafaye/kit/ci/publish.reusable.yml@master
+#       uses: anywaye/kit/ci/publish.reusable.yml@master
 #       with:
 #         push: true
 #
@@ -68,7 +68,7 @@
 #   1. The registry path. `chart.reusable.yml` pushes to the registry root and
 #      `helm push` appends the chart's name; every Argo CD Application in
 #      `templates/substrate/manifests/applications/` carries that path
-#      (`oci://ghcr.io/cafaye/charts/<chart>`) as its `source.repoURL`. Argo
+#      (`oci://ghcr.io/anywaye/charts/<chart>`) as its `source.repoURL`. Argo
 #      resolves an OCI source's revision against `repoURL` itself, so the bare
 #      root is not an artifact. Both files are in kit, which is what makes this
 #      provable in this repository's own gate — the check asserts
@@ -100,7 +100,7 @@
 #      charts pinned the image by that tag: the rendered Deployment was
 #      textually identical before and after a build, Argo's diff reported
 #      `Synced` with no rollout, and the box sat on the old image. MEASURED
-#      (roll-c5-image-digest): the registry's `ghcr.io/cafaye/gateway:0.1.0`
+#      (roll-c5-image-digest): the registry's `ghcr.io/anywaye/gateway:0.1.0`
 #      held `sha256:c264…37165` while the node ran `sha256:8e60…e79b`, six
 #      hours after the fix was merged and published — a refresh reported
 #      `Synced` with no diff and `imagePullPolicy: IfNotPresent` re-served
@@ -140,7 +140,7 @@ on:
           registry input.
         required: false
         type: string
-        default: 'oci://ghcr.io/cafaye/charts'
+        default: 'oci://ghcr.io/anywaye/charts'
       chart-dir:
         description: >-
           The directory holding Chart.yaml, relative to the repository root.

@@ -2,7 +2,7 @@
 # courier — the reference deployment.
 #
 #   SERVICE_NAME=courier \
-#   KIT_DEPLOY_IMAGE=cafaye-kit16/courier:35c6a27 \
+#   KIT_DEPLOY_IMAGE=anywaye-kit16/courier:35c6a27 \
 #   KIT_DEPLOY_PORT=16800 \
 #     templates/bin/deploy.sh up --service courier --file <this file> --secrets-fd 3
 #

@@ -3,20 +3,20 @@
 # cluster, and asserted as a number rather than described in a report.
 #
 # WHAT IT MEASURES. The packet's two shapes, on kit's own identity seam
-# (`cafaye.begin_account` / `cafaye.current_account_id`), against a membership
+# (`anywaye.begin_account` / `anywaye.current_account_id`), against a membership
 # table indexed in BOTH directions:
 #
-#   SLOW  using ((select cafaye.current_account_id()) in
+#   SLOW  using ((select anywaye.current_account_id()) in
 #                (select m.caller_account from member_of m
 #                   where m.subject_account = doc.subject_account_id))
 #          -- the membership subquery is CORRELATED to the policy's own row.
 #
 #   FAST  using (doc.subject_account_id in
 #                (select m.subject_account from member_of m
-#                   where m.caller_account = (select cafaye.current_account_id())))
+#                   where m.caller_account = (select anywaye.current_account_id())))
 #          -- membership resolved once into a set; IN against the ROW COLUMN.
 #
-#   KIT   using (account_id = (select cafaye.current_account_id()))
+#   KIT   using (account_id = (select anywaye.current_account_id()))
 #          -- what protect_table writes. No membership table, so no join either way.
 #
 #   EDGE  the same delegation reachable only through a link table, so the OUTER
@@ -102,13 +102,13 @@ mkdir -p "$WORK"
 
 say ""
 say "== the cluster, and the substrate on it =="
-if ! docker run -d --name "$C" -e POSTGRES_PASSWORD=cafaye -e POSTGRES_DB=rlsperf \
+if ! docker run -d --name "$C" -e POSTGRES_PASSWORD=anywaye -e POSTGRES_DB=rlsperf \
       "postgres:$IMAGE" >/dev/null; then
   say "SKIP tests/rls_perf_test.sh: could not start postgres:$IMAGE."
   exit 3
 fi
 
-q() { docker exec -e PGPASSWORD=cafaye "$C" psql -U postgres -d rlsperf -tAX -c "$1"; }
+q() { docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf -tAX -c "$1"; }
 
 ready=0
 for _ in $(seq 1 60); do
@@ -120,7 +120,7 @@ done
 # The REAL substrate, not a stand-in for the identity seam: the whole claim is
 # about the policies this template writes and about the function they call.
 docker cp "$SUBSTRATE" "$C:/tmp/substrate.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U postgres -d rlsperf \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf \
      -v ON_ERROR_STOP=1 -q -f /tmp/substrate.sql >"$WORK/substrate.log" 2>&1; then
   say "FAIL: templates/database/tenancy/substrate.sql did not apply. Last lines:"
   tail -20 "$WORK/substrate.log" | sed 's/^/       /'
@@ -201,24 +201,24 @@ begin
 end $$;
 
 create policy perf_sel on perf.slow_doc for select to perf_app
-  using ((select cafaye.current_account_id()) in
+  using ((select anywaye.current_account_id()) in
          (select m.caller_account from perf.member_of m
            where m.subject_account = perf.slow_doc.subject_account_id));
 
 create policy perf_sel on perf.fast_doc for select to perf_app
   using (perf.fast_doc.subject_account_id in
          (select m.subject_account from perf.member_of m
-           where m.caller_account = (select cafaye.current_account_id())));
+           where m.caller_account = (select anywaye.current_account_id())));
 
 create policy perf_sel on perf.plain_doc for select to perf_app
-  using (account_id = (select cafaye.current_account_id()));
+  using (account_id = (select anywaye.current_account_id()));
 
 create policy perf_sel on perf.hop_doc for select to perf_app
   using (exists (select 1 from perf.hop_link l
                   where l.doc_id = perf.hop_doc.id
                     and l.subject_account_id in
                         (select m.subject_account from perf.member_of m
-                          where m.caller_account = (select cafaye.current_account_id()))));
+                          where m.caller_account = (select anywaye.current_account_id()))));
 
 analyze perf.member_of;
 analyze perf.slow_doc;
@@ -229,7 +229,7 @@ analyze perf.hop_link;
 FIXTURE
 
 docker cp "$WORK/fixture.sql" "$C:/tmp/fixture.sql" >/dev/null
-if ! docker exec -e PGPASSWORD=cafaye "$C" psql -U postgres -d rlsperf \
+if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf \
      -v ON_ERROR_STOP=1 -q -f /tmp/fixture.sql >"$WORK/fixture.log" 2>&1; then
   say "FAIL: the measurement fixture did not install. Last lines:"
   tail -20 "$WORK/fixture.log" | sed 's/^/       /'
@@ -241,7 +241,7 @@ say "== the four policy shapes, run as the LOGIN role that owns nothing =="
 cat >"$WORK/measure.sql" <<'MEASURE'
 set client_min_messages = warning;
 begin;
-select cafaye.begin_account('00000000-0000-0000-0000-000000000007');
+select anywaye.begin_account('00000000-0000-0000-0000-000000000007');
 set local role = perf_app;
 set local search_path = perf, public;
 \pset format unaligned
@@ -262,7 +262,7 @@ explain (analyze, costs off) select count(*) from perf.hop_doc;
 rollback;
 MEASURE
 docker cp "$WORK/measure.sql" "$C:/tmp/measure.sql" >/dev/null
-docker exec -e PGPASSWORD=cafaye "$C" psql -U postgres -d rlsperf \
+docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf \
   -f /tmp/measure.sql >"$WORK/measure.out" 2>&1 \
   || { say "FAIL: the measurement did not run. Last lines:"; tail -20 "$WORK/measure.out" | sed 's/^/       /'; fail "the measurement did not run"; }
 

@@ -1,6 +1,6 @@
 # W3C traceparent — Go
 
-Go's trace propagation, so a request that enters one cafaye service and
+Go's trace propagation, so a request that enters one anywaye service and
 leaves it another still reads as **one** trace in a trace view rather than two
 unrelated ones.
 
@@ -112,8 +112,8 @@ why choosing the other transport does not inherit the other's fix.
 `WithEndpoint(host, port)` plus `WithURLPath`.** One place already normalises
 every other spelling an operator will type — bare `host:port`, trailing slash,
 base path behind a reverse proxy — and this is just the next rule it applies.
-Use `path.Join`, the SDK's own rule, so `https://otlp.example.com/cafaye`
-becomes `/cafaye/v1/traces`, byte-identical to what the SDK's own configuration
+Use `path.Join`, the SDK's own rule, so `https://otlp.example.com/anywaye`
+becomes `/anywaye/v1/traces`, byte-identical to what the SDK's own configuration
 would produce.
 
 **Make it IDEMPOTENT.** An operator who named `/v1/traces` in the variable is

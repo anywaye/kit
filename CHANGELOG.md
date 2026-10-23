@@ -27,10 +27,10 @@
   the flag, the URL pair and the declaration.
 
 - **One sandbox hosts many projects, and a service has a pipeline template.**
-  The instabox backend shipped a single-project provisioner and only `cafaye/docs`
+  The instabox backend shipped a single-project provisioner and only `anywaye/docs`
   used it; the plan caps sandboxes at five and the fleet is thirteen services, so
   the fleet could not adopt Actions-free CI. `backends/instabox/provision.sh` now
-  takes a **list** (`provision.sh cafaye-build billing courier docs identity`),
+  takes a **list** (`provision.sh anywaye-build billing courier docs identity`),
   writes one `~/ci-env.d/<project>.env` and one `~/ci/agents/<project>.sh`
   binding per project, and starts `backends/instabox/supervisor.sh`, which starts
   and restarts one agent per project. The single-project form is the list with
@@ -55,7 +55,7 @@
 ### Substrate
 
 - **The front door installs: a served run fetches its own manifests, and a pipe
-  is not an unbound-variable crash.** `curl https://cafaye.com/box/install | sh`
+  is not an unbound-variable crash.** `curl https://anywaye.com/box/install | sh`
   — the command the website, `cafe box init` and every doc print — could not
   install a box, measured live 2026-10-15. `SCRIPT_DIR="$(cd "$(dirname
   "${BASH_SOURCE[0]}")" && pwd)"` read `BASH_SOURCE[0]` unguarded: under a pipe
@@ -82,7 +82,7 @@
   store, and refreshes it if it cannot.** Measured on the Contabo dogfood box
   (2026-10-15): `/etc/ssl/certs/ca-certificates.crt` held 122 certificates and
   no major root (no ISRG, no DigiCert), so `cafe boxd` could not verify
-  `https://box.svc.cafaye.com:8443` (`x509: certificate signed by unknown
+  `https://box.svc.anywaye.com:8443` (`x509: certificate signed by unknown
   authority`) while a Mac client could, and the remedy was `apt-get install
   --reinstall ca-certificates && update-ca-certificates --fresh`. The preflight
   now verifies `KIT_SUBSTRATE_BOX_URL` and `KIT_SUBSTRATE_REGISTRY_URL` with
@@ -125,8 +125,8 @@
   a route the run did not watch. See `REPORT-roll-c5-oidc-restart`.
 
 - **The substrate carries only what a customer runs: pantry, box and
-  keyholder are out.** All three are Cafaye-operated and reached over
-  HTTPS — pantry at `https://pantry.cafaye.com` (gateway's ROUTE_TABLE
+  keyholder are out.** All three are Anywaye-operated and reached over
+  HTTPS — pantry at `https://pantry.anywaye.com` (gateway's ROUTE_TABLE
   names the operated origin for both pantry routes, from the one chart
   value), the registry exchange at `KIT_SUBSTRATE_REGISTRY_URL`, the
   control plane at `KIT_SUBSTRATE_BOX_URL` — so their Applications,
@@ -141,7 +141,7 @@
   Application may require an operated service at runtime (keyholder's
   own manifest requires box, which is the dimension that catches it).
   A 503 naming the unreachable *external* pantry origin is the honest
-  answer until Cafaye hosts the registry. See
+  answer until Anywaye hosts the registry. See
   `REPORT-roll-c5-operated-out`.
 
 - **Step 5 asks GHCR first, and only reaches for the capability when an
@@ -150,15 +150,15 @@
   a required ritual that buys nothing where every artifact is public (a
   stale/wrong pull secret does not break a public pull; GHCR falls back to
   anonymous). Now the step derives every GHCR chart and image the
-  Applications name (`repoURL`/`targetRevision` plus the image each cafaye
+  Applications name (`repoURL`/`targetRevision` plus the image each anywaye
   chart runs — 14 rows, no flag) and asks GHCR for an anonymous token and a
   manifest HEAD per artifact, both bounded. All public: an empty-auths pull
   secret through the same pipe into the same namespaces, with no box id, no
   capability and no exchange. One private: today's exchange unchanged, its
   refusals now naming which artifacts need the credential, and the readiness
   report naming the path taken (`registry: …` / `"registry_path"`). Measured
-  today: 11 of 14 anonymously fetchable; `cafaye/box`, `cafaye/charts/box`
-  and `cafaye/charts/pantry` refuse anonymous fetch, so installs pulling
+  today: 11 of 14 anonymously fetchable; `anywaye/box`, `anywaye/charts/box`
+  and `anywaye/charts/pantry` refuse anonymous fetch, so installs pulling
   them still take the capability path. See
   `REPORT-roll-c5-public-artifacts`.
 
@@ -170,7 +170,7 @@
   was never deployed because nothing ever published it (no `publish.yml`,
   so no image and no chart in the registry — both token scopes still
   DENIED at this writing) and the substrate named nothing of it. Now:
-  a pantry `Application` (`oci://ghcr.io/cafaye/charts/pantry`,
+  a pantry `Application` (`oci://ghcr.io/anywaye/charts/pantry`,
   `targetRevision` 0.1.0) with `imagePullSecrets` pointed at the
   installer-exchanged `ghcr-pull-secret`; a pantry database, owner/app
   roles, the five NOLOGIN RLS roles and three memberships in the Cluster
@@ -180,7 +180,7 @@
   the OWNER role. `KIT_SUBSTRATE_DATABASES` is
   `identity,gateway,courier,parlor,pantry`, and the refusal names the
   new set. The pantry half (publish workflow, digest-pinned chart,
-  owner-runnable migrations) ships in `cafaye/pantry`.
+  owner-runnable migrations) ships in `anywaye/pantry`.
 
 - **`KIT_SUBSTRATE_KUBECONFIG`: the substrate installs into a cluster that is
   already there.** One environment variable names a kubeconfig for a cluster that
@@ -238,12 +238,12 @@
   name that is taken.
 - **The readiness preflight reads INGRESS hosts, so the box reports every
   condition it has.** The live box's readiness event named 2 pending hosts
-  (`app.cafaye.com`, `auth.cafaye.com`) while `kubectl get ingress -A` on the
-  same box held three — gateway's `api.cafaye.com` among them, its Certificate
+  (`app.anywaye.com`, `auth.anywaye.com`) while `kubectl get ingress -A` on the
+  same box held three — gateway's `api.anywaye.com` among them, its Certificate
   READY=False for 98 minutes. An Ingress host is a bare hostname
   (`spec.rules.host`, or a chart's `host` value) and the URL grep the
   derivation used cannot match one by construction — the pattern requires a
-  scheme; `app.cafaye.com` was caught only because
+  scheme; `app.anywaye.com` was caught only because
   `KIT_SUBSTRATE_APP_BASE_URL` happens to name parlor's Ingress. The
   derivation is now `kit_substrate_intended_host_table` — `host<TAB>source`
   rows from three sources: the operator's two URLs, public https hosts in the
@@ -268,7 +268,7 @@
 
 - **Publish writes the image's DIGEST into the chart it pushes, so a new build
   is a textual diff Argo rolls.** Measured on the live box: the registry's
-  `ghcr.io/cafaye/gateway:0.1.0` held `sha256:c264…37165` (the merged Redis
+  `ghcr.io/anywaye/gateway:0.1.0` held `sha256:c264…37165` (the merged Redis
   AUTH fix) while the node ran `sha256:8e60…e79b`, six hours older. Both
   reasons nothing closed the gap were structural: the `0.1.0` tag is
   overwritten on every master push (it is this path's own `appVersion`
@@ -325,7 +325,7 @@
 - **The orphan sweep deleted a WORKING mail path and called it leftovers.**
   The live Contabo box carries a complete seven-key courier block
   (`COURIER_BASE_URL` and `COURIER_TOKEN` both present, five link templates
-  derived from `https://app.cafaye.com`) and identity boots reporting
+  derived from `https://app.anywaye.com`) and identity boots reporting
   "account recovery can send all four messages through courier". With
   `KIT_SUBSTRATE_APP_BASE_URL` unset the sweep collected all seven keys and
   deleted them as "leftovers from an installer that wrote half a pair" —
@@ -353,8 +353,8 @@
   (a probe of `deployment/argocd-repo-server`) and it wrapped the whole step,
   including `kubectl apply -f appproject.yaml`. The live Contabo box therefore
   carried the pre-glob `sourceRepos` —
-  `["https://grafana.github.io/helm-charts", "https://prometheus-community.github.io/helm-charts", "oci://ghcr.io/cafaye/charts"]` —
-  while this repository had already written `oci://ghcr.io/cafaye/charts/*`, and
+  `["https://grafana.github.io/helm-charts", "https://prometheus-community.github.io/helm-charts", "oci://ghcr.io/anywaye/charts"]` —
+  while this repository had already written `oci://ghcr.io/anywaye/charts/*`, and
   the only way to land the fix was to delete Argo CD. **A guard that covers an
   operator install and a policy file conflates two lifetimes**, so the AppProject
   apply moved out of the operator's `if`: the OPERATOR stays guarded (a warm box
@@ -385,7 +385,7 @@
   Ready.** The live Contabo box finished the install with exit 0 while Argo
   showed gateway Synced/Degraded and its pods logged `Readiness probe
   failed ... 503` 1564 times over four hours — two silent causes: ACME
-  HTTP-01 could never self-check (`lookup api.cafaye.com ...: no such host`,
+  HTTP-01 could never self-check (`lookup api.anywaye.com ...: no such host`,
   DNS never pointed at the box) and gateway's `/readyz` could never pass
   (identity serves its JWKS route only when
   `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` is set, and it was not). Neither is
@@ -404,15 +404,15 @@
 - **The AppProject permitted the registry ROOT while every Application named
   its own chart's PATH, so the controller refused all eight Applications.**
   A sibling packet moved each Application's OCI `source.repoURL` from
-  `oci://ghcr.io/cafaye/charts` to `oci://ghcr.io/cafaye/charts/<chart>`
+  `oci://ghcr.io/anywaye/charts` to `oci://ghcr.io/anywaye/charts/<chart>`
   (Argo resolves an OCI source's revision against the full path), and
   `manifests/argocd/appproject.yaml` — written before that change — still
   listed the bare root. The box's symptom was
-  `application repo oci://ghcr.io/cafaye/charts/gateway is not permitted in
+  `application repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
   project 'default'` on every Application; the name-equality check in §21 could
   not see it, because the project and Applications agree on the name and
   disagree on the sources. **`sourceRepos` now lists
-  `oci://ghcr.io/cafaye/charts/*`** — a PATTERN, not four enumerated chart
+  `oci://ghcr.io/anywaye/charts/*`** — a PATTERN, not four enumerated chart
   names, so a fifth service needs no edit here, and **not a bare `*`**: Argo CD
   v3.5.4 (`pkg/apis/application/v1alpha1/app_project_types.go`
   `IsSourcePermitted`, `util/glob.Match(pattern, value, '/')`) matches
@@ -456,7 +456,7 @@
   `REDIS_URL`, the DSNs, `NATS_URL`) were already fully qualified and are
   unchanged. **The public issuer pair is reported, not guessed:**
   `KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER` has no default (unset ⇒ identity serves
-  no OIDC surface), gateway's chart default is `https://auth.cafaye.com`, and a
+  no OIDC surface), gateway's chart default is `https://auth.anywaye.com`, and a
   box must set the same origin on both sides or identity mints `iss` gateway
   will not accept; `IDENTITY_ISSUER` stays an operator value. gateway's
   `ROUTE_TABLE` (`pantry`) and parlor's `BILLING_URL` are deliberately left to
@@ -531,7 +531,7 @@
   + prometheus, alloy is pinned at chart `1.13.0` with **no values**, so its
   default config (`config/example.alloy`) declares no `otelcol.receiver.otlp`
   and its default Service exposes only `http-metrics` on `12345`; the substrate
-  ships no Tempo (`cafaye/notes/deployment.md`: "Traces | deferred"); and `kubectl get svc -n
+  ships no Tempo (`anywaye/notes/deployment.md`: "Traces | deferred"); and `kubectl get svc -n
   observability` on the live box returns nothing. So the decision is the
   packet's other branch — **deliberately off** — and the mechanism is core's
   pinned no-op: `OTEL_SDK_DISABLED=true` (free: no queue, no retry, no warning
@@ -650,26 +650,26 @@
 - **An OCI Helm `Application` named the registry root, not the chart's own
   path, and every sync in the fleet's first end-to-end install failed.** The
   four service `Application`s in `templates/substrate/manifests/applications/`
-  carried `repoURL: oci://ghcr.io/cafaye/charts` with `chart: <name>`. Argo
+  carried `repoURL: oci://ghcr.io/anywaye/charts` with `chart: <name>`. Argo
   resolves an OCI source's revision against `repoURL` **itself** — the artifact
   it resolves is `<repoURL>:<targetRevision>` — and the published packages are
-  `cafaye/charts/<name>`, so the root is not an artifact:
+  `anywaye/charts/<name>`, so the root is not an artifact:
 
       Failed to load target state: failed to generate manifest for source 1 of 1:
       rpc error: … failed to resolve revision "0.1.0": cannot get digest for
-      revision 0.1.0: HEAD "https://ghcr.io/v2/cafaye/charts/manifests/0.1.0"
+      revision 0.1.0: HEAD "https://ghcr.io/v2/anywaye/charts/manifests/0.1.0"
       → 403 denied
 
   No `Application` synced, no `Deployment` was created, and step 11 waited on
   an object that never existed. The `repoURL` now names the chart's own path
-  (`oci://ghcr.io/cafaye/charts/<name>`; `chart:` stays, and the two may not
+  (`oci://ghcr.io/anywaye/charts/<name>`; `chart:` stays, and the two may not
   disagree). `check_chart_publish` in `tests/chart_publish_check.sh` is re-aimed
   from `repoURL == registry` to `repoURL == registry + "/" + chart`, with four
   red controls — the registry root (today's shape), a `repoURL` path disagreeing
   with `chart:`, a drifted registry prefix, and the existing flipped `push`
   default — and `check_obs_chart_sources` in the gate grades the same path.
   Measured live: patching one `Application` to
-  `oci://ghcr.io/cafaye/charts/identity` moved it to `Synced` and created the
+  `oci://ghcr.io/anywaye/charts/identity` moved it to `Synced` and created the
   fleet's first `identity` Deployment.
 - **CNPG never set the app roles' passwords, because the Secret's `username`
   key was the secret's name and not the role's.** Every service's pod logged
@@ -1033,24 +1033,24 @@
     re-run; the README's rotate-by-replacement path adds it.
 
 - **The box control plane's env surface is named for the box, and the install
-  has one front door: `https://cafaye.com/box/install`.** Two renames that are
+  has one front door: `https://anywaye.com/box/install`.** Two renames that are
   one packet — the plan's §3 L2 and L5 — and neither has a legacy alias,
   because an alias is a second spelling of a fact that moved.
   - **`KIT_SUBSTRATE_CONDUCTOR_URL` is `KIT_SUBSTRATE_BOX_URL`, default
-    `https://box.svc.cafaye.com`.** The variable named the service it talks
+    `https://box.svc.anywaye.com`.** The variable named the service it talks
     to; the fleet renamed that surface to the box, and the hostname followed.
     Nothing consumes the old spelling, so nothing shims it: a box that sets
     the old name gets the new default and redeems nowhere, which is the loud
     answer rather than the silent one.
-  - **The test double moved with it: `box.svc.cafaye.test`.** The suite's
+  - **The test double moved with it: `box.svc.anywaye.test`.** The suite's
     check on `sourced_vars` names the variable, so a rename that reached the
     installer and not the test would have left the suite exporting a value
     under a name nothing reads — green, and measuring nothing.
-  - **`kit.cafaye.com` is retired; `cafaye.com/box/install` is the front
+  - **`kit.anywaye.com` is retired; `anywaye.com/box/install` is the front
     door.** The Worker serves `/box/install` under whatever host it is
     reached on, so the plan's path and the host binding are two moves and
     only the second is an operator action: bind the route to `kit-install`
-    the way `cafaye.com` is bound to `site` today. `GET /` and
+    the way `anywaye.com` is bound to `site` today. `GET /` and
     `GET /install.sh` keep answering the same bytes — the cutover for a
     hostname-bound Worker, not a second front door.
   - **The byte-equality guarantee follows the path.** `check_install_host`
@@ -1127,22 +1127,22 @@
   adoption — left `kit` in the one state OPS-D2's own effect column names: no
   grant means "all rights reserved", and a manifestless repo can be both
   unlicensed and undescribed. Both halves land together.
-  - **`LICENSE` is byte-identical to `cafaye/core/LICENSE`.** The wording is not
-    new and not kit's own draft: seven cafaye repositories already carry this
-    exact text — billing, caf, cafaye-py, cafaye-ts, core, darkroom and docs —
+  - **`LICENSE` is byte-identical to `anywaye/core/LICENSE`.** The wording is not
+    new and not kit's own draft: seven anywaye repositories already carry this
+    exact text — billing, caf, anywaye-py, anywaye-ts, core, darkroom and docs —
     each 1063 bytes, each md5 `cb5ecefdf779acdeacb8709d2ddd56cf`. A reader
     diffing two framework repos sees no grant and only the repository differing.
-  - **`cafaye.yml` is added.** `name: kit`, `language: spec` (the schema's enum
+  - **`anywaye.yml` is added.** `name: kit`, `language: spec` (the schema's enum
     has no config member and AGENTS.md says kit is configuration and
     documentation only), `core: ^0.2.0`, `dependencies: []` (kit is a dependency
     *of* the fleet, never a consumer), `visibility: public`. No `exposes` or
     `consumes`: kit is not a running process, so it has no runtime contract to
     break — the reason core gives for its own omission. Validated against
-    `core/schemas/cafaye.manifest.schema.json` (required keys,
+    `core/schemas/anywaye.manifest.schema.json` (required keys,
     `additionalProperties: false`, and the `serviceName`, `semver`, `repository`
     and `owner` patterns).
   - **`name: kit` is on the reserved-name list** —
-    `cafaye`, `caf`, `kit`, `core`, `docs`, `pantry` are "reserved, never usable
+    `anywaye`, `caf`, `kit`, `core`, `docs`, `pantry` are "reserved, never usable
     as a service name" (`core/docs/manifest-conventions.md`, Namespace rules) —
     and it is named anyway, which is the exception core already makes for
     itself: the schema does not enforce the list and the rule exists to stop one
@@ -1157,10 +1157,10 @@
 
   **The gate is red on exactly one check, and that is named rather than hidden.**
   `license_check` in `tests/validate.sh` was written in m172 for the proprietary
-  grant: it requires `All rights reserved`, `proprietary property of Cafaye` and
-  `separate written Cafaye agreement`, refuses MIT's permission grant, and
+  grant: it requires `All rights reserved`, `proprietary property of Anywaye` and
+  `separate written Anywaye agreement`, refuses MIT's permission grant, and
   requires README's `## License` section to state `Proprietary` and name
-  `Cafaye`. Measured on this packet: 6 of its 8 sub-assertions are red, and the 2
+  `Anywaye`. Measured on this packet: 6 of its 8 sub-assertions are red, and the 2
   that stay green are the ones that were never about the grant's *wording*
   (README links the LICENSE file, README names AGPL). The grant is the file and
   the check is what has to move; a licensing packet does not get to edit a
@@ -1396,7 +1396,7 @@
 ### Added
 
 - **Kit owns the local launch harness: `launch/` (m186).** The retired
-  `cafaye/site` launcher (`bin/launch` + `e2e/docker-compose.launch.yml`)
+  `anywaye/site` launcher (`bin/launch` + `e2e/docker-compose.launch.yml`)
   moves to Kit as `launch/bin/launch` + `launch/docker-compose.launch.yml`
   plus `launch/README.md`: the same four product services (identity,
   gateway, courier, parlor) built from source on Kit's stack with mailpit
@@ -1416,18 +1416,18 @@
   `templates/substrate/` is separate and unproven here) — wired into the
   gate's static phase. See `REPORT-kit-launch-harness-m186`.
 
-- **`license_check` for the Cafaye proprietary grant (m172).** m168
+- **`license_check` for the Anywaye proprietary grant (m172).** m168
   re-pointed the prose — README.md's `## License` section and AGENTS.md's
   licence rule both describe a `license_check` that reads the grant and
   walks every root manifest — but added no check, so the prose described
   a gate that did not exist. `tests/validate.sh` now carries it, in the
   static phase, under the label
-  `LICENSE  (Cafaye proprietary, and nothing in the tree can disagree with it)`:
+  `LICENSE  (Anywaye proprietary, and nothing in the tree can disagree with it)`:
   `LICENSE` must contain the grant's own sentences (`All rights reserved`,
-  `proprietary property of Cafaye`, `separate written Cafaye agreement`)
+  `proprietary property of Anywaye`, `separate written Anywaye agreement`)
   rather than the bare word `Proprietary`, must not still contain MIT's
-  permission grant, and must name Cafaye as the holder; README's own
-  `## License` section must state the proprietary grant, name Cafaye, link
+  permission grant, and must name Anywaye as the holder; README's own
+  `## License` section must state the proprietary grant, name Anywaye, link
   the file, and still name AGPL (the backends distinction); every root
   manifest that can carry a licence field must agree — proprietary has no
   single SPDX token, so agreement is `Proprietary`, `UNLICENSED`, or
@@ -1535,7 +1535,7 @@
   32-byte base64url-no-padding key (the exact shape identity's config
   parser accepts — `base64.RawURLEncoding`, exactly 32 bytes, the same
   generation spelling as `SIGNUP_SIGNING_KEY`), so a clean
-  `curl https://kit.cafaye.com | sh` install boots an identity whose MFA
+  `curl https://kit.anywaye.com | sh` install boots an identity whose MFA
   surface works (GET /v1/mfa and enrollment routes mount only when the key
   is present). An operator-supplied `KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY`
   override is preserved for compatibility, validated by shape on the live
@@ -1582,10 +1582,10 @@
 - **The observability `Application`s point at their official upstream chart
   repositories with pinned chart versions.** All eight `Application`s in
   `templates/substrate/manifests/applications/` named
-  `oci://ghcr.io/cafaye/charts`, but nothing in the fleet publishes the
+  `oci://ghcr.io/anywaye/charts`, but nothing in the fleet publishes the
   observability four — kit holds no `Chart.yaml` for `alloy`, `grafana`,
   `loki` or `prometheus` and no service publish workflow pushes them — so
-  four Applications could never sync. Per `cafaye/notes/deployment.md` ("Who owns the
+  four Applications could never sync. Per `anywaye/notes/deployment.md` ("Who owns the
   `Application`"), the private-OCI shape governs the closed-source service
   charts only; third-party components we do not author and do not modify
   point upstream, shipped unmodified: `alloy 1.13.0`, `grafana 10.5.15`,
@@ -1604,7 +1604,7 @@
   after it.
 
 - **The substrate's data layer and the services' secrets: `install.sh`
-  steps 8–9.** `cafaye/notes/deployment.md` (manager decision, 2026-10-06) commits the
+  steps 8–9.** `anywaye/notes/deployment.md` (manager decision, 2026-10-06) commits the
   box to a CNPG Postgres `Cluster`, single-instance Redis, and
   box-created service secrets — and `install.sh` installed the CNPG
   *operator* with nothing that used it, no Redis, and no service secret.
@@ -1646,10 +1646,10 @@
   customer-box claim.
 
 - **The install host: `kit-install.mjs` serves `install.sh` at
-  `kit.cafaye.com`'s root.** `cafaye/notes/deployment.md` decides the product's front
-  door — `curl https://kit.cafaye.com | sh` — and the script it serves has
+  `kit.anywaye.com`'s root.** `anywaye/notes/deployment.md` decides the product's front
+  door — `curl https://kit.anywaye.com | sh` — and the script it serves has
   existed since W74 with nothing behind the URL: measured fleet-wide,
-  `grep -rln 'kit\.cafaye\.com'` returned only documentation and
+  `grep -rln 'kit\.anywaye\.com'` returned only documentation and
   `install.sh` itself; no Worker, no wrangler config, no static host. W74's
   own report named the gap. This packet closes it in kit, because the script
   and its delivery are one fact and belong in one repository and one gate —
@@ -1669,7 +1669,7 @@
   Worker holds no secret — `install.sh` reads `KIT_SUBSTRATE_PULL_SECRET`
   and `KIT_SUBSTRATE_ACME_EMAIL` from the operator's environment at run
   time. `wrangler.jsonc` carries no `routes` block, matching the fleet
-  (measured: `site`'s has none) — binding `kit.cafaye.com` to the Worker is
+  (measured: `site`'s has none) — binding `kit.anywaye.com` to the Worker is
   a Cloudflare route/custom-domain **action**, not a file, and cannot be
   asserted from this repository. `check_install_host` in `tests/validate.sh`
   proves it in kit's own gate with no network: it imports the handler as a
@@ -1678,15 +1678,15 @@
   re-encoded body reds — and requires two controls to go red (a fixture
   whose `install.sh` is one byte shorter; a fixture with the wrong
   content-type). **What remains unproven, and is stated rather than
-  hidden:** that `https://kit.cafaye.com` answers. The Worker, its config
+  hidden:** that `https://kit.anywaye.com` answers. The Worker, its config
   and the byte-equality are proven; the binding is an operator action and
   the URL works only when observed.
 
 - **The publish end of the pull-based loop: `chart.reusable.yml`, the
-  composed `publish.reusable.yml`, and the caller template.** `cafaye/notes/deployment.md`'s
+  composed `publish.reusable.yml`, and the caller template.** `anywaye/notes/deployment.md`'s
   deploy loop is pull-based — a commit changes a chart, Argo makes the box
   agree — and only the consume end existed: eight Argo CD `Application`s pull
-  `oci://ghcr.io/cafaye/charts` and nothing in the fleet ever ran `helm push`
+  `oci://ghcr.io/anywaye/charts` and nothing in the fleet ever ran `helm push`
   or `helm package`, so every `Application` pointed at a registry nothing
   wrote to, and the failure is silent — Argo reports no error, it just never
   finds the artifact. `.github/workflows/chart.reusable.yml` is a
@@ -1694,7 +1694,7 @@
   pushes it to the Helm OCI registry, modelled on `image.reusable.yml`: `push`
   is an input defaulting to **false** (a reusable workflow that publishes by
   default is one every caller publishes from by accident); `registry` defaults
-  to `oci://ghcr.io/cafaye/charts`, the exact string every `Application`
+  to `oci://ghcr.io/anywaye/charts`, the exact string every `Application`
   carries as `source.repoURL`; `chart-dir` defaults to `chart/`, where
   `caf gen chart` writes. The chart's **name and version are read from
   `Chart.yaml`, never inputs** — the OCI tag of a Helm chart IS its `version`,
@@ -1712,7 +1712,7 @@
   `version`/`appVersion` are never rewritten from git and no `latest` tag is
   added. One measured correction from the first draft: `helm push` APPENDS
   the chart's own name and version to whatever remote it is given, so the
-  push target is the registry (`oci://ghcr.io/cafaye/charts`) and the name
+  push target is the registry (`oci://ghcr.io/anywaye/charts`) and the name
   read from `Chart.yaml` appears only in the reference the log prints —
   pushing at `oci://…/charts/<name>` lands the chart at
   `charts/<name>/<name>:<version>`, which no `helm pull oci://…/charts/<name>`
@@ -1727,7 +1727,7 @@
   per the fleet rule. `templates/publish/publish.yml` is the caller a service
   copies: `on: push: branches: [master]`, both permissions, a non-colliding
   concurrency group with `cancel-in-progress: true`, and
-  `uses: cafaye/kit/.github/workflows/publish.reusable.yml@master` with
+  `uses: anywaye/kit/.github/workflows/publish.reusable.yml@master` with
   `push: true`. `check_chart_publish` in `tests/validate.sh` proves the
   publish/consume seam in kit's own gate — the workflow's default registry
   against every `Application`'s `source.repoURL` — with two controls that
@@ -1748,7 +1748,7 @@
   the ACME directory URL, solved with HTTP-01 through Traefik's ingress class
   by `ingressClassName` — the field the pinned cert-manager v1.21.2 CRD
   recommends, verified against the release asset rather than memory. The
-  solver decision is HTTP-01 because it needs no credential (`cafaye/notes/deployment.md:33`
+  solver decision is HTTP-01 because it needs no credential (`anywaye/notes/deployment.md:33`
   makes Cloudflare a DNS change, never infrastructure), because Traefik is
   already there, and because the cost — wildcards — is a capability this
   product does not need; DNS-01 is not implemented and the README says why.
@@ -1762,7 +1762,7 @@
   the customer's side), substituted into the manifests in a pipe so the value
   reaches the API server and is never written to disk, and never printed. The
   manifests carry the `ACME_EMAIL_PLACEHOLDER` token, never an address: a
-  literal would put cafaye's address, or a made-up one, on a customer's ACME
+  literal would put anywaye's address, or a made-up one, on a customer's ACME
   account. `tests/substrate_test.sh` proves the static half with a control per
   claim (a shared account key, an empty solver list), and the README records
   that whether Let's Encrypt actually issues remains a box-level claim.
@@ -1780,7 +1780,7 @@
   `$SYS.>` traffic and make the coverage unauditable); storage `file`, retention
   `limits`, max-age `7d` (the replay window a consumer's replay rests on),
   discard `old`, replicas `1`, ack on. It is idempotent by construction —
-  `nats stream info cafaye || nats stream add …` — because a plain `add` exits
+  `nats stream info anywaye || nats stream add …` — because a plain `add` exits
   1 on the second run ("stream name already in use with a different
   configuration (10058)", measured), and `--defaults` is load-bearing because
   the CLI asks for confirmation and exits 1 with no terminal. It waits for the
@@ -1803,7 +1803,7 @@
 
 - **`templates/substrate/`: the customer substrate — the one-command install,
   and the Applications that make it real.** `install.sh` is the executable
-  half of `cafaye/notes/deployment.md`: it installs k3s (single node, sqlite), cert-manager,
+  half of `anywaye/notes/deployment.md`: it installs k3s (single node, sqlite), cert-manager,
   CloudNativePG, Argo CD core, the GHCR image pull secret (from
   `KIT_SUBSTRATE_PULL_SECRET`, never a literal), and the first Applications, in
   that order. Every version is pinned exactly — k3s `v1.37.1+k3s1`,
@@ -2054,7 +2054,7 @@
   clickstack 15910. `bin/dev up` brings up postgres, nats, redis and the
   collector, so a second checkout beside a running one collides on the first of
   those it reaches. Measured, on this machine, against a developer's own running
-  `cafaye` stack: moving only `KIT_POSTGRES_PORT`, as `isolation_test.sh` does,
+  `anywaye` stack: moving only `KIT_POSTGRES_PORT`, as `isolation_test.sh` does,
   fails with `Bind for 0.0.0.0:15800 failed: port is already allocated` — on
   redis, the third container, **after** postgres had already been allocated.
   `tests/onecluster_test.sh` moves all five ports of the cheap stack from one
@@ -2213,7 +2213,7 @@
   assertion. And it **could not run where it belongs**: a clone of kit has no
   sibling checkouts, so every CI run took the `FLEET-ABSENT` branch and reported
   SKIP. The `account-scope-contract` job existed to work around exactly that, by
-  cloning six `cafaye/*` repositories into a fleet layout so the check would have
+  cloning six `anywaye/*` repositories into a fleet layout so the check would have
   siblings to read. That is the removed `secrets` job's shape one layer down: a
   finding that lands on whoever maintains the repository that broke, not on
   someone who can fix it.
@@ -2293,7 +2293,7 @@
 ### Fixed
 
 - **`image.reusable.yml` has never run. Its `stamp provenance` step read a
-  variable it had never set, so `ghcr.io/cafaye/site` has never been
+  variable it had never set, so `ghcr.io/anywaye/site` has never been
   published.** The step wrote the build timestamp as a PREFIX ASSIGNMENT on the
   command that needed it:
 
@@ -2397,7 +2397,7 @@
   ##[error]Process completed with exit code 1.
   ```
 
-  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  Measured in `anywaye/site` run 37236386666 and `anywaye/parlor` run 37230458669,
   on the `secrets` job — the one job in the file with no opt-in, the one this
   repository calls the only control a service cannot choose not to run. It was
   not a job that found nothing; it was a job that could not start. `zizmor` has
@@ -2412,7 +2412,7 @@
   these. That is the whole of it: a rule written down once, obeyed in one place,
   and contradicted in another by nobody reading the other place.
 
-  The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
+  The fix is `uses: actions/checkout` of `anywaye/kit` pinned by
   `inputs.kit-lint-ref` — the same mechanism the six language jobs already use —
   and the tree lands in `$RUNNER_TEMP`, **not** `<working-dir>/.kit`: `secrets`
   runs a full-history git scan rooted at `$GITHUB_WORKSPACE`, and a second git
@@ -2467,7 +2467,7 @@
   parserOptions set to generate type information for this file.
   ```
 
-  Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669,
+  Measured in `anywaye/site` run 37236386666 and `anywaye/parlor` run 37230458669,
   on the `node` job — whose first real execution this was, suppressed for four
   days by the collision `ad3e320` fixed. Both services carry three root-level
   `.mts` files, so this was never marginal. The run dies at **exit 2 before
@@ -2593,7 +2593,7 @@
   self-test over its own fixtures, and that self-test's script. So the contract
   was continuous in nobody's build — a service could add a route, widen a
   declaration, or delete `account_scope.yml` entirely and its own gate stayed
-  green. `cafaye/notes/debt.md` D18's shape, one level up from where D18 had been looking,
+  green. `anywaye/notes/debt.md` D18's shape, one level up from where D18 had been looking,
   and the failure has a name in this repository's own history: *the gate that
   did not run the proof*.
 
@@ -2652,7 +2652,7 @@
 
 - **A third cross-tenant adapter was attempted against `parlor` and WITHDRAWN,
   because no TypeScript service in this fleet holds a database.** The finding is
-  measured rather than asserted: across `cafaye-ts`, `guard`, `parlor`, `site`
+  measured rather than asserted: across `anywaye-ts`, `guard`, `parlor`, `site`
   and `docs` there is **not one import** of a postgres or ORM driver, **not one
   declared driver**, and **not one `.sql`** outside an `e2e/` fixture. So
   `adapter_migrate` has no migrations to apply, there is no write path to seed
@@ -2722,11 +2722,11 @@
 
   **A finding about the substrate, reported and not fixed here.** identity's
   `migrations/00016_account_isolation.sql` calls
-  `cafaye.protect_table('account_users')` with one argument, and that function
+  `anywaye.protect_table('account_users')` with one argument, and that function
   derives `login_role := coalesce(p_login_role, current_user || '_app')` and
   then **raises** unless such a role already exists and can log in:
 
-      ERROR:  cafaye.protect_table(account_users, postgres_app):
+      ERROR:  anywaye.protect_table(account_users, postgres_app):
               postgres_app is not a LOGIN role on this cluster.
 
   The hint the migration ships with names the provider — "kit's cluster
@@ -2829,11 +2829,11 @@
   caller's ref, so both sides computed `ci-refs/heads/master` and asked for one
   lock. The caller holds it.
 
-      $ gh api repos/cafaye/parlor/actions/runs/37230458669/jobs \
+      $ gh api repos/anywaye/parlor/actions/runs/37230458669/jobs \
           --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
       typecheck + build | completed/success
       bin/prime         | completed/success
-      $ gh api repos/cafaye/parlor/actions/runs/37230458669 --jq '.conclusion'
+      $ gh api repos/anywaye/parlor/actions/runs/37230458669 --jq '.conclusion'
       failure
 
   Both jobs green, the run red, and `gh run view --log-failed` returns **nothing
@@ -3023,15 +3023,15 @@
   message, so every `'42501'` in it would be satisfiable by a sequence denial —
   and is not, only because its probe table has no sequence column.** Reported,
   not fixed here: the file and `assertions.txt` are one contract compared in both
-  directions across six language templates, and changing what `cafaye_observed`
+  directions across six language templates, and changing what `anywaye_observed`
   returns changes the meaning of every assertion in it.
 
-  `pg_temp.cafaye_observed` is `return sqlstate;` in its `exception` handler, and
+  `pg_temp.anywaye_observed` is `return sqlstate;` in its `exception` handler, and
   four assertions compare against the literal `'42501'` — the same code both the
   policies and a missing sequence grant raise. That is the ambiguity the entry
   above exists to remove, one layer in and in kit's own tree.
 
-  What has kept it unreachable is the fixture: `cafaye_probe_things` is
+  What has kept it unreachable is the fixture: `anywaye_probe_things` is
   `id uuid primary key default gen_random_uuid()`, so no statement in the file can
   produce a sequence denial and 39 assertions have been green straight through
   this defect. That is also the trap — the natural next step for that suite is to
@@ -3123,7 +3123,7 @@
 - **`tests/generated_stack_check.py`, and a gate section that runs it: the file
   `cafe dev` GENERATES is not a source file, and nothing said so in the six
   repositories nobody had visited yet.** `cafe dev` renders a stack from
-  `cafaye.yml` and writes it to `caf.dev.compose.yaml` on every run — including
+  `anywaye.yml` and writes it to `caf.dev.compose.yaml` on every run — including
   the run that finds no services, because the write precedes the empty-stack
   return (`caf/internal/cli/dev.go:186`, before the `len(stack.Services) == 0`
   check at `:194`). Two states are now failures:
@@ -3137,12 +3137,12 @@
     answering "not ignored" about a tracked path however correct the
     `.gitignore` is, until `git rm --cached` moves it.
 
-  Scope is read off the FILESYSTEM: a root `cafaye.yml` is exactly what `cafe dev`
+  Scope is read off the FILESYSTEM: a root `anywaye.yml` is exactly what `cafe dev`
   uses to decide a directory is a project at all, so a repository is in scope
   the day it grows a manifest and nothing here is edited. Measured against the
   real fleet with the five per-repository fixes not yet merged: **11 findings
-  across 10 of 16 repositories**, exit 1. Five of those ten — `cafaye-rb`,
-  `cafaye-ts`, `docs`, `guard`, `muse` — hold a manifest, no ignore entry and no
+  across 10 of 16 repositories**, exit 1. Five of those ten — `anywaye-rb`,
+  `anywaye-ts`, `docs`, `guard`, `muse` — hold a manifest, no ignore entry and no
   file on disk, and they are invisible to a hand-written list precisely because
   nobody has run `cafe dev` on that machine yet.
 
@@ -3242,7 +3242,7 @@
   Measured on the fleet as it stands: `exit 1` before this commit with 6
   findings, `exit 1` after with the same 6 — `darkroom` and `muse` reclassified
   from blocking to frozen and printed under their own heading, and the four
-  blocking ones (`cafaye-rb`, `cafaye-ts`, `docs`, `guard`) unchanged. Proven
+  blocking ones (`anywaye-rb`, `anywaye-ts`, `docs`, `guard`) unchanged. Proven
   both ways on a two-repository fixture over the real `MVP-SCOPE.md`: the same
   defect in `darkroom` alone is `exit 0` with the finding printed, and adding
   `guard` makes it `exit 1`.
@@ -3501,7 +3501,7 @@
   PERFORMANCE).** A policy whose `IN (SELECT …)` subquery references the policy's
   own table is correlated, so the membership lookup runs once per candidate row
   instead of once per statement. Measured on this kit by the new
-  `tests/rls_perf_test.sh`, through the real `cafaye.begin_account` seam with
+  `tests/rls_perf_test.sh`, through the real `anywaye.begin_account` seam with
   `FORCE ROW LEVEL SECURITY` on every policy table, 200,000 rows and a
   membership table indexed in **both** directions: **2000 ms against 18 ms — the
   plan's own loop counter reads `loops=200000` against `loops=1`.**
@@ -3511,7 +3511,7 @@
     row count. The direction and the mechanism are what transfer, and the
     mechanism is what the rule reads.
   - **`protect_table` cannot emit the shape.** It writes
-    `account_id = (select cafaye.current_account_id())` — no membership table, so
+    `account_id = (select anywaye.current_account_id())` — no membership table, so
     no join to invert. The slow form is only reachable by a hand-written policy.
   - **Deliberately silent on a correlated `EXISTS`**, because it measured 56 ms:
     with the *inner* hop inverted the planner re-associates it into a semi-join and
@@ -3545,7 +3545,7 @@
   and every e2e tier now pulls one. `docker/provenance.sh` stamps five fields
   into all seven `docker/Dockerfile.<lang>` templates:
   `org.opencontainers.image.source`, `.revision`, `.created`,
-  `com.cafaye.kit.source.dirty`, `.template_version`.
+  `com.anywaye.kit.source.dirty`, `.template_version`.
   - **Labels, not an attestation.** `image.reusable.yml` already set
     `provenance: mode=max`, and it is the wrong answer for a *consumer*: reading
     one fetches a referrer from the registry over the network, and the e2e
@@ -3609,12 +3609,12 @@ anybody stamping it. Measured against real images, in
 
 | what | before | after |
 | --- | --- | --- |
-| `cafaye/guard:e2e` (built `FROM oven/bun`) | exit **0**, printing `https://github.com/oven-sh/bun` as our source | exit **6**, naming `oven-sh/bun` |
-| `cafaye/e2e-parlor:local`, `cafaye/e2e-site:local` (compose labels only) | exit **0**, printing five `<absent>` lines | exit **6** |
+| `anywaye/guard:e2e` (built `FROM oven/bun`) | exit **0**, printing `https://github.com/oven-sh/bun` as our source | exit **6**, naming `oven-sh/bun` |
+| `anywaye/e2e-parlor:local`, `anywaye/e2e-site:local` (compose labels only) | exit **0**, printing five `<absent>` lines | exit **6** |
 | a source that is a URL, or has three segments | exit **0** | exit **6**, with the `expect_source` line |
 | a well-formed **foreign** source, no `--expect-source` | exit **0**, silently | exit **0**, plus a `WARN` that repository ownership was **not** established |
 | a well-formed **foreign** source, **with** `--expect-source owner/repo` | not expressible | exit **5** |
-| `cafaye/identity:e2e` (no labels at all) | exit 4 | exit **4** — unchanged |
+| `anywaye/identity:e2e` (no labels at all) | exit 4 | exit **4** — unchanged |
 
 **The exit codes, and what a caller should do about each.**
 
@@ -3625,7 +3625,7 @@ anybody stamping it. Measured against real images, in
   unaffected.
 - **5 — unchanged in meaning, wider in reach.** "An expectation you gave was not
   met." The new `--expect-source` assertion lands here.
-- **6 — new.** "The labels are present and are not a valid cafaye stamp": a
+- **6 — new.** "The labels are present and are not a valid anywaye stamp": a
   field violates its own grammar, an identity field is absent, or the stamp
   carries nothing in kit's own namespace. Code written before this release only
   ever saw 4 and 5, so a caller branching on either is still correct, and a
@@ -3799,11 +3799,11 @@ that debt is named in the handoff rather than paid here.
 
 ### Fixed — the credential audit told the cluster's own admin role it had found nothing
 
-- **`cafaye.credential_tables()` no longer reads a deparsed expression.** It
+- **`anywaye.credential_tables()` no longer reads a deparsed expression.** It
   returned `public | api_keys | token_digest` as role `alpha` and **zero rows** as
-  role `cafaye` — same database, same policy — because `pg_get_expr` drops the
+  role `anywaye` — same database, same policy — because `pg_get_expr` drops the
   schema from a name the *reader's* `search_path` resolves, `"$user"` is a
-  `search_path` entry, and role `cafaye`'s own schema is the `cafaye` schema the
+  `search_path` entry, and role `anywaye`'s own schema is the `anywaye` schema the
   substrate creates. The function's regexp required the qualified spelling, so an
   operator auditing credentials as the cluster's admin role was told this database
   holds no table resolvable without an account. Its own comment had already warned
@@ -3826,7 +3826,7 @@ that debt is named in the handoff rather than paid here.
   with `'(unresolved)'` rather than with a NULL column, because a table named with
   an unresolved column is an audit finding and a table absent from the audit is the
   silence the function exists to prevent.
-- **Rejected: `(cafaye\.)?` in the pattern.** That is the quiet fix, it is what
+- **Rejected: `(anywaye\.)?` in the pattern.** That is the quiet fix, it is what
   `advisor.sql` does with its own regexps, and it is still a regexp over a
   pretty-printer's output — it accepts two spellings of one name and stays silent
   on a third, and the next reader cannot tell which spelling the audit saw.
@@ -3838,7 +3838,7 @@ that debt is named in the handoff rather than paid here.
   vacuously.
 - **`advisor.sql` keeps reading the text, deliberately, and says so.** Its rules are
   about what a predicate *says* — `using (true)` is invisible in every dependency
-  catalog — so `(cafaye\.)?` stays and the residual reader-dependence is listed
+  catalog — so `(anywaye\.)?` stays and the residual reader-dependence is listed
   under that file's "what this does not find" rather than left to be inferred.
   Its comments no longer claim the substrate's audit requires the qualified form,
   which stopped being true.
@@ -3849,7 +3849,7 @@ that debt is named in the handoff rather than paid here.
 ### Added — the account boundary's own advisor: the database grades its own policies
 
 - **`templates/database/tenancy/advisor.sql`.** Eight row-level-security rules as
-  one SQL function, `cafaye.advisor_findings(p_schemas text[])`, answering with
+  one SQL function, `anywaye.advisor_findings(p_schemas text[])`, answering with
   one row per finding in the shape `(name, level, facing, categories,
   description, detail, remediation, metadata, cache_key)`. The **database** is the
   layer that can see what a migration-as-text and a set of denials cannot: a
@@ -3864,7 +3864,7 @@ that debt is named in the handoff rather than paid here.
   happens: `anon`/`authenticated` → any non-owner LOGIN role (so the
   source's anonymous-vs-signed-in distinction collapses and two rules become
   four-word rules rather than four), `pgrst.db_schemas` → the `p_schemas`
-  argument, `auth.uid()` → `cafaye.current_account_id()`,
+  argument, `auth.uid()` → `anywaye.current_account_id()`,
   `pg_policies` → `pg_policy` + `pg_get_expr()` (the source reads a materialized
   view their platform refreshes), `facing = EXTERNAL` dropped, and the
   documentation-URL `remediation` replaced by the SQL that fixes the finding.
@@ -3893,13 +3893,13 @@ that debt is named in the handoff rather than paid here.
 - **Measured on the way in, and it shaped the file.** `pg_get_expr` deparses a
   name unqualified whenever the **reader's** `search_path` resolves it, and
   `"$user"` is a search_path entry: the same substrate policy reads as
-  `cafaye.current_account_id()` for role `alpha` and as `current_account_id()` for
-  role `cafaye`, whose `"$user"` schema is `cafaye`. Every regexp therefore accepts
+  `anywaye.current_account_id()` for role `alpha` and as `current_account_id()` for
+  role `anywaye`, whose `"$user"` schema is `anywaye`. Every regexp therefore accepts
   both forms, and says why. Requiring the qualified form alone would make
   `multiple_permissive_policies` report MD24's own policy as hand-written, and
   make `auth_rls_initplan` silently miss a bare call, to exactly the reader least
   likely to know why. That sentence also named the latent defect this entry's
-  follow-up fixes: `cafaye.credential_tables()` read the qualified form only and
+  follow-up fixes: `anywaye.credential_tables()` read the qualified form only and
   returned nothing at all in that second session. Recorded rather than fixed here,
   because `substrate.sql` was out of scope.
 - `assertions.txt` is **unchanged**: the advisor answers a different question with a
@@ -4100,8 +4100,8 @@ that debt is named in the handoff rather than paid here.
   forever, in a log nobody reads — while `up --wait` reports the stack healthy.
 
 - **Span metrics are still derived and still redacted; they go to the
-  collector's own stdout.** `spanmetrics`, `redaction/cafaye_metrics`,
-  `transform/cafaye_metrics_ingest_drop` and `batch` all still run, and
+  collector's own stdout.** `spanmetrics`, `redaction/anywaye_metrics`,
+  `transform/anywaye_metrics_ingest_drop` and `batch` all still run, and
   `exporters: [debug]` is where they land. That is not a consolation prize: it
   keeps the allowlist exercised on real derived metrics rather than only
   asserted about. **Putting a store back is four edits that belong together** —
@@ -4140,7 +4140,7 @@ that debt is named in the handoff rather than paid here.
   budgets are the argument: mimir 130s (retries 12 × interval 10s), tempo 65s,
   loki 16s, grafana 20s once and over 180s another time on a cold volume while it
   downloads a plugin zip nobody asked for. Against a 180s stack deadline and a
-  76s typical cold start (`cafaye/notes/reference/fleet-velocity.md` P1), the default was the
+  76s typical cold start (`anywaye/notes/reference/fleet-velocity.md` P1), the default was the
   tax and `KIT_DEV_PROFILES= bin/dev up` — documented as the *escape hatch* — was
   the good path. That is backwards, so it is now the highway:
   `KIT_DEV_PROFILES=observability bin/dev up` brings up tempo, loki and grafana.
@@ -4163,8 +4163,8 @@ that debt is named in the handoff rather than paid here.
 
 ### Changed — the sweep no longer assumes it owns the database
 
-- **`cafaye.unprotected_tables/0` is scoped to the schemas the substrate was
-  applied in**, plus `cafaye` and the session's temporary schema. It scanned
+- **`anywaye.unprotected_tables/0` is scoped to the schemas the substrate was
+  applied in**, plus `anywaye` and the session's temporary schema. It scanned
   every table in the database, so the assertion set assumed it owned the
   database: true in `tests/tenancy_test.sh`, false for every adopter whose tests
   build private fixture schemas.
@@ -4174,7 +4174,7 @@ that debt is named in the handoff rather than paid here.
 
   ```
   sweep/the-only-finding-is-the-control
-    expected "cafaye_probe_unprotected:row level security is not enabled"
+    expected "anywaye_probe_unprotected:row level security is not enabled"
     actual   "...,account_users:...,api_keys:...,oidc_clients:..."
   ```
 
@@ -4190,13 +4190,13 @@ that debt is named in the handoff rather than paid here.
   table would have to be created by the new substrate, so the repair would arrive
   only with a migration — decided by the very proof it repairs. Instead the scope
   is read back out of what the substrate already wrote: `protect_table` names its
-  policies `<table>_cafaye_<command>`, so every schema it was applied in is
+  policies `<table>_anywaye_<command>`, so every schema it was applied in is
   discoverable from `pg_policy` with nothing new to install.
 
 - **The scope is per SCHEMA, not per table**, deliberately: a table added next
   month to a schema already in scope is still named, so the sweep keeps its
   growth-guard property rather than only its adopter-safety one. Scoping to
-  `cafaye` + `pg_temp` alone — the obvious minimal fix — was rejected: it sweeps
+  `anywaye` + `pg_temp` alone — the obvious minimal fix — was rejected: it sweeps
   no real table in any adopter, so its positive control and its empty result are
   both satisfied by a sweep that could never have run.
 
@@ -4225,7 +4225,7 @@ that debt is named in the handoff rather than paid here.
   template shipped a bare `ENTRYPOINT ["/app/service"]`, so the schema a service
   booted against was whatever the last deploy or the last developer left behind,
   and a second replica booting beside the first met the cold-start failure:
-  the service is up, the schema is not. `cafaye/notes/reference/fleet-velocity.md` P0-6.
+  the service is up, the schema is not. `anywaye/notes/reference/fleet-velocity.md` P0-6.
   Both references that get this right do it in one shape — migrate first, serve
   last, chained so a failure refuses the start
   (`reference/signoz/…/compose.yaml:7-12`, `reference/bugsink/Dockerfile:54`) — so that
@@ -4292,9 +4292,9 @@ that debt is named in the handoff rather than paid here.
 ### Added — the account boundary, shipped once in kit
 
 - **`templates/database/tenancy/substrate.sql`.** The account boundary inside one
-  service's own database: the identity seam (`cafaye.begin_account/1`,
-  `cafaye.current_account_id/0`), `cafaye.protect_table/2`, and the sweep
-  (`cafaye.unprotected_tables/0`). Measured, before and after.
+  service's own database: the identity seam (`anywaye.begin_account/1`,
+  `anywaye.current_account_id/0`), `anywaye.protect_table/2`, and the sweep
+  (`anywaye.unprotected_tables/0`). Measured, before and after.
 
 - **`templates/database/tenancy/isolation.sql` + `assertions.txt`.** The assertion
   set — **39 assertions**, run twice, once as the login role and once as the
@@ -4314,7 +4314,7 @@ that debt is named in the handoff rather than paid here.
   turns a resolution context into a browsing context, which is exactly the failure
   a resolution path has to be proved against.
 
-- **Credential resolution — `cafaye.protect_credential_table/3`, the one answer to
+- **Credential resolution — `anywaye.protect_credential_table/3`, the one answer to
   "the account is what the query is for".** `identity` adopted the substrate
   (migration 00016) and then measured, against its real protected `api_keys` table
   and as the OWNER, that a request presenting a scoped token reads **zero** rows:
@@ -4324,7 +4324,7 @@ that debt is named in the handoff rather than paid here.
   exactly as `protect_table` does and then adds a fifth policy:
 
   ```sql
-  using (token_digest = (select cafaye.current_credential_digest()))
+  using (token_digest = (select anywaye.current_credential_digest()))
   ```
 
   The predicate lives in the **policy**, not only in the caller's query, which is
@@ -4335,7 +4335,7 @@ that debt is named in the handoff rather than paid here.
   it presented, and nothing else in the database** — `select *` returns that one
   row, and every other table reads zero. It also cannot write (so a resolution
   cannot mint a credential), it is a second transaction-local GUC for the pool
-  reason `begin_account/1` is, and `cafaye.credential_tables/0` is the audit that
+  reason `begin_account/1` is, and `anywaye.credential_tables/0` is the audit that
   answers *which tables can be read with no account*. Rejected and why:
   a `BYPASSRLS` role (right for Supabase's topology, which has a separate service
   role and no per-request one), a `SECURITY DEFINER` function (**does not work
@@ -4648,7 +4648,7 @@ permissions:
   packages: write        # the caller's to grant — a reusable workflow cannot
 jobs:                    # grant itself a permission
   image:
-    uses: cafaye/kit/.github/workflows/image.reusable.yml@master
+    uses: anywaye/kit/.github/workflows/image.reusable.yml@master
     with:
       push: true
 ```
@@ -4809,11 +4809,11 @@ empty directory**, so there was no error to see.
 
 Measured, on `identity`, before this fix:
 
-    $ docker exec cafaye-postgres-1 ls /docker-entrypoint-initdb.d/
+    $ docker exec anywaye-postgres-1 ls /docker-entrypoint-initdb.d/
     (nothing)
-    $ docker exec cafaye-postgres-1 psql -U cafaye -d postgres \
+    $ docker exec anywaye-postgres-1 psql -U anywaye -d postgres \
         -tAc "select rolname,rolsuper from pg_roles where rolname not like 'pg\_%'"
-    cafaye|t
+    anywaye|t
     $ docker compose up -d --wait postgres ; echo $?
     0        # and the container reports HEALTHY
 
@@ -5043,7 +5043,7 @@ and telemetry flowed — and an empty `/docker-entrypoint-initdb.d` produces
 exactly that. It now asks the running server: that database `kit_probe` exists
 and is owned by role `kit_probe`, that the role exists and is **not** a
 superuser, and that `datacl` grants `PUBLIC` nothing. That last one is read by
-its empty-grantee shape (`=c/cafaye`) rather than by a search for the word
+its empty-grantee shape (`=c/anywaye`) rather than by a search for the word
 `PUBLIC`, which appears in no `datacl` at all, and a NULL `datacl` is a failure
 rather than a skip because NULL means Postgres's defaults still stand — and the
 default is CONNECT to PUBLIC. Red proof: dropping the database and the role from
@@ -5120,7 +5120,7 @@ static gate was green because nothing in it looked at the thing that broke.
   `deploy.yml.erb`, `kamal-backup.yml.erb`, `drill.sh`, and a README.
 
   kit does not ship a deployment tool or a backup tool. `kamal` and
-  `kamal-backup` are both, both are installed wherever cafaye deploys, and
+  `kamal-backup` are both, both are installed wherever anywaye deploys, and
   kit-20 demonstrated the cost of the alternative by building one: **3,012 lines
   across seven files** — the four in `templates/backup/`, plus
   `templates/bin/backup.sh`, `docker/Dockerfile.backup` and
@@ -5641,7 +5641,7 @@ static gate was green because nothing in it looked at the thing that broke.
   `lint/` was 249 lines of golangci, rubocop, eslint, yamllint and hadolint
   configuration that **not one service in the fleet had ever copied**, and every
   check in this repository was green the whole time. Adoption correlated
-  *inversely* with how much a file did: `uses: cafaye/kit/...@master` is 11/11
+  *inversely* with how much a file did: `uses: anywaye/kit/...@master` is 11/11
   because it is live, and `cp lint/golangci.yml` is 1/11 because a snapshot has
   no propagation and rots silently. So the config moved to where the step already
   is, and adoption becomes 11/11 with no per-service action.
@@ -5653,7 +5653,7 @@ static gate was green because nothing in it looked at the thing that broke.
 
   - **`kit-lint-ref` and a sparse `lint/` checkout, in the go, ruby and node
     jobs.** The workflow file and the configs are two different things:
-    `uses: cafaye/kit/...@X` pins the *workflow*, and a reusable workflow is not
+    `uses: anywaye/kit/...@X` pins the *workflow*, and a reusable workflow is not
     handed its own ref — so the configs are fetched by name, and the name has to
     be an input. Pin it to the **same** ref you pinned `uses:` to; a caller who
     pins one and not the other gets that SHA's workflow with today's lint
@@ -5686,7 +5686,7 @@ static gate was green because nothing in it looked at the thing that broke.
 ### Added
 
 - **kit-19 — kit carries a licence, and a check that keeps it unambiguous.**
-  cafaye's decision is MIT across the fleet, and `kit` had no `LICENSE` at all.
+  anywaye's decision is MIT across the fleet, and `kit` had no `LICENSE` at all.
   That is not "unlicensed, therefore free": it is **all rights reserved**, the
   default copyright position when a public repository grants nothing, and it is
   the state `docs`' `licensing.md` names `kit` in. The grant is now the MIT text
@@ -5778,7 +5778,7 @@ static gate was green because nothing in it looked at the thing that broke.
     packet is not "a compose file that parses". It brings the **fetched** stack up
     (all eight containers healthy), sends real OTLP, and reads a trace out of
     Tempo and a metric out of Mimir — including the `spanmetrics` connector's
-    `cafaye_duration_count`, which is what the fleet dashboard is built on. The
+    `anywaye_duration_count`, which is what the fleet dashboard is built on. The
     canary reaches no exporter, asserted as an absence against a search that first
     proved the data is there. The collector's config is checked by
     `docker inspect .Mounts`: the daemon's own record of the bind, not the host's
@@ -6067,7 +6067,7 @@ static gate was green because nothing in it looked at the thing that broke.
     fifteen. All three name the check they expect to go red, and the control is
     now the check's *positive* case: a sweep that has only ever run against a
     red fleet has proved it can fail and nothing about whether it is right.
-  - `cafaye-rb`'s primary checkout is **red on this check today**, which is the
+  - `anywaye-rb`'s primary checkout is **red on this check today**, which is the
     check working: it carries the D12 workaround and the comment justifying it.
     It is fixed on `worker/kit-15-restore` and this is the report's evidence
     that the sweep found it.
@@ -6280,7 +6280,7 @@ static gate was green because nothing in it looked at the thing that broke.
   them.** Giving breakages `41`–`51` descriptive directory names named breakage
   50's copy `canary_literal` — which was already the name of the canary **value**
   assembled six lines below it. The recipe reassigned the variable to the value,
-  so `edit` was handed `cafaye_canary_…/templates/secrets/go/canary.go` and died
+  so `edit` was handed `anywaye_canary_…/templates/secrets/go/canary.go` and died
   with a `FileNotFoundError`. Breakage 50 never ran, and because the script stops
   at the first crash neither did 51: *"the canary is committed as a literal"* and
   *"the zizmor config baselines unpinned-uses"* had silently stopped being
@@ -6301,7 +6301,7 @@ static gate was green because nothing in it looked at the thing that broke.
     through a helper two files away does not match Identity's
     `dbtest.Pool|Schema|EnvVar|TEST_DATABASE_URL`, so its package never enters
     the required list and the run is never required to contain it. Rust
-    (`#[ignore = "cafaye:tier=db reason=…"]`), Go (`//go:build tier_db`) and
+    (`#[ignore = "anywaye:tier=db reason=…"]`), Go (`//go:build tier_db`) and
     Python (`@pytest.mark.tier_db`) have a collector that already exists. Ruby
     gets a `tier :db` macro, Elixir a `@tier :db` attribute, and Node and Bun an
     exported `TIER` const — each a **no-op at runtime**, so the collector is a
@@ -6353,16 +6353,16 @@ static gate was green because nothing in it looked at the thing that broke.
     floor is satisfied by *any* 1254 tests including the wrong 1254. Calling one
     a tier gate is worse than having none.
 
-- **`core/` — the `cafaye/core` fan-out standard.** Six repositories copy bytes
+- **`core/` — the `anywaye/core` fan-out standard.** Six repositories copy bytes
   out of `core` and nothing makes the copy reach them. This ships the standard
   that does, plus the two runnable pieces that make it enforceable:
   - `core/vendir/vendir.yml.{muse,pantry,caf}` — the three real consumers, in
     three languages. `muse` and `pantry` are **proven byte-identical (sha256)**
     to what those repositories have committed today, by running vendir 0.46.2
-    against the real `cafaye/core`. `caf` **cannot migrate as-is** and its banner
+    against the real `anywaye/core`. `caf` **cannot migrate as-is** and its banner
     says why: vendir has no rename, `caf` holds the bytes as
     `manifest-0.2.json`, and core publishes them as
-    `cafaye.manifest.schema.json`.
+    `anywaye.manifest.schema.json`.
   - `core/vendir/vendir.yml.template` — the onboarding template. Four things to
     change, each marked, each with the reason it is easy to get wrong.
   - `core/renovate/renovate.json5` and `core/renovate/SETUP.md` — one
@@ -8457,7 +8457,7 @@ e
   `kit`'s own CI calls it with the local `./` form, and there is exactly one
   copy of it in the tree. The failure it exists for: for six months the file
   sat at `workflows/ci.reusable.yml`, the README told every reader to call
-  `cafaye/kit/workflows/ci.reusable.yml@master`, GitHub resolved that to
+  `anywaye/kit/workflows/ci.reusable.yml@master`, GitHub resolved that to
   nothing, and **every check in the suite was green throughout**. A layout bug
   and a documentation bug that agree with each other are invisible to any check
   that reads only one of them.
@@ -8559,9 +8559,9 @@ e
 ### Fixed
 
 - **`tenant_id` was silently stripped from every trace and log resource.** The
-  `redaction/cafaye_metrics` processor listed the private stash names
-  (`cafaye.stashed.tenant_id`, `cafaye.stashed.account_id`) in its
-  `ignored_keys`; `redaction/cafaye_traces` and `redaction/cafaye_logs` did not.
+  `redaction/anywaye_metrics` processor listed the private stash names
+  (`anywaye.stashed.tenant_id`, `anywaye.stashed.account_id`) in its
+  `ignored_keys`; `redaction/anywaye_traces` and `redaction/anywaye_logs` did not.
   The redaction processor deletes every attribute it does not exempt, so on
   traces and logs it deleted the carrier the restore was about to read, and the
   restore put `tenant_id` back from an empty source. Per-tenant metric totals
@@ -8572,7 +8572,7 @@ e
   exempted in all three processors, and the three `ignored_keys` lists must be
   equal.
 - **The collector's `_total` rename never fired, so every dashboard panel
-  rendered "No data".** `transform/cafaye_metrics_labels` matched
+  rendered "No data".** `transform/anywaye_metrics_labels` matched
   `IsMatch(name, "\\.calls$")` inside a YAML *single-quoted* scalar, where a
   backslash is not an escape — so OTTL received a regex requiring a literal
   backslash and it matched no metric, ever. The processor was wired in and
@@ -8651,7 +8651,7 @@ e
 
 - **The reusable workflow moved to `.github/workflows/ci.reusable.yml`.** It was
   at `workflows/ci.reusable.yml`, and GitHub documents that subdirectories of
-  the workflows directory are not supported — so the `uses: cafaye/kit/workflows/
+  the workflows directory are not supported — so the `uses: anywaye/kit/workflows/
   ci.reusable.yml@master` line in the README resolved to nothing. No repository
   in the fleet was calling it. It is now a **move, not a mirror**: one file, at
   the only path GitHub will resolve, so there is no second copy to diverge.
@@ -8727,7 +8727,7 @@ e
   by running `oasdiff checks changelog` at v1.32.1 — but `core`'s fan-out is raw
   JSON Schema, and adding a pinned binary would make `kit` a repository with a
   dependency, which `AGENTS.md` forbids.
-- **`expectOperations` is untouched and stays in `cafaye-ts`.** vendir has no
+- **`expectOperations` is untouched and stays in `anywaye-ts`.** vendir has no
   opinion about whether a copy should have been allowed to change size, and a
   guard moved into a tool that cannot enforce it is a guard deleted.
 - **Three of the fleet's five parity guards still skip** when the core checkout

@@ -84,9 +84,9 @@ STUB
   # the script exporting it for itself, and a test that set it here instead would
   # pass against a script that had no fix at all.
   env LC_ALL="$loc" LANG="$loc" PATH="$sandbox:$PATH" \
-    POSTGRES_USER=cafaye \
-    POSTGRES_DB=cafaye_platform \
-    POSTGRES_PASSWORD=cafaye \
+    POSTGRES_USER=anywaye \
+    POSTGRES_DB=anywaye_platform \
+    POSTGRES_PASSWORD=anywaye \
     KIT_POSTGRES_DATABASES="$value" \
     bash "$script" 2>&1
   local rc=$?
@@ -217,7 +217,7 @@ done
 # `:?` on KIT_POSTGRES_DATABASES is the original defect this file's whole
 # neighbourhood was written around: an unset variable used to leave you with a
 # cluster that looked fine and no database on it.
-out="$(env PATH="$PATH" POSTGRES_USER=cafaye POSTGRES_DB=cafaye_platform bash "$script" 2>&1)"; rc=$?
+out="$(env PATH="$PATH" POSTGRES_USER=anywaye POSTGRES_DB=anywaye_platform bash "$script" 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && grep -q 'KIT_POSTGRES_DATABASES' <<<"$out"; then
   pass "an unset KIT_POSTGRES_DATABASES is still a loud failure"
 else

@@ -17,7 +17,7 @@ repository you own, with the canonical template kept as a **named remote**
 you merge from — never a copy you re-download.
 
 ```sh
-git clone https://github.com/cafaye/kit.git myapp
+git clone https://github.com/anywaye/kit.git myapp
 cd myapp
 git remote rename origin upstream
 git remote add origin https://github.com/your-handle/kit.git
@@ -64,13 +64,13 @@ differently. Reuse them; do not invent a fourth (in particular: no
 subtree/submodule of Kit, which would fuse the two directions above
 into one tree that can no longer be merged cleanly).
 
-Kit is public — `github.com/cafaye/kit`, verified 2026-10-08 — so every
+Kit is public — `github.com/anywaye/kit`, verified 2026-10-08 — so every
 mechanism below is fetchable from any repo, inside or outside the org,
 with no grant to request.
 
 | Piece | How it reaches you | How an update lands |
 |---|---|---|
-| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: cafaye/kit/ci/<file>@<ref>` — never copied | A PR bumping the ref |
+| Reusable workflows (`ci`, `image`, `chart`, `publish`) | **Called** via `uses: anywaye/kit/ci/<file>@<ref>` — never copied | A PR bumping the ref |
 | Lint configs (`lint/`) | **Fetched at run time** by the workflow (`kit-lint-ref` input) | With the workflow bump; nothing in your tree |
 | Local stack (`templates/compose/`) | **Fetched** by `bin/dev` from your committed `kit.ref` | `bin/dev pin <new-sha>` (prints the stack diff first) |
 | Copied files (`docker/Dockerfile`, `bin/prime`, `mise.toml`, `AGENTS.md`, …) | **Copied** once | Re-copy + review the diff. Nothing automates this; a fix in Kit sits un-copied until you copy it — the documented cost of copy-adoption |
@@ -82,7 +82,7 @@ branch moves under you between two runs of the same command):
 
 ```yaml
 # ci/ci.yml
-uses: cafaye/kit/ci/ci.reusable.yml@<40-char-sha> # master
+uses: anywaye/kit/ci/ci.reusable.yml@<40-char-sha> # master
 with:
   kit-lint-ref: '<the same 40-char-sha>' # master
 ```
@@ -128,8 +128,8 @@ branch and opens PRs moving the pins forward — a PR per pin/update set
       "customType": "regex",
       "managerFilePatterns": ["/(^|/)kit\\.ref$/"],
       "matchStrings": ["(?<currentDigest>[0-9a-f]{40})"],
-      "depNameTemplate": "cafaye/kit",
-      "packageNameTemplate": "cafaye/kit",
+      "depNameTemplate": "anywaye/kit",
+      "packageNameTemplate": "anywaye/kit",
       "currentValueTemplate": "master",
       "datasourceTemplate": "github-digest"
     },
@@ -137,14 +137,14 @@ branch and opens PRs moving the pins forward — a PR per pin/update set
       "customType": "regex",
       "managerFilePatterns": ["/ci/[^/]*\\.ya?ml$/"],
       "matchStrings": ["kit-lint-ref:\\s*['\"]?(?<currentDigest>[0-9a-f]{40})['\"]?\\s*#\\s*(?<currentValue>\\S+)"],
-      "depNameTemplate": "cafaye/kit",
-      "packageNameTemplate": "cafaye/kit",
+      "depNameTemplate": "anywaye/kit",
+      "packageNameTemplate": "anywaye/kit",
       "datasourceTemplate": "github-digest"
     }
   ],
   "packageRules": [
     {
-      "matchDepNames": ["cafaye/kit"],
+      "matchDepNames": ["anywaye/kit"],
       "groupName": "kit pins"
     }
   ]
@@ -184,14 +184,14 @@ a branch, a pull request to canonical Kit:
 ```sh
 git clone https://github.com/your-handle/kit.git
 cd kit
-git remote add canonical https://github.com/cafaye/kit.git
+git remote add canonical https://github.com/anywaye/kit.git
 git checkout -b docs-update-the-pin
 # …edit, then verify narrowly:
 git diff --check
 # plus the focused check for what you touched, if one exists —
 # e.g. bash tests/customer_upstream_check.sh after editing this page
 git push -u origin docs-update-the-pin
-# open the PR against cafaye/kit
+# open the PR against anywaye/kit
 ```
 
 Kit's CI owns the full gate — `tests/validate.sh` runs there, and

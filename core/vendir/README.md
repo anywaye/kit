@@ -1,6 +1,6 @@
 # The core fan-out: vendir + Renovate
 
-Thirteen repositories copy bytes out of `cafaye/core` and nothing makes the copy
+Thirteen repositories copy bytes out of `anywaye/core` and nothing makes the copy
 reach them. This directory is the standard that does.
 
 - **`vendir.yml.{muse,pantry,caf}`** — the three real consumers, in three
@@ -16,7 +16,7 @@ reach them. This directory is the standard that does.
 ## What vendir actually does, verified by running it
 
 Every claim in this directory was checked against vendir 0.46.2 running against
-the real `cafaye/core`, not against documentation. Three of those checks changed
+the real `anywaye/core`, not against documentation. Three of those checks changed
 what is written here.
 
 ### `includePaths` is an exact glob, not a directory
@@ -29,7 +29,7 @@ vendir joins each pattern to the sync root and matches every file against it
 | --- | --- |
 | `schemas` | matches the **directory**, therefore no file — vendir fails |
 | `schemas/**` | every file under `schemas` |
-| `schemas/cafaye.manifest.schema.json` | that one file |
+| `schemas/anywaye.manifest.schema.json` | that one file |
 
 The first row is the lucky failure: vendir reports `Expected to find at least one
 file within directory` and exits non-zero. Loud, and correct.
@@ -51,7 +51,7 @@ child of it:
 ```
 
 The second form was run. It exits **0** and vendors the entire upstream
-repository — `AGENTS.md`, `cafaye/notes/decisions.md`, the test suite, `.git` and all —
+repository — `AGENTS.md`, `anywaye/notes/decisions.md`, the test suite, `.git` and all —
 because vendir unmarshals through `sigs.k8s.io/yaml`, which drops keys the
 target struct does not declare, and then `includePaths` is empty. An empty
 `includePaths` means `matched = true` for every file, so the filter removes
@@ -95,7 +95,7 @@ at `f998d68`):
 - `http:` becomes a dependency with `skipReason: 'unsupported-datasource'`. It is
   extracted and then never updated. This is why the template uses `git:`.
 - `extractGitSource` requires a URL matching `^(?:ssh|https?):\/\/` and derives
-  the dependency name with `getHttpUrl`. A `git@github.com:cafaye/core.git` URL
+  the dependency name with `getHttpUrl`. A `git@github.com:anywaye/core.git` URL
   syncs perfectly well under vendir and is **not extracted at all**, so Renovate
   never sees it. A working local sync and a silently unbumped pin.
 
@@ -121,13 +121,13 @@ answer.
 
 ## The guard vendir does not know about
 
-`cafaye-ts/specs/index.json` carries a hand-set `expectOperations` per service,
+`anywaye-ts/specs/index.json` carries a hand-set `expectOperations` per service,
 and `vendor.mjs` refuses to absorb a document whose operation count moved.
 **vendir will re-copy such a document without comment.** It copies bytes; it has
 no opinion about whether the copy should have been allowed to change size.
 
 That guard is a real asset and it does not survive this migration inside
-vendir.yml. Keep it where it is — as its own CI test in `cafaye-ts` — rather than
+vendir.yml. Keep it where it is — as its own CI test in `anywaye-ts` — rather than
 looking for a vendir feature to hold it. A guard that has been moved into a tool
 that cannot enforce it is a guard that has been deleted, and the person who
 notices is the one debugging a client built from a document that changed under it.

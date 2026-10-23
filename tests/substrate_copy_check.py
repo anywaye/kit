@@ -2,7 +2,7 @@
 """Does an adopting service's copy of the substrate still match kit's?
 
     python3 tests/substrate_copy_check.py ../identity ../darkroom
-    python3 tests/substrate_copy_check.py --fleet /Users/kaka/Code/any/cafaye
+    python3 tests/substrate_copy_check.py --fleet /Users/kaka/Code/any/anywaye
 
 WHY THIS EXISTS, AND WHAT IT WOULD HAVE CAUGHT
 
@@ -39,7 +39,7 @@ THE THREE SHAPES OF ADOPTER, measured rather than imagined
               it is the shape's promise and the only verdict a shasum can
               reproduce. The name-level pass is the diagnosis beside it.
 
-  embedded    `create or replace function cafaye.*` blocks living inside a
+  embedded    `create or replace function anywaye.*` blocks living inside a
               service's own migration files (identity, darkroom). Compared
               function by function: semantics must match, comments need not.
               The reason for the asymmetry with standalone is the promise the
@@ -49,8 +49,8 @@ THE THREE SHAPES OF ADOPTER, measured rather than imagined
   neither     no adopted copy found. Reported and not failed: a service that
               has not adopted the substrate is not drifting from it. Adoption
               is measured by two predicates and only two — a file named
-              `substrate.sql`, or a `cafaye.*` function definition in a
-              non-test SQL file. A bare `create schema if not exists cafaye`
+              `substrate.sql`, or a `anywaye.*` function definition in a
+              non-test SQL file. A bare `create schema if not exists anywaye`
               is NOT one of them: earlier prose here claimed it was, and a
               repository holding only that line was measured to report no
               adopted copy. Treating the line as adoption would either report
@@ -62,7 +62,7 @@ KIT'S OWN TEMPLATE DIRECTORY IS NOT A SHAPE OF ADOPTER, measured
 
   A fleet run walks every checkout, kit's included, and kit's tree carries
   `templates/database/tenancy/advisor.sql` — a SIBLING template that happens
-  to define `cafaye.*` functions too. Graded as an adopted copy it reported
+  to define `anywaye.*` functions too. Graded as an adopted copy it reported
   all twelve substrate functions MISSING on every single run, and a FAIL that
   always fires on the template's own repository is how a reader learns to
   scroll past FAILs — which is exactly how courier's real drift stayed
@@ -100,7 +100,7 @@ THE COMPARISON RULES, in the order they apply
      identical. A check that fires on correct work teaches its reader to
      ignore it, so this is a report. The limit is stated rather than hidden: a
      comment CAN carry a false claim, and this checker cannot grade prose.
-  5. Extra `cafaye.*` functions in the repository are REPORTED, not failed.
+  5. Extra `anywaye.*` functions in the repository are REPORTED, not failed.
      Services legitimately add their own helpers, and this checker cannot tell
      a helper from a substrate function kit has since renamed.
 
@@ -159,7 +159,7 @@ SKIP_DIRS = {
     ".git", ".venv", "__pycache__", "node_modules", "vendor", "target",
     "dist", "tmp", "deps", "_build",
 }
-# Test fixtures define cafaye functions to exercise a service's OWN code; they
+# Test fixtures define anywaye functions to exercise a service's OWN code; they
 # are not the copy the database runs, and grading them would fire on correct
 # work. Same reason tests/ is excluded from tenancy.yml's scope in kit.
 SKIP_SEGMENTS = {"test", "tests", "spec", "specs", "fixtures"}
@@ -174,7 +174,7 @@ SKIP_SEGMENTS = {"test", "tests", "spec", "specs", "fixtures"}
 SKIP_FILENAMES = {"structure.sql", "schema.sql"}
 
 FUNC_RE = re.compile(
-    r"^\s*create\s+(?:or\s+replace\s+)?function\s+cafaye\.([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    r"^\s*create\s+(?:or\s+replace\s+)?function\s+anywaye\.([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.IGNORECASE | re.MULTILINE,
 )
 GOOSE_UP = "-- +goose up"
@@ -183,7 +183,7 @@ STANDALONE_NAME = "substrate.sql"
 
 
 class Definition:
-    """One `create or replace function cafaye.<name>` block, as extracted."""
+    """One `create or replace function anywaye.<name>` block, as extracted."""
 
     def __init__(self, name, path, line, sig, body):
         self.name = name
@@ -294,7 +294,7 @@ def normalize_sql(text, strip_comments=True):
 
 
 def extract_definitions(text, path):
-    """Every cafaye function definition in `text`, in file order."""
+    """Every anywaye function definition in `text`, in file order."""
     defs = []
     idx = 0
     while True:
@@ -325,7 +325,7 @@ def extract_definitions(text, path):
             idx = head_end
             continue
         body = text[body_start:end_tag]
-        # A truncation guard: a body that contains ANOTHER cafaye function
+        # A truncation guard: a body that contains ANOTHER anywaye function
         # definition (in code, after comments are stripped) means a closing
         # dollar tag above is missing, so this block has silently swallowed the
         # next one. Measured on a fixture with the first terminator deleted:
@@ -333,7 +333,7 @@ def extract_definitions(text, path):
         # instead of the truncation that caused both. Comments are stripped
         # first because the template's own comments quote DDL — a raw search
         # would fire on kit's template.
-        if re.search(r"\bcreate\s+(?:or\s+replace\s+)?function\s+cafaye[.]",
+        if re.search(r"\bcreate\s+(?:or\s+replace\s+)?function\s+anywaye[.]",
                      normalize_sql(body), re.IGNORECASE):
             defs.append(Definition(m.group(1).lower(), path,
                                    text.count("\n", 0, m.start()) + 1,
@@ -433,7 +433,7 @@ class RepoResult:
 
 
 def compare_definitions(res, defs, template_defs, root, standalone_source=None):
-    """The name-level verdict over one set of `cafaye.*` definitions.
+    """The name-level verdict over one set of `anywaye.*` definitions.
 
     Shared by the embedded pass and by the name-level pass over a drifted
     standalone copy: the comparison rules (comment-stripped semantics, named
@@ -464,7 +464,7 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
         if d.sig == "<unparsed>":
             unreadable = True
             res.fail(
-                "unreadable function block for cafaye.%s at %s:%d — its body does "
+                "unreadable function block for anywaye.%s at %s:%d — its body does "
                 "not close with its own dollar-quote tag (a deleted terminator, or "
                 "a body that swallowed the next definition)"
                 % (d.name, os.path.relpath(d.path, root), d.line)
@@ -476,7 +476,7 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
         d = by_name[name]
         if name not in template_defs:
             res.report(
-                "extra function not in kit's template: cafaye.%s (%s:%d) — services "
+                "extra function not in kit's template: anywaye.%s (%s:%d) — services "
                 "may add helpers; reported so a renamed kit function cannot hide here"
                 % (name, os.path.relpath(d.path, root), d.line)
             )
@@ -487,7 +487,7 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
             if normalize_sql(d.sig, strip_comments=False) != normalize_sql(ref.sig, strip_comments=False) \
                or normalize_sql(d.body, strip_comments=False) != normalize_sql(ref.body, strip_comments=False):
                 res.report(
-                    "comment-only difference in cafaye.%s (%s:%d) — SQL semantics are "
+                    "comment-only difference in anywaye.%s (%s:%d) — SQL semantics are "
                     "identical to kit's template"
                     % (name, os.path.relpath(d.path, root), d.line)
                 )
@@ -496,7 +496,7 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
         if normalize_sql(d.sig) != normalize_sql(ref.sig):
             why = "signature or body"
         res.fail(
-            "SEMANTIC DRIFT in cafaye.%s (%s:%d): %s differs from kit's template"
+            "SEMANTIC DRIFT in anywaye.%s (%s:%d): %s differs from kit's template"
             % (name, os.path.relpath(d.path, root), d.line, why)
         )
         if normalize_sql(d.body) != normalize_sql(ref.body):
@@ -508,11 +508,11 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
         where = " (%s)" % os.path.relpath(standalone_source, root)
     for name in sorted(template_defs):
         if name not in by_name:
-            res.fail("MISSING function: cafaye.%s%s" % (name, where))
+            res.fail("MISSING function: anywaye.%s%s" % (name, where))
 
     for name, first, last in redefinitions:
         res.info(
-            "cafaye.%s is defined more than once (%s, then %s); the later "
+            "anywaye.%s is defined more than once (%s, then %s); the later "
             "definition is the one the database applies, and it is the one "
             "compared above"
             % (name, os.path.relpath(first, root), os.path.relpath(last, root))
@@ -604,7 +604,7 @@ def print_repo(res):
             lines.append("   no adopted copy found — the SQL files found are kit's "
                          "own templates, not a copy of one")
         else:
-            lines.append("   no adopted copy found (no substrate.sql, no cafaye.* "
+            lines.append("   no adopted copy found (no substrate.sql, no anywaye.* "
                          "function definition)")
         return lines
     for path, identical, sha in res.standalone:

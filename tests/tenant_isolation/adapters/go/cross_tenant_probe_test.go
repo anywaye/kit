@@ -37,7 +37,7 @@
 // # THE CONNECTION IS A SUPERUSER, AND THAT IS DELIBERATE — READ THIS FIRST
 //
 // `tests/tenancy_test.sh` already proves identity's row-level security: the
-// `FORCE`, the `identity_app` login role, the `cafaye.begin_account` seam. This
+// `FORCE`, the `identity_app` login role, the `anywaye.begin_account` seam. This
 // file is the OTHER half, and the halves are measured separately on purpose.
 //
 // Postgres exempts a SUPERUSER from row-level security unconditionally, whatever
@@ -77,10 +77,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cafaye/identity/internal/accounts"
-	"github.com/cafaye/identity/internal/platform/db"
-	"github.com/cafaye/identity/internal/platform/id"
-	"github.com/cafaye/identity/internal/users"
+	"github.com/anywaye/identity/internal/accounts"
+	"github.com/anywaye/identity/internal/platform/db"
+	"github.com/anywaye/identity/internal/platform/id"
+	"github.com/anywaye/identity/internal/users"
 )
 
 // ---------------------------------------------------------------------------
@@ -391,8 +391,8 @@ func TestTheSubstrateIsNotWhatHoldsThisLine(t *testing.T) {
 	// identity's own seam, called by name exactly as internal/tenancy does, so
 	// this control proves the substrate is ARMED as well as bypassed. A control
 	// that skipped the call would also pass on a probe that never set an identity.
-	if _, err := tx.Exec(ctx, `select cafaye.begin_account($1)`, fixtureA.Account.ID); err != nil {
-		t.Fatalf("cafaye.begin_account: %v", err)
+	if _, err := tx.Exec(ctx, `select anywaye.begin_account($1)`, fixtureA.Account.ID); err != nil {
+		t.Fatalf("anywaye.begin_account: %v", err)
 	}
 
 	var visible int

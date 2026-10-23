@@ -43,11 +43,11 @@ if (!handler || typeof handler.fetch !== "function") {
   process.exit(1);
 }
 
-// The front door the plan pins: cafaye.com/box/install. The base is the site's
-// host, not a host of the Worker's own — kit.cafaye.com is retired, so the
-// Worker is bound to a route under cafaye.com and this probe answers the
+// The front door the plan pins: anywaye.com/box/install. The base is the site's
+// host, not a host of the Worker's own — kit.anywaye.com is retired, so the
+// Worker is bound to a route under anywaye.com and this probe answers the
 // question that binding will answer.
-const base = "https://cafaye.com";
+const base = "https://anywaye.com";
 let failures = 0;
 
 function check(label, ok, detail) {
@@ -69,7 +69,7 @@ async function probe(pathname) {
   };
 }
 
-// GET /box/install — THE FRONT DOOR. The plan's path, under cafaye.com, and
+// GET /box/install — THE FRONT DOOR. The plan's path, under anywaye.com, and
 // the only path this repository documents as the product's front door. It is
 // asserted first and by the same whole-body hash as the rest: the byte-equality
 // guarantee is about whatever path a customer types into `curl | sh`, and that
@@ -144,5 +144,5 @@ if (failures > 0) {
   process.exit(1);
 }
 console.log(
-  "install host: cafaye.com/box/install serves install.sh byte-exact; every other path 404s; /healthz is 200",
+  "install host: anywaye.com/box/install serves install.sh byte-exact; every other path 404s; /healthz is 200",
 );

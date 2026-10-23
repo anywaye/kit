@@ -1,9 +1,9 @@
 {
-  "uid": "cafaye-fleet-errors",
-  "title": "cafaye — every error in the fleet",
+  "uid": "anywaye-fleet-errors",
+  "title": "anywaye — every error in the fleet",
   "description": "The answer to 'one place to see all errors for the whole system' (PLAN.md §7b). Read the header below before editing a query: the predicate is span STATUS, and error.type is a drill-down inside a service. A fleet-wide breakdown grouped by error.type is the documented mistake.",
   "tags": [
-    "cafaye",
+    "anywaye",
     "errors",
     "fleet"
   ],

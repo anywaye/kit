@@ -4,7 +4,7 @@
 # local-cycle.sh — the substrate, on a cluster that is already on this machine.
 #
 #   bash templates/substrate/local-cycle.sh              # create or reuse, then run
-#   KIT_LOCAL_CLUSTER=cafaye-local bash templates/substrate/local-cycle.sh
+#   KIT_LOCAL_CLUSTER=anywaye-local bash templates/substrate/local-cycle.sh
 #
 # WHY THIS EXISTS
 #   The substrate install is a customer-box command: it provisions the host it
@@ -44,7 +44,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALLER="$ROOT/templates/substrate/install.sh"
-CLUSTER="${KIT_LOCAL_CLUSTER:-cafaye-local}"
+CLUSTER="${KIT_LOCAL_CLUSTER:-anywaye-local}"
 
 # Scratch, keyed to the worktree: two developers (or two worktrees of the same
 # repo) must not share one kubeconfig or one JSONL.
@@ -111,7 +111,7 @@ export KIT_SUBSTRATE_KUBECONFIG="$KUBECONFIG_FILE"
 # thing a developer met. A local cycle's list must be the list the tree ships;
 # a caller with a real box overrides it, which the `:-` still allows.
 export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-courier,gateway,identity,parlor}"
-export KIT_SUBSTRATE_ACME_EMAIL="${KIT_SUBSTRATE_ACME_EMAIL:-dev@cafaye.test}"
+export KIT_SUBSTRATE_ACME_EMAIL="${KIT_SUBSTRATE_ACME_EMAIL:-dev@anywaye.test}"
 # THE OPERATOR-SOURCED VALUES AS PLACEHOLDERS, and the reason is the step that
 # would otherwise refuse before reaching anything interesting. Step 9 refuses
 # without `KIT_SUBSTRATE_SMTP_*` and `KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET`,

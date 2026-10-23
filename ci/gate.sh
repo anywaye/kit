@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The gate, as the cafaye CI runs it.
+# The gate, as the anywaye CI runs it.
 #
 # kit is config-only: there is no runtime code and no library, so the gate is
 # the suite that proves every artifact a service repository copies or calls

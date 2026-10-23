@@ -1,6 +1,6 @@
 # The core fan-out
 
-`cafaye/core` owns the event envelope, the manifest schema, the per-event payload
+`anywaye/core` owns the event envelope, the manifest schema, the per-event payload
 schemas and the telemetry signal schemas. Six repositories copy bytes out of it.
 **Nothing in the fleet makes that copy reach them.**
 
@@ -71,9 +71,9 @@ Four pieces, and the dependency order matters.
    repositories in three languages are provided; two are proven byte-identical to
    what those repositories have committed today. See `vendir/README.md`.
 2. **`release/`** — the workflow `core` needs before any of it can move, because
-   `cafaye/core` has **zero tags** and `ref: v0.3.0` therefore fails. Verified by
+   `anywaye/core` has **zero tags** and `ref: v0.3.0` therefore fails. Verified by
    running it.
-3. **`renovate/`** — one `cafaye/renovate-config` repository with
+3. **`renovate/`** — one `anywaye/renovate-config` repository with
    `inheritConfig`, so a policy change is one pull request in one place. See
    `renovate/SETUP.md` for the ordered steps and for what to verify before
    onboarding a second repository.
@@ -119,14 +119,14 @@ careful is not a property.
 
 ### F2 — `expectOperations` is a guard vendir knows nothing about
 
-`cafaye-ts/specs/index.json` carries a hand-set `expectOperations` per service,
+`anywaye-ts/specs/index.json` carries a hand-set `expectOperations` per service,
 and `vendor.mjs` refuses to absorb a document whose operation count moved. vendir
 will re-copy such a document without comment.
 
 **This is a real migration cost and it is not resolved here.** The guard does not
 move into `vendir.yml`, because vendir copies bytes and has no opinion about
 whether a copy should have been allowed to change size. It stays where it is, as
-its own CI test in `cafaye-ts`. A guard relocated into a tool that cannot enforce
+its own CI test in `anywaye-ts`. A guard relocated into a tool that cannot enforce
 it is a guard deleted, and the person who finds out is debugging a client built
 from a document that changed under it. If the next person reads this and thinks
 "that could be simplified into the vendor step", this paragraph is the answer.
@@ -157,7 +157,7 @@ that can do so quietly. Everything else here is slower on purpose.
 
 Stated here rather than in a report nobody reads:
 
-- **The tag mechanism has never run.** `cafaye/core` has no tags, so
+- **The tag mechanism has never run.** `anywaye/core` has no tags, so
   `ref: v0.3.0` fails, so all three templates say `ref: master`. That a tag
   resolves correctly *is* proven — against a purpose-built repository with two
   tags whose contents differ, where `ref: v0.3.0` copied the v0.3.0 bytes — but

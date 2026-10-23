@@ -2763,7 +2763,7 @@ PY
   # shell had never been given, and under the `set -euo pipefail` every step in
   # this tree begins with, an unset read is not an empty value — it is
   # `unbound variable` and exit 1. The step failed on every run it ever had.
-  # `cafaye/site` calls this file, so `ghcr.io/cafaye/site` has never existed.
+  # `anywaye/site` calls this file, so `ghcr.io/anywaye/site` has never existed.
   #
   # The other four fields in that same step work because they arrive through the
   # step's `env:` block, which really does populate the shell environment.
@@ -3011,7 +3011,7 @@ services = doc.get("services") or {}
 if not services:
     problems.append("no services")
 
-# The shared infra every cafaye service joins. Half a platform is worse than
+# The shared infra every anywaye service joins. Half a platform is worse than
 # none: a service that adopts the stack needs all of these or none of them.
 # The three backing services are in the required set because the observability
 # PROFILE exists so a constrained machine can opt out, and the profile is the
@@ -3067,7 +3067,7 @@ for name, svc in services.items():
 if published:
     problems.extend(published)
 
-# Nothing in the stack may name a cafaye SERVICE: hostnames are the service's
+# Nothing in the stack may name a anywaye SERVICE: hostnames are the service's
 # own to choose, and a template that picks them for you is a template six repos
 # disagree with. Infrastructure is fine — that is what this file is — and the
 # observability backends are infrastructure, which is why they are named
@@ -3237,7 +3237,7 @@ PY
   # -------------------------------------------------------------------------
   # THE EVENT BUS — ONE STREAM, DEFINED BY THE STACK, IDEMPOTENTLY.
   #
-  # Every cafaye service with an outbox publishes each event to a subject equal
+  # Every anywaye service with an outbox publishes each event to a subject equal
   # to its event type — `identity.user.created`, `billing.subscription.started` —
   # with no mapping table and no prefix rewriting (core/docs/event-outbox.md).
   # The type IS the subject, and a subject no stream claims is a publish the
@@ -3552,7 +3552,7 @@ def strip_sql_comments(src):
 
     String literals are not tracked, and that is safe here for a measured reason
     rather than a hopeful one: every required token in the substrate lives on its
-    own line, and the substrate's only `--` inside a string is the `'cafaye:tier=db
+    own line, and the substrate's only `--` inside a string is the `'anywaye:tier=db
     ...'`-shaped hint text, which no required token overlaps.
     """
     out = []
@@ -4424,7 +4424,7 @@ root = sys.argv[1]
 # The same assembly the Go adapter performs, reproduced here rather than
 # imported. If the two ever disagree, one of them is wrong and the gate says so
 # instead of a canary being half-planted in CI and half in the gate.
-prefix = "cafaye_canary_"
+prefix = "anywaye_canary_"
 body = "notarealsecret"
 canary = prefix + (body * 3)[:32]
 
@@ -4462,7 +4462,7 @@ PY
     "$PY" - "$ROOT" <<'PY'
 import sys
 
-prefix = "cafaye_canary_"
+prefix = "anywaye_canary_"
 canary = prefix + ("notarealsecret" * 3)[:32]
 
 # Structural properties, asserted here because they are properties of the VALUE
@@ -4531,7 +4531,7 @@ PY
 
     local needle
     needle="$("$PY" -c '
-prefix = "cafaye_canary_"
+prefix = "anywaye_canary_"
 print(prefix + ("notarealsecret" * 3)[:32])
 ')"
     if [ -n "$needle" ] && printf '%s\n' "$out" | grep -qF -- "$needle"; then
@@ -4539,7 +4539,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
       echo "thing it is sweeping for: a report of a leak that carries the leak is a leak." >&2
       echo "The offending lines, with the value redacted:" >&2
       printf '%s\n' "$out" | grep -F -- "$needle" |
-        sed "s|$needle|cafaye_canary_REDACTED|g" | sed 's/^/  /' >&2
+        sed "s|$needle|anywaye_canary_REDACTED|g" | sed 's/^/  /' >&2
       return 1
     fi
 
@@ -4557,7 +4557,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # -------------------------------------------------------------------------
   # The chart publish path — the publish/consume seam, both ends in kit.
   #
-  # WHY THIS CHECK EXISTS. `cafaye/notes/deployment.md`'s deploy loop is pull-based: a
+  # WHY THIS CHECK EXISTS. `anywaye/notes/deployment.md`'s deploy loop is pull-based: a
   # commit changes a chart, Argo makes the box agree. The consume end is the
   # SERVICE half of the Argo CD `Application`s in `templates/substrate/
   # manifests/applications/` — `identity`, `gateway`, `courier`, `parlor`,
@@ -4587,7 +4587,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      fact, and an Application whose repoURL is not the chart's own path in
   #      that registry is a service that never deploys — Argo resolves an OCI
   #      source's revision against repoURL itself, so the registry ROOT is not
-  #      an artifact (measured: `HEAD .../v2/cafaye/charts/manifests/0.1.0`
+  #      an artifact (measured: `HEAD .../v2/anywaye/charts/manifests/0.1.0`
   #      → 403). Observability Applications are SKIPPED here — they resolve
   #      to upstream repositories by design (see `check_obs_chart_sources`).
   #   4. The chart name and version are NOT inputs. An input is a string a
@@ -4648,7 +4648,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # somebody publishes.
   #
   # WHY THIS CHECK EXISTS. The three observability `Application`s (`alloy`,
-  # `grafana`, `prometheus`) once named `oci://ghcr.io/cafaye/charts`
+  # `grafana`, `prometheus`) once named `oci://ghcr.io/anywaye/charts`
   # — the fleet's private registry — for charts nothing in the fleet
   # publishes (measured: kit holds no `Chart.yaml` for any of them, and no
   # service repository's publish workflow pushes them either). On a customer
@@ -4657,7 +4657,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   # finds it — the same silent shape as the publish/consume seam above, at
   # the other end of the same directory.
   #
-  # THE RULING IT ENFORCES (decided in `cafaye/notes/deployment.md`, "Who owns the
+  # THE RULING IT ENFORCES (decided in `anywaye/notes/deployment.md`, "Who owns the
   # `Application`" — cited, not restated, so this comment cannot drift from
   # it): the private-OCI shape exists for the closed-source service charts a
   # customer must pull without read access to our repositories. Third-party
@@ -4675,7 +4675,7 @@ print(prefix + ("notarealsecret" * 3)[:32])
   #      classifies by. A file whose name and manifest disagree is classified
   #      by neither and fails.
   #   2. A service name (`identity`, `gateway`, `courier`, `parlor`, `billing`)
-  #      carries its own name as `chart`, `repoURL: oci://ghcr.io/cafaye/charts/
+  #      carries its own name as `chart`, `repoURL: oci://ghcr.io/anywaye/charts/
   #      <name>` (the registry's PREFIX plus the chart name — Argo resolves the
   #      revision against repoURL itself, so the root is not an artifact), and
   #      `targetRevision: 0.1.0` — the private-OCI ruling, untouched.
@@ -4714,7 +4714,7 @@ import yaml
 
 apps_dir = sys.argv[1]
 
-PRIVATE_OCI = "oci://ghcr.io/cafaye/charts"
+PRIVATE_OCI = "oci://ghcr.io/anywaye/charts"
 GRAFANA_REPO = "https://grafana.github.io/helm-charts"
 PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 
@@ -4731,7 +4731,7 @@ PROM_REPO = "https://prometheus-community.github.io/helm-charts"
 # runs. `billing` joined on 2026-10-15 (it went to charging, and its
 # `publish.yml` pushes the chart the Application pulls) — it resolves to the
 # same private-OCI triple as the four launch services. Pantry, box and
-# keyholder ship no Application — all three are Cafaye-operated and reached
+# keyholder ship no Application — all three are Anywaye-operated and reached
 # over HTTPS — so an Application naming one of them is unclassified and still
 # fails closed while the fleet's own charts resolve.
 SERVICE_APPS = {"identity", "gateway", "courier", "parlor", "billing"}
@@ -4836,7 +4836,7 @@ PY
     # A temp file and `mv`, not `sed -i`: BSD sed (macOS) requires a backup
     # argument after `-i` and GNU sed does not, so the in-place spelling is
     # one platform's bug and the other's no-op.
-    sed 's|repoURL: https://grafana.github.io/helm-charts|repoURL: oci://ghcr.io/cafaye/charts|' \
+    sed 's|repoURL: https://grafana.github.io/helm-charts|repoURL: oci://ghcr.io/anywaye/charts|' \
       "$registry_fixture/alloy.yaml" >"$registry_fixture/alloy.yaml.reverted"
     mv "$registry_fixture/alloy.yaml.reverted" "$registry_fixture/alloy.yaml"
     if "$PY" "$checker" "$registry_fixture" >/dev/null 2>&1; then
@@ -4866,11 +4866,11 @@ PY
   }
 
   # -------------------------------------------------------------------------
-  # The install host — the Worker that serves install.sh at cafaye.com/box/install.
+  # The install host — the Worker that serves install.sh at anywaye.com/box/install.
   #
   # WHY THIS CHECK EXISTS. The product's front door is
-  # `curl https://cafaye.com/box/install | sh`; kit.cafaye.com is retired, so
-  # the Worker is bound to a route under cafaye.com rather than to a host. The
+  # `curl https://anywaye.com/box/install | sh`; kit.anywaye.com is retired, so
+  # the Worker is bound to a route under anywaye.com rather than to a host. The
   # script it serves has existed since
   # W74 and nothing in the fleet served it at that URL — measured: no Worker,
   # no wrangler config, no static host, and W74's own report named the gap.
@@ -4910,7 +4910,7 @@ PY
   # the test itself rather than a pass.
   #
   # WHAT IS NOT PROVEN HERE, and is stated rather than hidden: that
-  # cafaye.com/box/install ANSWERS. Binding the route to the Worker is a
+  # anywaye.com/box/install ANSWERS. Binding the route to the Worker is a
   # Cloudflare route/custom-domain action outside every repository (the plan
   # §1 stability rule 3 decides it), so the URL works only when observed.
   # `templates/substrate/README.md` carries the same sentence.
@@ -4921,11 +4921,11 @@ PY
     local driver="$ROOT/tests/install-host-driver.mjs"
 
     # The red-first message, before anything else: with no Worker there is
-    # nothing at cafaye.com/box/install, and the check says so by name rather
+    # nothing at anywaye.com/box/install, and the check says so by name rather
     # than failing later on an import error.
     if [ ! -f "$worker" ]; then
       printf '       the Worker does not exist: %s\n' "$worker"
-      printf '       nothing serves install.sh at cafaye.com/box/install — the front door is open\n'
+      printf '       nothing serves install.sh at anywaye.com/box/install — the front door is open\n'
       return 1
     fi
 
@@ -4993,7 +4993,7 @@ if not isinstance(obs, dict) or obs.get("enabled") is not True:
 if "routes" in doc:
     problems.append(
         "a `routes` block is present — the fleet does not carry one (measured:"
-        " site's has none); the cafaye.com/box/install route binding is an"
+        " site's has none); the anywaye.com/box/install route binding is an"
         " operator action, not a file"
     )
 rules = doc.get("rules")
@@ -5212,7 +5212,7 @@ PY
   # The launch harness — the developer-only four-service stack, owned by kit.
   #
   # `launch/bin/launch` + `launch/docker-compose.launch.yml` are the retired
-  # `cafaye/site` launcher's successor: same four services plus mailpit, same
+  # `anywaye/site` launcher's successor: same four services plus mailpit, same
   # mint-after-ready and bounded waits, but sibling checkouts by explicit
   # path (Website and Site never required) and the stack defaulting to this
   # checkout itself. Actually bringing the stack up needs the sibling
@@ -5316,9 +5316,9 @@ PY
       "$ROOT/templates/substrate/manifests/applications"
 
   # -------------------------------------------------------------------------
-  # The install host — the Worker that serves install.sh at cafaye.com/box/install.
+  # The install host — the Worker that serves install.sh at anywaye.com/box/install.
   #
-  # The front door is `curl https://cafaye.com/box/install | sh`. The script has
+  # The front door is `curl https://anywaye.com/box/install | sh`. The script has
   # existed since W74; nothing in the fleet served it at the URL that
   # URL (measured: no Worker, no wrangler config, no static host — W74's own
   # report named the gap). `templates/substrate/kit-install.mjs` closes it,
@@ -5334,11 +5334,11 @@ PY
   # Two controls must go red: a fixture whose install.sh is one byte shorter,
   # and a fixture with the wrong content-type.
   #
-  # WHAT IS NOT PROVEN: that cafaye.com/box/install ANSWERS. The binding is a
+  # WHAT IS NOT PROVEN: that anywaye.com/box/install ANSWERS. The binding is a
   # Cloudflare route/custom-domain action outside every repository, so the
   # URL works only when observed. `templates/substrate/README.md` says so.
   section 'static: the install host — the Worker serves the exact bytes of install.sh'
-  check 'install host  (cafaye.com/box/install serves install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
+  check 'install host  (anywaye.com/box/install serves install.sh byte-exact as text/x-shellscript; traversal and every other path 404; /healthz is 200; wrangler config pinned, Text rule, no routes)' \
     check_install_host
 
   # The build half — optional, SKIPs loudly where wrangler is absent. See
@@ -5622,7 +5622,7 @@ check 'tests/have_timeout_test.sh  (the toolchain probes cannot re-enter the gat
 # files beside kit's own template not graded as adopted copies (measured: the
 # fleet run FAILed kit itself with all twelve functions "missing"), a
 # generated dump correctly ignored, a non-adopter, a bare `create schema if
-# not exists cafaye` that is NOT an adopted copy (the predicate the docstring
+# not exists anywaye` that is NOT an adopted copy (the predicate the docstring
 # states is the predicate the code uses), a missing path, and --fleet. The
 # fleet run stays a deliberate command, not a row here:
 #   python3 tests/substrate_copy_check.py ../identity ../darkroom

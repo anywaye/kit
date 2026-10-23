@@ -5,8 +5,8 @@
 
 ## What this repo is
 
-- **Name:** `kit` (`github.com/cafaye/kit`)
-- **Purpose:** shared CI, lint, and toolchain conventions that every cafaye
+- **Name:** `kit` (`github.com/anywaye/kit`)
+- **Purpose:** shared CI, lint, and toolchain conventions that every anywaye
   service repo adopts.
 - **Contains:** configuration and documentation only. No runtime code, no
   library, no build step, no dependencies.
@@ -18,7 +18,7 @@
 kit/
 ├── README.md                             # what kit is, how a repo adopts it
 ├── LICENSE                               # MIT. The whole grant, and nothing can disagree
-├── cafaye.yml                           # the manifest: name, language, core range, owner
+├── anywaye.yml                           # the manifest: name, language, core range, owner
 ├── DECISIONS.md                          # the trades this repo has NOT made
 ├── VERSION                               # the version, and the ONLY place it is written
 ├── RESERVED                              # tombstones: a retired name stays dead
@@ -32,7 +32,7 @@ kit/
 │   ├── rubocop.yml   eslint.config.mjs
 │   └── hadolint.yaml                      # argues the one rule it ignores
 ├── docker/                               # Dockerfile.<lang> templates
-├── core/                                 # the cafaye/core fan-out standard
+├── core/                                 # the anywaye/core fan-out standard
 │   ├── tier/skip-allowlist               # one file for the fleet; four hygiene rules
 │   ├── tier/README.md                    # the format, the rules, and the limits
 │   ├── secrets/                          # runtime credential-leak canary
@@ -83,7 +83,7 @@ account-scoped services that boundary was enforced entirely by hand-written
 | | what stops it | how |
 |---|---|---|
 | service A reading service B | the database | one database per service, `REVOKE … FROM PUBLIC` |
-| account 1 reading account 2 | **row-level security, FORCED** | `cafaye.protect_table`, a `<service>_app` login role that owns nothing, and `cafaye.begin_account/1` once per request |
+| account 1 reading account 2 | **row-level security, FORCED** | `anywaye.protect_table`, a `<service>_app` login role that owns nothing, and `anywaye.begin_account/1` once per request |
 
 **`FORCE ROW LEVEL SECURITY` is not optional and nothing else in the tree will
 tell you so.** Postgres exempts a table's OWNER from its own policies, and every
@@ -118,7 +118,7 @@ learn.
 The reusable workflow is at `.github/workflows/ci.reusable.yml` and nowhere
 else. That is not a style choice: GitHub documents that **subdirectories of the
 workflows directory are not supported**, so a `uses:` line reading
-`cafaye/kit/workflows/ci.reusable.yml@master` resolves to nothing, and every
+`anywaye/kit/workflows/ci.reusable.yml@master` resolves to nothing, and every
 caller who copied it has a red build. A repo that holds the file in a convenient
 place and documents a `uses:` string is a repo whose documentation and layout
 have silently disagreed — which is the class of defect the `callable path`
@@ -196,7 +196,7 @@ not an empty path, it is a fatal on the step's **first line**:
 …/_temp/9bf3851b-….sh: line 2: GITHUB_ACTION_PATH: unbound variable
 ```
 
-Measured in `cafaye/site` run 37236386666 and `cafaye/parlor` run 37230458669, on
+Measured in `anywaye/site` run 37236386666 and `anywaye/parlor` run 37230458669, on
 a job that had never run once.
 that had stopped those jobs being created, and two jobs that had **never run
 once** were broken: this one could not start at all, and the `node` job crashed on
@@ -209,7 +209,7 @@ that said nothing about why.
   contradicted it. The reasoning was applied to the lint configs and not to these.
   A rule written down once, obeyed in one place, and contradicted in another by
   nobody reading the other place.
-- The fix is `uses: actions/checkout` of `cafaye/kit` pinned by
+- The fix is `uses: actions/checkout` of `anywaye/kit` pinned by
   `inputs.kit-lint-ref`, into **`$RUNNER_TEMP`** and not `<working-dir>/.kit`:
   a second git repository nested inside the one under test is a question with no good
   answer, and `$RUNNER_TEMP` is per-job scratch that is emptied when the job ends.
@@ -287,7 +287,7 @@ permissions:
   contents: read
 jobs:
   ci:
-    uses: cafaye/kit/.github/workflows/ci.reusable.yml@master
+    uses: anywaye/kit/.github/workflows/ci.reusable.yml@master
     with:
       language: go
 ```
@@ -306,7 +306,7 @@ permissions:
   packages: write
 jobs:
   image:
-    uses: cafaye/kit/.github/workflows/image.reusable.yml@master
+    uses: anywaye/kit/.github/workflows/image.reusable.yml@master
     with:
       push: true
 ```
@@ -428,7 +428,7 @@ contract is in `templates/secrets/README.md`; the Go adapter is in
 `templates/secrets/go/`.
 
 **The canary is assembled, never written out, and that is checked.** A committed
-`cafaye_canary_…` literal is a credential-shaped string in a public repository,
+`anywaye_canary_…` literal is a credential-shaped string in a public repository,
 which is what this repository's own scanner reports, and allowlisting it teaches
 the next reader that allowlisting a credential is normal. Two checks enforce it:
 one inside the Go suite, one over the whole tree.
@@ -595,7 +595,7 @@ assemble the canary, do not commit it.**
 - **THE FLEET IS FOUND BESIDE THIS REPOSITORY, and never further.** The checks
   that read service trees glob `$ROOT/..`, so they reach exactly one level of
   siblings and no more. `../..` is deliberately NOT searched: it found a fleet
-  once, in a leftover copy of a cafaye repository in a shared temp directory
+  once, in a leftover copy of a anywaye repository in a shared temp directory
   whose branch still carried a retired workaround, and a check went red on a
   tree with nothing wrong with it. **A sweep that reaches further than it owns is
   worse than no sweep**, and the same argument now covers the self-test copies
@@ -874,7 +874,7 @@ a value with no `job` is a green build that ran nothing.
 `templates/kamal/` is four files: `deploy.yml.erb`, `kamal-backup.yml.erb`, a
 `drill.sh`, and a README. kit does not ship a deployment tool or a backup tool,
 because `kamal` and `kamal-backup` are both, they are both installed wherever
-cafaye deploys, and kit-20 proved the cost of the alternative by building
+anywaye deploys, and kit-20 proved the cost of the alternative by building
 `templates/backup/` and `templates/bin/backup.sh` — about 3,012 lines
 reimplementing a command surface that already existed. **All of it is gone**, and
 `tests/validate.sh` asserts its absence, because "we removed it" has no
@@ -1135,7 +1135,7 @@ See `DECISIONS.md` (MD26, MD27).
   dependency into a run that did not. A witness from a different run is not a
   witness. Cache build products — `target/`, `$GOCACHE`, `node_modules`,
   `vendor/bundle` — and never a witness.
-- **Never copy code from `reference/`** into this repo or into any cafaye
+- **Never copy code from `reference/`** into this repo or into any anywaye
   repo. Those trees are behavioral references; every line here is ours.
 - **Pins are placeholders.** `templates/mise.toml` and the Dockerfiles carry
   placeholder versions on purpose. A service raises them in its own repo; kit
@@ -1151,14 +1151,14 @@ See `DECISIONS.md` (MD26, MD27).
   out of scope by design — a licence in a template is that template's business.
 
   **The check is stale against the grant, and that is named rather than hidden.**
-  kit's grant was the Cafaye proprietary text until OPS-D2 made the framework
+  kit's grant was the Anywaye proprietary text until OPS-D2 made the framework
   MIT (2026-10-10); `license_check` still asserts the proprietary sentences and
   still refuses MIT's permission grant, so the gate is red on exactly that one
   check. **Do not weaken it to get green** — the grant is the file and the check
   is what has to move, in its own commit, with a reason. The successor's move is
   to re-point the three required phrases and the README assertions at MIT, to
   keep the two-direction shape (the file grants MIT; the `## License` section
-  states MIT and links it), and to keep point 4 exactly as it is: `cafaye.yml`
+  states MIT and links it), and to keep point 4 exactly as it is: `anywaye.yml`
   declares no licence field and core's schema has no key for one, so "manifests
   inspected, none disagreeing" is still the measurement the check prints.
 - **No `latest`.** Every base image and action ref is pinned or floating-major

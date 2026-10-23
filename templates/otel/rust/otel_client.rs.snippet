@@ -75,7 +75,7 @@ const DEFAULT_ENDPOINT: &str = "http://otel-collector:4318";
 /// The OpenTelemetry spec's OWN kill switch, and the mechanism core's
 /// otel-endpoint schema pins the no-op to.
 ///
-/// Not a cafaye reimplementation: re-implementing "disabled" in six languages
+/// Not a anywaye reimplementation: re-implementing "disabled" in six languages
 /// is how six services acquire six different definitions of it, and the
 /// difference between them is somebody's production incident.
 const SDK_DISABLED: &str = "OTEL_SDK_DISABLED";
@@ -282,7 +282,7 @@ pub fn traced_client() -> Result<reqwest::Client, reqwest::Error> {
 /// that cannot be filtered out, and a route with an id in it is a cardinality
 /// explosion with a GET attached. core's span-naming schema caps every segment
 /// at fifteen characters, which is what makes an interpolated id impossible to
-/// spell even by accident — the grammar says nothing about cafaye id formats,
+/// spell even by accident — the grammar says nothing about anywaye id formats,
 /// it just says no segment is longer than fifteen characters.
 pub fn span_name(operation: &str) -> String {
     format!("{SERVICE_NAME}.{operation}")
