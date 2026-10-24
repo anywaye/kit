@@ -334,33 +334,12 @@ IDENTITY_URL="http://identity.identity.svc.cluster.local:8080"
 IDENTITY_COURIER_KEYS=(COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE)
 
 # --- the services' telemetry on a box: DELIBERATELY OFF ---------------------
-# THE BOX DEPLOYS NO OTLP ENDPOINT, SO THE SERVICES MUST NOT TRY TO REACH ONE.
-#
-# Measured, not assumed. The observability set is alloy + grafana +
-# prometheus (`manifests/applications/`), and alloy is pinned at chart 1.13.0
-# with NO values: the chart's default config is `config/example.alloy` — a
-# `logging` block and `discovery.kubernetes` components, and no
-# `otelcol.receiver.otlp` — and its default Service exposes only
-# `http-metrics` on 12345 (`alloy.extraPorts` is empty). So alloy does not
-# accept OTLP as shipped, and the substrate ships no Tempo at all: DEPLOYMENT.md
-# ("Traces | deferred") is the fleet's decision, and there is nowhere for a span
-# to land. `kubectl get svc -n observability` on the live box returns nothing.
-#
-# The services' COMPILED default is `http://otel-collector:4318` (identity,
-# courier, parlor) / `:4317` (gateway) — the COMPOSE stack's name, which
-# resolves only inside the compose network. On a box it resolves to nothing, and
-# the OTel SDK retries forever, so identity logs this every ten seconds:
-#
-#   level=INFO msg="traces export: Post \"http://otel-collector:4318/v1/traces\":
-#     dial tcp: lookup otel-collector on 10.43.0.10:53: no such host"
-#
-# The fix is the SDK's OWN kill switch, not a log-level change and not a
-# re-point at a name that does not resolve: core's `otel-endpoint.schema.json`
-# pins the no-op to `OTEL_SDK_DISABLED` and requires it to be free (no buffer,
-# no retry, no warning per export, no dial on boot). With it set, the service
-# logs one line at startup and nothing per export. When Tempo becomes an
-# Application this is what comes OUT: the endpoint variable goes IN, one fact in
-# one place.
+# OTLP IS NOW ENABLED ON THE BOX. Alloy accepts OTLP on 4317/4318 and
+# forwards logs to Loki (see alloy Application). Services send telemetry
+# via <SERVICE>_OTEL_ENDPOINT (set in each chart's env block). Traces are
+# still dropped (no Tempo yet); metrics via spanmetrics are a follow-up.
+# OTEL_SDK_DISABLED is NOT set, so services export by default. To disable
+# on a specific box, set OTEL_SDK_DISABLED=true in the service secret.
 #
 # ONE SPELLING, ONE LINE, AND THE ONE EXCEPTION NAMED. The generated charts
 # inject env with `envFrom: secretRef`, so a key written into a service secret
@@ -369,7 +348,7 @@ IDENTITY_COURIER_KEYS=(COURIER_BASE_URL COURIER_TOKEN PASSWORD_RESET_LINK_TEMPLA
 # rather than its secret, so its Application carries the same key/value in
 # `spec.source.helm.values` — the one service whose chart shape differs, and the
 # reason is written at the site that differs.
-SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)
+# SERVICE_OTEL_DISABLED removed: OTLP is now enabled (Alloy accepts OTLP; see alloy Application).
 
 # --- operator-supplied values ----------------------------------------------
 # --- the box's own identity and capability ------------------------------------
@@ -4114,7 +4093,7 @@ install_service_secrets() {
     kit_substrate_out "      secret identity-secrets exists — refusing to overwrite (rotate by replacing the secret and restarting the pods)"
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic identity-secrets -n identity \
-      "${identity_args[@]}" "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
+      "${identity_args[@]}" >/dev/null
     kit_substrate_out "      secret identity-secrets created (generated values once-only; rotate by replacing the secret)"
     # Read-back on a cold box: a secret written but not readable is the defect
     # the whole record tripwire exists to catch.
@@ -4241,7 +4220,7 @@ install_service_secrets() {
       "${courier_adapter_args[@]}" \
       --from-literal=COURIER_ERROR_RELAY_TOKEN="$relay_token" \
       --from-literal=NATS_URL="$NATS_URL" \
-      "${SERVICE_OTEL_DISABLED[@]}" \
+      \
       ${courier_extra_args[@]+"${courier_extra_args[@]}"} >/dev/null
     kit_substrate_out "      secret courier-secrets created (COURIER_IDENTITY_TOKEN follows in step 12 — minted on this box)"
   fi
@@ -4256,7 +4235,7 @@ install_service_secrets() {
   else
     kubectl --kubeconfig="$KUBECONFIG" create secret generic parlor-secrets -n parlor \
       --from-literal=DATABASE_URL="$(database_url_for parlor)" \
-      "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
+      >/dev/null
     kit_substrate_out "      secret parlor-secrets created (DATABASE_URL only — see the comment above)"
   fi
 
@@ -4303,7 +4282,7 @@ install_service_secrets() {
       --from-literal=BILLING_IDENTITY_AUDIENCE="billing" \
       --from-literal=STRIPE_API_KEY="$KIT_SUBSTRATE_STRIPE_API_KEY" \
       --from-literal=STRIPE_WEBHOOK_SECRET="$KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET" \
-      "${SERVICE_OTEL_DISABLED[@]}" >/dev/null
+      >/dev/null
     kit_substrate_out "      secret billing-secrets created (SECRET_KEY_BASE generated once-only; the Stripe pair from the environment)"
   fi
 }
