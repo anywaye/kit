@@ -43,6 +43,8 @@ spec:
         env:
           IDENTITY_URL: "http://identity.identity.svc.cluster.local:8080"
           BILLING_URL: "http://billing.billing.svc.cluster.local"
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy.observability:4318"
+          OTEL_SERVICE_NAME: "website"
   destination:
     server: https://kubernetes.default.svc
     namespace: parlor
