@@ -1,0 +1,60 @@
+# GlitchTip — internal error tracking for anywaye.
+#
+# NOT part of the customer substrate. This runs on anywaye's own boxes
+# (anywaye.com) for our error tracking and agent-driven resolution.
+# Customers do not get this.
+#
+# Usage:
+#   cd /opt/glitchtip  (or any directory)
+#   docker compose up -d
+#
+# Requires: Docker + Docker Compose. Postgres and Valkey are included.
+# Set SECRET_KEY and GLITCHTIP_DOMAIN via environment or .env file.
+# Default port: 8095 (avoids conflict with identity on 8080, ella on 8000).
+#
+# To generate a SECRET_KEY:  openssl rand -hex 32
+# To enable MCP (for agents): GLITCHTIP_ENABLE_MCP=True (set below)
+x-environment: &default-environment
+  DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+  VALKEY_URL: redis://valkey:6379
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY (openssl rand -hex 32)}
+  EMAIL_URL: ${EMAIL_URL:-consolemail://}
+  GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN:-http://localhost:8095}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-errors@anywaye.com}
+  ENABLE_ADMIN: "False"
+  ENABLE_OPENAPI: "False"
+  GLITCHTIP_ENABLE_MCP: "True"
+  GLITCHTIP_ENABLE_LOGS: "True"
+  ALLOWED_HOSTS: "*"
+
+x-depends_on: &default-depends_on
+  - postgres
+  - valkey
+
+services:
+  postgres:
+    image: postgres:18
+    command: -c max_locks_per_transaction=512
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+    restart: unless-stopped
+    volumes:
+      - pg-data:/var/lib/postgresql
+  valkey:
+    image: valkey/valkey:9
+    restart: unless-stopped
+  web:
+    image: glitchtip/glitchtip:6
+    depends_on: *default-depends_on
+    ports:
+      - "${GLITCHTIP_PORT:-8095}:8000"
+    environment:
+      <<: *default-environment
+      SERVER_ROLE: all_in_one
+    restart: unless-stopped
+    volumes:
+      - uploads:/code/uploads
+
+volumes:
+  pg-data:
+  uploads:
