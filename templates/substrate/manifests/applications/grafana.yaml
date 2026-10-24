@@ -18,6 +18,27 @@ spec:
     repoURL: https://grafana.github.io/helm-charts
     chart: grafana
     targetRevision: 10.5.15
+    helm:
+      values: |
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Tempo
+                type: tempo
+                access: proxy
+                url: http://tempo:3200
+                isDefault: false
+              - name: Loki
+                type: loki
+                access: proxy
+                url: http://loki:3100
+                isDefault: false
+              - name: Prometheus
+                type: prometheus
+                access: proxy
+                url: http://prometheus:9090
+                isDefault: true
   destination:
     server: https://kubernetes.default.svc
     namespace: observability

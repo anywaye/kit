@@ -18,6 +18,11 @@ spec:
     repoURL: https://prometheus-community.github.io/helm-charts
     chart: prometheus
     targetRevision: 29.36.0
+    helm:
+      values: |
+        server:
+          extraArgs:
+            web.enable-remote-write-receiver: null
   destination:
     server: https://kubernetes.default.svc
     namespace: observability
