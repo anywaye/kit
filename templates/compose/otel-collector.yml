@@ -1,100 +1,6 @@
 ---
-# kit template — the OpenTelemetry collector. The chokepoint.
-#
-#   cp <kit>/templates/compose/otel-collector.yml ./otel-collector.yml
-#   cp <kit>/templates/compose/.env.example ./.env   # then edit
-#
-# WHAT THIS DOES
-#   1. Receives OTLP over gRPC and HTTP from all six languages.
-#   2. Receives container stdout/stderr, which is how an uncaught panic
-#      becomes a log record with no per-language SDK (PLAN.md §7b, layer 2).
-#   3. Applies the redaction allowlist ONCE, before anything leaves the
-#      process. This is the enforcement point core's redaction.schema.json
-#      names as `enforcedAt: collector`.
-#   3a. DROPS THE HIGH-CARDINALITY DIMENSIONS AT INGEST, BY NAME. The
-#      allowlist above works by omission; `transform/anywaye_metrics_ingest_drop`
-#      writes the deny set down — `tenant_id`, `account_id`, `request_id`,
-#      `user_id`, `email`, `url.full`, `error.message` and their OpenTelemetry
-#      twins — so the coverage is legible and so a later widening is a line
-#      somebody read. Not one of those names is ever a metric label, on the
-#      cheap default path or the full one.
-#   4. Fans out: traces to Tempo, logs to Loki, and — derived from already-
-#      redacted spans by the `spanmetrics` connector — metrics to ClickStack.
-#      ClickStack (the `otlp/clickstack` exporter) is the metrics STORE, and it
-#      takes the other two signals too, because it is a single pane over all
-#      three rather than a store per signal. Its service is behind the
-#      `clickstack` compose profile, so with the profile off this exporter
-#      dials a dead hostname — the same accepted silence Tempo and Loki's
-#      absence already is, and the reason every exporter below disables its
-#      sending queue and its retry loop.
-#
-# THIS CONFIG IS DERIVED, NOT INVENTED
-#   Every `allowed_keys` list below is a projection of core's schemas, and
-#   `tests/validate.sh` reads core's files off disk and compares both ways:
-#   every attribute core allows on a signal must be kept here, and nothing
-#   may be kept that core does not allow. The check prints the core commit
-#   it compared against, because "it passed" against a spec from six weeks
-#   ago is a different statement from "it passed".
-#
-#   core's files, and what each contributes:
-#     schemas/telemetry/traces.schema.json    the trace attribute set
-#     schemas/telemetry/metrics.schema.json   the measurement dimensions,
-#                                            and the prohibited-identifier list
-#     schemas/telemetry/logs.schema.json      the log attribute set
-#     schemas/telemetry/redaction.schema.json the content-word vocabulary
-#                                            and where enforcement lives
-#
-#   Where core's own files disagree with each other, this config takes the
-#   UNION of the per-signal set and the fleet-wide redaction `allowed` list,
-#   and says so where it does. The `llm.*` names are the live case: core's
-#   redaction schema allows them, core's traces schema does not list them,
-#   and muse is an LLM gateway whose entire reason for existing in a trace
-#   view is the model it called and how many tokens it spent. Dropping them
-#   would be tidy and would gut the one service that has telemetry today.
-#   Raised in kit's report as a DECISION NEEDED rather than resolved here.
-#
-# STRICTNESS NOTES — READ BEFORE EDITING
-#   - FILTER BEFORE EXPORT, NEVER AFTER. Every pipeline below runs its
-#     `redaction/*` processor before `batch` and therefore before every
-#     exporter. A redaction step that runs after an exporter has handed the
-#     data off is a comment, and the comment is what the next reader trusts.
-#   - NO LITERAL ENDPOINT ANYWHERE. Every address is a `${env:...}`
-#     substitution resolved from the collector's own process environment.
-#     A literal is the one shape that turns a privacy boundary into an
-#     incident, and the gate fails on it.
-#   - THE SHIPPED STACK IS NOT A CONSTANT. `<SERVICE>_OTEL_ENDPOINT` is the
-#     only contract (core D16); the collector below is just its default
-#     value. A self-hoster already running Datadog, Honeycomb or Grafana
-#     Cloud sets that variable in THEIR service and this stack goes quiet.
-#     Bring-your-own is a supported deployment, not a degraded mode.
-#   - NOTHING BUFFERS AND NOTHING RETRIES. Every exporter sets
-#     `sending_queue: {enabled: false}` and `retry_on_failure:
-#     {enabled: false}` explicitly, and the gate asserts both. The reason is
-#     the same one core's otel-endpoint schema gives for a service's own SDK:
-#     a queue is a memory leak with a telemetry-shaped trigger, and a retry
-#     loop against a dead Tempo is a thread waking on a timer for the life
-#     of the process, invisible in every dashboard because nothing is being
-#     recorded. Losing a span is strictly better than becoming a slow
-#     service.
-#   - NO SAMPLING HERE. The W3C traceparent sampled flag is the caller's
-#     decision and the services preserve it; a head sampler in the middle
-#     that disagreed would break traces at exactly the boundary that is
-#     hardest to debug.
-#   - EXCEPTIONS ARE LOG RECORDS, NOT SPAN EVENTS. The `exception` span
-#     event is Deprecated in favour of an exception log record, and
-#     `spanmetrics.events.enabled: false` below is that migration: the
-#     counter it would otherwise mint is the deprecated convention. The
-#     `exception.*` attributes an SDK writes on the way out are not on any
-#     allowlist, so the redaction processor drops them — which is how
-#     `exception.message` (a stack trace, and on muse a path straight to a
-#     prompt) never reaches an exporter without anything having to remember
-#     to ask for it.
 
 receivers:
-  # OTLP over gRPC and HTTP, from every service on the compose network. Both
-  # endpoints bind on all interfaces INSIDE the network only; the compose file
-  # publishes nothing for the collector, so there is no host port to collide
-  # with and no OTLP receiver exposed to the rest of the machine.
   otlp:
     protocols:
       grpc:
@@ -102,104 +8,19 @@ receivers:
       http:
         endpoint: ${env:KIT_OTEL_HTTP_ENDPOINT}
 
-  # THE CRASH LAYER. Every one of the six languages already writes a fatal
-  # error to stderr; in a container that is the log stream, so a panic
-  # becomes a log record here with zero per-language SDK and zero new
-  # dependency — which is the whole of PLAN.md §7b's second error layer and
-  # the part a Sentry SDK would otherwise own.
-  #
-  # syslog rather than filelog, and that is a portability decision with a
-  # history: the filelog-on-`/var/lib/docker/containers` form works on a Linux
-  # host and does not work at all under Docker Desktop or OrbStack, where the
-  # daemon's filesystem lives inside a VM that the host cannot bind-mount
-  # without asking for a shared directory. Docker's `syslog` log driver ships
-  # the line over the compose network to this receiver, which is the same
-  # bytes from the same place on every platform. The compose template sets
-  # `logging:` on each service, which is where that is configured.
   syslog/crash:
-    # RFC5424 is what Docker's syslog log driver emits. Declared rather than
-    # defaulted, because a receiver guessing at the framing of the one signal
-    # that carries a crash is a receiver that silently drops crashes.
     protocol: rfc5424
     tcp:
       listen_address: ${env:KIT_OTEL_SYSLOG_ENDPOINT}
 
 processors:
-  # Must come first, and the gate asserts it is first: it sheds load before
-  # the batcher allocates. Without a limiter one service in a runaway loop
-  # takes the collector down and every other service loses its telemetry at
-  # the same moment — which is the failure that gets blamed on telemetry.
   memory_limiter:
     check_interval: 1s
-    # A fraction of the container's limit, not an absolute: the compose file
-    # caps the collector and this reads that cap rather than duplicating the
-    # number in two places where they could disagree.
     limit_percentage: ${env:KIT_OTEL_MEMORY_LIMIT_PERCENTAGE}
     spike_limit_percentage: ${env:KIT_OTEL_MEMORY_SPIKE_PERCENTAGE}
 
-  # -------------------------------------------------------------------------
-  # THE REDACTION BOUNDARY. Three processors, one per signal, because the
-  # allowlist is per signal and one shared list would be the union of three
-  # contracts, which is a contract nobody wrote.
-  #
-  # `allow_all_keys: false` is stated explicitly rather than left to the
-  # default. The processor is fail-closed — an EMPTY allowed_keys list strips
-  # every attribute — so `true` would disable the allowlist entirely while
-  # still looking configured, and it is the single most dangerous line in this
-  # file. The gate asserts it is false on all three.
-  #
-  # `blocked_values` is the second barrier to the same leak, and it is a
-  # different KIND of barrier: the allowlist keeps a key out, and this masks a
-  # credential-shaped VALUE that arrived under a key core does allow. Two
-  # independent controls, because the realistic way this leaks is one of them
-  # being removed by a well-meaning change and nobody noticing for a month.
-  # -------------------------------------------------------------------------
   redaction/anywaye_traces:
     allow_all_keys: false
-    # THE RESOURCE EXEMPTION, AND IT IS NOT OPTIONAL.
-    #
-    # The redaction processor's `allowed_keys` covers RESOURCE attributes as
-    # well as span attributes, and a resource attribute not on the list is
-    # removed. That is correct as a default and catastrophic here: it would
-    # strip `service.name` off every span, which is the attribute the whole
-    # fleet dashboard partitions by.
-    #
-    # `service.name` and the deployment attributes are in `ignored_keys`, which
-    # is the right tool: those are never measurement attributes, so exempting
-    # them cannot weaken the metrics boundary.
-    #
-    # `tenant_id` and `account_id` are NOT in `ignored_keys`, and that is a
-    # deliberate asymmetry. Those two are the *only* attributes core's metrics
-    # schema names in BOTH lists — prohibited on a measurement, required on the
-    # resource — and `ignored_keys` cannot tell the two apart: it is one flat
-    # list, so exempting `tenant_id` for the resource would also exempt it on
-    # every data point, which is precisely the cardinality bomb the metric
-    # exists to prevent. The stash/restore pair in `transform/anywaye_resource_*`
-    # below is what exempts a resource attribute WITHOUT exempting the
-    # measurement of the same name.
-    #
-    # `tests/canary_test.sh` asserts both halves: a resource `tenant_id` reaches
-    # the exporter, and a data-point `tenant_id` does not. That pair is the
-    # reason this is written down — the canary test found the gap by failing,
-    # and the first version of this config had no `ignored_keys` at all.
-    #
-    # `anywaye.stashed.*` MUST be here, and this line is load-bearing in a way
-    # that is invisible until a trace is read back. Those two names are the
-    # carrier the stash writes and the restore reads; a name this processor
-    # does not exempt is a name it DELETES. So with the stash running and the
-    # redaction processor omitting this pair, the sequence is: stash writes
-    # `anywaye.stashed.tenant_id` — redaction deletes it — restore reads nothing
-    # and puts `tenant_id` back from an empty source. Every trace then arrives
-    # with no `tenant_id` and no `account_id` on its resource, silently, while
-    # the metrics pipeline keeps both, because the metrics processor is the one
-    # that had the entry.
-    #
-    # That is not hypothetical: it is what this packet shipped. The three
-    # processors are copies of one idea, and the metrics copy had the entry
-    # while the traces and logs copies did not — so the fleet's per-tenant
-    # trace and log views were empty and only the metric view worked. Found by
-    # running the stack and reading a span back out of Tempo, not by reading
-    # this file. `tests/validate.sh` now asserts the three agree.
     ignored_keys:
       - service.name
       - service.version
@@ -221,10 +42,6 @@ processors:
       - messaging.operation
       - otel.status_code
       - error.type
-      # The LLM half, from core's fleet-wide redaction allowlist. Token
-      # COUNTS, model id, latency and finish reason — every entry is a fact
-      # about how a call was served. The prompt is a fact about what the
-      # caller said, and that is the line.
       - llm.model
       - llm.provider
       - llm.tokens_in
@@ -235,35 +52,14 @@ processors:
       - llm.candidates_tried
       - llm.breaker_state
     blocked_values:
-      # A JWT. Nobody allowlists a key for a JWT, so this only ever fires on
-      # an allowlisted key carrying one by accident.
       - "eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}"
-      # `sk-` prefixed provider keys, and the Anthropic shape.
       - "sk-[A-Za-z0-9_-]{16,}"
       - "sk-ant-[A-Za-z0-9_-]{16,}"
-      # `Bearer <token>` if a header ever reaches a span attribute.
       - "[Bb]earer[ ]+[A-Za-z0-9._-]{16,}"
-    # `info` counts what was removed; `debug` also names the removed keys.
-    # `debug` is the canary test's setting and is the right one while you are
-    # working out why a span is missing an attribute. It is not the default
-    # because a list of removed key NAMES is still a list you did not choose
-    # to publish.
     summary: ${env:KIT_OTEL_REDACTION_SUMMARY}
 
   redaction/anywaye_logs:
     allow_all_keys: false
-    # Same resource exemption as the traces processor, for the same reason. A
-    # log record with no `service.name` on its resource is a record no label can
-    # be built from, and the crash layer is exactly the signal where "which
-    # service died" is the only question being asked. `tenant_id` and
-    # `account_id` go through the stash/restore pair for the same reason as on
-    # traces: one flat `ignored_keys` list cannot exempt a resource without also
-    # exempting the measurement.
-    #
-    # `anywaye.stashed.*` here for the same reason as on traces, and the failure
-    # mode is the same: without them the redaction processor deletes the
-    # carrier the restore is about to read, so no log record arrives with
-    # `tenant_id` on its resource and the per-tenant log view is empty.
     ignored_keys:
       - service.name
       - service.version
@@ -288,26 +84,6 @@ processors:
 
   redaction/anywaye_metrics:
     allow_all_keys: false
-    # THE RESOURCE EXEMPTION IS THE WHOLE POINT ON THIS SIGNAL, and it is worth
-    # reading twice. core's metrics schema is not being pedantic when it requires
-    # `tenant_id` on the RESOURCE and prohibits it on the measurement: resource
-    # attributes are not part of the set the 2000-combination cap counts, so
-    # they are exempt from it and they survive on the overflow point. A
-    # per-tenant total therefore stays answerable after the measurement has
-    # folded — which is the only reason a per-tenant breakdown is worth having.
-    #
-    # Strip the resource attributes and that mechanism is gone, silently, and
-    # the dashboard keeps rendering.
-    #
-    # `anywaye.stashed.*` is the only `ignored_keys` entry that is not a real
-    # anywaye attribute, and it exists because of the asymmetry named above: the
-    # stash/restore pair moves `tenant_id` under a private name, the redaction
-    # processor is told to ignore the private name, and the restore puts
-    # `tenant_id` back on the RESOURCE only. Verified against the pinned image
-    # rather than reasoned about, because "the processor visits resource
-    # attributes and the data-point attributes with the same rule" is not
-    # something to take on faith when the whole cardinality argument depends on
-    # the difference.
     ignored_keys:
       - service.name
       - service.version
@@ -319,17 +95,6 @@ processors:
       - telemetry.sdk.version
       - anywaye.stashed.tenant_id
       - anywaye.stashed.account_id
-    # The MEASUREMENT dimensions, and nothing else. This list is what core's
-    # 2000-combination argument turns on: every entry is bounded by an enum,
-    # a length cap or a small range, so the product of the cardinalities is a
-    # budget a reviewer can do in their head.
-    #
-    # `tenant_id` is deliberately absent. It is not on this list because
-    # core's metrics schema names it in a `not`, and it is a RESOURCE
-    # attribute instead — attached once per process, exempt from the cap, and
-    # still queryable on the overflow point, which is what makes a per-tenant
-    # total answerable after the measurement has folded. The gate asserts that
-    # no resource name appears here.
     allowed_keys:
       - http.request.method
       - http.route
@@ -338,42 +103,10 @@ processors:
       - db.operation
       - messaging.system
       - error.type
-      # `otel.status_code`, put back by `transform/anywaye_metrics` from the
-      # connector's `status.code` and NOT by any decision to widen this list.
-      # core's metrics schema does not name it, which is a gap in core and a
-      # DECISION NEEDED in kit's report; core's TRACES schema does allow it, and
-      # dropping it is what took the error predicate out of the metrics.
       - otel.status_code
     blocked_values: []
     summary: ${env:KIT_OTEL_REDACTION_SUMMARY}
 
-  # THE RESOURCE / MEASUREMENT SPLIT, AND WHY IT NEEDS TWO PROCESSORS.
-  #
-  # core's metrics schema puts `tenant_id` in BOTH lists with opposite meanings:
-  # PROHIBITED as a measurement attribute, REQUIRED on the resource. The reason
-  # is mechanical rather than stylistic — resource attributes are not part of
-  # the set OpenTelemetry's 2000-combination cap counts, so they are exempt from
-  # it and they survive on the overflow point. A per-tenant total therefore
-  # stays answerable after the measurement has folded. Move identity onto the
-  # measurement and you get a dashboard whose total looks right and whose
-  # breakdown silently undercounts, with no error anywhere.
-  #
-  # The redaction processor cannot express that split. `allowed_keys` and
-  # `ignored_keys` are both flat lists, applied to resource and measurement
-  # attributes by the same rule — verified against the pinned image, not assumed,
-  # because this is the exact place an assumption would be invisible. So
-  # `ignored_keys: [tenant_id]` would exempt the resource AND the data point, and
-  # the data point is the thing the schema exists to prohibit.
-  #
-  # The fix is a stash and a restore. Before redaction, copy the resource
-  # `tenant_id` to a private name; exempt the private name; after redaction, put
-  # it back on the resource. The data point never carries the private name, so it
-  # is redacted, and the resource is restored afterwards so the exemption
-  # survives to the exporter.
-  #
-  # Order is load-bearing in both directions: the stash MUST come before the
-  # redaction processor or there is nothing left to stash, and the restore MUST
-  # come after it or the private name is what gets exported instead.
   transform/anywaye_resource_stash:
     error_mode: ignore
     trace_statements:
@@ -440,29 +173,6 @@ processors:
             where attributes["anywaye.stashed.account_id"] != nil
           - 'delete_key(attributes, "anywaye.stashed.account_id")'
 
-  # SPAN EVENTS ARE NOT ATTRIBUTES, and the redaction processor does not reach
-  # them.
-  #
-  # This is the one place the allowlist is genuinely not enough, and it was
-  # found by the canary test rather than by reading the processor's docs. The
-  # `redaction` processor is specified over "span, log, and metric datapoint
-  # attributes"; a span EVENT carries its own attribute map, at a different
-  # depth, which the processor does not visit. So an SDK still writing the
-  # DEPRECATED `exception` span event — and a service migrating off it will for
-  # months — ships `exception.message` and `exception.stacktrace` straight
-  # through a boundary that has them nowhere on its allowlist.
-  #
-  # The canary test's `exception.message` and `exception.stacktrace` cases both
-  # failed on the first run for exactly this reason, and this processor is the
-  # fix. `spanevent` is the OTTL context name — probed against the pinned image
-  # rather than guessed, because `span_event` and indexing `events[0]` are both
-  # rejected by the parser and the error names the valid paths.
-  #
-  # Note what is NOT deleted: `exception.type`, the exception's CLASS. It is
-  # bounded text with no caller content in it, and it is the difference between
-  # "something threw" and "something threw a ProviderAuthError". The migration
-  # this implements moves the RECORD to logs; it does not make the old span
-  # event useless, it makes the message in it unshippable.
   transform/anywaye_span_events:
     error_mode: ignore
     trace_statements:
@@ -471,141 +181,19 @@ processors:
           - 'delete_key(attributes, "exception.message")'
           - 'delete_key(attributes, "exception.stacktrace")'
 
-  # Derive-then-allowlist, and the order is the point. Anything this processor
-  # puts on the record has to be a name core's log schema allows, or the
-  # redaction processor immediately after it drops the thing this one just
-  # computed. Running it the other way round produces a pipeline that looks
-  # like it derives the severity and does not.
-  #
-  # It exists for the crash layer, where the input is a syslog line and not an
-  # SDK: without it a panic arrives with no `log.severity` and no `service.name`,
-  # and a log store with no label on a record is a log store nobody can filter.
-  # `error_mode: ignore` because a statement that cannot apply to a record must
-  # not take the record with it: a crash line with no severity_text is still a
-  # crash, and losing it to a type error is the opposite of a crash layer.
-  # THE METRICS SIGNAL'S PREDICATE, AND IT HAD TO BE PUT BACK BY HAND.
-  #
-  # PLAN.md §7b is unambiguous: "the predicate for 'this is an error' is span
-  # status Error, not error.type", and the fleet dashboard filters on it. The
-  # `spanmetrics` connector projects a span's status onto a metric datapoint
-  # attribute called `status_code` — and that attribute is on NOBODY's
-  # allowlist, so `redaction/anywaye_metrics` deleted it, and every panel
-  # filtering on `status_code="STATUS_CODE_ERROR"` returned nothing.
-  #
-  # That is the whole of the finding: the redaction boundary, working exactly as
-  # derived from core, silently removes the one dimension the error view is
-  # built on. It was found by running the stack and querying it, not by reading
-  # the config.
-  #
-  # core's TRACES schema allows `otel.status_code` ("mirrored as an attribute so
-  # a log-indexed query can filter on it"). So this renames the connector's
-  # `status_code` onto a name core already blesses, and the dashboards filter on
-  # that. Renaming rather than allowlisting is deliberate: allowlisting
-  # `status_code` would put a vendor-specific name in front of every fleet
-  # query, and the rename is one line a service's own dashboards inherit for
-  # free.
-  #
-  # **core's metrics schema does not name this attribute at all.** That is a
-  # gap in core, not a choice here, and it is raised as a DECISION NEEDED in
-  # kit's report: `metrics.schema.json`'s `measurementAttributes` should carry
-  # `otel.status_code`, because the spanmetrics connector is how this fleet gets
-  # its metrics and the status predicate has to live on a measurement
-  # somewhere.
   transform/anywaye_metrics:
     error_mode: ignore
     metric_statements:
       - context: datapoint
         statements:
-          # `status.code`, DOTTED — which is what the connector actually emits,
-          # verified by capturing its output through a `file` exporter rather
-          # than by reading its README. The first version of this transform
-          # looked for `status_code`, matched nothing, and the error view stayed
-          # empty: a transform that silently does nothing is the same shape of
-          # failure as a redaction processor that silently does too much.
           - 'set(attributes["otel.status_code"], attributes["status.code"]) where attributes["status.code"] != nil'
           - 'delete_key(attributes, "status.code")'
 
-  # -------------------------------------------------------------------------
-  # THE HIGH-CARDINALITY DIMENSIONS, DROPPED AT INGEST BY NAME.
-  #
-  # The shape this ports is the study clone's `signozspanmetrics/delta`
-  # (refs/signoz/.devenv/docker/signoz-otel-collector/otel-collector-config.yaml
-  # :29-72), and the SHAPE is the point, not the particular names: that config
-  # gives its span-metrics processor an explicit `dimensions:` ALLOWLIST — twelve
-  # names — and everything not on it never becomes a label. Cost is paid at
-  # STORAGE only for what a human chose to keep.
-  #
-  # So this collector has always been drop-by-default too, because
-  # `redaction/anywaye_metrics` is `allow_all_keys: false` with seven bounded
-  # `allowed_keys`. What it did not have is the DENY SET written out. That is not
-  # the same property, for a reason this file has already been bitten by twice: a
-  # filter that works by omission is a filter whose coverage is invisible, and a
-  # transform that silently deletes nothing is indistinguishable from one that
-  # works — see the `status.code` and the `IsMatch(name, "\\.calls$")` notes
-  # below, both of which shipped wired in, and both of which did nothing at all.
-  #
-  # Naming the drop is what makes it checkable, and what makes a future widening
-  # deliberate: a name added here, or to `spanmetrics.dimensions`, or to
-  # `redaction/anywaye_metrics.allowed_keys`, is now a line somebody read.
-  #
-  # WHY DATAPOINT CONTEXT AND NOT THE RESOURCE, which is the subtle bit. In this
-  # collector `tenant_id` is stashed onto the RESOURCE and restored onto the
-  # RESOURCE, deliberately: resource attributes sit outside the
-  # 2000-combination cap and survive on the overflow point, which is what keeps a
-  # per-tenant total answerable after the measurement has folded. `context:
-  # datapoint` does not visit the resource, so this deletes the DATA POINT's
-  # `tenant_id` and leaves the resource's alone. Deleting it everywhere would
-  # undo the mechanism the stash/restore pair exists to provide.
-  #
-  # `tenant_id` and `account_id` are the two this exists for. They are exactly
-  # the attributes the tenancy boundary must NOT become a metric label: a
-  # per-tenant series is a per-customer line item in a time-series database, and
-  # the whole reason `account_id` is a RESOURCE attribute is that the fleet can
-  # still answer "how much did account N send this month" without minting one
-  # series per account.
-  #
-  # THIRTEEN names plus EIGHT canonical twins, and the twins are not padding. A
-  # `delete_key` on a name no producer emits is a no-op wearing the costume of a
-  # working control, so where the fleet's spelling and OpenTelemetry's semantic
-  # convention name the same thing, both are listed. EIGHT and not seven, because
-  # the `error.message` line below contributes TWO twins — `exception.message`
-  # and `exception.stacktrace` — and thirteen plus eight is the twenty-one
-  # `delete_key` statements this block actually carries:
-  #
-  #     tenant_id  account_id  user_id        request_id   trace_id   span_id
-  #     session_id message_id  email          error.message
-  #     error.stacktrace                     url.full     url.path
-  #
-  #   user_id             -> user.id               (the OTel name)
-  #   session_id          -> session.id
-  #   message_id          -> messaging.message.id
-  #   email               -> user.email
-  #   error.message       -> exception.message      (and exception.stacktrace)
-  #   url.full            -> http.url              (the pre-1.20 spelling)
-  #   url.path            -> http.target
-  #
-  # `url.full` and `url.path` are here on their own merits and not only as twins:
-  # a full URL carries the query string, and a query string is whatever the caller
-  # put in it. `http.route` is deliberately NOT on this list and stays on the
-  # metrics allowlist — it is the template, it is bounded, and it is the
-  # dimension that makes a fleet error panel readable.
-  #
-  # IT IS NOT THE ONLY LINE, and it is not being trusted as one. The three
-  # `redaction/*` processors already drop every one of these names by omission,
-  # and the `spanmetrics` connector sits at the END of the traces pipeline, so it
-  # only ever sees spans `redaction/anywaye_traces` has already emptied. This
-  # transform is the explicit, legible statement of a property the allowlist also
-  # provides, plus the coverage the allowlist cannot express: the OTel twins,
-  # which are on no schema here at all, and would be added to one by a future
-  # core change with nobody reading this file.
-  # -------------------------------------------------------------------------
   transform/anywaye_metrics_ingest_drop:
     error_mode: ignore
     metric_statements:
       - context: datapoint
         statements:
-          # Identity — and the first two are a tenancy boundary rather than a
-          # convenience.
           - 'delete_key(attributes, "tenant_id")'
           - 'delete_key(attributes, "account_id")'
           - 'delete_key(attributes, "user_id")'
@@ -614,92 +202,25 @@ processors:
           - 'delete_key(attributes, "email")'
           - 'delete_key(attributes, "session_id")'
           - 'delete_key(attributes, "session.id")'
-          # Per-request / per-message identity. A dimension that is unique per
-          # request is not a dimension; it is the series count multiplied by the
-          # request count.
           - 'delete_key(attributes, "request_id")'
           - 'delete_key(attributes, "trace_id")'
           - 'delete_key(attributes, "span_id")'
           - 'delete_key(attributes, "message_id")'
           - 'delete_key(attributes, "messaging.message.id")'
-          # Content-shaped. `exception.message` is a stack trace, and on muse a
-          # path straight to a prompt — the same reason `error.message` and
-          # `error.stacktrace` are on the span-event transform's delete list
-          # above. On a MEASUREMENT it is worse than on a span: a span is looked
-          # up by its own id, and a series is aggregated over everything sharing
-          # its labels.
           - 'delete_key(attributes, "error.message")'
           - 'delete_key(attributes, "error.stacktrace")'
           - 'delete_key(attributes, "exception.message")'
           - 'delete_key(attributes, "exception.stacktrace")'
-          # The URL and its pre-1.20 spellings. A query string is caller content
-          # by another route, which is the sentence this file keeps saying about
-          # a different attribute.
           - 'delete_key(attributes, "url.full")'
           - 'delete_key(attributes, "url.path")'
           - 'delete_key(attributes, "http.url")'
           - 'delete_key(attributes, "http.target")'
 
-  # THE REDACTION PROCESSOR'S OWN DIAGNOSTIC ATTRIBUTES, removed AFTER it runs.
-  #
-  # The processor adds `redaction.redacted.count`, `redaction.redacted.keys` and
-  # `redaction.ignored.count` as a receipt for what it removed. They are useful
-  # and deliberate — `KIT_OTEL_REDACTION_SUMMARY=debug` is how the canary test
-  # proves removal happened — and they MUST NOT become metric dimensions:
-  #
-  #   * a `redaction_redacted_count` label is a cardinality axis nobody queries;
-  #   * it changes value whenever an allowlist is edited, so every dashboard's
-  #     history breaks on a config change.
-  #
-  # Observed in the first end-to-end run, on every series in Mimir.
-  #
-  # AFTER, and that is the whole point. These attributes are created BY the
-  # redaction processor, so deleting them before it runs deletes nothing — the
-  # first version of this config put these three statements in the
-  # pre-redaction transform and the labels came through unchanged, which is
-  # exactly the kind of thing a comment can prevent and a test cannot.
   transform/anywaye_metrics_labels:
     error_mode: ignore
     metric_statements:
-      # THE `_total` SUFFIX, and its absence is a warning on every panel.
-      #
-      # Mimir's OTLP ingestion stores the metric under the name the producer
-      # sent it, with no `_total` added, so a `rate()` over it returns a correct
-      # number and a PromQL warning: "metric might not be a counter, name does
-      # not end in _total". Every panel in Grafana carries that warning banner,
-      # and a fleet that learns to ignore the warning banner is a fleet that
-      # ignores the one that matters.
-      #
-      # The match is on the trailing `calls`, not on a hardcoded name, so the
-      # rule survives a namespace change in .env: a metric called
-      # `<namespace>.calls` is a counter, and `_total` is what Prometheus
-      # reserves for counters.
       - context: metric
         statements:
-          # `Concat`'s second argument is the DELIMITER, not a prefix — the
-          # first version passed `":"` and produced a metric called
-          # `anywaye_calls:_total`, which is worse than no suffix at all because
-          # it looks deliberate.
-          #
-          # AND THE ESCAPING IS THE WHOLE STORY. The pattern used to read
-          # `IsMatch(name, "\\.calls$")` — inside a YAML SINGLE-QUOTED scalar,
-          # where a backslash is not an escape character, so OTTL received a
-          # regex of `\\.calls$`: a literal BACKSLASH followed by any character
-          # followed by `calls`. The connector emits `anywaye.calls`, which that
-          # does not match, so the rename never fired on any metric, ever.
-          #
-          # This processor was wired into the metrics pipeline and documented at
-          # length, and every dashboard panel queries `anywaye_calls_total` (Mimir
-          # mangles the dot to an underscore on OTLP ingestion), so every panel
-          # on both dashboards rendered "No data" against a stack that was
-          # working perfectly. Found by asking Mimir what series it actually
-          # held rather than by reading this file.
-          #
-          # The fix avoids escapes entirely rather than correcting them, because
-          # a single-quoted YAML scalar is the wrong place to carry one: the
-          # character class matches a leading dot or underscore, so the rule
-          # survives whichever separator the connector or the store uses, and
-          # there is no layer where the escaping could be counted wrong.
           - 'set(name, Concat([name, "_total"], "")) where IsMatch(name, "(^|[._])calls$")'
       - context: datapoint
         statements:
@@ -713,20 +234,10 @@ processors:
       - context: log
         statements:
           - 'set(attributes["log.severity"], severity_text) where severity_text != nil'
-          # The class is a bounded snake_case token, never a message. A value
-          # that does not match core's shape is DELETED rather than shipped:
-          # `error.type` is the drill-down dimension under a service filter,
-          # and a free string in that field is the cardinality bomb core's
-          # metrics schema exists to prevent.
           - >-
             delete_key(attributes, "error.type")
             where attributes["error.type"] != nil
             and not IsMatch(attributes["error.type"], "^[a-z][a-z0-9]*(_[a-z0-9]+)*$")
-          # syslog's own fields — `syslog.app_name`, `syslog.facility.code`,
-          # `net.peer.name` and the rest — are not on core's log allowlist, and
-          # the redaction processor is about to drop every one of them. Promote
-          # the one that identifies the process FIRST, so a crash is
-          # attributable to a service; lose the rest deliberately.
           - >-
             set(resource.attributes["service.name"], attributes["syslog.app_name"])
             where resource.attributes["service.name"] == nil
@@ -739,69 +250,27 @@ processors:
     send_batch_size: ${env:KIT_OTEL_BATCH_SIZE}
 
 connectors:
-  # Where the metrics come from. Not from a service's own meter: one
-  # implementation of one histogram that every service's spans feed, which is
-  # what makes "one place to see all errors" a single query rather than six
-  # dashboards that have to be compared by eye.
-  #
-  # It sits at the END of the traces pipeline, so the spans it has already
-  # been through `redaction/anywaye_traces`. A dimension the redaction
-  # processor stripped produces a metric whose label is permanently empty —
-  # a column that looks like "no traffic" and is really "your filter ran
-  # first" — so every dimension below is asserted to be an allowed key.
   spanmetrics:
     namespace: ${env:KIT_OTEL_METRIC_NAMESPACE}
     histogram:
       explicit:
-        # A dev stack, so a short, readable ladder. The default OTel buckets
-        # top out at 10s, which is nine orders of magnitude finer than a local
-        # request and produces a histogram nobody can read.
         buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2.5s, 5s, 10s]
     dimensions:
-      # Every one of these is a bounded dimension core's TRACE allowlist keeps,
-      # which the gate asserts — a dimension the redaction processor has
-      # already stripped is a metric label that is permanently empty, and a
-      # column that looks like "no traffic" and is really "your filter ran
-      # first".
-      #
-      # NOT `http.response.status_code`. It is a legal trace attribute and a
-      # legal metric attribute, but it is 500 values on a measurement, and
-      # core's metrics schema is deliberate that the metric signal carries the
-      # CLASS where the trace signal carries the code. The class is not
-      # derivable here either: the connector reads span attributes, and asking
-      # a span to carry a metric-only name would mean adding to the trace
-      # allowlist to serve a metric — which is the wrong direction.
-      #
-      # The error predicate does not need it. `spanmetrics` already emits a
-      # `status_code` label carrying `STATUS_CODE_ERROR`, and §7b's answer is
-      # that THIS is the predicate, filtered on before any error.type
-      # breakdown. `error.type` below is the drill-down inside a service, and
-      # it is ABSENT on success because the connector only adds a dimension
-      # label when the attribute is present — so "absent" is the load-bearing
-      # "this was not an error".
       - name: http.route
       - name: http.request.method
       - name: db.system
       - name: messaging.system
       - name: error.type
-    # The migration PLAN.md §7b names: the `exception` span-event convention
-    # is Deprecated in favour of an exception log record, and this counter is
-    # the deprecated form. It stays off and the record goes to Loki instead.
     events:
       enabled: false
     metrics_flush_interval: ${env:KIT_OTEL_METRICS_FLUSH_INTERVAL}
     aggregation_temporality: AGGREGATION_TEMPORALITY_CUMULATIVE
 
 exporters:
-  # Nothing here can reach a network that is not the compose network, and
-  # every address comes from an environment variable. Point one of them
-  # somewhere else and the shipped stack is bypassed rather than extended —
-  # which is the supported way for a self-hoster to bring their own.
   otlp/tempo:
     endpoint: ${env:KIT_TEMPO_OTLP_ENDPOINT}
     tls:
       insecure: ${env:KIT_OTEL_TLS_INSECURE}
-    # OFF, explicitly. See STRICTNESS NOTES.
     sending_queue:
       enabled: false
     retry_on_failure:
@@ -810,13 +279,6 @@ exporters:
     # observability tool, which is the worst possible source of one.
     timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
 
-  # THE SINGLE-PANE BACKEND. Traces, logs and the derived span metrics all go
-  # here, because ClickStack's whole point is that the three signals are one
-  # query apart. The redaction boundary above has ALREADY run by the time this
-  # exporter is reached — this is an exporter on the same pipelines as Tempo,
-  # not an alternative intake — so what ClickHouse stores is what the
-  # allowlist decided should leave the process, and `tests/canary_test.sh`
-  # proves it by capturing what this exporter would hand over.
   otlp/clickstack:
     endpoint: ${env:KIT_CLICKSTACK_OTLP_ENDPOINT}
     tls:
@@ -827,12 +289,6 @@ exporters:
       enabled: false
     timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
 
-  # Loki takes OTLP over HTTP on its own port, and it has no gRPC listener at
-  # all: a gRPC exporter pointed at `loki:4317` gets `connection refused` on
-  # every export, which is a loud failure and an easy one. `endpoint` is the
-  # base and the exporter appends `/v1/logs`, so the configured value ends in
-  # `/otlp` and not `/otlp/v1/logs` — writing the full path produces a doubled
-  # suffix and a 404 that looks like a Loki problem.
   otlphttp/loki:
     endpoint: ${env:KIT_LOKI_OTLP_ENDPOINT}
     sending_queue:
@@ -841,46 +297,11 @@ exporters:
       enabled: false
     timeout: ${env:KIT_OTEL_EXPORT_TIMEOUT}
 
-  # THE METRICS STORE IS BACK, AND IT IS NOT MIMIR. The history, because the
-  # note this replaces was a decision someone will otherwise undo blind:
-  #
-  # The old metrics store (Mimir) cost 130 seconds of readiness budget per cold
-  # start and 384m of memory — against a 180s deadline for the whole stack — for
-  # a fleet that did not have the series to put in it, and it was removed rather
-  # than half-wired. For a while the metrics pipeline ran on `debug` alone: this
-  # process's own stdout, which kept the allowlist EXERCISED on real derived
-  # metrics while storing none of them.
-  #
-  # ClickStack is the store that came back, and it is a different shape: one
-  # container (dev profile `clickstack`) that takes all three signals, so the
-  # span metrics land next to the traces they were derived from instead of in a
-  # fourth store with its own datasource. It arrives through the documented
-  # three edits, and all three are in this tree: the `otlp/clickstack` exporter
-  # above, the metrics pipeline's `exporters:` list below, and the
-  # `clickstack` service plus `KIT_CLICKSTACK_OTLP_ENDPOINT` in the compose
-  # file. With the profile OFF the exporter dials a dead hostname — the same
-  # accepted silence as Tempo's absence, and the reason sending_queue and
-  # retry_on_failure stay OFF.
-  #
-  # `debug` STAYS on the pipeline. The local escape hatch is how a developer
-  # sees a span without opening any UI, and it is what keeps the metrics
-  # pipeline observable when the clickstack profile is off.
 
-  # The local escape hatch, and the reason a developer can see a span
-  # without opening Grafana. It writes to this process's stdout on the machine
-  # already running it and cannot reach the network. `normal` rather than
-  # `detailed` because this is a terminal, not a reader.
   debug:
     verbosity: ${env:KIT_OTEL_DEBUG_VERBOSITY}
 
 extensions:
-  # A real health signal, and the gate asserts it exists. The compose
-  # healthcheck hits this endpoint, so `up --wait` is waiting for the
-  # pipelines to be wired rather than for a port to accept. Note what it does
-  # NOT check: none of the three exporters. A collector whose Tempo is down
-  # is a collector that has lost spans, not one that is unhealthy, and a
-  # health check that failed on it would take the telemetry of every service
-  # down with it — which is the opposite of degrading honestly.
   health_check:
     endpoint: ${env:KIT_OTEL_HEALTH_ENDPOINT}
 
@@ -895,13 +316,6 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      # `transform/anywaye_span_events` before the redaction processor and not
-      # after: the event attributes are outside the processor's reach, so this
-      # has to happen whether or not the allowlist later decides anything.
-      #
-      # The stash/restore pair brackets the redaction processor for the reason
-      # given where it is defined: a flat `ignored_keys` cannot exempt
-      # `tenant_id` on the resource without also exempting it on the span.
       processors:
         - memory_limiter
         - transform/anywaye_span_events
@@ -909,54 +323,23 @@ service:
         - redaction/anywaye_traces
         - transform/anywaye_resource_restore
         - batch
-      # spanmetrics is an exporter here and a receiver in the metrics pipeline
-      # below, which is what a connector is. Tempo, ClickStack and the local
-      # debug.
       exporters: [spanmetrics, otlp/tempo, otlp/clickstack, debug]
 
     metrics:
-      # `spanmetrics` is in here as a receiver: this is where the fleet's
-      # error rate becomes a query instead of a per-service number.
       receivers: [otlp, spanmetrics]
-      # On THIS signal the stash/restore pair is the whole story: it is the only
-      # thing exempting `tenant_id` on the resource without exempting it on the
-      # data point, which is the cardinality trap core's metrics schema exists
-      # to close.
-      # transform BEFORE redaction, for the same reason as the logs pipeline:
-      # derive the attributes the allowlist is about to judge, then let it judge.
       processors:
         - memory_limiter
         - transform/anywaye_metrics
-        # The high-cardinality deny set, BEFORE anything else in this pipeline
-        # sees a datapoint. `redaction/anywaye_metrics` below drops the same
-        # names by omission and is the load-bearing line; this one makes the
-        # drop explicit, names it, and covers the OpenTelemetry spellings core's
-        # schema has never heard of. Order relative to the redaction processor
-        # is therefore not load-bearing — both run before `batch`, therefore
-        # before every exporter, and that IS load-bearing.
         - transform/anywaye_metrics_ingest_drop
         - transform/anywaye_resource_stash
         - redaction/anywaye_metrics
         - transform/anywaye_metrics_labels
         - transform/anywaye_resource_restore
         - batch
-      # ClickStack is the store; see the note above the `debug` exporter for
-      # why it is this and not Mimir, and why `debug` is still on this list.
       exporters: [otlp/clickstack, debug]
 
     logs:
-      # otlp for an SDK's own records — including the exception log record
-      # that replaced the deprecated span event — and syslog for every
-      # container's stderr, which is how a panic arrives with no SDK at all.
       receivers: [otlp, syslog/crash]
-      # transform BEFORE redaction: derive the allowed attributes, then let
-      # the allowlist decide what survives. The other way round computes a
-      # severity and then immediately drops it.
-      #
-      # `anywaye_resource_stash` is here for the same reason as on the other two
-      # signals, and the crash layer is where it matters most: a log record with
-      # no service label is a record nothing can be filtered by, and a metric
-      # with a tenant on the data point is a cardinality bomb.
       processors:
         - memory_limiter
         - transform/anywaye_logs

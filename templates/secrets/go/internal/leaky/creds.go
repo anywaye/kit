@@ -1,31 +1,3 @@
-// Package leaky is a DELIBERATELY DEFECTIVE credential-bearing package.
-//
-//	DO NOT COPY ANYTHING IN HERE INTO A SERVICE.
-//
-// It exists for one reason: the harness's detectors have to be shown failing, or
-// they are assertions about a counter-example nobody can see. Every type below
-// carries exactly one of the five defects the canary contract names, so a
-// detector that stops working shows up as a red vector rather than as a green
-// build that has quietly stopped testing anything.
-//
-// It lives under `internal/`, so Go's own import rules make it unreachable
-// from outside this module. A service that copies the template gets a package it
-// cannot import and whose name says why it is there.
-//
-// WHAT IS WRONG WITH EACH TYPE
-//
-//	Session              vector 1 + 2 — an exported Token field with no
-//	                     `json:"-"`, so it reaches a log line under `%+v` and
-//	                     reaches the wire under `json.Marshal`.
-//	MintedSession        vector 4 — marshals a `token` key even when the token
-//	                     is empty, which teaches every consumer to look for a
-//	                     key that is always there.
-//	AuthError            vector 3 — `Error()` interpolates the credential, and
-//	                     the wrapping error delegates to it, so formatting the
-//	                     OUTER error is enough to print the secret.
-//	PrintableSession     vector 5 — a `String()` method on a credential-bearing
-//	                     type, which is what the type-coverage analyzer exists
-//	                     to refuse.
 package leaky
 
 import (
@@ -44,7 +16,6 @@ type Token struct {
 // defect there is: a struct field someone added without a json tag.
 type Session struct {
 	Subject string `json:"subject"`
-	Token   Token  // <- no `json:"-"`. This is the bug.
 }
 
 // Print returns the session the way a careless log line would.

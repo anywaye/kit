@@ -1,4 +1,3 @@
 #!/usr/bin/env bash
-# wrapper: bin/publish-sandbox --help  -> bin/publish --sandbox --help
 set -euo pipefail
 exec "$(dirname "$0")/publish" --sandbox "$@"

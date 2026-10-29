@@ -1,54 +1,4 @@
 ---
-# NATS with JetStream: the bus the local stack runs, on the box too.
-#
-# The local stack runs `nats:${KIT_NATS_TAG:-2.10.24-alpine}` with `-js` plus
-# the one-shot `nats-stream-init` defining stream `anywaye`; this reproduces
-# the broker half in the `data` namespace beside the Postgres Cluster and
-# Redis. (The stream half lives in install.sh step 10, not here: a manifest
-# cannot express check-then-create, and a Job object would need deleting
-# before every re-run to run again.)
-#
-# THE TAG IS A PLACEHOLDER, NOT A PIN. `NATS_IMAGE_PLACEHOLDER` is substituted
-# by install.sh step 10 with `nats:${NATS_VERSION}` in a pipe at apply time
-# (the TLS step's shape for the ACME email) — so the pin lives in exactly one
-# place and this file never carries a second opinion. A literal tag here fails
-# the gate, the way a second pin anywhere else would.
-#
-# THE TWO FIELDS, AND WHICH FILE MEANS WHAT. This file reproduces the local
-# service, but it does not reproduce its field spelling. Compose's `command:`
-# APPENDS to the image's ENTRYPOINT; Kubernetes' `command:` REPLACES it, and
-# Kubernetes' `args:` is the field that carries arguments. So the local stack's
-# `command: [-js, -sd, /data, -m, 8222]` runs `nats-server -js …` there, while
-# the same list under this file's `command:` asked the kernel to exec a binary
-# literally named `-js` — measured, on the box, as a CrashLoopBackOff whose
-# termination message was `exec: "-js": executable file not found in $PATH`.
-# The flags are `args:` below, beside a `command:` naming the binary, and the
-# comment at the Deployment spells out both semantics against the image's own
-# entrypoint. `tests/substrate_test.sh` fails the build if a `command:` in this
-# tree ever starts with a flag again.
-#
-# THE SHAPE, and each choice, mirroring the local service:
-#   `-js`            JetStream on. Without it a service that publishes and then
-#                    crashes loses the message, and the at-least-once guarantee
-#                    quietly becomes at-most-once. The gate fails a fixture
-#                    without it under the same check this file passes.
-#   `-sd /data`      file storage on the `nats-data` volume, which survives a
-#                    restart the way the local volume survives `bin/dev down`.
-#                    Memory storage would turn at-least-once back into
-#                    at-most-once on every reschedule.
-#   `-m 8222`        the monitoring port, which is what both probes read: the
-#                    local healthcheck probes /healthz on it because it answers
-#                    200 only once JetStream is up, which is a stronger signal
-#                    than a TCP connect to the client port.
-#   replicas: 1      one box, one broker. A second replica without a route is
-#                    a split brain, not capacity (the Redis manifest says the
-#                    same about its own dataset, for the same reason).
-#   ports            4222 client, 8222 monitor — the same two the local stack
-#                    publishes, unrenumbered so a client config moves unchanged.
-#
-# No secret VALUE is a literal anywhere in this file: NATS carries no
-# credentials on this substrate (no clustering, no client TLS — one box, the
-# packet's explicit non-goal), so there is nothing to reference.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -57,10 +7,6 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  # k3s's default provisioner: the box's own disk, like the Postgres Cluster's
-  # and Redis's. 5Gi is the box's disk budget for the bus, not a JetStream
-  # sizing rule — the stream is age-bounded (7d, see step 10), so the volume
-  # holds a week of fleet events and no more.
   storageClassName: local-path
   resources:
     requests:
@@ -72,8 +18,6 @@ metadata:
   name: nats
   namespace: data
 spec:
-  # Exactly one. See the header: a second replica without a route is a split
-  # brain, not capacity.
   replicas: 1
   selector:
     matchLabels:
@@ -85,48 +29,7 @@ spec:
     spec:
       containers:
         - name: nats
-          # Substituted at apply time by install.sh step 10 — never a literal
-          # tag here (see the header). Renders to nats:<NATS_VERSION>.
           image: NATS_IMAGE_PLACEHOLDER
-          # THE BINARY, then THE FLAGS — and the two fields are not the two
-          # fields the compose file spells the same way.
-          #
-          # Kubernetes `command:` REPLACES the image's ENTRYPOINT. It is NOT
-          # compose's `command:`, which APPENDS to it. Measured on the pinned
-          # tag (`docker image inspect nats:2.10.24-alpine`) the image is
-          # ENTRYPOINT ["docker-entrypoint.sh"], CMD
-          # ["nats-server","--config","/etc/nats/nats-server.conf"], and that
-          # entrypoint script prepends the binary when the first argument is a
-          # flag:
-          #
-          #     if [ "$#" -eq 0 ] || [ "${1#-}" != "$1" ]; then
-          #         set -- nats-server "$@"
-          #     fi
-          #
-          # So the compose service's flag list under `command:` runs, via the
-          # image's own entrypoint, as
-          #
-          #     nats-server -js -sd /data -m 8222
-          #
-          # and the SAME list under a Kubernetes `command:` appends to nothing:
-          # it asks the kernel to exec a binary literally named `-js`. That is
-          # what shipped, and it is what the box said — `exec: "-js":
-          # executable file not found in $PATH`, StartError, CrashLoopBackOff,
-          # and step 10's `kubectl wait` timing out on deployments/nats. So the
-          # flags live in `args:` here, which is where a container override puts
-          # ARGUMENTS — a field compose spells `command` and Kubernetes also
-          # spells `command`, which is exactly how the two got confused.
-          #
-          # `command:` is written out, naming the binary, rather than being left
-          # off to inherit the entrypoint: the manifest then says what it runs
-          # without a reader knowing the image, and it does not depend on the
-          # entrypoint script's first-argument heuristic still being there.
-          # Leaving `command:` off would also work today — the entrypoint script
-          # prepends `nats-server` for exactly this argument shape — and that is
-          # the more literal port of the compose contract. Naming the binary is
-          # the Redis manifest's precedent, which names `sh` for the same
-          # reason, and `nats-server` is on the image's PATH at
-          # /usr/local/bin (measured).
           command:
             - "nats-server"
           args:
@@ -140,10 +43,6 @@ spec:
               containerPort: 4222
             - name: monitor
               containerPort: 8222
-          # The monitor answers 200 only once the server (and JetStream) is
-          # up — the same signal the local healthcheck probes with wget.
-          # Numeric, not named: the check asserts the literal 8222, and a name
-          # would resolve through one more indirection to the same number.
           livenessProbe:
             httpGet:
               path: /healthz
@@ -157,8 +56,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            # A broker on a shared box: bounded, small, and stated as a share
-            # of the 8GB box, not as a NATS measurement.
             requests:
               memory: 128Mi
               cpu: 100m

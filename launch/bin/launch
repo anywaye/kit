@@ -1,31 +1,4 @@
 #!/usr/bin/env bash
-# The LAUNCH harness — identity + gateway + courier + parlor + billing, on kit's stack.
-#
-#   launch/bin/launch           resolve kit, generate the credentials, mint the
-#                              courier key, bring the stack up, print where to look
-#   launch/bin/launch down      stop the stack and delete its volumes (.env survives)
-#   launch/bin/launch status    what is running, and its health
-#   launch/bin/launch --check   the prerequisite checks and nothing else
-#
-# ---------------------------------------------------------------------------
-# WHAT THIS IS
-# ---------------------------------------------------------------------------
-# Kit's developer-only local bring-up for the five product services, built
-# from the source checkouts the LAUNCH_*_DIR variables name, on kit's stack,
-# with an SMTP sink a person can read. Billing is the fifth and the only one
-# that holds a credential the operator must supply (STRIPE_API_KEY and
-# STRIPE_WEBHOOK_SECRET are passed through, never generated), because a
-# processor credential in version control is a leaked credential. The topology is
-# `launch/docker-compose.launch.yml`, an override on kit's stack. See
-# `launch/README.md` for the layout, the variables, and what this is not —
-# in particular: this is NOT the customer installer
-# (`templates/substrate/install.sh`) and proves nothing about k3s, Argo,
-# ACME, GHCR or Cloudflare.
-#
-# THE TWO PHASES: the courier key does not exist until identity is up to
-# mint it, and identity will not boot without the key. So phase 1 brings up
-# postgres + identity, the key is minted from identity's own API, and phase 2
-# brings up the rest with the real key in place.
 set -euo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -36,7 +9,6 @@ cd "$KIT_ROOT"
 CHECK_ONLY=0
 DOWN_ONLY=0
 STATUS_ONLY=0
-while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK_ONLY=1; shift ;;
     down) DOWN_ONLY=1; shift ;;
@@ -57,16 +29,6 @@ die() {
 
 log() { printf '[launch] %s\n' "$1"; }
 
-# ---------------------------------------------------------------------------
-# 0. THE SIBLING CHECKOUTS — explicit paths, documented defaults.
-# ---------------------------------------------------------------------------
-# The five services are built from source, so these must be git checkouts.
-# Defaults assume the fleet layout: every service beside this kit checkout.
-# Any other layout works by exporting the variables — Website and Site are
-# never required and never consulted. The front door is PARLOR, the
-# customer-stack app; Website is the Anywaye app derived from Parlor and is
-# not a service this harness builds. BILLING is the money service and its
-# port is its OWN (3000) rather than one of the shared block's slots.
 LAUNCH_IDENTITY_DIR="${LAUNCH_IDENTITY_DIR:-$KIT_ROOT/../identity}"
 LAUNCH_GATEWAY_DIR="${LAUNCH_GATEWAY_DIR:-$KIT_ROOT/../gateway}"
 LAUNCH_COURIER_DIR="${LAUNCH_COURIER_DIR:-$KIT_ROOT/../courier}"
@@ -74,23 +36,6 @@ LAUNCH_PARLOR_DIR="${LAUNCH_PARLOR_DIR:-$KIT_ROOT/../parlor}"
 LAUNCH_BILLING_DIR="${LAUNCH_BILLING_DIR:-$KIT_ROOT/../billing}"
 export LAUNCH_IDENTITY_DIR LAUNCH_GATEWAY_DIR LAUNCH_COURIER_DIR LAUNCH_PARLOR_DIR LAUNCH_BILLING_DIR
 
-# THERE IS NO FOURTH SOURCE, and the absence is deliberate rather than an
-# omission. A `kit_ref()` reader used to sit here, reading a committed `kit.ref`
-# the way kit's own `stack_ref` does — and it was never called: this function's
-# three sources below are the whole resolution, and this worktree holds no
-# `kit.ref` for it to read. It is deleted rather than wired up, because wiring
-# it up would make the lowest-precedence source something other than "this
-# checkout", which is the documented decision the third source states: the
-# harness runs the stack it ships with, so there is no fetch, no cache, and no
-# pin that can drift from the overlay beside it. A committed pin would also be
-# a pin this repository cannot honour — kit ships none, and a service that
-# adopted `launch/` by copy would inherit a reference to a file nobody has.
-#
-# validate_pin <ref> — a sha or a tag, never a branch. The same rule kit's
-# own `bin/dev` enforces: a branch is a MOVING reference, and the stack you
-# get on Tuesday would not be the stack you reviewed on Monday. `case` and
-# not a regex, for kit's own reason: no tooling dependency in the refusal
-# path.
 validate_pin() {
   local ref="$1"
   case "$ref" in
@@ -143,18 +88,6 @@ validate_pin() {
    stack you reviewed on Monday."
 }
 
-# resolve_stack — where kit's compose tree comes from.
-#
-# THREE SOURCES, IN THIS ORDER:
-#   1. KIT_STACK_DIR in the environment: a person naming a directory for one
-#      run. Highest precedence because it is the only one typed on this run.
-#   2. LAUNCH_KIT_REF in the environment: a pin, resolved through kit's OWN
-#      `templates/bin/dev.sh live` — the snapshot, the cache key and the fetch
-#      are kit's, and a second copy of any of them here would be a second
-#      thing to keep true. The pin is validated with the rule above before
-#      kit is called, so the refusal names this harness.
-#   3. This checkout itself: the harness runs the stack it ships with, so no
-#      fetch, no cache, and no pin that can drift from the overlay beside it.
 resolve_stack() {
   if [ -n "${KIT_STACK_DIR:-}" ]; then
     [ -d "$KIT_STACK_DIR" ] ||
@@ -183,9 +116,6 @@ resolve_stack() {
   printf '%s' "$KIT_ROOT"
 }
 
-# ---------------------------------------------------------------------------
-# 1. DOCKER, asked before anything else — every path below needs it.
-# ---------------------------------------------------------------------------
 need() {
   command -v "$1" >/dev/null 2>&1 ||
     die "$2"
@@ -195,14 +125,6 @@ need docker "Docker is not installed or not on PATH: https://docs.docker.com/get
 docker compose version >/dev/null 2>&1 ||
   die "docker compose (the v2 plugin) is not available. The harness needs it for 'up --wait' and 'down'."
 
-# The compose invocation this whole script uses, in one place so the file and
-# the command cannot drift. `KIT_COMPOSE_DIR` is not optional: kit's compose
-# resolves its postgres build context and its initdb bind through it, and
-# compose resolves a relative path against the PROJECT DIRECTORY — which
-# `--project-directory "$LAUNCH_DIR"` sets to this harness's own directory.
-# Drop the variable and kit's build context resolves to `launch/postgres`, a
-# directory that does not exist, which Docker creates as an empty one. The
-# cluster then comes up healthy holding none of the fleet's databases.
 compose() {
   KIT_COMPOSE_DIR="$KIT_STACK_DIR/templates/compose" docker compose \
     --project-directory "$LAUNCH_DIR" \
@@ -211,27 +133,6 @@ compose() {
     "$@"
 }
 
-# ---------------------------------------------------------------------------
-# 1a. THE DOWN PATH — stop the stack and delete its volumes.
-# ---------------------------------------------------------------------------
-# A teardown must not require the build checkouts: the siblings are needed to
-# build the images, and a `down` on a machine that has torn everything else
-# down is the one command that should still work. So this path asks only for
-# docker and the stack, and runs the teardown.
-#
-# Volumes are deleted because a stale database is a schema from a previous
-# checkout, and the next bring-up should start from a fresh cluster. The
-# generated credentials in launch/.env survive — they are the stable half,
-# and re-minting on a fresh database is the one thing that must NOT happen
-# automatically.
-#
-# THE DUMMIES, and why a teardown carries credentials that are not real: the
-# launch file marks the seam secrets `${VAR:?…}`, so with no `.env` on disk
-# (deleted, or never generated) `compose ps` fails closed — and this path then
-# reports "nothing is running" while containers are up. A teardown never
-# starts a container, so placeholders satisfy the interpolation and change
-# nothing. When `.env` exists, compose's own `.env` file supplies the real
-# values; these defaults apply only when nothing else does.
 export COURIER_SECRET_BOX_KEY="${COURIER_SECRET_BOX_KEY:-launch-down-placeholder}"
 export COURIER_TOKEN="${COURIER_TOKEN:-launch-down-placeholder}"
 export COURIER_ERROR_RELAY_TOKEN="${COURIER_ERROR_RELAY_TOKEN:-launch-down-placeholder}"
@@ -251,10 +152,6 @@ if [ "$DOWN_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# 1b. STATUS — what is running, and its health. Read-only: starts nothing,
-#     generates nothing, mints nothing.
-# ---------------------------------------------------------------------------
 if [ "$STATUS_ONLY" -eq 1 ]; then
   KIT_STACK_DIR="$(resolve_stack)" ||
     die "could not resolve kit's stack. The message is above."
@@ -263,33 +160,12 @@ if [ "$STATUS_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# 1c. THE BRING-UP'S PREREQUISITE CHECKS, before anything is fetched or built.
-# ---------------------------------------------------------------------------
-# A missing toolchain is a sentence naming the fix, not a stack that fails to
-# come up four minutes from now. `--check` is the same command with the
-# bring-up taken off the end.
 need curl "curl is used to poll /readyz from the host and to mint the courier key."
 need git "git fetches kit's stack at a pinned ref (LAUNCH_KIT_REF only; the default path needs no network)."
 need openssl "openssl generates the signing keys and the courier secrets."
 need jq "jq reads the minted courier key out of identity's response."
-# psql — THE ONE THAT ARRIVED AFTER THE BUILD. The migrations are a deploy
-# step run from the HOST (§3a below): identity's image is distroless and its
-# entrypoint is the server, so the schema is the bring-up's job, and the
-# bring-up runs identity's own `bin/migrate` against the published cluster
-# port. Identity's migrate pipes each migration's Up section into psql
-# (identity/bin/migrate:82-83), so a machine with no psql passes this
-# preflight, builds BOTH images, and then dies — measured once, for real.
-# A preflight that passes where the launch cannot succeed is the defect, and
-# the failure landing after the build is what made it expensive. The
-# companion control is in tests/launch_test.sh.
 need psql "psql is used to apply identity's migrations from the host, through identity's own bin/migrate (identity's image is distroless and migrates nothing itself). Install the PostgreSQL client — 'brew install postgresql' on macOS, or the postgresql-client package on Linux."
 
-# The sibling checkouts are required, and a missing one is a BUILD failure
-# rather than a fetch failure: the launch file's build contexts are the
-# siblings themselves. Say so before the first build, not four minutes in.
-# Website and Site are deliberately NOT in this list: neither is built,
-# and neither needs to exist.
 for sibling in "$LAUNCH_IDENTITY_DIR" "$LAUNCH_GATEWAY_DIR" "$LAUNCH_COURIER_DIR" "$LAUNCH_PARLOR_DIR" "$LAUNCH_BILLING_DIR"; do
   [ -d "$sibling/.git" ] ||
     die "$sibling is not a git checkout. The launch tier builds the five services from the directories LAUNCH_*_DIR names — check them out first, or export the variables."
@@ -310,13 +186,6 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# 1d. IS IT ALREADY UP? — asked before anything is generated.
-# ---------------------------------------------------------------------------
-# A second run that mints a second account and a second key is a run that
-# quietly forks the stack's history: the first key still works, the second is
-# the one in .env, and nobody can say which credential a given mail path used.
-# The question is asked of the daemon rather than assumed.
 if compose ps 2>/dev/null | awk 'NR>1 && NF {found=1} END {exit !found}'; then
   printf '[launch] the launch stack is already up — nothing to do\n'
   printf '[launch] parlor  http://127.0.0.1:%s\n' "${LAUNCH_PARLOR_PORT:-15083}"
@@ -325,19 +194,6 @@ if compose ps 2>/dev/null | awk 'NR>1 && NF {found=1} END {exit !found}'; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# 2. THE CREDENTIALS, generated into launch/.env — git-ignored, never committed.
-# ---------------------------------------------------------------------------
-# `.env` is read by compose automatically from the project directory, which is
-# `launch/`. Each value is written ONCE and kept stable across a teardown,
-# for the reason the launch file's header gives per value: a key that moves
-# under a browser tab turns a form the person is filling in into a 422, and
-# a secret that changes on every `up` is a secret nobody can pin.
-#
-# The one exception is COURIER_TOKEN, which is minted from identity's API
-# after identity is up (phase 2 below) — it starts as a placeholder so
-# identity's `:?` interpolation lets phase 1 boot, and is overwritten with the
-# real key before phase 2.
 ENV_FILE="$LAUNCH_DIR/.env"
 
 env_set_once() {
@@ -350,49 +206,26 @@ env_set_once() {
   log "$key: generated"
 }
 
-# SIGNUP_SIGNING_KEY — identity refuses to boot without it. base64url, no
-# padding, of exactly 32 bytes: the HMAC-SHA256 key length, and the format
-# identity's Load refuses to stretch or guess. The two `tr`s convert the
-# alphabet and strip the padding — the naive `openssl rand -base64 32` is
-# rejected by base64.RawURLEncoding.
 SIGNUP_SIGNING_KEY=$(openssl rand 32 | base64 | tr '+/' '-_' | tr -d '=') ||
   die "openssl could not generate SIGNUP_SIGNING_KEY."
 env_set_once SIGNUP_SIGNING_KEY "$SIGNUP_SIGNING_KEY"
 
-# MFA_ENCRYPTION_KEY — seals the TOTP secrets identity stores for
-# second-factor users. Without it identity BOOTS but refuses to mount the MFA
-# management routes, so a sign-in with MFA is impossible. Same shape as
-# SIGNUP_SIGNING_KEY: base64url, no padding, 32 bytes.
 MFA_ENCRYPTION_KEY=$(openssl rand 32 | base64 | tr '+/' '-_' | tr -d '=') ||
   die "openssl could not generate MFA_ENCRYPTION_KEY."
 env_set_once MFA_ENCRYPTION_KEY "$MFA_ENCRYPTION_KEY"
 
-# COURIER_SECRET_BOX_KEY — seals courier's webhook secrets. courier's own
-# runtime.exs names the mint: `openssl rand -base64 32`.
 COURIER_SECRET_BOX_KEY=$(openssl rand -base64 32) ||
   die "openssl could not generate COURIER_SECRET_BOX_KEY."
 env_set_once COURIER_SECRET_BOX_KEY "$COURIER_SECRET_BOX_KEY"
 
-# COURIER_ERROR_RELAY_TOKEN — the shared secret on courier's error-ingest
-# surface. Hex, once, stable.
 COURIER_ERROR_RELAY_TOKEN=$(openssl rand -hex 32) ||
   die "openssl could not generate COURIER_ERROR_RELAY_TOKEN."
 env_set_once COURIER_ERROR_RELAY_TOKEN "$COURIER_ERROR_RELAY_TOKEN"
 
-# COURIER_TOKEN — the A3 contract's one value, held by BOTH identity (as
-# COURIER_TOKEN) and courier (as COURIER_IDENTITY_TOKEN). It is minted from
-# identity's API in phase 2; until then a placeholder satisfies identity's
-# `:?` so phase 1 can boot. The placeholder is random, never a literal: a
-# committed placeholder is a shared secret in version control.
 COURIER_TOKEN=$(openssl rand -hex 32) ||
   die "openssl could not generate the phase-1 COURIER_TOKEN placeholder."
 env_set_once COURIER_TOKEN "$COURIER_TOKEN"
 
-# OIDC_SIGNING_KEY — generated per run and EXPORTED, not written to .env: a
-# multi-line PEM does not belong in an env file, and nothing caches it across
-# runs, so a per-run key costs nothing. An operator who wants a fixed key
-# exports one and this leaves it alone. A committed RSA private key trains
-# every reader that a PEM in this tree is unremarkable.
 if [ -z "${OIDC_SIGNING_KEY:-}" ]; then
   OIDC_SIGNING_KEY=$(openssl genrsa -traditional 2048 2>/dev/null) ||
     die "openssl could not generate an OIDC signing key."
@@ -401,26 +234,10 @@ if [ -z "${OIDC_SIGNING_KEY:-}" ]; then
   log "OIDC_SIGNING_KEY: generated (per run, exported — not in .env)"
 fi
 
-# The front door, written to .env so identity's link templates and this
-# script's own output agree on it. An operator with a different front door
-# sets LAUNCH_PARLOR_PORT (or APP_BASE_URL) in launch/.env and the compose
-# defaults pick it up.
 PARLOR_PORT="${LAUNCH_PARLOR_PORT:-15083}"
 env_set_once APP_BASE_URL "http://127.0.0.1:$PARLOR_PORT"
 
-# ---------------------------------------------------------------------------
-# 3. PHASE 1 — postgres and identity, so the key can be minted.
-# ---------------------------------------------------------------------------
-# The bring-up is two-phase because the courier key does not exist until
-# identity is up to mint it, and identity will not boot without the key.
-# Phase 1 brings up the two services the mint needs; phase 2 brings up the
-# rest with the real key in place.
 log "phase 1: postgres + identity (building from source on first run)"
-# `--build` IS NOT OPTIONAL: `compose up` builds an image ONLY when the tag
-# does not already exist, so a machine holding a stale `anywaye/identity:dev`
-# silently serves the OLD code and the launch tier's subject ("built from the
-# checkouts the LAUNCH_*_DIR variables name") is violated with no error
-# anywhere. The build cache makes the rebuild cheap after the first.
 compose up -d --wait --build postgres identity
 
 IDENTITY_PORT="${LAUNCH_IDENTITY_PORT:-15080}"
@@ -436,57 +253,17 @@ done
 [ "$identity_ready" -eq 1 ] ||
   die "identity did not become ready on 127.0.0.1:$IDENTITY_PORT/readyz in 120s. Read its logs: docker compose logs identity"
 
-# ---------------------------------------------------------------------------
-# 3a. THE MIGRATIONS — a deploy step, run from the host.
-# ---------------------------------------------------------------------------
-# identity never migrates itself: its image is distroless and its entrypoint is
-# the server, so the schema is the bring-up's job. The DSN is kit's published
-# cluster port, and the role is `identity` — the OWNER, which is what
-# `bin/migrate` connects as and the ONLY place this role appears: identity's
-# own file says nothing the running process reads gives it the owner role, and
-# that holds here too. The runtime DSN in the overlay's identity block is
-# `identity_app`, the login role, and the two are different roles on purpose —
-# Postgres exempts a table's owner from its own row-level-security policies, so
-# the pool must not be the role that owns the tables. `bin/migrate` is
-# identity's own — the same files, the same order.
 POSTGRES_PORT="${KIT_POSTGRES_PORT:-15500}"
 log "applying identity's migrations from the host"
 DATABASE_URL="postgres://identity:${KIT_POSTGRES_PASSWORD:-anywaye}@127.0.0.1:$POSTGRES_PORT/identity?sslmode=disable" \
   "$LAUNCH_IDENTITY_DIR/bin/migrate" ||
   die "identity's migrations failed. Its message is above."
 
-# ---------------------------------------------------------------------------
-# 4. MINT THE COURIER KEY, from identity's own API.
-# ---------------------------------------------------------------------------
-# The A3 contract made real: one identity-issued API key, held by both
-# services. identity's introspection endpoint lets a token caller introspect
-# ONLY ITSELF, so the seam works when one key is held by both — and two
-# distinct keys produce identity's 403 and courier's 503 with nothing in
-# either repository to explain it.
-#
-# The mint is four calls, and each is forced by the one before it:
-#   register a user (anonymous) → session (the credential) → account (the
-#   key's home) → api-key (the credential itself).
-#
-# The account belongs to the mail path and to nothing else: the key is minted
-# with the one scope the mint's non-empty requirement forces and the
-# introspection route does not need. `accounts:read` is the floor of the
-# scope vocabulary — the mint refuses an empty list, and the introspection
-# the key is actually used for is not account-scoped.
-# THE ADDRESS carries a dot in its domain because identity's email pattern
-# requires one: `owner+launch@localhost` is refused with a 422 invalid_format,
-# and the mint dies on the first call. `.local` is the conventional domain
-# for a stack that is not reachable from the internet.
 MINT_EMAIL="owner+launch@anywaye.local"
 MINT_PASSWORD=$(openssl rand -hex 24)
 
 log "minting the courier key from identity's API"
 
-# THE SIGNED TIMESTAMP, minted immediately before the register call:
-# identity's register refuses a request whose (timestamp, signature) pair does
-# not verify under SIGNUP_SIGNING_KEY — the form's bot defence, and the mint
-# is a client of the same route. The pair is a bearer credential with a
-# one-hour life, which is why it is minted here rather than at bring-up.
 timestamp_response=$(curl -sf -X POST "http://127.0.0.1:$IDENTITY_PORT/v1/signup-timestamp") ||
   die "could not mint a signup timestamp from identity."
 MINT_TIMESTAMP=$(printf '%s' "$timestamp_response" | jq -r '.timestamp // empty')
@@ -494,10 +271,6 @@ MINT_SIGNATURE=$(printf '%s' "$timestamp_response" | jq -r '.signature // empty'
 [ -n "$MINT_TIMESTAMP" ] && [ -n "$MINT_SIGNATURE" ] ||
   die "identity's signup-timestamp response carried no pair."
 
-# THE PAIR MUST AGE BEFORE IT VERIFIES: signup.MinAge is 2s — "a person needs
-# seconds to fill a form, a bot submits instantly" — and this mint is a client
-# of the same route, so the defence applies to it. The wait is the defence
-# working as designed, not a workaround around it.
 sleep 3
 
 register_response=$(curl -sf -X POST "http://127.0.0.1:$IDENTITY_PORT/v1/users" \
@@ -533,79 +306,26 @@ mint_response=$(curl -sf -X POST "http://127.0.0.1:$IDENTITY_PORT/v1/accounts/$A
 COURIER_TOKEN=$(printf '%s' "$mint_response" | jq -r '.token // empty')
 [ -n "$COURIER_TOKEN" ] || die "identity's mint response carried no token."
 
-# The real key replaces the placeholder in .env — the one value in the file
-# that is rewritten rather than kept, because it did not exist until now.
 grep -v '^COURIER_TOKEN=' "$ENV_FILE" >"$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
 printf 'COURIER_TOKEN=%s\n' "$COURIER_TOKEN" >>"$ENV_FILE"
 log "courier key: minted from identity's API and written to launch/.env"
 
-# ---------------------------------------------------------------------------
-# 5. PHASE 2 — the bus, then the one-shot, then the full stack. THREE
-#    commands and not one, because the one-shot cannot be in a wait set.
-# ---------------------------------------------------------------------------
-# Kit's `nats-stream-init` is `restart: "no"`: it creates the `anywaye`
-# JetStream stream and exits 0. A completed container is not a running one,
-# and a wait set containing one fails by the orchestrator's own accounting —
-# measured twice, two ways, on the tier this harness is derived from. So every
-# wait below names its long-running services EXPLICITLY (a blanket wait would
-# re-enlist the one-shot the day kit's stack gains another), and the
-# initializer runs bounded, once, with its real exit code required before
-# anything downstream starts. No always-running initializer sidecar: the
-# stream, once created, lives in the broker's volume, not in a container.
 log "phase 2a: NATS (the bus the stream is created on)"
-# `--build` is absent here and present in 2c, and both are deliberate: the bus
-# is a published image with nothing to build, and the four launch services in
-# 2c are this tier's subject — a stale image there is a silent wrong answer,
-# for the reason phase 1's comment gives.
 compose up -d --wait nats
 
 log "phase 2b: creating the anywaye JetStream stream (one-shot, bounded)"
-# Kit's own check-then-create (`stream info … || stream add …`): idempotent,
-# exit 0 whether the stream already exists or was just created. Attached, so a
-# failure's output is inline in this log; `--rm` so no container survives it.
-# The broker is healthy by 2a (kit's own ordering needs the same), so a
-# non-zero exit here names the initializer and nothing else.
 if ! compose run --rm nats-stream-init; then
   die "nats-stream-init failed: the anywaye JetStream stream was not created. The initializer's own output is above; identity's outbox publishes block until the stream exists."
 fi
 log "the anywaye JetStream stream exists"
 
 log "phase 2c: the full launch stack (identity and courier restart with the real key)"
-# `--build` for the reason phase 1's comment gives: the launch services are
-# this tier's subject, and a stale image is a silent wrong answer.
-# EVERY long-running service, NAMED: kit's postgres, nats, redis and
-# otel-collector (the default-profile set — tempo, loki, grafana are
-# profile-gated and were never in the blanket wait either), plus this tier's
-# mailpit, identity, gateway, courier, parlor and billing. No one-shot: it ran
-# bounded in 2b, and a wait set containing a completed container exits 1 by the
-# orchestrator's own accounting.
-#
-# BILLING'S MIGRATIONS ARE NOT A HOST STEP, and that is deliberate: billing's
-# image carries Rails' own entrypoint, which runs `db:prepare` before the
-# server, so the step the other two services need from the host is already
-# inside its container. What IS worth a word: `up --wait` returns when the
-# healthcheck passes, and healthcheck's start_period is the budget that
-# `db:prepare` gets — the first bring-up applies the schema inside the
-# container while the pod sits `starting`, and the second one finds it applied.
 compose up -d --wait --build postgres nats redis otel-collector mailpit identity gateway courier parlor billing
 
-# ---------------------------------------------------------------------------
-# 5a. COURIER'S MIGRATIONS — its own deploy step, for identity's reason.
-# ---------------------------------------------------------------------------
-# courier's release image does not migrate at boot (its CMD is the server), so
-# the schema is the bring-up's job. The release carries the command as an
-# overlay script — `bin/migrate`, which evals release.ex's migrate/0 as the
-# owner — so it executes inside the container it migrates, with the
-# container's own database environment. It is NOT `courier migrate`: the
-# release registers no such subcommand, and the attempt dies with
-# "ERROR: Unknown command migrate".
 log "applying courier's migrations"
 compose exec courier /app/bin/migrate ||
   die "courier's migrations failed. Its message is above."
 
-# ---------------------------------------------------------------------------
-# 6. WHERE TO LOOK.
-# ---------------------------------------------------------------------------
 GATEWAY_PORT="${LAUNCH_GATEWAY_PORT:-15081}"
 COURIER_PORT="${LAUNCH_COURIER_PORT:-15082}"
 MAILPIT_PORT="${KIT_MAILPIT_PORT:-15025}"

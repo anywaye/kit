@@ -48,20 +48,12 @@ __all__ = [
     "server_hop",
 ]
 
-# Bit 0 of trace-flags (§3.2.2.5.1). It is a bit in a field, not the field's
-# value: reading ``flags == 1`` instead of ``flags & 1 == 1`` is the single most
-# common trace-context bug, and it is why this is a named constant.
 SAMPLED = 0x01
 
-# A traceparent is exactly 55 characters: 2 version, 32 trace-id, 16 parent-id,
-# 2 trace-flags, and 3 dashes (§3.2.2.2).
 MIN_HEADER_LEN = 55
 
-# §3.3.1.5: "Vendors SHOULD propagate at least 512 characters of a combined
-# header." Bigger than this and we truncate whole entries.
 TRACESTATE_LIMIT = 512
 
-# §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
 TRACESTATE_ENTRY_LIMIT = 128
 
 ZERO_TRACE_ID = "0" * 32
@@ -144,19 +136,13 @@ def parse_traceparent(value: str | None) -> TraceParent | None:
         return None
 
     raw = value if isinstance(value, str) else str(value)
-    # A short header cannot hold the four fields, whatever the version (§3.2.4).
     if len(raw) < MIN_HEADER_LEN:
         return None
 
-    # §3.2.4: "When the version prefix cannot be parsed (it's not 2 hex characters
-    # followed by a dash), the implementation should restart the trace." Checked
-    # before anything else, so a malformed version is never mistaken for a valid
-    # one.
     if raw[2] != "-" or not _is_lower_hex(raw[0:2]):
         return None
 
     version = int(raw[0:2], 16)
-    # §3.2.2.1: "Version ff is invalid."
     if version == 0xFF:
         return None
 
@@ -164,26 +150,18 @@ def parse_traceparent(value: str | None) -> TraceParent | None:
     parent_id = raw[36:52]
     flags_field = raw[53:55]
 
-    # The three fixed positions, all three mandatory (§3.2.4).
     if raw[35] != "-" or raw[52] != "-":
         return None
     if not (_is_lower_hex(trace_id) and _is_lower_hex(parent_id) and _is_lower_hex(flags_field)):
         return None
 
     if version == 0:
-        # §3.2.2.2 defines version 00 as exactly these four fields. Trailing data
-        # means the sender is not speaking version 00, and accepting it would be
-        # inventing a format the spec does not define.
         if len(raw) != MIN_HEADER_LEN:
             return None
     elif len(raw) > MIN_HEADER_LEN:
-        # §3.2.4: on a higher version the two flag characters are followed by
-        # either the end of the header or a dash introducing an unknown field.
         if raw[MIN_HEADER_LEN] != "-":
             return None
 
-    # §3.2.2.3 and §3.2.2.4: all zeroes is an invalid value for both, and the
-    # required response is to ignore the header.
     if trace_id == ZERO_TRACE_ID or parent_id == ZERO_SPAN_ID:
         return None
 
@@ -204,17 +182,11 @@ def server_hop(headers: Mapping[str, str], span_id: str) -> ServerHop:
     parsed = parse_traceparent(header(headers, "traceparent"))
 
     if parsed is None:
-        # §3.3: "If the vendor failed to parse traceparent, it MUST NOT attempt to
-        # parse tracestate." §4.2 makes it explicit for the no-traceparent case: a
-        # tracestate alone "is invalid and MUST be discarded". Forwarding it
-        # would attach a vendor's state to an unrelated trace.
         return ServerHop(trace_id=new_trace_id(), span_id=span_id, flags=0)
 
     return ServerHop(
         trace_id=parsed.trace_id,
         span_id=span_id,
-        # §3.2.2.5: a bit field, so mask on read rather than carry the bytes
-        # through. §3.2.2.5.2 requires the reserved bits to be zero outbound.
         flags=parsed.flags & SAMPLED,
         tracestate=forward_tracestate(header(headers, "tracestate")) or "",
         continued=True,
@@ -247,12 +219,10 @@ def forward_tracestate(value: str | None) -> str | None:
     entries: list[str] = []
     for raw in value.split(","):
         entry = raw.strip()
-        # §3.3.1.1: "Empty and whitespace-only list members are allowed."
         if not entry or len(entry) > TRACESTATE_ENTRY_LIMIT:
             continue
         entries.append(entry)
 
-    # Pop from the end until the combined value fits (§3.3.1.5).
     while entries and len(",".join(entries)) > TRACESTATE_LIMIT:
         entries.pop()
 
@@ -298,10 +268,4 @@ def new_span_id() -> str:
 
 
 def _is_lower_hex(value: str) -> bool:
-    """Whether ``value`` is entirely lowercase hex.
-
-    §3.2.2 defines the alphabet as HEXDIGLC, lowercase only. Uppercase is
-    rejected rather than folded: accepting it means two services disagree about
-    whether a header is valid, and one of them starts a new trace.
-    """
     return bool(value) and _LOWER_HEX.issuperset(value)

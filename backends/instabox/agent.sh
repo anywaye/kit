@@ -1,46 +1,9 @@
 #!/usr/bin/env bash
-# kit/backends/instabox/agent.sh — the poller. Runs on the sandbox.
-#
-# The sandbox has no public IP, so a push-triggered build is a poll: fetch
-# the project's master, and on a new commit run the project's own
-# ci/pipeline.sh. The interval is the whole backend's latency, which is why
-# it is an environment variable and not a constant (CI_POLL_SECONDS, default
-# 120) — a fleet that pushes frequently lowers it; a nightly project raises
-# it.
-#
-# ONE AGENT PER PROJECT, AND THIS FILE IS THE AGENT. A sandbox hosts several
-# projects (the plan caps sandboxes at five and the fleet is larger), so the
-# supervisor starts one of these per project, each bound to its own
-# environment file and its own log by ~/ci/agents/<project>.sh — see
-# backends/instabox/supervisor.sh and backends/instabox/provision.sh. The
-# binding is three variables, so this file does not know how many projects
-# exist:
-#
-#   CI_ENV        the KEY=value environment for THIS project
-#                 (default: $HOME/.ci-env, the single-project legacy path)
-#   AGENT_NAME    the project name, used in messages and the lock name
-#                 (default: PROJECT_NAME)
-#   AGENT_RUN_LOG where this agent's last pipeline run is logged
-#                 (default: $HOME/ci-last-run.log)
-#
-# Environment comes from $CI_ENV, one KEY=value per line, written by
-# provision. The pipeline sees those plus WORKSPACE, GH_TOKEN and CI — see
-# backends/README.md for the contract. That includes the database pair
-# (`DATABASE_URL`, `TEST_DATABASE_URL`) when the project declares one, and
-# `CI_GATE_SERIAL=1` when the project's gate cannot run beside another's.
-#
-# ONE LOCK PER AGENT, because a poller that is started twice is a project that
-# is built twice concurrently. The supervisor can race itself across a
-# restart, and an operator can start one by hand; flock is what makes the
-# second copy exit rather than run beside the first. flock is Linux-only and
-# the sandbox is Linux, but a machine without it degrades to no lock rather
-# than refusing to poll.
 set -euo pipefail
 
 CI_ENV="${CI_ENV:-$HOME/.ci-env}"
 if [ -f "$CI_ENV" ]; then
   set -a
-  # shellcheck disable=SC1090  # $CI_ENV is a path chosen by the caller, not a literal
   . "$CI_ENV"
   set +a
 fi
@@ -55,15 +18,6 @@ RUN_LOG="${AGENT_RUN_LOG:-$HOME/ci-last-run.log}"
 
 export WORKSPACE CI=1
 
-# The lock is taken before the first fetch and held for the process's whole
-# life, so a second agent for the same project exits instead of polling beside
-# this one. A per-sandbox workspace means a per-sandbox lock directory.
-#
-# `mkdir` is the lock, and it is chosen over `flock` because it is the same
-# mechanism on every machine this runs on: the sandbox is Linux, where the
-# fleet also develops on macOS, and `flock` is a util-linux binary macOS does
-# not ship. `mkdir` is atomic everywhere. The pid inside it is what makes a
-# SIGKILLed agent's lock recoverable rather than permanent.
 LOCK_ROOT="${CI_LOCK_DIR:-$WORKSPACE/.ci-locks}"
 LOCK_DIR="$LOCK_ROOT/$AGENT_NAME.lock"
 mkdir -p "$LOCK_ROOT"
@@ -73,7 +27,6 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "agent[$AGENT_NAME]: another agent (pid $holder) holds $LOCK_DIR — exiting"
     exit 0
   fi
-  # The holder is gone; its lock outlived it. Take it over.
   rm -rf "$LOCK_DIR"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "agent[$AGENT_NAME]: lost the race for $LOCK_DIR — exiting"
@@ -86,21 +39,6 @@ trap 'rm -rf "$LOCK_DIR"' EXIT
 mkdir -p "$WORKSPACE/anywaye"
 PROJECT_DIR="$WORKSPACE/anywaye/$PROJECT_NAME"
 
-# The serial gate lock. Two projects' gates running at once is normal and fine
-# on this backend — their databases are separate, so they share nothing. A
-# project whose GATE cannot run concurrently with another's — a fixed port, a
-# global temp path — declares it with `CI_GATE_SERIAL=1` in its env, and its run
-# then takes a SANDBOX-WIDE lock that serialises it against every other
-# declaring project. The resource such a gate contends for is machine-wide, so
-# the lock is too; a per-project lock would not be, because the contention is
-# with a *different* project.
-#
-# The lock is the same `mkdir` + pid shape as the agent lock above, chosen for
-# the same reason: atomic on the Linux sandbox and on a developer's macOS.
-# Unlike the agent lock it WAITS rather than exits — the correct behaviour for a
-# contended resource is to run after the other owner, not to skip a commit. It
-# is named `serial.lock` in the per-sandbox workspace, so the sandboxes do not
-# contend with each other.
 GATE_LOCK_ROOT="${CI_GATE_LOCK_DIR:-$WORKSPACE/.ci-gate-locks}"
 GATE_LOCK_DIR="$GATE_LOCK_ROOT/serial.lock"
 
@@ -113,7 +51,6 @@ acquire_gate_lock() {
       echo "agent[$AGENT_NAME]: waiting for the serial gate lock (held by pid $holder)"
       sleep 2
     else
-      # The holder is gone; its lock outlived it. Take it over.
       rm -rf "$GATE_LOCK_DIR"
     fi
   done
@@ -122,7 +59,6 @@ acquire_gate_lock() {
 
 release_gate_lock() { rm -rf "$GATE_LOCK_DIR"; }
 
-# run_pipeline — the project's pipeline, serialised when it declares itself so.
 run_pipeline() {
   if [ "${CI_GATE_SERIAL:-0}" = "1" ]; then
     local rc=0

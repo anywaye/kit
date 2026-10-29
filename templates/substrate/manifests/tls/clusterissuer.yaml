@@ -1,32 +1,4 @@
 ---
-# The two Let's Encrypt ClusterIssuers — staging and production, identical but
-# for the ACME directory URL.
-#
-# THE PLACEHOLDER. `spec.acme.email` is `ACME_EMAIL_PLACEHOLDER`, never an
-# address. install.sh substitutes the operator's KIT_SUBSTRATE_ACME_EMAIL in a
-# pipe at apply time (`sed … | kubectl apply -f -`), so the value reaches the
-# API server and is never written to disk. A literal here would be wrong, not
-# merely insecure: it would put anywaye's address, or a made-up one, on a
-# customer's ACME account.
-#
-# THE NAMES ARE A CONTRACT. The generated service charts annotate their
-# Ingresses with `ingress.clusterIssuer: letsencrypt-prod`, and caf's chart
-# tests use that exact string. An issuer named anything else here is an
-# annotation pointing at nothing: cert-manager has no Certificate to issue and
-# Traefik serves its own self-signed fallback.
-#
-# WHY TWO. Let's Encrypt's production limits are 5 duplicate certificates per
-# week and 5 failed validations per hour. A customer whose DNS record is wrong
-# on the first install can burn a week of TLS with one afternoon of debugging;
-# staging is where the mistake is found. The account keys are distinct because
-# staging and production are separate ACME accounts — one shared key is a real
-# mistake a copy-paste produces.
-#
-# THE SOLVER. HTTP-01 through Traefik's ingress class, by `ingressClassName` —
-# the field the pinned cert-manager v1.21.2 CRD recommends; `class` is the
-# legacy annotation. The argument is in README.md. DNS-01 is not implemented:
-# it needs a Cloudflare API token, and DEPLOYMENT.md:28 makes Cloudflare a DNS
-# change, never infrastructure — the install must not require a credential.
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:

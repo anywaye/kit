@@ -1,12 +1,4 @@
 ---
-# kit template — the dashboard provider.
-#
-# Without this stanza Grafana provisions the DATASOURCES above and no
-# dashboards at all, which is a half-provisioned stack that looks configured.
-# The gate asserts this file exists and that its `path` is ABSOLUTE: Grafana
-# resolves a relative path against its own working directory, which in the
-# image is /var/lib/grafana and nowhere a reader would guess, so a relative path
-# here finds nothing and fails silently.
 
 apiVersion: 1
 
@@ -15,24 +7,10 @@ providers:
     orgId: 1
     folder: anywaye
     type: file
-    # Absolute, and mounted read-only by docker-compose.yml. The UID is
-    # stable so a dashboard's links from the error view to the overview keep
-    # working across a re-provision.
     options:
       path: /etc/grafana/provisioning/dashboards
       foldersFromFilesStructure: false
-    # Not editable in the UI by default. A provisioned dashboard a developer
-    # has edited in the browser is a dashboard whose edits vanish on the next
-    # `bin/dev up`, and the losing is silent. Change it in a repo instead.
     allowUiUpdates: false
     disableDeletion: false
     updateIntervalSeconds: 30
 
-# WHY THERE IS NO `plugins/` DIRECTORY HERE
-#   Grafana logs an error on every start for a missing
-#   /etc/grafana/provisioning/plugins, and it is the only red line in a
-#   first-load log that a self-hoster will read. It is noise, not a fault:
-#   nothing in this stack uses a plugin, and adding an empty directory to
-#   silence a log line is a file that exists for no reason a reader can
-#   discover. Recorded here instead, which is where a self-hoster looking at
-#   the log will be pointed.

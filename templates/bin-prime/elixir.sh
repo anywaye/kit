@@ -1,23 +1,4 @@
 #!/usr/bin/env bash
-#
-# kit template — prime an Elixir worktree. Copy to bin/prime in the service repo
-# and run it after `git clone`, `git worktree add`, or `git pull --rebase`.
-#
-#   bin/prime            # deps, compile, format check, then the full suite
-#   bin/prime --fast     # deps and compile only
-#
-# WHAT IT PROMISES
-#   Exit 0: dependencies resolve, the project compiles, the formatter is clean,
-#   and every test passes. Anything else: nonzero, with the failing step named.
-#   `set -euo pipefail` is the whole mechanism.
-#
-# STRICTNESS NOTES
-#   - No `mise install` here. mise.toml pins elixir and erlang; this script only
-#     primes dependencies and fails loudly (127) if the BEAM is missing.
-#   - `mix deps.get` never updates mix.lock: a prime that moves the lockfile is a
-#     prime that can make two worktrees disagree about the same commit.
-#   - `mix format --check-formatted` runs before the tests. A tree that needs
-#     `mix format` is not a tree whose test result means anything yet.
 
 set -euo pipefail
 
@@ -47,8 +28,6 @@ step() {
   printf '\n== %s\n' "$1"
 }
 
-# Never fails the prime. The toolchain check below is the gate; a banner must
-# not be able to turn a green prime red.
 version_of() {
   "$@" --version 2>/dev/null | head -n 1 || true
 }

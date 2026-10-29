@@ -1,96 +1,9 @@
-# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
-#
-# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
-# on the machine the developer chose. This file is the SPECIFICATION those
-# checks read — the steps, the floors, the exemptions — kept where the
-# repository can hold it and read it.
-#
-# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
-# `ci.workflow`), and the CI service reads that declaration and runs it.
-#
-# The GitHub Actions spelling is retired, not deleted, because the checks in
-# this repository read this file to hold the specification still: a gate that
-# checks a specification nobody executes is a gate checking a fiction, and a
-# gate that checks nothing is worse. The steps below are the specification
-# the executable CI is measured against, and the day this file stops being
-# that, the checks move with it.
 ---
-# kit — the CI path every anywaye service repo runs.
-#
-# Consumers do not copy this file; they call it (repo: github.com/anywaye/<svc>):
-#
-#   # ci/ci.yml
-#   name: ci
-#   on: [push, pull_request]
-#   permissions:
-#     contents: read
-#   jobs:
-#     ci:
-#       uses: anywaye/kit/ci/ci.reusable.yml@master
-#       with:
-#         language: go
-#         working-dir: .
-#
-# If you also declare `concurrency`, your group must NOT begin with `kit-`. Every
-# other spelling is yours. The whole fleet wrote
-# `${{ github.workflow }}-${{ github.ref }}`, this file wrote the same string, and
-# for four days the `uses:` job above produced no job, no check-run and no log in
-# any repository — see the long comment on `concurrency` at the bottom of this
-# file for the measurement.
-#
-# The `.github/workflows/` in that path is not decoration. GitHub resolves a
-# reusable workflow at `{owner}/{repo}/ci/{file}@{ref}` and
-# documents that subdirectories of the workflows directory are not supported, so
-# this file has no reachable path from anywhere else in the tree. It is also the
-# only place a workflow may live at all if the repository that defines it is to
-# call it with `uses: ./ci/ci.reusable.yml`.
-#
-# One job per language exists on purpose: six services, six toolchains, and a
-# `language` x `version` matrix would multiply CI minutes the org cannot spend.
-# Every job is gated on `inputs.language`, so exactly one runs per call.
-#
-# STRICTNESS NOTES (read before loosening anything)
-#   - No job builds or pushes an image, and no job writes to the default branch.
-#     Release work is a separate workflow so a red test can never publish.
-#   - The coverage gate is a PLACEHOLDER (0) so adoption never blocks a repo on
-#     day one, and it is an INPUT (coverage-fail-under) so a repo raises it in
-#     its caller rather than forking this file. A gate left at 0 fails nothing.
-#   - Action refs are floating major tags where the upstream publishes them and
-#     exact tags where it does not (astral-sh/*). Dependabot upgrades are
-#     one-line diffs; full-SHA pinning is a service repo's own choice.
-#     zizmor disagrees about all of this and says so on every run; the
-#     disagreement is recorded, not resolved, in DECISIONS.md under MD10.
-#   - Every `actions/checkout` sets `persist-credentials: false`. No job in this
-#     file pushes, so a token left on disk after a checkout is a credential that
-#     outlives the job for no reason, and every job here runs `upload-artifact`
-#     — which is the combination zizmor's `artipacked` audit exists to catch.
-#   - Every step that can run offline does. Nothing here reaches a anywaye
-#     service, so this workflow needs no secrets of its own and consumes none
-#     from the caller.
 name: ci
 on:
   workflow_call:
     inputs:
       language:
-        # THE LEGAL VALUES ARE IN THIS PROSE BECAUSE `workflow_call` HAS NO
-        # `options` KEY, and saying so is cheaper than the two days it cost.
-        #
-        # This file carried an `options:` list here from 2026-09-30 until
-        # kit-33. `options` is a `workflow_dispatch` input feature;
-        # `workflow_call` inputs accept only `description`, `required`, `type`
-        # and `default`. GitHub rejects the WHOLE FILE at parse time for an
-        # unknown key, so the result was not "the language picker is missing" —
-        # it was that no job in this file ever started, for any caller, in any
-        # repository. Every service in the fleet calls this file, so the whole
-        # fleet's CI was a zero-check-run failure for two days and the run
-        # summary said only "This run likely failed because of a workflow file
-        # issue."
-        #
-        # The list is still enforced, by a job rather than by a picker: see the
-        # `language` job below, which fails on a value that is not one of the
-        # eight. That is a STRONGER guarantee than the picker was, because an
-        # unknown value used to skip all eight language jobs and leave a green
-        # run that had tested nothing.
         description: >-
           Toolchain to build, lint, and test. One job runs; the rest skip. Use
           'none' for a repository with no service manifest at all. One of:
@@ -99,37 +12,6 @@ on:
           no toolchain at all.
         required: true
         type: string
-      # The kit ref the LINT CONFIGS are read from, as opposed to the ref this
-      # workflow file itself was fetched at.
-      #
-      # These are two different things and the difference is the whole reason
-      # this input exists. `uses: anywaye/kit/ci/ci.reusable.yml@X`
-      # pins the WORKFLOW at X. GitHub does not hand a called workflow its own
-      # ref — `github.workflow_ref` inside a reusable workflow is the CALLER's
-      # workflow, and `GITHUB_ACTION_PATH` is documented as composite-action-only
-      # — so the configs have to be fetched by a name, and the name has to be an
-      # input. Defaulting it to `master` matches every caller in the fleet,
-      # which is written `uses: anywaye/kit/...@master`.
-      #
-      # THIS PARAGRAPH WAS RIGHT AND EVERY `run:` BODY CONTRADICTED IT. The
-      # `zizmor` and `telemetry` jobs reached into kit's tree with
-      # `${GITHUB_ACTION_PATH}` — the variable this comment names as unavailable —
-      # and did so under `set -euo pipefail`, where an unset variable is not an
-      # empty path but a fatal on the step's first line. Measured in
-      # `anywaye/site` run 37236386666 and `anywaye/parlor` run 37230458669. The
-      # reasoning above was applied to the lint configs and not to those run:
-      # bodies, which is the whole of it: a rule written down once, obeyed in
-      # one place, and contradicted in another by nobody reading the other
-      # place. `kit_gate_tree_check` in tests/validate.sh now asserts the
-      # variable appears in no `run:` body in this file, so the paragraph and
-      # the code cannot disagree again.
-      #
-      # Raise it to a SHA when you pin the `uses:` line to one. It is NOT a
-      # second, independent pin: a caller who pins the workflow to a SHA and
-      # leaves this at `master` gets that SHA's workflow with today's lint
-      # policy, which is a real and specific failure. Nothing detects it
-      # automatically, so it is documented here and in README.md rather than
-      # pretended to be automatic.
       kit-lint-ref:
         description: >-
           Git ref to read kit's lint configs from, e.g. 'master' or a commit
@@ -138,28 +20,6 @@ on:
         required: false
         type: string
         default: 'master'
-      # Extra arguments appended to the linter's own command line, after kit's.
-      #
-      # THIS IS THE DEVIATION SEAM, and its narrowness is the point:
-      #
-      #   - It comes LAST, so a service can add flags (`-E gosec`) and cannot
-      #     remove the `--config` that precedes it. Anything appended here is an
-      #     addition to kit's invocation, not a replacement of it.
-      #   - It is a string, not a path, so there is no service-side config file
-      #     for a linter to read and therefore none to rot. The failure this
-      #     packet ends is a file nobody propagates; a seam that reintroduces
-      #     the file reinstates the failure.
-      #   - It may not be used to turn kit's config off, to lint a diff instead
-      #     of the tree, or to stop a finding from failing the build. The
-      #     `lint-args guard` step in every lint job refuses those flags, and it
-      #     is in the WORKFLOW rather than in kit's gate because `lint-args` is
-      #     the caller's value and kit has never got it. The guard's token list
-      #     is asserted against a copy in `tests/validate.sh`, so shortening it is
-      #     a red build rather than a quiet widening of this input.
-      #
-      # What it is FOR: a repository that needs a stricter setting than the
-      # fleet's, and nothing else. If a flag is wanted often enough to be
-      # common, it belongs in lint/ and every service gets it for free.
       lint-args:
         description: >-
           Extra arguments appended to the linter's command line, after kit's
@@ -173,9 +33,6 @@ on:
         required: false
         type: string
         default: ''
-      # Descriptions are folded, not quoted: a long description that is reflowed
-      # to fit line-length is unreadable, and Actions has no width limit on
-      # `description`. Our own lint/yamllint.yml caps source lines at 120.
       working-dir:
         description: >-
           Directory holding the service manifest: go.mod, Gemfile, mix.exs,
@@ -243,30 +100,6 @@ on:
         required: false
         type: string
         default: ''
-      # The tier a service DEMANDS, by gate-variable name: `REQUIRED_DB`, not
-      # `db`. Demanded rather than inferred, on purpose.
-      #
-      # Inference is the failure this replaces. Identity derives its database
-      # tier by grepping the tree for `dbtest.Pool|Schema|EnvVar|TEST_DATABASE_URL`,
-      # and that fails OPEN: a test that reaches Postgres through a helper two
-      # files away, or through a fixture, does not match, so its package never
-      # enters the required list and the run is never required to contain it.
-      # The test is written. It is not gated. Nobody finds out.
-      #
-      # So the caller NAMES the variable and this workflow exports it as `1` on
-      # the test step of every language job, which is gateway's
-      # GATEWAY_REDIS_REQUIRED pattern: it fails at tier-invocation time, before a
-      # report exists, so nothing downstream can misreport the run.
-      #
-      # Setting it commits the repo to the normalised result format
-      # (templates/tier/README.md): the `tier demand` step below reads a `ran`
-      # line out of the run log and fails NAMING THIS VARIABLE when the tier ran
-      # zero tests. A gate variable that is set, and a tier that ran nothing, is
-      # a green build that verified nothing.
-      #
-      # A string, empty by default. Adoption cannot turn a green repo red,
-      # because an unset variable demands nothing and the `tier demand` step
-      # exits 0 without reading a log.
       required-tier:
         description: >-
           Gate variable that demands a tier, e.g. 'REQUIRED_DB'. Exported as
@@ -276,14 +109,6 @@ on:
         required: false
         type: string
         default: ''
-      # Opt-in by construction. A kit change that breaks every consumer's CI is
-      # a kit change that does not ship, so a new job cannot start running in
-      # 13 repos the day it lands — the repo has to ask for it by name.
-      #
-      # A string, not a boolean: `inputs.telemetry == 'true'` reads the way a
-      # caller writes it, and GitHub coerces the bare word `false` to a boolean
-      # in some positions, which makes `if: inputs.telemetry` a trap. Compare
-      # to the string and there is no coercion to reason about.
       telemetry:
         description: >-
           'Run the W3C traceparent conformance job as well: "true" or "false".
@@ -292,9 +117,6 @@ on:
         required: false
         type: string
         default: 'false'
-      # The GitHub Actions security audit, opt-in for the reason its header
-      # gives: it reads the adopting repo's workflows, which kit did not write.
-      # A string for the same reason `telemetry` is one, and for the same trap.
       zizmor:
         description: >-
           'Run the zizmor GitHub Actions security audit as well: "true" or
@@ -305,33 +127,6 @@ on:
         required: false
         type: string
         default: 'false'
-      # The account-isolation declaration check, opt-in for the same reason
-      # `zizmor` is: it reads the adopting repo's `tenancy.yml` and the tree
-      # behind it, which kit did not write and cannot fix. A string for the
-      # same reason `telemetry` is one, and for the same trap.
-      #
-      # WHAT IT RUNS, and why it is a job and not a step in a language job: the
-      # checker is core's, not kit's, and it needs core's harness on disk. A
-      # language job's matrix has no use for a whole extra checkout, and the
-      # check is about the SERVICE's declaration, not about any one toolchain —
-      # so it is toolchain-independent and runs once, not six times.
-      #
-      # THE VERDICT IS THE EXIT CODE, AND IT IS FATAL. This is not a report-only
-      # step: a repo that turns this on is asserting its declaration is green,
-      # and a red build is the assertion being wrong. The opt-in IS the gate —
-      # a repo that has not adopted `tenancy.yml` leaves the input at 'false'
-      # and is not graded, which is the whole of "without turning the fleet red".
-      # Measured 2026-10-06 across the sixteen repositories under anywaye/:
-      # exactly one (identity) is green today and can turn this on now.
-      #
-      # THE FINDINGS LAND ON THE REPOSITORY THAT CAN FIX THEM. That is the
-      # argument for this job living here rather than in thirteen adopting
-      # repositories: MD36's first reason (a finding nobody in this repository
-      # can fix is not this gate's finding) does not apply to a step whose
-      # subject is the caller, and the alternative — thirteen hand-rolled
-      # fetches of anywaye/core, each pinning its own ref — is the drift this
-      # repository exists to prevent. The fetch is written once and the pin is
-      # one input, below.
       tenancy:
         description: >-
           'Run core's tenancy checker against this repository: "true" or
@@ -342,18 +137,6 @@ on:
         required: false
         type: string
         default: 'false'
-      # The core ref the TENANCY CHECKER is read from. A separate input from
-      # `kit-lint-ref` because it is a different repository: that one pins kit's
-      # lint configs, this one pins core's harness. A caller who pins the
-      # workflow to a kit SHA and leaves this at 'master' gets that SHA's
-      # workflow with whatever checker core's master carries, which is a real and
-      # specific drift — so pin this to the core ref you have verified.
-      #
-      # The checker is stdlib-only Python (floor 3.9) and reads no TOML and runs
-      # no process, so it needs no packages and no toolchain beyond what the
-      # runner already has. It is not vendored here on purpose: a copy of
-      # `tenancy_check.py` in kit would be a copy that can drift from core's
-      # schema, which is the drift core's own harness exists to prevent.
       kit-core-ref:
         description: >-
           Git ref to read core's tenancy checker from, e.g. 'master' or a
@@ -366,145 +149,29 @@ on:
 permissions:
   contents: read
 
-# ===========================================================================
-# THE `kit-` PREFIX ON THE CONCURRENCY GROUP IS LOAD-BEARING, and it is here
-# because the fleet ran half a CI for four days without anybody noticing.
-#
-# WHAT WENT WRONG, MEASURED. Every caller in the fleet declares
-#
-#     concurrency:
-#       group: ${{ github.workflow }}-${{ github.ref }}
-#       cancel-in-progress: true
-#
-# and this file declared the identical block from the commit that first
-# published it (8ebf4db, 2026-09-30). Inside a reusable workflow `github.workflow`
-# is the CALLER's workflow name and `github.ref` is the caller's ref — GitHub does
-# not re-scope either to the called file — so caller and callee computed the same
-# string, `ci-refs/heads/master`, and asked for the same lock. The caller holds it.
-# The called workflow's request is refused, or cancels the holder, and the `uses:`
-# job produces NO job, NO check-run and NO log line.
-#
-# The signature is the reason it survived. In anywaye/parlor, run 37230458669:
-#
-#     $ gh api repos/anywaye/parlor/actions/runs/37230458669/jobs \
-#         --jq '.jobs[] | "\(.name) | \(.status)/\(.conclusion)"'
-#     typecheck + build | completed/success
-#     bin/prime         | completed/success
-#
-#     $ gh api repos/anywaye/parlor/actions/runs/37230458669 --jq '.conclusion'
-#     failure
-#
-# Both jobs green, the run red, `gh run view --log-failed` empty — because no step
-# failed, and the one job that mattered was never created. The `language` gate
-# below is UNCONDITIONAL, so its absence is the unambiguous signal: no caller in
-# the fleet has ever produced a job ending `/ language`. Lint, the frozen install
-# and the coverage step live behind it. `bin/prime` ran the suite, so tests were
-# not entirely absent — but no repository in the fleet has run kit's linter in CI.
-#
-# Reproduced end to end against this exact file, byte-identical to master
-# (git blob f91df58), with one variable changed at a time:
-#
-#   caller group `${{ github.workflow }}-${{ github.ref }}`   ->  1 job, callee gone, run failure
-#   caller group `caller-${{ github.workflow }}-${{ ... }}`   -> 13 jobs, callee present
-#
-# So the fix is HERE and not in thirteen callers, which is also the only fix that
-# reaches a repository nobody remembers exists. It repairs kit's own CI as a side
-# effect: `ci.yml`'s group is `ci-<ref>` and this one is now `kit-ci-<ref>`.
-#
-# AND THE RENAME COSTS NOTHING. A second push must still cancel the first one's
-# called jobs, and that was measured rather than assumed, because dropping this
-# block would have been the other way to stop a collision and it is the way that
-# trades a missing job for an unbounded pile of superseded runs:
-#
-#   push A -> called job in_progress; push B -> A's called job `cancelled`,
-#   run A `cancelled`.
-#
-# The caller's cancellation propagates into the called workflow, so kit's block is
-# a second layer rather than the only one, and renaming the group leaves it working.
-#
-# THE RULE FOR A CALLER, which is the half this file cannot enforce: if you declare
-# `concurrency`, your group must NOT begin with `kit-`. Every other spelling is
-# yours. The `no caller and callee share a concurrency group` check in
-# tests/validate.sh reads the callers beside this repository and fails on a
-# collision in either direction.
-# ===========================================================================
 concurrency:
   group: kit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # Placeholder (0) so adoption never blocks a repo on day one. A service repo
-  # raises it with the `coverage-fail-under` input — a value, not a fork of this
-  # file. Set in env so all six jobs read one number.
   COVERAGE_FAIL_UNDER: ${{ inputs.coverage-fail-under }}
-  # Deterministic builds: do not stamp VCS info into Go binaries.
   GOFLAGS: '-buildvcs=false'
   # The demanded gate variable's NAME, not its value. It is exported as `1` on
   # each test step rather than set here, because an env block cannot have a key
   # that is a variable — and setting it here would export it to every step in
   # the job, including the ones that are not running the tier.
   REQUIRED_TIER: ${{ inputs.required-tier }}
-  # Where kit's own tree lands inside the service being built. `.kit` and NOT
-  # a path beside the repository, and the reason is measured rather than
-  # stylistic: ESLint's flat config is an ES module that does
-  # `import js from '@eslint/js'`, and node resolves that import from the
-  # CONFIG FILE's own directory upward. A config sitting beside the repository
-  # finds no `@eslint/js` and the run dies with ERR_MODULE_NOT_FOUND — a red
-  # build that has linted nothing. Inside the tree it walks up into the
-  # service's own node_modules and resolves. golangci-lint and rubocop accept
-  # the same path happily, so one location serves all three.
   KIT_LINT_DIR: ${{ inputs.working-dir }}/.kit
-  # The linter's own extra arguments, from the seam. Empty by default, which is
-  # the fleet's current state: every service lints with kit's policy and
-  # nothing else.
   KIT_LINT_ARGS: ${{ inputs.lint-args }}
 
-# ===========================================================================
-# THE `tier demand` STEP — one body, present in every language job, IDENTICAL
-# in all of them.
-#
-# GitHub reusable workflows have no way to share a step, so this block is
-# duplicated. That is a deliberate trade: kit's rule is that callers override
-# and never fork, and six hand-maintained copies of a policy block is exactly
-# the drift that rule exists to prevent — so the copies are not left to drift.
-# `tier_demand_check` in tests/validate.sh asserts the step exists in every
-# language job AND that all six bodies are byte-identical. Change one, change
-# all six, or the gate goes red.
-# ===========================================================================
 
 jobs:
-  # -------------------------------------------------------- the language gate
-  # THIS JOB IS THE REPLACEMENT FOR A DROPDOWN, and it is a stronger guarantee
-  # than the dropdown was.
-  #
-  # `workflow_call` inputs have no `options` key. That is not a limitation to
-  # work around in the UI, it is the reason a wrong value could previously pass
-  # SILENTLY: every language job is gated on `inputs.language == '<name>'`, so a
-  # caller who wrote `language: golang` — or `Go`, or `nodejs`, or a trailing
-  # space — matched no job, ran no toolchain, and got a run whose only steps
-  # were telemetry and zizmor. Those two can be green on a
-  # repository that has never been compiled. The header above says "Every job
-  # is gated on `inputs.language`, so exactly one runs per call", and nothing
-  # verified that one did.
-  #
-  # It has no `if:`, deliberately. Every other job in this file is conditional
-  # on the very value this one checks, so gating this one on it would mean the
-  # check runs exactly when it is not needed and is skipped exactly when it is.
-  #
-  # It is a required check, not an advisory one, and it is deliberately the
-  # FIRST job: a caller who misspells their toolchain learns it in seconds
-  # rather than after waiting out a full suite that never ran.
   language:
     name: language
     runs-on: ubuntu-latest
-    # The gate job: a `case` over the requested language, no toolchain. 5
-    # bounds a wedged runner without ever touching a healthy one.
     timeout-minutes: 5
     steps:
       - name: the language is one this file has a job for
-        # `${{ }}` is deliberately NOT interpolated into this body. zizmor's
-        # `template-injection` audit is right that it should not be, and the
-        # idiomatic fix is to pass it through `env:` and read the variable.
         env:
           REQUESTED: ${{ inputs.language }}
         run: |
@@ -530,52 +197,13 @@ jobs:
               ;;
           esac
 
-  # ----------------------------------------------------- configuration-only
-  # `language: none` — a repository with no service manifest. No go.mod, no
-  # Gemfile, no pyproject.toml: the seven jobs above each open with a manifest
-  # they cannot find, and a caller passing one of them gets a red build on a
-  # repository that has nothing to compile.
-  #
-  # It exists because of that, and because of a second, sharper reason: this is
-  # kit, and the repository that defines the standard should be the first
-  # repository held to it. Without it kit could not call its own workflow at
-  # all — `uses: ./ci/ci.reusable.yml` still needs a `language`,
-  # `language` is required, and every value in `options` named a toolchain this
-  # repository does not have. The repository that ships the standard was
-  # structurally excluded from using it.
-  #
-  # It runs the repository's own gate, `tests/validate.sh`, and FAILS when that
-  # file is absent. A caller who asks for the configuration gate and ships no
-  # gate has asked for a green checkmark on nothing, which is the same defect
-  # as a coverage threshold left at 0. Deliberately strict, and the failure
-  # message says which file is missing.
-  #
-  # THE `full` JOB IN ci.yml KEEPS CALLING THIS, and that is a decision rather
-  # than inertia: kit is the one repository that ships `tests/validate.sh`, so
-  # `language: none` is meaningful here and only here — it is kit gating itself,
-  # the release proof. The guard above was read first (the file exists at this
-  # path, so the entry runs the gate rather than the refusal); dropping the
-  # entry would leave the repository that defines the standard structurally
-  # excluded from using it, which is the sharper reason above restated as the
-  # verdict. A service repo with no gate of its own must pass a real language.
   none:
     name: none
     if: ${{ inputs.language == 'none' }}
     runs-on: ubuntu-latest
-    # `language: none` runs the adopting repo's whole `tests/validate.sh`,
-    # docker stacks and live tiers included — the single heaviest job kit
-    # hands out. 60 is several times a healthy run and still a sixth of the
-    # 360-minute default a caller cannot override.
     timeout-minutes: 60
     services:
       postgres:
-        # postgres:17-alpine with the default superuser untouched — the fleet's
-        # convention. The tenancy proof needs two isolated tenants (alpha, beta,
-        # each with its own database and `_app` login role) that a bare postgres
-        # does not provide, so the provisioning step below runs kit's own
-        # templates/compose/postgres/initdb/10-cluster.sh against this service.
-        # Without it the tier's `psql -U alpha -d beta` dies with
-        # `permission denied for database "beta"` before a query is parsed.
         image: postgres:17-alpine
         env:
           POSTGRES_PASSWORD: postgres
@@ -591,41 +219,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          # FULL HISTORY, and it is not tidiness. tests/substrate_test.sh's
-          # three-key red control derives its fixture from history:
-          # `git log -S KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL` finds the
-          # commit that wired the fourth key, and the fixture is that commit's
-          # PARENT. In a depth-1 checkout the search answers with the boundary
-          # commit itself (its diff IS the whole tree), the parent does not
-          # exist, and the control fails with "no three-key tree found
-          # (base=…)" — measured, run 38658518489 job `full / none`, base
-          # 03a7f768. The control cannot say how far back its commit is, so the
-          # depth is not bounded on purpose.
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          # The install step below needs a Go new enough for
-          # golangci-lint/v2's module, and `stable` is what the go job falls
-          # back to when a caller names no version — read from the same
-          # expression shape, not a second literal.
           go-version: stable
       - name: install the toolchains the lint proofs exec
-        # tests/lint_test.sh FAILS rather than skips when a linter is absent —
-        # "A skipped lint proof is not a proof" — and the gate bootstraps only
-        # its .venv tools (PyYAML, yamllint, hadolint). The go and ruby proofs
-        # exec golangci-lint and rubocop against kit's own configs, and a
-        # runner without them is red on three checks: measured, run 38658518489
-        # job `full / none` (SKIP go ×3, SKIP ruby ×2, then "FAIL: lint_test —
-        # assertion(s) skipped for a missing toolchain").
-        #
-        # golangci-lint at v2.14.0 — THE SAME PIN the go job's lint step names
-        # below, so the two cannot disagree about which linters are enabled (the
-        # measured 37-finding gap that pin's comment records). `go install`
-        # rather than the action, because tests/lint_test.sh EXECs the binary;
-        # it is not a lint step of this job. The module path is assembled from
-        # two words for the same reason identity's gate job assembles it: whole,
-        # it is a long github.com/… run that key-shaped scanners read as a
-        # pasted key.
         run: |
           set -euo pipefail
           host="github.com/golangci"
@@ -635,21 +233,6 @@ jobs:
           "$(go env GOPATH)/bin/golangci-lint" version
           rubocop --version
       - name: provision tenancy substrate (alpha, beta)
-        # The tenancy proof needs two isolated tenants, and the SHAPE of a tenant
-        # is kit's own contract, not this step's: one database and TWO roles per
-        # service — the owner, and a login role that owns nothing, with the
-        # membership in one direction only (`GRANT <svc>_app TO <svc>`, which is
-        # what lets the owner impersonate the weaker role the drivers `SET ROLE`
-        # to). A hand-rolled CREATE ROLE here would be a second copy of that
-        # contract, and a copy that drifts the day the template changes — so this
-        # step runs templates/compose/postgres/initdb/10-cluster.sh itself,
-        # unmodified, against the service above. The template is the source of
-        # truth; the workflow only names which tenants to make.
-        # RLS is deliberately untouched here: FORCE ROW LEVEL SECURITY is per
-        # table, not per cluster, and lives in
-        # templates/database/tenancy/substrate.sql, which the tier applies and
-        # asserts — including the control with FORCE removed going red on the
-        # owner half while the login half stays green.
         env:
           KIT_POSTGRES_DATABASES: alpha,beta
           POSTGRES_USER: postgres
@@ -664,9 +247,6 @@ jobs:
             sudo apt-get install -y postgresql-client
           fi
           bash templates/compose/postgres/initdb/10-cluster.sh
-          # The topology the tenancy tier asserts before it asserts anything
-          # else: each database exists, each `_app` role is a non-superuser
-          # LOGIN, and the owner can impersonate exactly its own `_app` role.
           for svc in alpha beta; do
             psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -tAX \
               -c "SELECT count(*) FROM pg_database WHERE datname = '$svc'" | grep -qx 1
@@ -679,10 +259,6 @@ jobs:
           echo "provisioned KIT_POSTGRES_DATABASES=$KIT_POSTGRES_DATABASES: one database and two roles each"
       - name: kit gate
         working-directory: ${{ inputs.working-dir }}
-        # The gate bootstraps its own dependencies (PyYAML, yamllint, hadolint)
-        # into a gitignored .venv/, so a runner with nothing installed runs
-        # the same command a developer runs on a fresh clone. See the header of
-        # tests/validate.sh.
         run: |
           set -euo pipefail
           if [ ! -f tests/validate.sh ]; then
@@ -693,14 +269,10 @@ jobs:
           fi
           bash tests/validate.sh
 
-  # ------------------------------------------------------------- compiled
   go:
     name: go
     if: ${{ inputs.language == 'go' }}
     runs-on: ubuntu-latest
-    # Module download, build, lint, test and coverage. Go compiles quickly but
-    # a cold module cache is not free; 30 leaves the suite room and caps a
-    # hung test.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -744,7 +316,6 @@ jobs:
           # the guard exists for.
           if grep -rn --include='*.go' '^//go:generate.*@v' . >/dev/null; then
             if grep -q 'GOMODCACHE\|go mod download all' bin/prime 2>/dev/null || grep -q 'GOMODCACHE\|go mod download all' ci/ci.yml 2>/dev/null; then
-              : # warmed out of band — library shape, allowed
             else
               echo "::error::a //go:generate line pins @v but no cache-warming step was found — a library must warm the generator's graph out of band (throwaway module, GOMODCACHE is shared) or an application must declare the tool in tools.go and run as go run <module> without @v. See identity/bin/prime and gateway/tools.go." >&2
               exit 1
@@ -753,12 +324,6 @@ jobs:
       - name: build
         working-directory: ${{ inputs.working-dir }}
         run: go build ./...
-      # Kit's own tree, INSIDE the service, for the lint config below. Sparse,
-      # because the only thing read out of it is `lint/` and a full clone of
-      # kit on every Go push is a cost paid for files nobody opens.
-      #
-      # `persist-credentials: false` so kit's checkout leaves no token in a
-      # git config inside the tree a service's own later steps run in.
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
@@ -768,52 +333,11 @@ jobs:
           sparse-checkout: lint
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      # THE SEAM'S OWN GUARD, and it lives HERE rather than in kit's gate
-      # because of a fact about the input: `lint-args` is set by the CALLER, and
-      # kit never sees that value. A check in `tests/validate.sh` can assert the
-      # input exists, is a string and defaults to empty — all of which it does —
-      # and it can assert this step exists in three jobs and that the three
-      # copies are byte-identical. It cannot check the value, because kit has
-      # never got it. So the rule that makes the seam narrow has to run where
-      # the value is: in the service.
-      #
-      # WHAT IT REFUSES, and the one sentence that is the whole policy: the seam
-      # may make the lint STRICTER, and it may not change WHICH CONFIG IS READ,
-      # WHAT IS LINTED, or WHETHER A FINDING FAILS THE BUILD. Every token below
-      # is one of those three, and every one was read out of the linter's own
-      # `--help` rather than remembered:
-      #
-      #   which config   --config / -c (rubocop) / --no-config (golangci-lint)
-      #                  / --no-config-lookup (eslint) / --force-default-config
-      #   what is linted --new, --new-from-rev, --new-from-patch,
-      #                  --new-from-merge-base (a diff, not the tree)
-      #   does it fail   --issues-exit-code (golangci-lint; `=0` is a linter that
-      #                  cannot fail), --fail-level (rubocop), --quiet (eslint:
-      #                  "report errors only", which is looser, not stricter),
-      #                  --no-error-on-unmatched-pattern (an unmatched path is
-      #                  green, so a renamed file is silently unlinted)
-      #
-      # `--auto-gen-config` and `--regenerate-todo` are here for a different
-      # reason and it is the packet's own reason: both WRITE a config file into
-      # the tree. A linter that generates its own config is the copy mechanism
-      # arriving through the back door, and it would be a copy nobody reviews.
-      #
-      # The list is duplicated in `tests/validate.sh` and asserted against this
-      # one, so shortening it here is a red build rather than a quiet widening
-      # of the seam.
       - name: lint-args guard
         run: |
           set -euo pipefail
-          # Empty is the fleet's state, and it is not a failure: every service
-          # lints with kit's policy and nothing else.
           [ -n "${KIT_LINT_ARGS:-}" ] || exit 0
-          # Deliberate word splitting — the seam is a command line, and this is
-          # the list the shell will hand the linter. shellcheck disable=SC2086
-          # for exactly that one line.
-          # shellcheck disable=SC2086
           for tok in $KIT_LINT_ARGS; do
-            # `--config=path` and `--config path` are the same request, so the
-            # value is stripped before the name is matched.
             name="${tok%%=*}"
             case "$name" in
               --config|-c|--no-config|--no-config-lookup|--force-default-config|\
@@ -835,70 +359,26 @@ jobs:
       - name: lint
         uses: golangci/golangci-lint-action@v9
         with:
-          # `version:` is load-bearing, and its absence was measured on
-          # 2026-10-14. With no pin the action installs whatever it considers
-          # current; the worktree pinned 2.6.2 by a different route and CI ran
-          # 2.14.0, and the two disagree by 37 findings — a service whose local
-          # gate is green and whose CI is red on files nobody touched. The gap
-          # is `noctx`, which flags `httptest.NewRequest` from Go 1.23's
-          # deprecation onward in a context the older version does not reach.
-          #
-          # ONE more place holds the same number: each service's `mise.toml`
-          # pins `golangci-lint` to it so `bin/prime-go` and CI agree, and a
-          # bump touches both in the same commit. Two homes and one command to
-          # change them — unlike the version itself, which has one home each.
           version: v2.14.0
           working-directory: ${{ inputs.working-dir }}
-          # `--config` and not `GOLANGCI_LINT_CONFIG`: measured on
-          # golangci-lint v2.6.2, the environment variable is read by NOTHING —
-          # the run proceeds on the built-in default set and exits 0 on a file
-          # this config rejects. So the missing flag is not a slower lint, it
-          # is a different and much weaker policy that still goes green.
-          #
-          # `args` is space-split by the action, so the flag carries an `=`.
           args: --config=${{ github.workspace }}/${{ env.KIT_LINT_DIR }}/lint/golangci.yml ${{ env.KIT_LINT_ARGS }}
       - name: test-packages
         if: ${{ inputs.test-packages != '' }}
         run: |
           set -euo pipefail
-          # The binaries the Go tests EXEC rather than dial. gateway's
-          # 'internal/httpapi/runtime_session_test.go' starts a real
-          # 'redis-server' by executing the binary rather than dialing a URL,
-          # and it FAILS rather than skips when the binary is absent — so a
-          # shared job that runs 'go test ./...' without it is red on a missing
-          # apt package. This step is the general seam for that class: a caller
-          # names the package its suite needs, kit installs it before the tests
-          # run. The same package is installed directly in the service's own
-          # 'prime' job, because 'bin/prime' runs its own 'go test' there.
           sudo apt-get update -qq && sudo apt-get install -y ${{ inputs.test-packages }}
       - name: test
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred. gateway's
-          # GATEWAY_REDIS_REQUIRED pattern: it turns "no database" from a skip
-          # into a failure at INVOCATION time, before a report exists, so
-          # nothing downstream can summarise the run as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
-          # -count=1 is mandated, not a suggestion. Go keys its test cache on
-          # the environment variables a test reads, so a gated and an ungated
-          # run already have different cache keys — genuinely good news — but
-          # mandating -count=1 removes the question instead of reasoning about
-          # it, and it costs nothing.
           go test -race -count=1 -coverprofile=coverage.out ./... 2>&1 \
             | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with go test's status.
-          # Stated because without it a piped exit code is the exit of the LAST
-          # command — tee — and a test step that reports tee's status is a gate
-          # that can never fail.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -907,11 +387,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -938,9 +413,6 @@ jobs:
     name: rust
     if: ${{ inputs.language == 'rust' }}
     runs-on: ubuntu-latest
-    # Cargo fetch, fmt, the test build and `cargo llvm-cov` (a full
-    # instrumented rebuild). Rust is the slowest language toolchain kit runs,
-    # so 45 rather than the others' 30.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -961,19 +433,13 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           cargo test 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with cargo's status.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -982,11 +448,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1006,36 +467,11 @@ jobs:
           path: ${{ inputs.working-dir }}/coverage.out
           if-no-files-found: ignore
 
-  # -------------------------------------------------------- interpreted
   ruby:
     name: ruby
     if: ${{ inputs.language == 'ruby' }}
     runs-on: ubuntu-latest
-    # `bundle install`, rubocop, the suite and rake coverage. 30 covers a cold
-    # gem install and caps a hung test.
     timeout-minutes: 30
-    # THE DATABASE A RAILS SUITE NEEDS, and its absence is what made box the
-    # first caller to find out. `bundle exec rake` boots the app, and a Rails
-    # app whose models talk to Postgres cannot boot without one:
-    #
-    #   connection to server on socket "/run/postgresql/.s.PGSQL.5432" failed:
-    #   No such file or directory
-    #
-    # The `none` job above has carried this service since it was written; the
-    # ruby job never did, because until `anywaye/box` adopted it every Ruby
-    # repository in the fleet was Elixir or Node (`courier` is Elixir,
-    # `parlor` is Node) and no caller needed it. box's own gate provisions its
-    # own Postgres — which is why `bin/ci` is green while this job was red on a
-    # missing socket.
-    #
-    # The shape is the `none` job's, unchanged: `postgres:17-alpine` with the
-    # default superuser, on 5432, with a health check so the suite cannot start
-    # against a server still initialising. The job also sets `PGHOST`,
-    # `PGUSER`, `PGPASSWORD` and `RAILS_ENV=test` so a Rails suite whose
-    # `config/database.yml` names only a database (like `box_test`) connects
-    # via TCP to this service without the caller having to supply
-    # `DATABASE_URL`. The database *name* still comes from the repository's
-    # own `database.yml` — kit does not guess it.
     services:
       postgres:
         image: postgres:17-alpine
@@ -1059,8 +495,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # Reads .ruby-version/.tool-versions/mise.toml from working-dir when the
-      # repo pins one, so the worktree and CI agree on the interpreter.
       - uses: ruby/setup-ruby@v1
         with:
           working-directory: ${{ inputs.working-dir }}
@@ -1068,10 +502,6 @@ jobs:
       - name: install
         working-directory: ${{ inputs.working-dir }}
         run: bundle install
-      # Kit's own tree, inside the service, for the lint config below. Same
-      # step, same reason, same shape as the go job's — three jobs cannot share
-      # a step in a reusable workflow, and `lint_wiring_check` is what keeps the
-      # three copies from drifting.
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
@@ -1081,57 +511,11 @@ jobs:
           sparse-checkout: lint
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      # `--config` is load-bearing, and the measurement is in tests/lint_test.sh:
-      # with no config, RuboCop applies its own defaults and a 13-line method is
-      # RED under those defaults and GREEN under kit's (Max: 15). A repo whose
-      # lint step lost this flag goes from kit's policy to RuboCop's without
-      # failing anything.
-      # THE SEAM'S OWN GUARD, and it lives HERE rather than in kit's gate
-      # because of a fact about the input: `lint-args` is set by the CALLER, and
-      # kit never sees that value. A check in `tests/validate.sh` can assert the
-      # input exists, is a string and defaults to empty — all of which it does —
-      # and it can assert this step exists in three jobs and that the three
-      # copies are byte-identical. It cannot check the value, because kit has
-      # never got it. So the rule that makes the seam narrow has to run where
-      # the value is: in the service.
-      #
-      # WHAT IT REFUSES, and the one sentence that is the whole policy: the seam
-      # may make the lint STRICTER, and it may not change WHICH CONFIG IS READ,
-      # WHAT IS LINTED, or WHETHER A FINDING FAILS THE BUILD. Every token below
-      # is one of those three, and every one was read out of the linter's own
-      # `--help` rather than remembered:
-      #
-      #   which config   --config / -c (rubocop) / --no-config (golangci-lint)
-      #                  / --no-config-lookup (eslint) / --force-default-config
-      #   what is linted --new, --new-from-rev, --new-from-patch,
-      #                  --new-from-merge-base (a diff, not the tree)
-      #   does it fail   --issues-exit-code (golangci-lint; `=0` is a linter that
-      #                  cannot fail), --fail-level (rubocop), --quiet (eslint:
-      #                  "report errors only", which is looser, not stricter),
-      #                  --no-error-on-unmatched-pattern (an unmatched path is
-      #                  green, so a renamed file is silently unlinted)
-      #
-      # `--auto-gen-config` and `--regenerate-todo` are here for a different
-      # reason and it is the packet's own reason: both WRITE a config file into
-      # the tree. A linter that generates its own config is the copy mechanism
-      # arriving through the back door, and it would be a copy nobody reviews.
-      #
-      # The list is duplicated in `tests/validate.sh` and asserted against this
-      # one, so shortening it here is a red build rather than a quiet widening
-      # of the seam.
       - name: lint-args guard
         run: |
           set -euo pipefail
-          # Empty is the fleet's state, and it is not a failure: every service
-          # lints with kit's policy and nothing else.
           [ -n "${KIT_LINT_ARGS:-}" ] || exit 0
-          # Deliberate word splitting — the seam is a command line, and this is
-          # the list the shell will hand the linter. shellcheck disable=SC2086
-          # for exactly that one line.
-          # shellcheck disable=SC2086
           for tok in $KIT_LINT_ARGS; do
-            # `--config=path` and `--config path` are the same request, so the
-            # value is stripped before the name is matched.
             name="${tok%%=*}"
             case "$name" in
               --config|-c|--no-config|--no-config-lookup|--force-default-config|\
@@ -1154,13 +538,6 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: bundle exec rubocop --parallel --config "$KIT_LINT_DIR/lint/rubocop.yml" ${{ env.KIT_LINT_ARGS }}
       - name: prepare
-        # THE STEP A FRESH POSTGRES NEEDS, and it is a caller-named command
-        # rather than a `db:prepare` kit runs blind: the shared job cannot know
-        # whether a repository's suite wants a schema loaded, a seed replayed or
-        # nothing at all, and running `db:prepare` against a repository with no
-        # Rake task by that name would fail every caller that does not want it.
-        # Empty by default; `ruby-prepare-command`'s own description carries the
-        # measurement that put it here (`Database not found: box_test`).
         if: ${{ inputs.ruby-prepare-command != '' }}
         working-directory: ${{ inputs.working-dir }}
         run: ${{ inputs.ruby-prepare-command }}
@@ -1168,19 +545,13 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           bundle exec rake 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with rake's status.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -1189,11 +560,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1201,11 +567,6 @@ jobs:
             echo "::error::nothing. See templates/tier/README.md." >&2
             exit 1
           fi
-      # The repo's own `rake coverage` task reads COVERAGE_FAIL_UNDER and exits
-      # nonzero below it (see README: a coverage rake task is part of adoption).
-      # Empty `ruby-coverage-command` means no coverage step — a repository
-      # whose coverage policy is per-file rather than a whole-repo percentage
-      # says so in its caller (box does: `ruby-coverage-command: ''`).
       - name: coverage
         if: ${{ inputs.ruby-coverage-command != '' }}
         working-directory: ${{ inputs.working-dir }}
@@ -1221,8 +582,6 @@ jobs:
     name: elixir
     if: ${{ inputs.language == 'elixir' }}
     runs-on: ubuntu-latest
-    # `mix deps.get`, format check, the suite and coveralls. 30 covers a cold
-    # Hex fetch and caps a hung test.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -1242,19 +601,13 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           mix test 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with mix's status.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -1263,11 +616,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1275,8 +623,6 @@ jobs:
             echo "::error::nothing. See templates/tier/README.md." >&2
             exit 1
           fi
-      # coveralls is a hex dep the service repo declares; it exits nonzero
-      # below the minimum, which is what makes this a gate and not a report.
       - name: coverage
         working-directory: ${{ inputs.working-dir }}
         run: mix coveralls --minimum-coverage "$COVERAGE_FAIL_UNDER"
@@ -1291,8 +637,6 @@ jobs:
     name: python
     if: ${{ inputs.language == 'python' }}
     runs-on: ubuntu-latest
-    # `uv sync`, lint, the suite and coverage. 25 is ample for a fast
-    # toolchain and bounds a hung test.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -1302,7 +646,6 @@ jobs:
         with:
           working-directory: ${{ inputs.working-dir }}
           enable-cache: true
-      # Only for the documented no-uv fallback; uv does not need it.
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ fromJSON(inputs.versions).python || '3.13' }}
@@ -1318,25 +661,17 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           if command -v uv >/dev/null 2>&1; then
             uv run pytest --cov --cov-report=xml 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
           else
             pytest --cov --cov-report=xml 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
           fi
-          # `pipefail` is on, so this step already exits with pytest's status.
-          # The PIPESTATUS index is 0 either way, because both arms are a
-          # pipeline and the `if` does not reset it.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -1345,11 +680,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1372,8 +702,6 @@ jobs:
     name: node
     if: ${{ inputs.language == 'node' }}
     runs-on: ubuntu-latest
-    # `npm ci`, eslint, the suite and coverage. 25 covers a cold install and
-    # bounds a hung test.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -1387,14 +715,6 @@ jobs:
       - name: install
         working-directory: ${{ inputs.working-dir }}
         run: npm ci
-      # Kit's own tree, inside the service, for the lint config below. Same
-      # step, same reason, same shape as the go and ruby jobs'.
-      #
-      # INSIDE the tree is not a preference here, it is the only thing that
-      # works: kit's flat config does `import js from '@eslint/js'`, node
-      # resolves that from the CONFIG FILE's directory upward, and a config
-      # beside the repository finds nothing and dies with ERR_MODULE_NOT_FOUND.
-      # Measured; see tests/lint_test.sh and README.md.
       - name: kit (lint config)
         uses: actions/checkout@v7
         with:
@@ -1404,66 +724,11 @@ jobs:
           sparse-checkout: lint
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      # ESLint run DIRECTLY, not `npm run lint`.
-      #
-      # `npm run lint` is not a linter: it is whatever script the repository
-      # happens to define, and a repository that defines none gets a confusing
-      # "Missing script" rather than a lint, while one that defines it is
-      # running its OWN config — which is the copy this packet exists to end.
-      # Naming the tool is what makes the policy kit's.
-      #
-      # `npx --no-install` and not bare `npx`: without it, a service that has
-      # not declared eslint gets a package FETCHED AND RUN at whatever version
-      # is current, which is a floating dependency in a build that is otherwise
-      # pinned. With it, a missing eslint is a build failure that says so.
-      #
-      # `.` rather than a path, so the service lints the same tree it tests.
-      # THE SEAM'S OWN GUARD, and it lives HERE rather than in kit's gate
-      # because of a fact about the input: `lint-args` is set by the CALLER, and
-      # kit never sees that value. A check in `tests/validate.sh` can assert the
-      # input exists, is a string and defaults to empty — all of which it does —
-      # and it can assert this step exists in three jobs and that the three
-      # copies are byte-identical. It cannot check the value, because kit has
-      # never got it. So the rule that makes the seam narrow has to run where
-      # the value is: in the service.
-      #
-      # WHAT IT REFUSES, and the one sentence that is the whole policy: the seam
-      # may make the lint STRICTER, and it may not change WHICH CONFIG IS READ,
-      # WHAT IS LINTED, or WHETHER A FINDING FAILS THE BUILD. Every token below
-      # is one of those three, and every one was read out of the linter's own
-      # `--help` rather than remembered:
-      #
-      #   which config   --config / -c (rubocop) / --no-config (golangci-lint)
-      #                  / --no-config-lookup (eslint) / --force-default-config
-      #   what is linted --new, --new-from-rev, --new-from-patch,
-      #                  --new-from-merge-base (a diff, not the tree)
-      #   does it fail   --issues-exit-code (golangci-lint; `=0` is a linter that
-      #                  cannot fail), --fail-level (rubocop), --quiet (eslint:
-      #                  "report errors only", which is looser, not stricter),
-      #                  --no-error-on-unmatched-pattern (an unmatched path is
-      #                  green, so a renamed file is silently unlinted)
-      #
-      # `--auto-gen-config` and `--regenerate-todo` are here for a different
-      # reason and it is the packet's own reason: both WRITE a config file into
-      # the tree. A linter that generates its own config is the copy mechanism
-      # arriving through the back door, and it would be a copy nobody reviews.
-      #
-      # The list is duplicated in `tests/validate.sh` and asserted against this
-      # one, so shortening it here is a red build rather than a quiet widening
-      # of the seam.
       - name: lint-args guard
         run: |
           set -euo pipefail
-          # Empty is the fleet's state, and it is not a failure: every service
-          # lints with kit's policy and nothing else.
           [ -n "${KIT_LINT_ARGS:-}" ] || exit 0
-          # Deliberate word splitting — the seam is a command line, and this is
-          # the list the shell will hand the linter. shellcheck disable=SC2086
-          # for exactly that one line.
-          # shellcheck disable=SC2086
           for tok in $KIT_LINT_ARGS; do
-            # `--config=path` and `--config path` are the same request, so the
-            # value is stripped before the name is matched.
             name="${tok%%=*}"
             case "$name" in
               --config|-c|--no-config|--no-config-lookup|--force-default-config|\
@@ -1489,19 +754,13 @@ jobs:
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           npm test 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with npm's status.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -1510,11 +769,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1522,8 +776,6 @@ jobs:
             echo "::error::nothing. See templates/tier/README.md." >&2
             exit 1
           fi
-      # --if-present keeps day-one adoption green; drop it once the script exists
-      # so a missing coverage step fails the build.
       - name: coverage
         working-directory: ${{ inputs.working-dir }}
         run: npm run coverage --if-present
@@ -1534,20 +786,10 @@ jobs:
           path: ${{ inputs.working-dir }}/coverage
           if-no-files-found: ignore
 
-  # ------------------------------------------------------------------- bun
-  # The job gateway's own CI hand-rolled, because kit had none. gateway ships
-  # bun.lock and no package-lock.json, so the `node` job above would have died
-  # on `npm ci` on day one and the whole file would have stayed bespoke.
-  #
-  # It is a separate job rather than a flag on the node one because the two
-  # differ in ways a flag hides: a different package manager, a different
-  # lockfile name, and a different frozen-install contract.
   bun:
     name: bun
     if: ${{ inputs.language == 'bun' }}
     runs-on: ubuntu-latest
-    # `bun install`, typecheck, the suite and coverage. 25, the same shape as
-    # node above.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -1558,33 +800,21 @@ jobs:
           bun-version: ${{ fromJSON(inputs.versions).bun || '1.3.12' }}
       - name: install
         working-directory: ${{ inputs.working-dir }}
-        # Frozen: installs exactly bun.lock and FAILS when the lock and the
-        # manifest disagree. Plain `bun install` here would let a lockfile drift
-        # reach master unnoticed, which is the entire reason the lockfile exists.
         run: bun install --frozen-lockfile
       - name: typecheck
-        # `tsc --noEmit`. --noEmit matters: without it this step publishes
-        # .js files next to the .ts sources, and the next step then tests files
-        # the compiler invented rather than the ones in the commit.
         working-directory: ${{ inputs.working-dir }}
         run: bun run typecheck
       - name: test
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # The demand, exported rather than inferred: a tier that cannot run
-          # must fail here, at invocation time, rather than report as a pass.
           if [ -n "${REQUIRED_TIER:-}" ]; then export "$REQUIRED_TIER=1"; fi
           bun test 2>&1 | tee "$RUNNER_TEMP/kit-tier.log"
-          # `pipefail` is on, so this step already exits with bun's status.
           exit "${PIPESTATUS[0]}"
       - name: tier demand
         working-directory: ${{ inputs.working-dir }}
         run: |
           set -euo pipefail
-          # An empty REQUIRED_TIER is the default and demands nothing, so a repo
-          # that has not adopted tiers is untouched. Exits before reading a log
-          # that need not exist.
           [ -n "${REQUIRED_TIER:-}" ] || exit 0
           log="$RUNNER_TEMP/kit-tier.log"
           if [ ! -f "$log" ]; then
@@ -1593,11 +823,6 @@ jobs:
             echo "::error::verified nothing, whatever the test step printed." >&2
             exit 1
           fi
-          # The one place the normalised format is read, and it reads only the
-          # format kit owns — never a per-language report. A `ran` line is the
-          # evidence that something executed; no `ran` line is a tier that ran
-          # zero tests, and the failure NAMES THE VARIABLE so the fix is obvious
-          # from the log alone.
           if ! grep -qE '^ran[[:space:]]' "$log"; then
             echo "::error::$REQUIRED_TIER was set and no 'ran <tier> <suite> <test>'" >&2
             echo "::error::line reached this log. A gate variable that is set and a" >&2
@@ -1605,9 +830,6 @@ jobs:
             echo "::error::nothing. See templates/tier/README.md." >&2
             exit 1
           fi
-      # --if-present for the same reason as the node job above: day-one adoption
-      # must not be blocked by a coverage script that does not exist yet. Drop
-      # it once `coverage` is in package.json, or this step is a report.
       - name: coverage
         working-directory: ${{ inputs.working-dir }}
         run: bun run --if-present coverage
@@ -1618,28 +840,12 @@ jobs:
           path: ${{ inputs.working-dir }}/coverage
           if-no-files-found: ignore
 
-  # ----------------------------------------------------------------- telemetry
-  # Opt-in (see the `telemetry` input). A repo that has copied
-  # templates/otel/<lang>/ into its tree runs the W3C traceparent conformance
-  # suite for its language on every push, so "we propagate traces" stops being a
-  # claim in a README and becomes a red build.
-  #
-  # A matrix, not six jobs: this is the one place a matrix is right. It runs
-  # only when a repo opts in, it is a small stdlib-only suite, and a per-language
-  # job here would mean six near-identical blocks to keep in sync. The six
-  # language jobs above stay ungated-by-matrix because each one installs a
-  # different toolchain, which is the thing a matrix cannot share.
   telemetry:
     name: telemetry (${{ matrix.language }})
     if: ${{ inputs.telemetry == 'true' }}
     runs-on: ubuntu-latest
-    # Installs SIX toolchains (go, ruby, elixir, python, node, rust) and then
-    # runs one conformance suite. The setup actions dominate; 30 bounds a
-    # matrix leg that hangs on a download.
     timeout-minutes: 30
     strategy:
-      # One language at a time. Six runners for six stdlib suites costs more
-      # than it returns, and a failure is easier to read from a serial log.
       max-parallel: 2
       fail-fast: false
       matrix:
@@ -1654,10 +860,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # The toolchain comes from the matrix, so a bun-only repo does not install
-      # an entire Go toolchain to run one test file. Each entry is the setup
-      # action the language's own job uses, deliberately the same action and the
-      # same version default, so the two paths cannot drift.
       - name: install go
         if: ${{ matrix.language == 'go' }}
         uses: actions/setup-go@v7
@@ -1685,48 +887,6 @@ jobs:
       - name: install rust
         if: ${{ matrix.language == 'rust' }}
         uses: dtolnay/rust-toolchain@stable
-      # Kit's own tree, for the fallback suite below. Fetched by a NAME and never
-      # read out of `$GITHUB_ACTION_PATH`, and the reason is the same one the
-      # language jobs use: GitHub documents `GITHUB_ACTION_PATH` as
-      # composite-action-only, so inside a REUSABLE WORKFLOW it is not set and
-      # `${GITHUB_ACTION_PATH}/…` expands to nothing. Under `set -euo pipefail`
-      # that is not a missing optional path — it is `unbound variable` and the
-      # step dies on its first line. The whole of that argument is in the
-      # `kit-gate-tree` comment block on the `zizmor` job's fetch step below.
-      #
-      # WHY `run:` AND NOT `uses: actions/checkout`, which is the SECOND fatal on
-      # this line. The action REFUSES a `path:` outside the workspace, from its own
-      # source at v7 `src/input-helper.ts`:
-      #
-      #   result.repositoryPath = path.resolve(githubWorkspacePath, path)
-      #   if (!(result.repositoryPath + path.sep).startsWith(githubWorkspacePath + path.sep))
-      #     throw new Error(`Repository path '…' is not under '…'`)
-      #
-      # It is a guard rather than a quirk — the action cleans up after itself and
-      # persists credentials relative to the workspace — and NO input relaxes it.
-      # Measured in `anywaye/parlor` run 37249271580, job `ci (kit, node) /
-      # secrets`:
-      #
-      #   ##[error]Repository path '/home/runner/work/_temp/kit' is not under
-      #             '/home/runner/work/parlor/parlor'
-      #
-      # So a `git clone` into `$RUNNER_TEMP` sidesteps the guard entirely and
-      # writes wherever it likes, which is the only place this tree may go (see
-      # below). `tests/validate.sh`'s `checkout_path_check` now fails on any
-      # `actions/checkout` in this directory whose `path:` is not under the
-      # workspace, so the shape cannot come back by accident.
-      #
-      # WHY `$RUNNER_TEMP` AND NOT `.kit` INSIDE THE WORKSPACE. A second git
-      # repository nested inside the one under test is a nested-repo question
-      # with no good answer: its files are swept by the artifact upload and by
-      # any gate step that walks the tree. `$RUNNER_TEMP` is per-job scratch
-      # space, emptied when the job ends — the lifetime this file needs.
-      #
-      # CREDENTIALS. `anywaye/kit` is PUBLIC, so this clone needs no token — which
-      # is a stronger position than the `persist-credentials: false` the action
-      # was given, because nothing is written to `.git/config` to be cleaned up.
-      # `GIT_TERMINAL_PROMPT=0` is set so a future private repo fails instead of
-      # hanging on a prompt that cannot be answered in CI.
       - name: kit (conformance fallback)
         env:
           KIT_REF: ${{ inputs.kit-lint-ref }}
@@ -1742,10 +902,6 @@ jobs:
           git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
           echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
       - name: conformance suite
-        # The suite the repo copied, not the one in kit: a service that has
-        # patched its own middleware runs its own tests. Falls back to kit's
-        # copy when the repo has not adopted the template yet, so turning the
-        # input on is never a red build for want of a file.
         working-directory: ${{ inputs.working-dir }}
         env:
           KIT_TELEMETRY_DIR: ${{ inputs.working-dir }}/templates/otel/${{ matrix.language }}
@@ -1772,63 +928,19 @@ jobs:
               "$RUNNER_TEMP/kit-telemetry" ;;
           esac
 
-  # ------------------------------------------------------------------ zizmor
-  # GitHub Actions' own security audit, run on the adopting repository's own
-  # workflows. It is a separate job because it needs kit's own tree to run in,
-  # and a language job's matrix has no use for a whole extra checkout. The
-  # audit looks at the workflow's own shape — who can write, what is pinned,
-  # what persists a credential.
-  #
-  # It ships with an opt-in, for a reason. The
-  # audit's output depends entirely on the adopting repository's workflows,
-  # which kit does not control and did not write, so making it fatal on day one
-  # would mean a repo inherits a red build for a finding kit introduced. A repo
-  # that wants it now asks for it; every repo gets it the moment this stops
-  # being true, because the input is already here and the default only ever
-  # moves down.
-  #
-  # `unpinned-uses` is reported and does not fail the job. That is not a
-  # baseline: the finding is counted and printed on every run, and the decision
-  # it is waiting on is written down in DECISIONS.md under MD10 with all three
-  # options costed. Every other audit is fatal.
   zizmor:
     name: zizmor
     if: ${{ inputs.zizmor == 'true' }}
     runs-on: ubuntu-latest
-    # `pip install zizmor`, a sparse fetch of kit, and one audit. 15 bounds a
-    # stalled network install.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: install zizmor (pinned)
-        # From PyPI, not a release archive: zizmor publishes no checksums file,
-        # so pinning its archives would mean pinning hashes we computed
-        # ourselves, which is a weaker claim than hadolint's published one.
-        # The version is exact because an audit whose findings change when the
-        # tool is upgraded is an audit nobody can reason about.
         run: |
           set -euo pipefail
           python3 -m pip install --quiet --disable-pip-version-check 'zizmor==1.30.1'
-      # Kit's own tree, for `tests/zizmor_gate.sh`. Fetched by a NAME, never
-      # `$GITHUB_ACTION_PATH` — the variable is documented as composite-action-only
-      # and this is a reusable workflow, so it is not set here and reading it
-      # under `set -euo pipefail` is a fatal on the step's first line. The full
-      # argument is in the `kit (gate scripts)` step of every language job;
-      # `kit (gate scripts)` step; this job is the SECOND one that had the defect
-      # and the reason `kit_gate_tree_check` asserts on the variable's absence
-      # rather than on either file happening to be correct today.
-      #
-      # Hand-rolled `git` rather than `uses: actions/checkout`, and this is the
-      # THIRD job that carried the same latent fatal: the action refuses a `path:`
-      # outside the workspace, and this step pointed one at the runner's scratch
-      # directory. It had simply never fired, because this job is opt-in and
-      # opt-in job failed first. All three copies are
-      # fixed together for the reason AGENTS.md records about the
-      # `REUSABLE_WORKFLOWS` list: a fix that leaves two armed is a fix that has
-      # not landed, and "nobody has seen it fail" is a fact about which job runs
-      # first, not about whether it fails.
       - name: kit (gate scripts)
         env:
           KIT_REF: ${{ inputs.kit-lint-ref }}
@@ -1844,81 +956,19 @@ jobs:
           git -C "$KIT_TREE_DIR" checkout --quiet FETCH_HEAD
           echo "KIT_TREE_DIR=$KIT_TREE_DIR" >> "$GITHUB_ENV"
       - name: zizmor (unpinned-uses recorded, everything else fatal)
-        # `PY` is exported as well as `KIT_TREE_DIR`, and that is a SECOND defect
-        # in this job rather than a detail of the first: `tests/zizmor_gate.sh`
-        # ends by piping zizmor's JSON report through `"$PY" - …`, and nothing
-        # here ever set it. In kit's own gate `PY` comes from
-        # `kit_bootstrap_python`, which `validate.sh` calls; a reusable workflow
-        # has no such call, so the script reached its own last line and died on
-        # `PY: unbound variable`. Both are the same shape — a script written to
-        # be called by one caller, run by another that had not been read.
-        #
-        # `KIT_TREE_DIR` is not re-declared here: the fetch step above exports it
-        # through `$GITHUB_ENV`. `PY` still has to be, because no step exports it.
         env:
           PY: python3
         run: bash "$KIT_TREE_DIR/tests/zizmor_gate.sh" "$GITHUB_WORKSPACE" "$(command -v zizmor)"
 
-  # ------------------------------------------------------------------ tenancy
-  # Opt-in (see the `tenancy` input). Core's account-isolation declaration
-  # checker, run against the adopting repository's own tree.
-  #
-  # A separate job because it needs core's harness on disk, and a language job's
-  # matrix has no use for a whole extra checkout. It is toolchain-independent —
-  # the checker is stdlib-only Python — so it runs once, not once per language.
-  #
-  # THE SUBJECT IS THE CALLER, AND THAT IS THE ARGUMENT FOR THIS JOB LIVING
-  # HERE. Every job in this file runs against the caller's tree; a red tenancy
-  # finding lands on the repository that owns `tenancy.yml` and can fix it,
-  # which is the finding MD36's first reason excludes (a finding nobody in this
-  # repository can fix). The alternative — thirteen adopting repositories each
-  # hand-rolling a fetch of anywaye/core and each pinning its own ref — is the
-  # drift this repository exists to prevent, and it is strictly worse than the
-  # one fetch and one pin this job makes.
-  #
-  # WHAT IT DOES NOT CHECK, said plainly: this job runs `tenancy-check` and
-  # nothing else. The sibling `account-scope-check` is a separate checker with
-  # a separate adoption state — measured 2026-10-06, identity is green on
-  # `tenancy-check` and carries 42 failures from `account-scope-check` in the
-  # same tree — and wiring it in is a different packet. Do not read a green
-  # here as "this service has adopted tenancy"; read it as "this service's
-  # tenancy.yml is true of its tree".
   tenancy:
     name: tenancy
     if: ${{ inputs.tenancy == 'true' }}
     runs-on: ubuntu-latest
-    # A sparse fetch of core plus `tenancy-check`. 20 bounds a stalled fetch
-    # and leaves the checker room on a large tree.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # Core's own tree, for the checker below. Fetched by a NAME and never read
-      # out of `$GITHUB_ACTION_PATH`, for the reason the two kit fetches above
-      # give: the variable is documented as composite-action-only, so inside a
-      # REUSABLE WORKFLOW it is not set, and reading it under `set -euo pipefail`
-      # is a fatal on the step's first line. The whole of that argument is in
-      # the `kit (conformance fallback)` and `kit (gate scripts)` steps; this
-      # is the THIRD hand-rolled fetch in this file and the first that reaches
-      # outside kit.
-      #
-      # WHY CORE AND NOT KIT, AND WHY A FETCH AND NOT A VENDORED COPY. The
-      # checker is core's: it reads `tenancy.yml` against
-      # `schemas/tenant-isolation.schema.json`, and kit ships no schema and no
-      # checker. A copy of `tenancy_check.py` in kit would be a copy that can
-      # drift from core's schema — the same reason courier's gate-self-test
-      # fetches core rather than vendoring the gate checker. So this job
-      # establishes the notion of core's harness for the first time, through the
-      # same idiom the kit fetches use: a public repository, no token,
-      # `$RUNNER_TEMP` scratch, a pin that is an input.
-      #
-      # WHAT IT SPARSE-CHECKS OUT, and why `harness` and not the whole tree: the
-      # wrapper resolves `tenancy_check.py` and `anywaye_contract.py` beside
-      # itself, and the schema's constraints are re-implemented in the Python
-      # (the file is stdlib-only), so `harness/` is the whole of what this job
-      # reads. A full clone of core on every opt-in push is a cost paid for
-      # files nobody opens.
       - name: core (harness)
         env:
           CORE_REF: ${{ inputs.kit-core-ref }}
@@ -1934,24 +984,6 @@ jobs:
           git -C "$CORE_TREE_DIR" checkout --quiet FETCH_HEAD
           echo "CORE_TREE_DIR=$CORE_TREE_DIR" >> "$GITHUB_ENV"
       - name: tenancy-check
-        # THE EXIT-CODE CONTRACT IS THE WRAPPER'S, AND THIS STEP PASSES IT
-        # THROUGH UNTOUCHED. `core/harness/bin/tenancy-check` exits 0 (no
-        # failure — warnings may still print), 1 (at least one failure) or 2
-        # (the check could not happen), and its header says the one thing a
-        # caller branches on is the exit code. So this step captures the status
-        # and re-emits it rather than letting `set -e` abort on the first
-        # non-zero and lose the summary — a wrapper that turns a refusal into a
-        # pass is worse than no wrapper, and the same is true of a step.
-        #
-        # THE SUMMARY IS PUBLISHED ON EVERY EXIT CODE, including 0. A green run
-        # with warnings is a report worth reading — `enumeration-partial` means
-        # "this machine could not answer that question" — and a red run is a
-        # diagnosis that belongs in the step summary, not only in an artifact
-        # somebody has to download. The JSON is uploaded as an artifact below on
-        # every exit code, so the findings survive the run.
-        #
-        # `CORE_TREE_DIR` is not re-declared here: the fetch step above exports
-        # it through `$GITHUB_ENV`.
         env:
           CORE_TREE_DIR: ${{ env.CORE_TREE_DIR }}
         run: |
@@ -1959,11 +991,6 @@ jobs:
           json="$RUNNER_TEMP/tenancy.json"
           status=0
           "$CORE_TREE_DIR/harness/bin/tenancy-check" --json . > "$json" || status=$?
-          # The summary is best-effort and must not mask the exit code: a
-          # checker that could not run (exit 2) writes no JSON, and the step's
-          # verdict is the exit code, not the summary. So the reader handles a
-          # missing or corrupt file and always exits 0 — the one status this
-          # step swallows is the summary's, never the checker's.
           python3 - "$json" >> "$GITHUB_STEP_SUMMARY" <<'PY'
           import json
           import sys
@@ -2004,7 +1031,4 @@ jobs:
         with:
           name: tenancy-findings
           path: ${{ runner.temp }}/tenancy.json
-          # `warn`, not `error`: a checker that could not run (exit 2) writes no
-          # JSON, and the step above has already failed with the real reason. A
-          # second failure here would be noise on top of the verdict.
           if-no-files-found: warn

@@ -1,33 +1,3 @@
-# kit template — W3C Trace Context propagation for a Phoenix service.
-#
-# Copy traceparent.ex into your service (`lib/<app>/telemetry/`), then
-# `mix test test/test_traceparent.exs`. The suite travels with it.
-#
-# The upstream OTel SDK does this for you — see phoenix_telemetry.ex.snippet for
-# the versioned wiring. Use this file when you need the header handling on its
-# own: a `Req` plug, a PubSub subscriber, or a test that asserts propagation
-# without standing up an SDK.
-#
-# REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-# https://www.w3.org/TR/trace-context/
-#
-# IMPLEMENTED SECTIONS (every one is asserted in test_traceparent.exs)
-#   §3.2.1     header name: accept any case, send lowercase
-#   §3.2.2.1   version is 2 hex chars; ff is forbidden
-#   §3.2.2.2   version-format for version 00
-#   §3.2.2.3   invalid trace-id -> ignore the traceparent (all zeroes forbidden)
-#   §3.2.2.4   invalid parent-id -> ignore the traceparent (all zeroes forbidden)
-#   §3.2.2.5   trace-flags is a bit field; mask on read
-#   §3.2.2.5.1 the sampled flag is the only flag in version 00
-#   §3.2.2.5.2 reserved flags MUST be set to zero on the wire
-#   §3.2.4     higher version: parse positionally, re-emit at 00, drop unknowns
-#   §3.3       a failed traceparent MUST NOT be rescued by a tracestate
-#   §3.3.1.5   tracestate: propagate >=512 chars, truncate whole entries only
-#   §4.2/§4.3  no traceparent -> new trace; invalid -> restart, never an error
-#
-# NO DEPENDENCIES. `:crypto`, `:public_key`, and ExUnit. The `:opentelemetry` and
-# `:telemetry` hex deps are referenced by version in phoenix_telemetry.ex.snippet,
-# not required here — kit has no dependencies and this module must not grow one.
 
 defmodule KitOtel.Traceparent do
   @moduledoc """
@@ -38,20 +8,12 @@ defmodule KitOtel.Traceparent do
   the file header for the spec sections behind each rule.
   """
 
-  # Bit 0 of trace-flags (§3.2.2.5.1). It is a bit in a field, not the field's
-  # value: reading `flags == 1` instead of `flags &&& 1 == 1` is the single most
-  # common trace-context bug, and it is why this is a named constant.
   @sampled 0x01
 
-  # A traceparent is exactly 55 characters: 2 version, 32 trace-id, 16 parent-id,
-  # 2 trace-flags, and 3 dashes (§3.2.2.2).
   @min_header_len 55
 
-  # §3.3.1.5: "Vendors SHOULD propagate at least 512 characters of a combined
-  # header." Bigger than this and we truncate whole entries.
   @tracestate_limit 512
 
-  # §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
   @tracestate_entry_limit 128
 
   @zero_trace_id String.duplicate("0", 32)
@@ -122,8 +84,6 @@ defmodule KitOtel.Traceparent do
     @spec outbound_headers(t()) :: %{optional(binary()) => binary()}
     def outbound_headers(%__MODULE__{} = hop) do
       headers = %{
-        # §3.2.1: send lowercase. The name is part of the contract even though
-        # the receiving side is required to be case-insensitive.
         "traceparent" => KitOtel.Traceparent.format_traceparent(hop.trace_id, hop.span_id, hop.flags)
       }
 
@@ -147,11 +107,6 @@ defmodule KitOtel.Traceparent do
   """
   @spec parse(binary() | nil) :: {:ok, TraceParent.t()} | {:error, :invalid}
   def parse(value) when is_binary(value) do
-    # The binary pattern does the positional work of §3.2.4 in one step: it
-    # pins the three dash delimiters at bytes 2, 35 and 52, so a header with
-    # any other delimiter cannot match at all. That is stricter than checking the
-    # dashes separately and is why this parse cannot be talked into accepting a
-    # header with, say, underscores.
     with true <- byte_size(value) >= @min_header_len,
          <<version::binary-size(2), "-", trace_id::binary-size(32), "-", parent_id::binary-size(16),
            "-", flags_field::binary-size(2), _rest::binary>> <- value,
@@ -194,18 +149,12 @@ defmodule KitOtel.Traceparent do
         %ServerHop{
           trace_id: tp.trace_id,
           span_id: span_id,
-          # §3.2.5: a bit field, so mask on read rather than carry the bytes
-          # through. §3.2.5.2 requires the reserved bits to be zero outbound.
           flags: Bitwise.band(tp.flags, @sampled),
           tracestate: forward_tracestate(header(headers, "tracestate")),
           continued: true
         }
 
       {:error, :invalid} ->
-        # §3.3: "If the vendor failed to parse traceparent, it MUST NOT attempt
-        # to parse tracestate." §4.2 makes it explicit for the no-traceparent
-        # case: a tracestate alone "is invalid and MUST be discarded".
-        # Forwarding it would attach a vendor's state to an unrelated trace.
         %ServerHop{trace_id: new_trace_id(), span_id: span_id, flags: 0, continued: false}
     end
   end
@@ -240,10 +189,8 @@ defmodule KitOtel.Traceparent do
       value
       |> String.split(",")
       |> Enum.map(&String.trim/1)
-      # §3.3.1.1: "Empty and whitespace-only list members are allowed."
       |> Enum.reject(&(&1 == "" or byte_size(&1) > @tracestate_entry_limit))
 
-    # Pop from the end until the combined value fits (§3.3.1.5).
     trimmed = drop_from_end(entries)
 
     case trimmed do
@@ -295,19 +242,12 @@ defmodule KitOtel.Traceparent do
     if id == @zero_span_id, do: "0000000000000001", else: id
   end
 
-  # -- internals ---------------------------------------------------------------
 
-  # §3.2.2.1: "Version ff is invalid." Anything that is not two lowercase hex
-  # characters never reaches here — `lowcase_hex?` checked it in `parse/1`.
   defp parse_version(<<"ff", _rest::binary>>), do: {:error, :invalid}
   defp parse_version(hex), do: {:ok, String.to_integer(hex, 16)}
 
   defp parse_flags(hex), do: {:ok, String.to_integer(hex, 16)}
 
-  # §3.2.2.2 defines version 00 as exactly these four fields: trailing data means
-  # the sender is not speaking version 00, and accepting it would be inventing a
-  # format the spec does not define. §3.2.4 allows trailing fields on a higher
-  # version, but only after a dash — anything else is unparseable.
   defp check_trailing(value, 0), do: if(byte_size(value) == @min_header_len, do: :ok, else: {:error, :invalid})
 
   defp check_trailing(value, _version) when byte_size(value) > @min_header_len,
@@ -315,8 +255,6 @@ defmodule KitOtel.Traceparent do
 
   defp check_trailing(_value, _version), do: :ok
 
-  # Sliced only when there is something past the fixed fields, so a version-00
-  # header (exactly 55 bytes) cannot index past its own end.
   defp extra(value) when byte_size(value) > @min_header_len,
     do: binary_part(value, @min_header_len + 1, byte_size(value) - @min_header_len - 1)
 
@@ -343,9 +281,6 @@ defmodule KitOtel.Traceparent do
 
   defp encode_flags(flags), do: flags |> Bitwise.band(0xFF) |> Integer.to_string(16) |> String.pad_leading(2, "0")
 
-  # §3.2.2 defines the alphabet as HEXDIGLC, lowercase only. Uppercase is rejected
-  # rather than folded: accepting it means two services disagree about whether a
-  # header is valid, and one of them starts a new trace.
   defp lowcase_hex?(""), do: false
   defp lowcase_hex?(value), do: not String.match?(value, ~r/[^0-9a-f]/)
 end

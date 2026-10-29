@@ -11,33 +11,6 @@ spec:
     repoURL: oci://ghcr.io/anywaye/charts/website
     chart: website
     targetRevision: 0.1.0
-    # PARLOR'S ONE CROSS-NAMESPACE ADDRESS, AND WITHOUT IT PARLOR DOES NOT RUN.
-    #
-    # parlor is the browser front end, and its runtime reads `IDENTITY_URL` from
-    # the environment (`process.env.IDENTITY_URL`) to reach identity's `/auth`
-    # session endpoints. Its chart ships `env: {}` — "the manifest carries no
-    # env; a service's configuration is its own" — and install.sh's
-    # parlor-secrets carries only `DATABASE_URL` and the telemetry switch, so on
-    # a box NOTHING set it: parlor was left with its compiled fallback, which is
-    # the COMPOSE stack's `http://identity:8080`. That resolves only inside a
-    # namespace called `identity`, and parlor runs in `parlor`, so parlor could
-    # not serve a sign-in.
-    #
-    # THE SUBSTRATE OWNS THE TOPOLOGY, so the address is set HERE, in parlor's
-    # own Application, rather than by teaching parlor's chart a namespace it
-    # cannot know. Same rule, same spelling and same check as gateway's
-    # (`tests/substrate_test.sh` §24): one fact — identity's `identity` Service
-    # in the `identity` namespace — spelled once per consumer, and asserted to
-    # name a Service the substrate's manifests ship.
-    #
-    # `BILLING_URL` ARRIVED WITH BILLING, and until 2026-10-16 it was
-    # deliberately absent: parlor treats an empty/absent one as the supported
-    # "no billing deployed" state, and the substrate shipped no billing. billing
-    # joined the set with its Application (2026-10-15) and its database, secrets
-    # and migration (2026-10-16), so naming the address here now points at a
-    # Service these manifests ship — which is exactly what §24 checks. The
-    # address is billing's own Service port (80 → the container's 3000); the
-    # BFF calls it for every billing route a screen reads.
     helm:
       values: |
         env:

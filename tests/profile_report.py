@@ -1,27 +1,4 @@
 #!/usr/bin/env python3
-"""Render the TSV `tests/validate.sh` writes when `KIT_PROFILE` is set.
-
-WHY THIS IS A PROGRAM AND NOT A `sort`. The file it reads is appended to by
-every gate copy the self-test spawns, so it has ~1,000 rows whose labels are
-long, whose kinds are five (`check`, `cpu`, `tier`, `phase`, `par`), and which
-fall into two populations that must never be added together: the GATE's rows and
-the SELF-TEST's rows. Aggregating those into one column is how a profile claims
-a ten-minute run that cost four, and it is why this renders the two populations
-separately and refuses to sum a `cpu` row with a `phase` row. A `par` row is a
-parallel region's wall clock: it tiles with the `phase` rows (regions do not
-overlap each other) while the `cpu` rows overlap inside it, so it is summed with
-the one and never with the other.
-
-Standard library only, like the other programs in `tests/`. There was a
-`carve-out boundary` check in `validate.sh` that walked the AST of every Python
-file here and failed on an import outside json/os/re/sys/argparse/subprocess/
-difflib/glob/urllib/__future__; it went with the cross-repo fleet programs, and
-AGENTS.md records that the rule is now a convention rather than a control. So the
-two imports below are on their honour, and this file is deliberately the smallest
-thing in the directory: it reads a file and prints a table.
-
-    python3 tests/profile_report.py /tmp/profile.tsv [--top N] [--sort sum|label]
-"""
 
 import argparse
 import sys
@@ -34,20 +11,10 @@ TIER = "tier"
 VERDICT = "verdict"
 TOTAL = "total"
 
-# The self-test's own rows are prefixed by the tag `tests/self_test.sh` sets, so
-# the two populations can be told apart without a schema change. A row with no
-# tag belongs to the gate that was run directly.
 SELFTEST_PREFIX = "self_test "
 
 
 def read(path):
-    """Yield (kind, label, seconds, tag). A short or ragged row is SKIPPED.
-
-    A profiling file is written by several hundred appends from several
-    processes, so the last one can in principle be torn. A half-written row is
-    not a reason to lose the other 999 — and it must not be a reason to guess,
-    either, so it is counted and reported rather than repaired.
-    """
     rows, torn = [], 0
     with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -68,41 +35,19 @@ def read(path):
 
 
 def bucket(rows):
-    """Split into the gate's own rows and the self-test's copies' rows."""
     gate = [r for r in rows if not r[3].startswith(SELFTEST_PREFIX)]
     inner = [r for r in rows if r[3].startswith(SELFTEST_PREFIX)]
     return gate, inner
 
 
 def selftest_by_breakage(inner):
-    """Total wall time per breakage, from the `00 bootstrap` phase row.
-
-    Each breakage runs a whole gate copy, and that copy's FIRST phase row is
-    emitted right after it has resolved its interpreter — so it measures the
-    copy's startup and nothing before it. Every later row in the same copy is
-    that copy's real work, and summing the copy's rows measures the breakage.
-
-    The tag is the breakage label, which is what makes the column readable; the
-    breakage NUMBER is inside the label rather than parsed out of it, because
-    the label is the identifier the suite already prints and re-deriving a
-    number from prose is the sort of thing this repository keeps failing on.
-    """
     per = {}
     for kind, label, secs, tag in inner:
-        # The copy's OWN `total` row spans the whole copy and therefore contains
-        # every other row it wrote. Summing it with them would double the phase,
-        # so it is read for the printout and left out of the arithmetic — the
-        # same reason `cpu` rows are never added to `phase` rows.
         if kind == TOTAL:
             continue
         name = tag[len(SELFTEST_PREFIX):]
         entry = per.setdefault(name, {"total": 0.0, "rows": 0, "boot": 0.0,
                                       "wall": 0.0, "checks": 0.0})
-        # `check` and `tier` rows are NESTED INSIDE the `phase` row that covers
-        # them, so summing kinds together double-counts -- which is how the first
-        # version of this column reported a 48s copy as 99s. Only the PHASE and
-        # PAR rows tile a copy without overlapping, so only they are summed, and
-        # the copy's own `total` row is carried beside them as the number to trust.
         if kind in (PHASE, PAR):
             entry["total"] += secs
         elif kind in (CHECK, TIER):
@@ -116,7 +61,6 @@ def selftest_by_breakage(inner):
 
 
 def render(title, rows, top, limit=25):
-    """One table: slowest first. `cpu` rows are marked because they overlap."""
     print(f"\n== {title}  ({len(rows)} timed rows)")
     if not rows:
         print("   (none recorded)")
@@ -154,12 +98,6 @@ def main(argv=None):
 
     gate, inner = bucket(rows)
 
-    # The run's own wall clock, written on the EXIT trap. It is the DENOMINATOR:
-    # every table below is rows that sum to some part of it, and a profile whose
-    # rows account for most of a run is trustworthy in a way that one accounting
-    # for 40% of it is not. When it disagrees with the sum, the gap is time
-    # inside a check whose row was never written — a run killed mid-check, which
-    # is exactly what a `timeout` bound produces.
     for kind, label, secs, _ in gate:
         if kind == TOTAL:
             print(f"\n== wall clock of the gate that wrote this file: {secs:.2f}s")
@@ -168,10 +106,6 @@ def main(argv=None):
         print(f"   of which the self-test's {len(inner_totals)} copies spent "
               f"{sum(inner_totals):.1f}s in total, {sum(inner_totals) / len(inner_totals):.1f}s each")
 
-    # The gate's own phases and parallel regions, in wall time. This is the table
-    # a reader of a ten-minute run thinks in: it cannot double-count, because a
-    # phase row is emitted once per phase, a `par` row once per region, and the
-    # two tile the run without overlapping.
     render(
         "the GATE's phases and parallel regions, wall time (these do not overlap)",
         [r for r in gate if r[0] in (PHASE, PAR)],

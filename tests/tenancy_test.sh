@@ -1,88 +1,9 @@
 #!/usr/bin/env bash
-#
-# THE PROOF that kit's account-isolation templates isolate a tenant.
-#
-#   bash tests/tenancy_test.sh
-#
-# WHAT THIS IS, AND WHY IT IS A SEPARATE SCRIPT.
-#
-#   kit's other suites parse configuration. This one brings up a real Postgres
-#   from the stack kit ships, applies `templates/database/tenancy/substrate.sql`,
-#   runs `templates/database/tenancy/isolation.sql`, and reports every assertion —
-#   printing the ones that failed, with the reason each one exists.
-#
-#   It exists because "a service that reads another tenant's rows is a bug in
-#   review" is a claim about a RUNNING system. AGENTS.md's rule is that a config
-#   written from documentation rather than from the pinned image is a config that
-#   breaks on the first `bin/dev up`; this is the answer to that for the account
-#   boundary, which cannot be checked any other way.
-#
-# NINE THINGS, and the last five are what make the first one mean something:
-#
-#   1. every assertion in isolation.sql passes.        (the property)
-#   2. the CONTROL: with `FORCE ROW LEVEL SECURITY` removed, the OWNER half of the
-#      spine goes red and the LOGIN half stays green.   (the property is
-#      load-bearing, and it is load-bearing FOR THE OWNER specifically — which is
-#      the half a policy's mere presence cannot satisfy)
-#   3. the init plan, MEASURED: a wrapped policy calls the identity function once
-#      per statement and a bare one calls it once per candidate row. (a comment
-#      saying so is not a measurement)
-#   4. the assertion set is EXACTLY the one assertions.txt names, both ways.
-#      (the proof has not quietly shrunk)
-#   5. an ADOPTER'S FIXTURE SCHEMA, planted before the proof runs, is out of the
-#      sweep's scope and the proof is still green.  (0b: the sweep does not
-#      assume it owns the database)
-#   6. an unprotected account-scoped table in a schema the substrate DOES own
-#      turns the proof red.                            (5: and scoping the sweep
-#      did not turn it into a green constant)
-#   7. THE DATABASE'S OWN ADVISOR, `templates/database/tenancy/advisor.sql`, run
-#      against this cluster, reports ZERO ERROR and zero WARN on the two tables
-#      the substrate wrote.                            (the one question the five
-#      above cannot ask: a policy that PERMITS everything satisfies every denial,
-#      because a denial cannot tell permitted-by-predicate from
-#      permitted-by-accident)
-#   8. every rule in that advisor FIRES on a fixture built to trip it, naming
-#      itself and the object it fired on, AND stays silent on four views built to
-#      prove it is selective.                (a detective that has never fired is
-#      a detective you cannot trust; one that fires on everything is a detective
-#      nobody reads)
-#   9. THE AUDIT ANSWERS EVERY ROLE THE SAME. `anywaye.credential_tables()` is
-#      read as the owner, as the cluster's admin role and as the non-owner LOGIN
-#      role; the three answers must be identical AND non-empty.  (8: an audit
-#      whose answer depends on the reader's `search_path` reports "no credential
-#      path in this database" to the one role whose `"$user"` schema is `anywaye`,
-#      which is the most expensive reading in the file to believe)
-#
-#   Assertion 2 is the expensive and the important one. It is the control this
-#   repository's rules insist on: a control that never runs differently proves
-#   nothing. Without it, a proof that asserted "the owner reads no rows" would
-#   also pass on a template with no FORCE at all — which is precisely the trap
-#   this file exists for, because FORCE is absent from Supabase's guide and no
-#   lint in this fleet checks for it.
-#
-#   Assertions 0b and 5 are one measurement in two directions, and neither means
-#   anything alone. `identity` adopted this substrate and its whole-suite run then
-#   failed kit's account-isolation control: its test helper builds a private
-#   fixture schema per test by cloning tables with `LIKE ... INCLUDING ALL`, which
-#   does not copy row-level security, so every fixture carries an `account_id`
-#   column and no policies -- and a sweep that scanned the whole database named
-#   all of them, with the count moving per run (5, then 21) as neighbours went in
-#   and out of flight. 0b plants that shape and requires it to be ignored. 5
-#   requires an unprotected table in the substrate's OWN schema to still be
-#   named. Narrow the scope to `pg_temp` alone and 0b passes forever while 5 goes
-#   red, because every real table in every adopter is then outside it: which is
-#   the only reason 5 exists rather than 0b by itself.
-#
-# SKIPS LOUDLY, NEVER SILENTLY. No docker, no image, no network to GHCR: this is a
-# SKIP that names what it needed, and `validate.sh` counts it. A skip is honest; a
-# skip reported as a pass is the thing this repository forbids.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Two services. `alpha` and `beta` rather than real names, because the point is
-# that the harness does not know or care what the services are called.
 ALPHA=alpha
 BETA=beta
 
@@ -91,43 +12,11 @@ ISOLATION="$ROOT/templates/database/tenancy/isolation.sql"
 MANIFEST="$ROOT/templates/database/tenancy/assertions.txt"
 ADVISOR="$ROOT/templates/database/tenancy/advisor.sql"
 
-# ONE NAME FOR THE WHOLE RUN. This was `kit-tenancy`, written out at both
-# compose sites, and a compose project name namespaces that stack's containers,
-# networks and volumes — so two concurrent runs were one stack with two owners.
-# Observed rather than argued, and the tenancy shape is the worst of the two:
-# the second run cannot bring up a cluster ("removal of container … is already in
-# progress"), and the FIRST run — already mid-assertion — then dies part way
-# through assertion 5 with psql's exit code and no FAIL line of its own, because
-# the other run's teardown took the project volume out from under it. Through
-# validate.sh's FAIL summary that reads as a database-boundary violation, which
-# is precisely the claim this tier exists to make trustworthy.
-#
-# `$$` is the convention the four other docker tiers already use, and it is unique
-# among live processes on one machine — which is the scope that has to hold, since
-# CI gives every job its own daemon. DECISIONS.md records why not `mktemp`.
 PROJECT="kit-tenancy-$$"
 
-# THE HOST PORT is a fixed name of the same class in a different hat, and it is
-# WORSE than the project name, because it collides with the developer's own running
-# stack rather than only with another test run. `KIT_POSTGRES_PORT=15531` was
-# hardcoded; deriving only the project name would still leave two concurrent runs
-# of this tier fighting over one port, and the second red on `port is already
-# allocated` — the collision not fixed, merely relocated to the next namespace.
-#
-# This suite never reaches postgres from the host: every query goes through
-# `docker exec`. The port is published only because the shipped compose file
-# publishes it, and moving it is enough to keep two runs apart.
-#
-# The probe is the dependency-free one stack_live_test.sh uses (`/dev/tcp`, not
-# `nc` or python), for the reason it gives: nothing in a tier may assume a tool is
-# installed. The SEARCH is below `fail`'s definition — see the comment there.
 
 WORK="${TMPDIR:-/tmp}/kit-tenancy.$$"
 IMAGE_TAG="17"
-# The pgvector layer pin, matching templates/compose/postgres/Dockerfile. It is
-# repeated here rather than read out of that file for the reason
-# tests/isolation_test.sh gives: parsing ARGs out of a BuildKit Dockerfile in bash
-# would be a second place for the pin to drift.
 PGVECTOR_TAG="17-0.8.6"
 
 say() { printf '%s\n' "$*"; }
@@ -137,20 +26,6 @@ fail() {
 }
 
 cleanup() {
-  # `docker compose down -v`, not `docker rm -f` plus a guessed volume name, for
-  # the reason tests/isolation_test.sh records: `docker-entrypoint-initdb.d` runs
-  # ONLY on a fresh volume, so a leaked volume makes the next run reuse an
-  # already-provisioned cluster and the suite fails on an assertion about state the
-  # previous run created — which reads exactly like a broken boundary.
-  #
-  # `docker rm -f kit-tenancy-control` and `docker volume rm
-  # kit-tenancy-control-vol` were REMOVED rather than derived, which is a claim
-  # worth making loudly because it is the opposite of what this file did. Nothing
-  # here ever creates either object: every control in this suite is a SQL mutation
-  # against THIS cluster, not a second container. So those two lines were reaching
-  # outside their own namespace to delete objects belonging to a different tier —
-  # `docker rm` takes a bare name and does not care who made it. Deleting a name
-  # this run never created is a teardown that removes something it does not own.
   if [ -f "$WORK/compose/docker-compose.yml" ]; then
     docker compose --project-name "$PROJECT" -f "$WORK/compose/docker-compose.yml" \
       down -v --remove-orphans >/dev/null 2>&1 || true
@@ -159,10 +34,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# THE HOST PORT, searched here rather than at the top of the file because it calls
-# `fail`, and shellcheck (correctly) reports a function used before it is defined.
-# Being the first thing to fail means a machine with no free port says so by name
-# instead of exiting 127 on a missing function.
 PGPORT_BASE=$(( 15500 + ($$ % 400) ))
 PGPORT=""
 _p=0
@@ -180,9 +51,6 @@ for f in "$SUBSTRATE" "$ISOLATION" "$MANIFEST" "$ADVISOR"; do
   [ -r "$f" ] || fail "$(basename "$f") is not readable, so there is nothing to prove"
 done
 
-# ---------------------------------------------------------------------------
-# Environment. Everything missing is named, because "SKIP (docker)" tells a
-# reader nothing about which of three things was absent.
 if ! command -v docker >/dev/null 2>&1; then
   say "SKIP tests/tenancy_test.sh: docker is not installed, so the account boundary is unexercised."
   exit 3
@@ -194,29 +62,15 @@ fi
 
 mkdir -p "$WORK"
 
-# Derived from `$PROJECT`, which is the whole point. Spelled out, it addressed
-# ONE cluster shared by every run of this suite, so every `psql_in` and
-# `run_script` below could be answered by whichever run won the race — a proof
-# that asserts against a cluster it did not start.
 C="$PROJECT-postgres-1"
 
-psql_in() { # psql_in <role> <db> <sql>
   docker exec -e PGPASSWORD=anywaye "$C" psql -U "$1" -d "$2" -tAX -c "$3"
 }
 
-# psql as the OWNER with the whole script, because the assertions need the simple
-# query protocol (a script is a batch) and need the transaction the script opens
-# for itself.
-run_script() { # run_script <db> <sql-file>
   docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$1" -A -t -F'@' \
     -v ON_ERROR_STOP=1 -f "$2" 2>&1
 }
 
-# The wait is for the EVIDENCE the init script produces, not for the server to
-# answer. During `docker-entrypoint-initdb.d` the image runs a TEMPORARY server
-# that `pg_isready` returns 0 against, so polling either that or a healthcheck
-# returns while the cluster is still half-provisioned.
-wait_for_provisioning() { # wait_for_provisioning <container> <role> <db>
   local container="$1" role="$2" db="$3" out
   for _ in $(seq 1 90); do
     out="$(docker exec -e PGPASSWORD=anywaye "$container" \
@@ -230,9 +84,6 @@ wait_for_provisioning() { # wait_for_provisioning <container> <role> <db>
   return 1
 }
 
-# The WHOLE of templates/compose, not just the postgres directory, so the thing
-# under test is the STACK kit ships: the init script's bind mount, the `build:`
-# args and the environment block are all in that one file.
 cp -R "$ROOT/templates/compose" "$WORK/compose"
 docker cp "$SUBSTRATE" "$C:/tmp/substrate.sql" >/dev/null 2>&1 || true
 
@@ -272,14 +123,6 @@ say "== the cluster, provisioned by templates/compose/postgres/initdb/10-cluster
 docker logs "$C" 2>&1 | grep -E '\[cluster\]' | sed 's/^/   /' \
   || say "   (no [cluster] lines — the init script did not run on this volume)"
 
-# ---------------------------------------------------------------------------
-# ASSERTION 0 — the topology. Before asking whether isolation works, ask whether
-# the cluster is the shape the contract claims: one database, and TWO roles, of
-# which the login role owns nothing.
-#
-# Without this, every assertion below passes on a cluster with no `_app` role at
-# all, because isolation.sql's preflight would be the only thing that noticed and
-# a proof that stops at its own preflight is a proof that stopped.
 say ""
 say "== assertion 0: the topology the templates require is present"
 for svc in "$ALPHA" "$BETA"; do
@@ -289,10 +132,6 @@ for svc in "$ALPHA" "$BETA"; do
   got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_roles WHERE rolname = '${svc}_app' AND rolcanlogin AND NOT rolsuper")"
   [ "$got" = "1" ] || fail "expected one non-superuser LOGIN role named ${svc}_app; found $got"
-  # The membership, in the one direction that is allowed. The reverse is what
-  # would undo the design, so it is asserted absent here as well as present:
-  # a claim that a direction is allowed is worthless without the claim that the
-  # other one is not.
   got="$(psql_in anywaye anywaye_platform \
     "SELECT count(*) FROM pg_auth_members m
        JOIN pg_roles member ON member.oid = m.member
@@ -308,10 +147,6 @@ for svc in "$ALPHA" "$BETA"; do
 done
 say "   topology: 2 databases, 2 owner roles, 2 non-owner LOGIN roles, membership in one direction only"
 
-# ---------------------------------------------------------------------------
-# THE SUBSTRATE, applied. This is the file a service applies once, and it is
-# applied here by the owner role — the same role a service's migrations run as,
-# which is the only role the design is interesting for.
 say ""
 say "== applying templates/database/tenancy/substrate.sql, as the OWNER role"
 docker cp "$SUBSTRATE" "$C:/tmp/substrate.sql" >/dev/null
@@ -324,26 +159,6 @@ fi
 docker cp "$ISOLATION" "$C:/tmp/isolation.sql" >/dev/null
 say "   installed: schema anywaye, current_account_id/0, begin_account/1, protect_table/2, unprotected_tables/0"
 
-# ---------------------------------------------------------------------------
-# ASSERTION 0b — AN ADOPTER'S FIXTURE SCHEMA, PLANTED BEFORE THE PROOF RUNS.
-#
-# This is identity's shape, reproduced rather than described. Its test helper
-# builds a private fixture schema per test by cloning tables with
-# `LIKE ... INCLUDING ALL`, and `LIKE` does not copy row-level security: an
-# `account_id` column with no policies. A sweep that scans the whole database
-# names every one of those, so `identity`'s whole-suite run failed kit's
-# account-isolation control on a database whose five real tables were all
-# protected -- and the count moved per run with how many neighbours were
-# mid-flight.
-#
-# It is planted HERE, before assertion 1 runs, and permanently rather than in a
-# transaction the proof rolls back, because the defect is precisely that the
-# sweep sees a schema it did not create and does not roll back.
-#
-# The clone is a real `LIKE ... INCLUDING ALL` rather than a hand-written
-# `create table`, because a hand-written table is not the thing that went wrong:
-# the shape that matters is a fixture built by a helper the substrate never saw,
-# and a fixture authored here would be a different shape wearing the same name.
 say ""
 say "== assertion 0b: an adopter's fixture schema is present, and out of the sweep's scope"
 psql_in "$ALPHA" "$ALPHA" "
@@ -361,9 +176,6 @@ psql_in "$ALPHA" "$ALPHA" "
   );
 " >/dev/null
 
-# ...and it really is unprotected, so a green proof below cannot be a sweep that
-# found nothing to ignore. Both halves are read from the catalog rather than
-# assumed: an `account_id` column, and neither `relrowsecurity` nor a policy.
 got="$(psql_in "$ALPHA" "$ALPHA" "
   SELECT count(*) FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -374,26 +186,16 @@ got="$(psql_in "$ALPHA" "$ALPHA" "
      AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)")"
 [ "$got" = "2" ] || fail "the fixture schema holds $got unprotected account-scoped table(s), not 2, so assertion 0b is not testing what it claims"
 
-# The sweep must not name either of them. Read the function's own answer rather
-# than inferring it from the proof's verdicts, so a failure here says "the sweep
-# reached into a foreign schema" instead of "some assertion went red".
 leaked="$(psql_in "$ALPHA" "$ALPHA" \
   "SELECT count(*) FROM anywaye.unprotected_tables() WHERE table_schema = 'kit_neighbour_fixture'")"
 [ "$leaked" = "0" ] || fail "the sweep named $leaked table(s) in an adopter's fixture schema. It is scoped to the schemas the substrate was applied in, and kit_neighbour_fixture is not one of them."
 say "   2 unprotected account-scoped tables in kit_neighbour_fixture, and the sweep names neither."
 say "   identity's whole-suite failure was exactly this, with the count moving per run."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 1 — every assertion in the set passes.
 say ""
 say "== assertion 1: every assertion in templates/database/tenancy/isolation.sql passes"
 out="$(run_script "$ALPHA" /tmp/isolation.sql)"
 
-# The result rows are `assertion@expected@actual@verdict@why`, and `why` is prose
-# that may itself contain `@` in a future edit, so only the first three fields are
-# split and the rest is taken as the remainder. A field-splitting shape chosen
-# against the CURRENT prose rather than the intended one is how a check starts
-# reporting empty results on a correct tree.
 failures="$(printf '%s\n' "$out" | grep '@fail@' || true)"
 total="$(printf '%s\n' "$out" | grep -cE '@(pass|fail)@' || true)"
 [ "$total" -gt 0 ] || {
@@ -417,10 +219,6 @@ if [ -n "$failures" ]; then
 fi
 say "   $total assertions, all pass"
 
-# ---------------------------------------------------------------------------
-# ASSERTION 4 — the assertion set is EXACTLY the one assertions.txt names, both
-# ways. Run before the controls so a shrunken proof is caught before it is used to
-# prove anything else.
 say ""
 say "== assertion 4: the proof returns EXACTLY the assertions assertions.txt names"
 want="$(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST" | sort)"
@@ -435,37 +233,14 @@ if [ "$want" != "$got_names" ]; then
 fi
 say "   $(printf '%s\n' "$want" | grep -c .) assertions, named identically in both files"
 
-# ---------------------------------------------------------------------------
-# ASSERTION 2 — THE CONTROL. The same proof, with `FORCE ROW LEVEL SECURITY`
-# removed from the substrate, must go red — and must go red on the OWNER half
-# ONLY.
-#
-# This is the measurement the packet exists for. Measured here, on this tree:
-#
-#   with FORCE      owner reads 1 row (its own), login reads 1 row
-#   without FORCE   owner reads 3 rows (every tenant's), login reads 1 row
-#
-# The login half staying green is the point rather than an inconvenience: it is
-# what makes it obvious that an isolation suite written only against the
-# application role passes on a template with no FORCE at all.
 say ""
 say "== assertion 2: the CONTROL — same proof, FORCE ROW LEVEL SECURITY removed"
 mkdir -p "$WORK/noforce"
-# The EXECUTABLE line, and only the executable line. A case-insensitive grep for the
-# words removes the substrate's own explanation of why FORCE is there as well, and a
-# control whose mutation also deletes the reasoning is a control whose recipe has to
-# be re-read every time somebody edits a comment — which is the "a breakage recipe
-# asserts its own premise before it mutates" rule, applied to a control rather than
-# to a self-test.
 grep -v "execute format('alter table %s force row level security'" \
   "$SUBSTRATE" >"$WORK/noforce/substrate.sql"
 if grep -q "execute format('alter table %s force row level security'" "$WORK/noforce/substrate.sql"; then
   fail "the control's mutation did not remove the FORCE statement, so the control would prove nothing"
 fi
-# ...and that it was SURGICAL: the substrate's own explanation of why FORCE is
-# required is still there. A mutation that removed the reasoning along with the
-# statement would leave a control nobody can read six months from now, and the
-# test for that is that the paragraph survives.
 grep -q "FORCE ROW LEVEL SECURITY is still required" "$WORK/noforce/substrate.sql" \
   || fail "the control's mutation also deleted the substrate's own explanation of why FORCE is required"
 docker cp "$WORK/noforce/substrate.sql" "$C:/tmp/substrate-noforce.sql" >/dev/null
@@ -480,8 +255,6 @@ if [ "$ctl_failures" -eq 0 ]; then
   say "      controls agree, which is the one outcome that proves nothing."
   fail "the FORCE assertion is not load-bearing"
 fi
-# The specific shape, because a control that goes red for an unrelated reason is
-# a control that proves something else.
 for name in \
   'owner/another-tenants-rows-read-as-none' \
   'owner/no-identity-reads-no-rows' \
@@ -493,7 +266,6 @@ for name in \
     fail "the FORCE control is red for the wrong reason"
   }
 done
-# ...and the login half must stay green, because that is what makes this specific.
 login_red="$(printf '%s\n' "$ctl" | grep '@fail@' | grep -c '^login/' || true)"
 [ "$login_red" -eq 0 ] || {
   say "FAIL: the login-role assertions went red without FORCE ($login_red of them)."
@@ -508,27 +280,6 @@ say "   the login-role half stayed green throughout, which is what makes this sp
 say "   an isolation suite written only against the application role passes on a"
 say "   template with no FORCE at all."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 5 — THE SWEEP'S OWN CONTROL, INSIDE THE SCOPED SWEEP.
-#
-# Assertion 0b proves the scope is narrow enough. This proves narrowing it did
-# not turn the sweep into a green constant — which is the failure mode of every
-# tempting version of this fix. Scope the sweep to `pg_temp` alone, or to
-# `anywaye` alone, and all three sweep assertions pass forever while naming no
-# real table in any adopter: `sweep/names-an-unprotected-table` finds the
-# control, `sweep/every-account-scoped-table-is-protected` counts it, and
-# `sweep/the-only-finding-is-the-control` matches it. Three greens, zero
-# information, and the sweep's positive control is now a control of nothing.
-#
-# So: a SECOND unprotected account-scoped table, planted in a schema the
-# substrate WAS applied in and left there permanently, must turn the proof red.
-# The scope is derived from the policies `protect_table` wrote, so this is the
-# honest question -- "is a real account-scoped table in the substrate's own
-# territory still named?" -- rather than an artefact of how the scope is spelled.
-#
-# It is `$ALPHA`'s own public schema, which is exactly where a service's tables
-# live and exactly what a service reaches by adding a column to a new table and
-# forgetting the substrate.
 say ""
 say "== assertion 5: the sweep still names an unprotected table in a schema the substrate OWNS"
 psql_in "$ALPHA" "$ALPHA" "
@@ -546,7 +297,6 @@ if [ -z "$scope_failures" ]; then
   say "      it is a green constant: it would pass on a service that never protected anything."
   fail "the sweep's control cannot fail inside its own scope"
 fi
-# ...and by the sweep assertion, not by an unrelated one going red.
 printf '%s\n' "$ctl_scope" | grep -q '^sweep/every-account-scoped-table-is-protected@' || {
   say "FAIL: the planted table went red, but NOT via sweep/every-account-scoped-table-is-protected."
   printf '%s\n' "$scope_failures" | awk -F@ '{print "       red instead: " $1}' | head -8
@@ -559,17 +309,9 @@ say "   named it: sweep/every-account-scoped-table-is-protected and"
 say "   sweep/the-only-finding-is-the-control both went red. The scope is narrow enough for"
 say "   an adopter (assertion 0b) and still able to fail (this)."
 
-# Put the substrate back so anything after this sees the real thing.
 docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   -v ON_ERROR_STOP=1 -q -f /tmp/substrate.sql >/dev/null 2>&1
 
-# ---------------------------------------------------------------------------
-# ASSERTION 3 — the `(select ...)` wrapping, MEASURED rather than asserted.
-#
-# Two temporary tables with identical rows and identical policies, differing only
-# in how the identity is written. A counting function records how many times it is
-# called, so the number is the plan's behaviour rather than this file's reading of
-# a document.
 say ""
 say "== assertion 3: the (select ...) wrapping, measured"
 cat >"$WORK/initplan.sql" <<'INITPLAN'
@@ -619,31 +361,6 @@ if [ "$wrapped_calls" -ge "$bare_calls" ]; then
 fi
 say "   the same policy and the same rows; only the wrapping differs."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 6 — THE DATABASE GRADES ITSELF.
-#
-# Assertions 1-5 are the boundary RUN: they execute denials and read verdicts.
-# This one asks the opposite question, and it is the one the other five cannot
-# ask. Every assertion above is satisfied by a policy that PERMITS everything,
-# because a permissive predicate returns rows and a denial cannot tell
-# "permitted because the predicate said so" from "permitted by accident". Nor can
-# any file scanner see that two permissive policies on one (table, role, command)
-# combine with OR and the table is wider than either reads.
-#
-# So `templates/database/tenancy/advisor.sql` is installed here and RUN, against
-# the same cluster, over the same tables the substrate wrote. A rule that cannot
-# be executed is a comment.
-#
-# THE SCOPE IS DERIVED, never named, and for the reason `substrate.sql`'s sweep
-# derives its own: the schemas a `protect_table` call actually wrote into. A list
-# of schemas here would be a second thing to remember and a thing to forget on
-# the first service whose tables live somewhere else.
-#
-# THE TABLES ARE REAL ONES, and `api_keys` is the interesting one: it carries all
-# FIVE of `protect_credential_table`'s policies, so `(api_keys, alpha, SELECT)`
-# holds two permissive policies. MD24's fifth policy is therefore the live case
-# for `multiple_permissive_policies`, and the advisor is asked about it on every
-# run of this suite rather than in a comment claiming the answer.
 say ""
 say "== assertion 6: templates/database/tenancy/advisor.sql, against this cluster"
 
@@ -656,15 +373,6 @@ if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
 fi
 say "   installed: anywaye.advisor_findings(p_schemas text[])"
 
-# Two tables, created exactly as a service's migrations create them: a
-# membership one, and a credential one. The second is the whole point — it is
-# the only table in this fixture that gets a fifth policy for a DIGEST, and
-# `multiple_permissive_policies` is going to be asked about it. The first is the
-# same shape for the CALLER, and `account_users` is deliberately the real fleet
-# name rather than a generic one: it is the table whose missing user scope made
-# `GET /v1/accounts` answer `[]` to an owner, and a fixture with a different name
-# would let a future reader assume the mechanism had been proven against a
-# generic stand-in.
 psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
   drop table if exists public.api_keys;
@@ -686,10 +394,6 @@ psql_in "$ALPHA" "$ALPHA" "
   set client_min_messages = warning;
   select anywaye.protect_credential_table('public.api_keys', 'token_digest')" >/dev/null
 
-# Five from protect_membership_table and five from protect_credential_table, each
-# being four from protect_table plus one of its own. Counted, because everything
-# below is a claim about those ten policies and a fixture that had silently
-# installed nine would still produce a clean advisor run.
 policies_now="$(psql_in "$ALPHA" "$ALPHA" "
   select count(*) from pg_policy p
     join pg_class c on c.oid = p.polrelid
@@ -706,10 +410,6 @@ scoped="$(psql_in "$ALPHA" "$ALPHA" "
    where p.polname ~ '_anywaye_(select|insert|update|delete)$'")"
 scoped="${scoped#\{}"
 scoped="${scoped%\}}"
-# The derived list is turned into an array by the SERVER rather than pasted into a
-# literal here. A hand-assembled `'{a, b}'` is a second place the scope can be
-# wrong, and it is wrong in the direction that matters: a malformed array literal
-# is an error, while a malformed one that happens to parse is a quiet scope.
 scoped="${scoped// /},anywaye"
 say "   scope, read back from the policies protect_table wrote: ${scoped//,/, }"
 
@@ -753,22 +453,6 @@ say "   the fifth policy that reads a digest and the fifth that reads a caller a
 say "   different claims, and a rule exempting only the one it was written for would"
 say "   report the other as a finding on the substrate's own table."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 6b — THE EXEMPTION'S OWN CONTROL, and it is the MD24 question rather
-# than a tidy-up.
-#
-# `multiple_permissive_policies` is the one rule that has to be exempt for MD24's
-# credential mechanism to be allowed to exist: `protect_credential_table` adds a
-# fifth policy whose predicate is the digest the CALLER presented, so
-# (api_keys, alpha, SELECT) permanently holds two permissive policies and they
-# combine with OR. The exemption is that the group is all substrate-written.
-#
-# An exemption with no control is a rule that has been switched off, and this is
-# where that would show: add ONE hand-written permissive policy to `api_keys` and
-# the group stops being all-of, so the rule must fire AND NAME the hand-written
-# policy specifically. A firing that named only the substrate's two would prove
-# the rule is on; a firing that does not name it proves nothing about which policy
-# it objected to.
 say ""
 say "== assertion 6b: the multiple_permissive_policies exemption does not absorb a hand-written policy"
 psql_in "$ALPHA" "$ALPHA" "
@@ -809,30 +493,6 @@ still="$(psql_in "$ALPHA" "$ALPHA" "
 [ "$still" = "0" ] || fail "removing the hand-written policy left $still finding(s); the control's cleanup did not restore a clean advisor run"
 say "   policy dropped, and the advisor is clean again: 0 ERROR, 0 WARN."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 7 — THE HONEST NEGATIVES. A detective that has never fired is a
-# detective you cannot trust, so every rule is run against a fixture BUILT TO TRIP
-# IT, and each must name itself.
-#
-# Every fixture below is in its own schema, the substrate was never applied to it,
-# and the advisor is scoped to that schema alone. That is not tidiness: it is what
-# makes the control specific. Scoped to the whole database, a rule that fires
-# proves only that the advisor returned rows, and seven of these nine could be
-# satisfied by any of the others. Named rule, named fixture, one rule proven able
-# to fire.
-#
-# AND WHAT IT STILL CANNOT PROVE, which is why 7b exists below: that any of them
-# is SELECTIVE. A rule that fires on every view, every policy or every table is
-# satisfied by this assertion as completely as a rule that fires on exactly the
-# right one. `security_definer_view` is the rule where that matters most, because
-# the two ways to write it badly are "fires on nothing" and "fires on everything",
-# and only one of them is a control.
-#
-# AND IT IS ALSO WHAT PROVES THE ADVISOR STANDS ALONE. Nothing here calls a
-# `anywaye.*` function the substrate owns except the two identity seams a policy
-# has to be written against — so these fixtures are a schema on a database where
-# the substrate was applied to `public` and nothing else, which is the shape of
-# the service that has not finished adopting.
 cat >"$WORK/advisor_fixture.sql" <<'FIXTURE'
 create schema kit_advisor_fixture;
   set client_min_messages = warning;
@@ -1150,21 +810,6 @@ if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U "$ALPHA" -d "$ALPHA" \
   fail "the negative fixtures did not install"
 fi
 
-# The UNREACHABLE VIEW is a SEPARATE script applied by the cluster admin after the
-# main fixture, because it cannot be part of the one `alpha` applies. Two failed
-# fixtures led here and the RULE was right both times -- the FIXTURE was wrong:
-#
-#   1. Applied as `alpha`, which is a LOGIN role, so alpha OWNS the view.
-#      Ownership is not a grant: `revoke all ... from public` does nothing.
-#   2. Giving it a NOLOGIN owner is not enough either, because reaching that owner
-#      requires `grant <owner> to alpha` -- MEMBERSHIP, and membership carries the
-#      owner's privileges. `has_table_privilege('alpha', ..., 'SELECT')` is then
-#      TRUE through the membership.
-#
-# So `anywaye` builds it. `anywaye` is excluded from `api_roles` by the same
-# `not rolsuper` predicate every other rule here uses, and a superuser-owned view
-# no login role can reach is a real shape: it is a reporting view owned by the
-# migration role that nobody was granted SELECT on.
 cat >"$WORK/advisor_unreachable_fixture.sql" <<'UNREACHABLE'
 set client_min_messages = warning;
 drop table if exists kit_advisor_fixture.owner_protected cascade;
@@ -1200,9 +845,6 @@ neg="$(psql_in "$ALPHA" "$ALPHA" "
     from anywaye.advisor_findings(string_to_array('kit_advisor_fixture', ',')::text[])
    order by cache_key")"
 
-# Every rule, and the fixture that must trip it. A rule that has gone quiet here
-# is a rule nobody can rely on, and the whole cost of this assertion is that it
-# is a list: a count would be satisfied by the same rule firing twice.
 tripped=""
 for pair in \
   'policy_exists_rls_disabled:policies_without_rls' \
@@ -1235,36 +877,6 @@ say "   10 rules, 13 fixtures, every rule naming itself and the object it fired 
 say "   scoped to kit_advisor_fixture alone, so each one is proven specific and not"
 say "   satisfied by whichever other rule happened to return a row."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 7c — THE FUNCTION HOP, ITS CONTROL, AND ITS OPPOSITE.
-#
-# The list above proves rule 4 CAN fire on a helper-routed policy. It cannot
-# prove the hop is what made it fire, and those are different defects: a rule
-# that fired on `helper_routed` because it fires on EVERY policy in the schema
-# satisfies the list identically. Three checks, and the second and third are the
-# ones with teeth:
-#
-#   1. the finding NAMES the function. `via_functions` is not decoration: it is
-#      the only column that says the route was a function, and a reader who is
-#      told "policy reads kit_advisor_fixture.writable_flags" and nothing else
-#      has to go and work out which of the two policies in this fixture is
-#      talking about a SECURITY DEFINER helper.
-#   2. THE CONTROL answers differently ON THE SAME TABLE. `direct_policy` reaches
-#      the SAME `writable_flags` with no function in the path, and its
-#      `via_functions` must be EMPTY. One table, two routes, opposite answers --
-#      so the rule is reading the route. Delete either check and this pair is
-#      one observation instead of two, which is the shape AGENTS.md calls a
-#      control two checks could satisfy.
-#   3. `helper_opaque` is SILENT, and this is the negative that decides whether
-#      the two positives mean anything. It reaches the same table through a
-#      helper whose body pg_depend does not record (measured:
-#      `measure-advisor-pgproc.sql`, a `language sql` STRING body records
-#      pg_namespace and nothing else). The rule must not fire on it, because the
-#      only way to fire is to read `prosrc` and match a table name in SQL text,
-#      and a rule that does that fires on a table named in a comment. So this
-#      silence is the LIMIT of the rule, asserted rather than apologised for, and
-#      rule 6 fires on the helper itself -- which is the honest position: a
-#      detector sees the helper, this rule does not claim to be the one.
 for pair in 'helper_routed:may_read_admin' 'direct_policy:'; do
   obj="${pair%%:*}"
   fn="${pair#*:}"
@@ -1298,33 +910,6 @@ say "   helper_opaque -> silent, and that is the rule's measured limit: the cata
 say "      does not carry a string body, so no rule reads one. See the"
 say "      \"what this does not find\" block in advisor.sql and REPORT-kit-advisor-pgproc-01."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 7b — THE HONEST NEGATIVES OF ASSERTION 7.
-#
-# The list above proves every rule CAN fire. It cannot prove any rule is
-# SELECTIVE, and for `security_definer_view` selectivity is the entire value of
-# the rule: the two ways to write it are "fires on every view in the schema" and
-# "fires on nothing", and only one of those is a security control. The other is
-# a report nobody reads — or a detective that has never fired.
-#
-# Four views in the fixture schema are here to be SILENT, and each one is silent
-# for a different reason, so satisfying all four means the rule is reading
-# something rather than counting something:
-#
-#   invoker_view        the same view over the same table, fixed. A rule that
-#                       reports its own remedy would print both rows.
-#   plain_reads         a view over a table with NO row-level security. Nothing
-#                       to bypass, so nothing to report.
-#   definer_no_grant    the hole is real and no login role can reach it.
-#   over_invoker_view   reads only an invoker view, so the transitive walk must
-#                       STOP at that hop rather than walking past it.
-#
-# The last one is the one that can pass by accident. A walk that ignored the
-# invoker flag would report `over_invoker_view`, and a reader would see that as a
-# true positive — because the chain below it really is a definer view. It is
-# reported here as a misfire because the finding is about a view that is
-# reachable only THROUGH an invoker view, and there the caller's policies are
-# already in force.
 for quiet in invoker_view plain_reads definer_no_grant over_invoker_view \
              on_spelled_invoker over_on_spelled_invoker; do
   if printf '%s\n' "$neg" | grep -q "^security_definer_view@$quiet\$"; then
@@ -1349,10 +934,6 @@ say "   \`true\`. Postgres stores reloptions verbatim and core's own fixture wri
 say "   \`on\`, so a rule matching only one spelling would pass this suite while"
 say "   missing the fleet's idiom."
 
-# The fixtures go, and their going is asserted rather than assumed: everything
-# after this point in a shared container should see the cluster the substrate
-# left, and a leftover `using (true)` policy is exactly the sort of thing that
-# makes a later run's numbers mean something else.
 psql_in "$ALPHA" "$ALPHA" \
   "set client_min_messages = warning; drop schema kit_advisor_fixture cascade" >/dev/null
 left="$(psql_in "$ALPHA" "$ALPHA" \
@@ -1360,41 +941,6 @@ left="$(psql_in "$ALPHA" "$ALPHA" \
 [ "$left" = "0" ] || fail "the fixture schema survived its drop, so the next assertion would run against it"
 say "   kit_advisor_fixture dropped, asserted gone."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 8 — THE AUDIT ANSWERS THE SAME TO EVERY ROLE THAT ASKS.
-#
-# `anywaye.credential_tables()` is the one query that answers "which tables in this
-# database can be read with no account", and `isolation.sql` asserts it as the
-# session's own role — which on a real cluster is the owner's, a role with no
-# schema of its own. So the audit was only ever measured from the one reader it
-# happened to be correct for.
-#
-# The trap is the READER, not the SQL. `pg_get_expr` drops the schema from a name
-# the reader can resolve, and what a reader can resolve is their `search_path` —
-# and `"$user"` is a search_path entry. So the SAME policy deparses
-# `anywaye.current_credential_digest()` for `alpha` (no `alpha` schema exists) and
-# `current_credential_digest()` for `anywaye` (whose `"$user"` schema IS the
-# `anywaye` schema the substrate creates). An audit written against that text
-# returns everything to one role and NOTHING to the cluster's own admin role,
-# which reads as "this database has no credential path at all" to exactly the
-# reader most likely to act on it.
-#
-# TWO HALVES, and the second is what stops the first from being vacuous:
-#
-#   A. THE PROPERTY. Three readers — the owner, the cluster's admin role, and the
-#      non-owner LOGIN role — must get the SAME answer, and that answer must be
-#      non-empty. Agreement alone is satisfiable by a function that returns
-#      nothing to everybody, which is a green assertion about an audit that has
-#      stopped working.
-#   B. THE CONTROL. The two spellings must actually DIFFER on this cluster, or
-#      half A is asserting nothing about the mechanism it names. A red here is
-#      true rather than a flake: it says Postgres no longer deparses by the
-#      reader's visibility, and this suite's control needs rewriting because the
-#      reason it exists has changed.
-#
-# `public.api_keys` is the fixture — assertion 6's credential table, still in
-# place — and the printed column is the deparsed policy itself, because the whole
-# claim is about that text differing between two sessions that share one policy.
 say ""
 say "== assertion 8: the credential audit reports the same tables to every role"
 
@@ -1476,19 +1022,6 @@ say "     as $ALPHA: $alpha_deparse   (qualified=$alpha_qualified)"
 say "   and the audit above is identical for both anyway. That is the whole"
 say "   assertion: the function no longer reads the text that differs."
 
-# ---------------------------------------------------------------------------
-# ASSERTION 8b — THE SAME CLAIM ABOUT THE SECOND AUDIT, and it is repeated rather
-# than generalised because `membership_tables()` is a SEPARATE function rather
-# than a parameter of `credential_tables()`. That separation is deliberate (one
-# query answering both would report a membership table as resolvable by anybody
-# who guesses a digest), and a deliberate separation of two functions that
-# already worked is exactly the shape a later change quietly un-proves: someone
-# reads `pg_get_expr` rather than `pg_depend` in the new one and it is correct
-# on every cluster where the admin role happens not to be named after a schema.
-#
-# `public.account_users` is the fixture, and it is the same table identity's
-# `GET /v1/accounts` reads — which is the point: the second audit's answer has to
-# hold for the table whose user scope was missing, not for a stand-in.
 say ""
 say "== assertion 8b: the membership audit reports the same tables to every role"
 
@@ -1538,10 +1071,6 @@ esac
   fail "the membership audit depends on the role reading it"
 }
 
-# THE CONTROL, again, and it is a separate control rather than a shared one
-# because the two policies could stop differing independently: `membership_tables`
-# could be rewritten to read text while `credential_tables` kept reading
-# dependencies, and every other row here would still pass.
 case "$m_admin_deparse" in
   *anywaye.current_user_id*) m_admin_qualified=1 ;;
   *) m_admin_qualified=0 ;;
@@ -1564,7 +1093,6 @@ say "   control: the trap is live here too, on this cluster, for this policy:"
 say "     as anywaye: $m_admin_deparse     (qualified=$m_admin_qualified)"
 say "     as $ALPHA: $m_alpha_deparse   (qualified=$m_alpha_qualified)"
 
-# ---------------------------------------------------------------------------
 say ""
 say "PASS: kit's account boundary is enforced by Postgres, and the enforcement is"
 say "      proven able to fail."

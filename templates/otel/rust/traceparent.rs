@@ -1,65 +1,18 @@
-// kit template — W3C Trace Context propagation for a Rust service.
-//
-// Copy `traceparent.rs` into your service (`src/telemetry/`), then
-// `cargo test --lib`. The suite below lives in the same file because that is
-// where Rust puts unit tests, so the template is one file a service can paste.
-//
-// The upstream OTel SDK does this for you — see `otel_client.rs.snippet` for the
-// versioned wiring. Use this file when you need the header handling on its own:
-// a `reqwest` middleware, a NATS consumer, or a test that asserts propagation
-// without standing up an SDK.
-//
-// REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-// https://www.w3.org/TR/trace-context/
-//
-// IMPLEMENTED SECTIONS (every one is asserted in the tests below)
-//   §3.2.1      header name: accept any case, send lowercase
-//   §3.2.2.1    version is 2 hex chars; ff is forbidden
-//   §3.2.2.2    version-format for version 00
-//   §3.2.2.3    invalid trace-id -> ignore the traceparent (all zeroes forbidden)
-//   §3.2.2.4    invalid parent-id -> ignore the traceparent (all zeroes forbidden)
-//   §3.2.2.5    trace-flags is a bit field; mask on read
-//   §3.2.2.5.1  the sampled flag is the only flag in version 00
-//   §3.2.2.5.2  reserved flags MUST be set to zero on the wire
-//   §3.2.4      higher version: parse positionally, re-emit at 00, drop unknowns
-//   §3.3        a failed traceparent MUST NOT be rescued by a tracestate
-//   §3.3.1.5    tracestate: propagate >=512 chars, truncate whole entries only
-//   §4.2/§4.3   no traceparent -> new trace; invalid -> restart, never an error
-//
-// NO DEPENDENCIES. Std only, so this file drops into any Rust service and the
-// suite runs with `rustc --test` and no network. If you find yourself adding
-//! `opentelemetry` to make this work, read `otel_client.rs.snippet` instead —
-// that is the supported path.
 
 use std::collections::BTreeMap;
 use std::io::Read;
 
-/// Bit 0 of trace-flags (§3.2.2.5.1). It is a bit in a field, not the field's
-/// value: reading `flags == 1` instead of `flags & 1 == 1` is the single most
-/// common trace-context bug, and it is why this is a named constant.
 const SAMPLED: u8 = 0x01;
 
-/// A traceparent is exactly 55 characters: 2 version, 32 trace-id, 16 parent-id,
-/// 2 trace-flags, and 3 dashes (§3.2.2.2).
 const MIN_HEADER_LEN: usize = 55;
 
-/// §3.3.1.5: "Vendors SHOULD propagate at least 512 characters of a combined
-/// header." Bigger than this and we truncate whole entries.
 const TRACESTATE_LIMIT: usize = 512;
 
-/// §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
 const TRACESTATE_ENTRY_LIMIT: usize = 128;
 
 const ZERO_TRACE_ID: &str = "00000000000000000000000000000000";
 const ZERO_SPAN_ID: &str = "0000000000000000";
 
-/// A parsed `traceparent` header.
-///
-/// `version` is the raw version byte: zero for version `00`, the only version we
-/// emit; a higher version is parsed (§3.2.4) and then downgraded. `extra` is
-/// everything after the flags field on a higher-version header, retained for
-/// logging only — §3.2.4 says vendors MUST NOT forward unknown fields, and
-/// [`ServerHop::outbound_headers`] does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceParent {
     pub version: u8,
@@ -80,10 +33,6 @@ impl TraceParent {
     }
 }
 
-/// One service's continuation of a trace.
-///
-/// `continued` is not a debug field: a span exporter needs to know whether this
-/// is a root span in order to label it correctly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerHop {
     pub trace_id: String,
@@ -106,8 +55,6 @@ impl ServerHop {
     /// make any other mutation.
     pub fn outbound_headers(&self) -> BTreeMap<String, String> {
         let mut out = BTreeMap::new();
-        // §3.2.1: send lowercase. The name is part of the contract even though
-        // the receiving side is required to be case-insensitive.
         out.insert(
             "traceparent".to_string(),
             format_traceparent(&self.trace_id, &self.span_id, self.flags),
@@ -128,21 +75,15 @@ impl ServerHop {
 pub fn parse_traceparent(value: Option<&str>) -> Option<TraceParent> {
     let raw = value?;
 
-    // A short header cannot hold the four fields, whatever the version (§3.2.4).
     if raw.len() < MIN_HEADER_LEN {
         return None;
     }
 
-    // §3.2.4: "When the version prefix cannot be parsed (it's not 2 hex
-    // characters followed by a dash), the implementation should restart the
-    // trace." Checked before anything else, so a malformed version is never
-    // mistaken for a valid one.
     if raw.as_bytes()[2] != b'-' || !is_lower_hex(&raw[0..2]) {
         return None;
     }
     let version = u8::from_str_radix(&raw[0..2], 16).ok()?;
 
-    // §3.2.2.1: "Version ff is invalid."
     if version == 0xFF {
         return None;
     }
@@ -151,7 +92,6 @@ pub fn parse_traceparent(value: Option<&str>) -> Option<TraceParent> {
     let parent_id = &raw[36..52];
     let flags_field = &raw[53..55];
 
-    // The three fixed positions, all three mandatory (§3.2.4).
     if raw.as_bytes()[35] != b'-' || raw.as_bytes()[52] != b'-' {
         return None;
     }
@@ -162,29 +102,19 @@ pub fn parse_traceparent(value: Option<&str>) -> Option<TraceParent> {
     let flags = u8::from_str_radix(flags_field, 16).ok()?;
 
     if version == 0 {
-        // §3.2.2.2 defines version 00 as exactly these four fields. Trailing data
-        // means the sender is not speaking version 00, and accepting it would be
-        // inventing a format the spec does not define.
         if raw.len() != MIN_HEADER_LEN {
             return None;
         }
     } else if raw.len() > MIN_HEADER_LEN {
-        // §3.2.4: on a higher version the two flag characters are followed by
-        // either the end of the header or a dash introducing an unknown field.
         if raw.as_bytes()[MIN_HEADER_LEN] != b'-' {
             return None;
         }
     }
 
-    // §3.2.2.3 and §3.2.2.4: all zeroes is an invalid value for both, and the
-    // required response is to ignore the header.
     if trace_id == ZERO_TRACE_ID || parent_id == ZERO_SPAN_ID {
         return None;
     }
 
-    // Sliced only when there is something past the fixed fields: a version-00
-    // header is exactly MIN_HEADER_LEN bytes, and slicing past its end panics.
-    // The whole point of this parser is that it never panics on hostile input.
     let extra = if raw.len() > MIN_HEADER_LEN {
         raw[MIN_HEADER_LEN + 1..].to_string()
     } else {
@@ -215,10 +145,6 @@ pub fn server_hop(headers: &BTreeMap<String, String>, span_id: &str) -> ServerHo
 
     match parsed {
         None => ServerHop {
-            // §3.3: "If the vendor failed to parse traceparent, it MUST NOT attempt
-            // to parse tracestate." §4.2 makes it explicit for the no-traceparent
-            // case: a tracestate alone "is invalid and MUST be discarded".
-            // Forwarding it would attach a vendor's state to an unrelated trace.
             trace_id: new_trace_id(),
             span_id: span_id.to_string(),
             flags: 0,
@@ -228,8 +154,6 @@ pub fn server_hop(headers: &BTreeMap<String, String>, span_id: &str) -> ServerHo
         Some(tp) => ServerHop {
             trace_id: tp.trace_id,
             span_id: span_id.to_string(),
-            // §3.2.5: a bit field, so mask on read rather than carry the bytes
-            // through. §3.2.5.2 requires the reserved bits to be zero outbound.
             flags: tp.flags & SAMPLED,
             tracestate: forward_tracestate(header(headers, "tracestate").map(String::as_str))
                 .unwrap_or_default(),
@@ -264,14 +188,12 @@ pub fn forward_tracestate(value: Option<&str>) -> Option<String> {
     let mut entries: Vec<&str> = Vec::new();
     for piece in raw.split(',') {
         let entry = piece.trim();
-        // §3.3.1.1: "Empty and whitespace-only list members are allowed."
         if entry.is_empty() || entry.len() > TRACESTATE_ENTRY_LIMIT {
             continue;
         }
         entries.push(entry);
     }
 
-    // Pop from the end until the combined value fits (§3.3.1.5).
     while !entries.is_empty() {
         let joined = entries.join(",");
         if joined.len() <= TRACESTATE_LIMIT {
@@ -344,17 +266,9 @@ fn random_hex(n: usize) -> String {
     out
 }
 
-/// `n` bytes from the OS CSPRNG, or a fixed non-zero value if that fails.
-///
-/// The fallback is not a quality degradation to apologise for: it is the same
-/// tradeoff `NewSpanID` makes in every other template. `/dev/urandom` never
-/// blocks and never fails on any platform we deploy to, so a failure here means
-/// something is badly wrong; a service that panics at startup on a telemetry
-/// detail is worse than one that emits a trace id from a narrower pool.
 fn random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)).is_err() {
-        // Never hand back an all-zero id: §3.2.2.3 and §3.2.2.4 make it invalid.
         buf.iter_mut().for_each(|byte| *byte = 1);
     }
     buf
@@ -367,7 +281,6 @@ mod tests {
     const KNOWN_HEADER: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const KNOWN_TRACE: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
     const KNOWN_PARENT: &str = "00f067aa0ba902b7";
-    /// Fixed so every assertion below is an equality, not a shape check.
     const FIXED_SPAN: &str = "1111111111111111";
 
     fn headers(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -379,8 +292,6 @@ mod tests {
 
     #[test]
     fn known_traceparent_is_continued() {
-        // The headline promise: a known traceparent comes out the other side with
-        // its trace identity intact and a fresh span id (§3.4).
         let hop = server_hop(&headers(&[("traceparent", KNOWN_HEADER)]), FIXED_SPAN);
 
         assert_eq!(hop.trace_id, KNOWN_TRACE);
@@ -400,7 +311,6 @@ mod tests {
 
     #[test]
     fn unsampled_flag_is_preserved() {
-        // §3.2.2.5.1: sampled is a recommendation, not a rule.
         let unsampled = format!("00-{KNOWN_TRACE}-{KNOWN_PARENT}-00");
         let hop = server_hop(&headers(&[("traceparent", &unsampled)]), FIXED_SPAN);
 
@@ -414,7 +324,6 @@ mod tests {
 
     #[test]
     fn second_hop_keeps_the_same_trace_id() {
-        // Three services, one trace: hop N+1 keeps the trace-id hop N produced.
         let first = server_hop(&headers(&[("traceparent", KNOWN_HEADER)]), "2222222222222222");
         let second = server_hop(&first.outbound_headers(), "3333333333333333");
 
@@ -424,8 +333,6 @@ mod tests {
 
     #[test]
     fn malformed_traceparent_starts_a_new_trace() {
-        // Every one of these is garbage a proxy, a client library, or an attacker
-        // will eventually send: start a new trace, silently, without panicking.
         let bad: Vec<(&str, String)> = vec![
             ("empty", String::new()),
             ("not a header", "garbage".to_string()),
@@ -459,7 +366,6 @@ mod tests {
 
     #[test]
     fn missing_traceparent_starts_a_new_trace() {
-        // §4.2
         let hop = server_hop(&headers(&[]), FIXED_SPAN);
 
         assert!(!hop.continued);
@@ -470,7 +376,6 @@ mod tests {
 
     #[test]
     fn tracestate_is_forwarded() {
-        // §3.3: tracestate is opaque to us and MUST travel with the trace.
         let hop = server_hop(
             &headers(&[
                 ("traceparent", KNOWN_HEADER),
@@ -484,7 +389,6 @@ mod tests {
 
     #[test]
     fn tracestate_is_truncated_at_whole_entries() {
-        // §3.3.1.5: propagate at least 512 characters, truncating whole entries.
         let entries: Vec<String> = (0..60)
             .map(|i| format!("v{:02}={}", i, "x".repeat(30)))
             .collect();
@@ -510,7 +414,6 @@ mod tests {
 
     #[test]
     fn oversized_tracestate_entries_are_removed_first() {
-        // §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
         let oversized = format!("huge={}", "y".repeat(200));
         let joined = format!("{oversized},small=1");
         let hop = server_hop(
@@ -529,8 +432,6 @@ mod tests {
 
     #[test]
     fn tracestate_without_a_valid_traceparent_is_discarded() {
-        // §3.3 and §4.2: forwarding it would attach vendor state to an unrelated
-        // trace.
         for value in ["", "not-a-traceparent"] {
             let hop = server_hop(
                 &headers(&[
@@ -549,7 +450,6 @@ mod tests {
 
     #[test]
     fn header_names_are_case_insensitive_and_sent_lowercase() {
-        // §3.2.1: accept the header name in any case, send it lowercase.
         for name in ["traceparent", "TraceParent", "TRACEPARENT", "Traceparent"] {
             let hop = server_hop(&headers(&[(name, KNOWN_HEADER)]), FIXED_SPAN);
             assert_eq!(hop.trace_id, KNOWN_TRACE, "header {name} was not recognised");
@@ -563,8 +463,6 @@ mod tests {
 
     #[test]
     fn higher_version_is_downgraded_and_unknown_fields_are_not_forwarded() {
-        // §3.2.4: parse positionally, then re-emit at version 00 without the
-        // unknown fields.
         let future = format!("cc-{KNOWN_TRACE}-{KNOWN_PARENT}-01-what-the-future-wants");
 
         let tp = parse_traceparent(Some(future.as_str())).expect("a well-formed higher version parses per §3.2.4");
@@ -585,7 +483,6 @@ mod tests {
 
     #[test]
     fn trace_flags_are_a_bit_field() {
-        // §3.2.2.5: mask on read, rebuild on write; §3.2.2.5.2: reserved bits zero.
         let both = format!("00-{KNOWN_TRACE}-{KNOWN_PARENT}-03");
         let hop = server_hop(&headers(&[("traceparent", both.as_str())]), FIXED_SPAN);
 
@@ -598,7 +495,6 @@ mod tests {
 
     #[test]
     fn new_identifiers_are_random_and_never_all_zero() {
-        // §8: 16 and 8 random bytes, never all zeroes, never repeated.
         let mut seen = std::collections::HashSet::new();
         for _ in 0..256 {
             let trace_id = new_trace_id();

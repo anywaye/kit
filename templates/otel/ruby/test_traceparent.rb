@@ -1,23 +1,5 @@
 # frozen_string_literal: true
 
-# kit template — W3C Trace Context propagation for a Rails service.
-#
-# Copy traceparent.rb and this file into your service, then run
-# `ruby -Itest test/test_traceparent.rb` (or let `rake test` pick it up). The
-# suite is the contract: it proves the template still continues a trace instead
-# of quietly restarting it.
-#
-# REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-# https://www.w3.org/TR/trace-context/ — every rule asserted below cites the
-# section that requires it.
-#
-# WHAT IT PROMISES
-#   - A valid inbound traceparent is continued: same trace-id, sampled flag
-#     preserved, parent-id replaced with this hop's span id (§3.4).
-#   - A missing or malformed traceparent starts a new trace and never raises.
-#     A request is not a 500 because its trace header was garbage.
-#   - tracestate travels with the trace, capped at 512 characters and truncated
-#     on whole-entry boundaries (§3.3.1.5).
 
 require 'minitest/autorun'
 require_relative 'traceparent'
@@ -34,12 +16,9 @@ require_relative 'traceparent'
 # 2.7, for `filter_map` — and a run on anything older is a toolchain mistake
 # wearing this suite's clothes, not a finding about trace propagation.
 class TestTraceparent < Minitest::Test
-  # Already frozen by the magic comment at the top of this file, which is why
-  # an explicit `.freeze` here is RedundantFreeze rather than belt and braces.
   KNOWN_HEADER  = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'
   KNOWN_TRACE   = '4bf92f3577b34da6a3ce929d0e0e4736'
   KNOWN_PARENT  = '00f067aa0ba902b7'
-  # Fixed so every assertion below is an equality, not a shape check.
   FIXED_SPAN    = '1111111111111111'
 
   # The headline promise: a known traceparent comes out the other side with its
@@ -83,9 +62,6 @@ class TestTraceparent < Minitest::Test
     assert second.continued, 'a traceparent this service just emitted must parse on the way back in'
   end
 
-  # Every one of these is garbage a proxy, a client library, or an attacker will
-  # eventually send. The requirement is the same for all of them: start a new
-  # trace, silently, without an error.
   BAD_HEADERS = {
     'empty' => '',
     'not a header' => 'garbage',
@@ -101,9 +77,6 @@ class TestTraceparent < Minitest::Test
   }.freeze
 
   def test_malformed_traceparent_starts_a_new_trace
-    # `each_value`, not `each`: the keys are labels for the failure message and
-    # the message already interpolates the value, which is the part that
-    # identifies the failure.
     BAD_HEADERS.each_value do |value|
       hop = KitOtel.server_hop({ 'traceparent' => value }, FIXED_SPAN)
 

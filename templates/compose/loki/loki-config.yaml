@@ -29,9 +29,6 @@ server:
   http_listen_port: 3100
   grpc_listen_port: 9096
   log_level: warn
-  # A dev stack, and the log volume is real: six services plus a stack that is
-  # itself chatty. 4 workers is enough to keep ingestion ahead of a burst on a
-  # laptop core and small enough not to fight the services for it.
   grpc_server_max_recv_msg_size: 8388608
 
 common:
@@ -52,73 +49,30 @@ schema_config:
       store: tsdb
       object_store: filesystem
       schema: v13
-      # The `index.period: 24h` line is REQUIRED by Loki 3.x, not a tuning
-      # choice: the TSDB store refuses to start without a periodic index config
-      # and says so. The first version of this file omitted it and Loki exited
-      # with a message about a period_config.
       index:
         prefix: index_
         period: 24h
 
 limits_config:
-  # A DAY. A dev stack exists to answer "what just happened", and a log store
-  # that keeps a week of a laptop's test output is a disk problem with a
-  # dashboard on it. Raise it in .env, not here.
   retention_period: 24h
-  # Reject a write rather than queue it forever. A queue here is the same
-  # memory leak core's otel-endpoint schema describes for a service's exporter,
-  # one hop downstream: a Loki that accepts everything and is behind accepts
-  # everything and is behind for the life of the container.
   ingestion_rate_mb: 8
   ingestion_burst_size_mb: 16
   max_query_series: 1000
   max_query_lookback: 168h
-  # The collector's redaction processor has already stripped everything not on
-  # core's log allowlist by the time a record arrives, so a record here is
-  # already bounded. These are the second line for a service that bypasses the
-  # collector by pointing its *_OTEL_ENDPOINT somewhere else.
   max_line_size: 256kb
   reject_old_samples: true
   reject_old_samples_max_age: 168h
   allow_structured_metadata: true
   volume_enabled: true
 
-# VERIFIED AGAINST THE PINNED IMAGE. Loki 3.2.1 is strict about the relationship
-# between these three blocks, and each of the mistakes below cost a real
-# `bin/dev up`:
-#
-#   * `index.period: 24h` is required by the TSDB store — without it Loki exits
-#     naming a period_config.
-#   * `compactor.delete_request_store` is required WHENEVER retention is
-#     enabled. `retention_enabled: true` with no delete-request store is a
-#     startup failure, and it is the failure that makes "bounded retention" a
-#     config that cannot be switched on.
-#   * Loki takes ~16s to report ready from cold even on an idle laptop, because
-#     it waits for the ring to stabilise before starting the compactor. That is
-#     why the compose healthcheck has a 30s start_period and a generous retry
-#     count: a shorter one produces a stack that fails to come up on a slow
-#     machine and never on a fast one, which is the worst kind of flake.
-#
-# The crash layer's whole reason for existing, and a line budget. A panic
-# message is the one place free text is expected, and core's log schema bounds
-# it at 2048 characters for exactly this reason: an unbounded log body is an
-# unbounded log volume.
 compactor:
   working_directory: /loki/compactor
   compaction_interval: 10m
   retention_enabled: true
   retention_delete_delay: 2h
-  # Delete a chunk only once every stream that references it is out of
-  # retention. Without this, a dev stack deletes chunks another stream is still
-  # using and produces "chunk not found" errors in a dashboard, which reads as
-  # data loss and is only a compaction ordering mistake.
   delete_request_store: filesystem
 
 ruler:
-  # Alert rules are provisioned into Grafana, not into Loki. Two alerting
-  # engines both evaluating the same fleet is how a self-hoster ends up with
-  # two different answers to "is it broken", and Grafana is where the dashboard
-  # already is.
   enable_api: false
   rule_path: /loki/rules-temp
 

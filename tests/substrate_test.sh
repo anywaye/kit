@@ -1,51 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC1090,SC2034
-#
-# kit's proof that the substrate install is real, and that its pins are exact.
-#
-#   bash tests/substrate_test.sh
-#
-# WHAT THIS IS FOR
-#   `templates/substrate/install.sh` is the customer-facing one-command install.
-#   It cannot be EXECUTED on a development machine — it needs root, a Linux
-#   kernel, a container runtime and a reachable registry — so the claims it
-#   makes are otherwise untested. This script proves the parts that can be
-#   proven without a box: the script parses, DRY_RUN runs to completion
-#   printing the ordered steps, every pin is exact, every manifest parses, the
-#   two ClusterIssuers are staging and prod with distinct account keys, the
-#   Postgres Cluster reproduces the local provisioning contract, every CRD
-#   field the manifests write is declared by the operator the installer pins
-#   (§9b — the check that would have caught `spec.storageConfiguration`), the
-#   Redis image is pinned exact, the NATS broker is installed with the fleet's
-#   stream defined idempotently and matching the local stack's nats-stream-init,
-#   the recorded secret name-and-key list matches what install.sh creates, and
-#   every secret NAME and KEY the five service charts mount or read is in that
-#   list — a chart key with no writer is a pod that never starts,
-#   no image floats on `latest`, no secret is a literal in the tree, step 6
-#   waits on nothing — the core-install reality, executed against a mock whose
-#   deployment list is the pinned core-install set, with the pre-fix wait
-#   restored as the control — and the
-#   apply mode is assigned by where the manifest comes from — a REMOTE URL is
-#   `--server-side=true --force-conflicts` (client-side apply's
-#   last-applied-configuration annotation overflows Kubernetes's 262144-byte cap
-#   on metadata.annotations for cert-manager's, CNPG's and Argo CD's CRDs, and a
-#   re-run after any mixed-mode apply collides with "field managed by another
-#   client"), while kit's own manifests stay client-side so a re-run keeps the
-#   ability to reclaim its own fields.
-#   the env-var surface the leak check covers is still the surface the installer
-#   reads — so a rename that reaches one file and not the other goes red.
-#
-# EVERY CLAIM HAS A CONTROL THAT MUST ANSWER DIFFERENTLY.
-#   A check that passes against an empty directory is not a check. So each
-#   check below is run twice: once against the real tree (must be GREEN) and
-#   once against a fixture built to violate exactly that one property (must
-#   be RED). The pin check's control is the one the packet names — a fixture
-#   with a `latest` pin goes red under the same check the real tree passes.
-#   A control that does not go red is reported as a failure of the test itself.
-#
-# WHAT IS NOT PROVEN HERE
-#   That k3s installs, that Argo syncs, that the charts exist. Those need a
-#   customer box. `templates/substrate/README.md` says so in the same words.
 
 set -euo pipefail
 
@@ -58,7 +11,6 @@ if [ ! -r "$ROOT/tests/bootstrap.sh" ]; then
   echo "substrate_test.sh: tests/bootstrap.sh is missing — cannot resolve a python" >&2
   exit 1
 fi
-# shellcheck source=tests/bootstrap.sh
 . "$ROOT/tests/bootstrap.sh"
 kit_bootstrap_python "$ROOT"
 export KIT_PYTHON="$PY"
@@ -86,13 +38,6 @@ fail() {
   failures=$((failures + 1))
 }
 
-# run <name> <expected: red|green> <command...>
-#
-# The `|| ec=$?` shape is not defensive style: `out=$(cmd)` alone is an
-# ASSIGNMENT, and under `set -e` a failing `cmd` kills this script before the
-# status is ever read — so a check that correctly REJECTS a bad fixture would
-# take the harness down with it. The guard makes the command part of a list,
-# which `set -e` does not apply to.
 run() {
   local name="$1" want="$2" out ec=0
   shift 2
@@ -115,20 +60,8 @@ run() {
 
 printf -- '-- substrate_test: the install is real, and the pins are exact\n'
 
-# ===========================================================================
-# 1. install.sh parses
-# ===========================================================================
 run 'install.sh parses (bash -n)' green bash -n "$SUBSTRATE/install.sh"
 
-# ===========================================================================
-# 2. DRY_RUN=1 runs to completion, printing the ordered steps
-# ===========================================================================
-# The install needs KIT_SUBSTRATE_DATABASES even to plan: step 8 provisions
-# one role-and-database per named service, so a plan with no names is a plan
-# for nothing. The success path below sets it; the refusal controls after it
-# prove an unset or empty value is refused with the fix named. (SMTP and the
-# paired courier values are validated on the live path only — a plan does not
-# need credentials to print.)
 DBS="identity,gateway,courier,parlor,billing"
 dry_run_out="$(KIT_SUBSTRATE_DATABASES="$DBS" DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && dry_run_ec=0 || dry_run_ec=$?
 
@@ -138,14 +71,6 @@ else
   pass 'DRY_RUN=1 runs to completion'
 fi
 
-# The thirteen steps, in order. The markers are `[1/13]` … `[13/13]`; the check
-# reads them out of the output in the order they appear and compares against
-# the expected sequence, so a script that printed them out of order — or
-# skipped one — would go red here rather than passing on the presence of all
-# thirteen. The `|| true` is load-bearing: with no `[n/13]` markers printed yet,
-# grep exits 1, and under `set -o pipefail` a failing command substitution
-# would take the harness down before the status is ever read — the same shape
-# the `run` helper's comment describes four lines below.
 found="$(printf '%s\n' "$dry_run_out" | grep -o '\[[0-9][0-9]*/13\]' | tr -d '[]' | cut -d/ -f1 | tr '\n' ' ' || true)"
 found="${found% }"
 if [ "$found" = "1 2 3 4 5 6 7 8 9 10 11 12 13" ]; then
@@ -154,8 +79,6 @@ else
   fail 'DRY_RUN prints the thirteen steps in order' "found step sequence: '${found}'"
 fi
 
-# Each step must say what it would do. A DRY_RUN that printed only the headers
-# and no per-step action would be a plan with no content.
 dry_count="$(printf '%s\n' "$dry_run_out" | grep -c 'DRY_RUN:' || true)"
 if [ "$dry_count" -ge 10 ]; then
   pass 'DRY_RUN prints a per-step action for every step'
@@ -163,11 +86,6 @@ else
   fail 'DRY_RUN prints a per-step action for every step' "found ${dry_count} DRY_RUN action(s), expected >= 9"
 fi
 
-# The refusal: KIT_SUBSTRATE_DATABASES unset or empty is a refusal in DRY_RUN
-# too, with a message naming the fix — mirroring 10-cluster.sh:120. A plan
-# that cannot name its databases is not a plan. Both the unset and the empty
-# spelling must refuse; either one completing is a gate that waves through
-# the exact state the local contract refuses.
 refuse_unset="$(DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" && refuse_unset_ec=0 || refuse_unset_ec=$?
 if [ "$refuse_unset_ec" -ne 0 ] && printf '%s\n' "$refuse_unset" | grep -q 'KIT_SUBSTRATE_DATABASES'; then
   pass 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES unset refuses, naming the fix'
@@ -182,15 +100,6 @@ else
   fail 'control: DRY_RUN with KIT_SUBSTRATE_DATABASES empty refuses, naming the fix' "exit=${refuse_empty_ec}: ${refuse_empty}"
 fi
 
-# ===========================================================================
-# 3. Every pin is exact — and a `latest` pin goes red under the same check
-# ===========================================================================
-#
-# The check is a python script that reads the four version variables and
-# refuses a floating value. It is run against the real install.sh (green) and
-# against a fixture with `latest` substituted in (red). The fixture is the
-# control: it proves the check can fail, which is the only thing that
-# distinguishes it from a grep that matches nothing.
 check_pins() {
   "$PY" - "$1" <<'PY'
 import re
@@ -219,43 +128,17 @@ PY
 
 run 'every pin is exact (k3s, cert-manager, CNPG, Argo CD, NATS, nats-box)' green check_pins "$SUBSTRATE/install.sh"
 
-# The control: the same check against a fixture with a floating pin. This MUST
-# go red. If it does not, the check above is not measuring what it claims.
 fixture_latest="$WORK/install-latest.sh"
 sed 's/^K3S_VERSION="v1.37.1+k3s1"/K3S_VERSION="latest"/' \
   "$SUBSTRATE/install.sh" >"$fixture_latest"
 run 'control: a latest pin goes red under the same check' red check_pins "$fixture_latest"
 
-# The second control: a fixture floating the NATS pin instead. Must go red the
-# same way — a pin the check cannot see float is documentation, not a pin.
 fixture_latest_nats="$WORK/install-latest-nats.sh"
 sed 's/^NATS_VERSION="2.10.24-alpine"/NATS_VERSION="latest"/' \
   "$SUBSTRATE/install.sh" >"$fixture_latest_nats"
 run 'control: a latest NATS pin goes red under the same check' red check_pins "$fixture_latest_nats"
 
-# ===========================================================================
-# 3b. The front door: a SERVED install fetches its manifests, and a pipe is
-#     not an unbound-variable crash
-# ===========================================================================
-#
-# THE DEFECT THIS SECTION ENDS. `curl https://anywaye.com/box/install | sh` is
-# the command the website, `cafe box init` and every document print, and it was
-# never exercised end to end: every cycle ran `bash /tmp/kit/…/install.sh` from
-# a git clone, where `manifests/` is the script's own sibling. Served, the
-# script is read from a pipe, so `BASH_SOURCE[0]` is UNSET — and `set -u` turns
-# `${BASH_SOURCE[0]}` into a fatal unbound variable (measured: `bash: line 433:
-# BASH_SOURCE[0]: unbound variable`) — or empty, in which case SCRIPT_DIR
-# becomes the caller's CWD, the manifest directory does not exist, step 5's
-# probe derives ZERO artifacts and demands a registry capability for artifacts
-# that are all public.
-#
-# THE FIX these checks are about: SCRIPT_DIR is read with an explicit empty
-# fallback, and a served run (no sibling `manifests/`) FETCHES the manifest set
-# from kit's public repository at the sha pinned in `KIT_SUBSTRATE_MANIFESTS_REF`.
-# A fetch that cannot complete is a REFUSAL naming the fetch — never a run that
-# limps into a credential demand.
 
-# --- (a) the pin is exact, and it is a TIE to the manifests, not a number ----
 check_manifests_pin() {
   "$PY" - "$1" "$2" <<'PY'
 import re
@@ -293,18 +176,12 @@ PY
 run 'the served-manifests pin is an exact sha that tracks the manifests on disk' green \
   check_manifests_pin "$SUBSTRATE/install.sh" "$ROOT"
 
-# Control 1: a floating ref. Must go red — a fetch at `master` installs
-# different manifests on two runs of the same served bytes.
 fixture_manifest_float="$WORK/install-manifest-float.sh"
 sed 's/^KIT_SUBSTRATE_MANIFESTS_REF="[0-9a-f]*"/KIT_SUBSTRATE_MANIFESTS_REF="master"/' \
   "$SUBSTRATE/install.sh" >"$fixture_manifest_float"
 run 'control: a floating manifest ref goes red under the same pin check' red \
   check_manifests_pin "$fixture_manifest_float" "$ROOT"
 
-# Control 2: a ref that RESOLVES but whose manifest tree differs from the one on
-# disk. This is the half that makes the pin a tie rather than a number: it must
-# name a commit that really carries these manifests. The repository's root
-# commit predates `templates/substrate/manifests`, so the diff is non-empty.
 manifest_root_commit="$(git -C "$ROOT" rev-list --max-parents=0 HEAD 2>/dev/null | tail -1 || true)"
 if [ -n "$manifest_root_commit" ]; then
   fixture_manifest_stale="$WORK/install-manifest-stale.sh"
@@ -322,12 +199,6 @@ else
     'no root commit resolved in this checkout'
 fi
 
-# --- (b) the pipe: no unbound-variable read, fetch or REFUSE ----------------
-# A fake `curl` stands in for GitHub so these checks are offline and
-# deterministic, the way the trust-preflight checks stub openssl and apt. The
-# success stub answers the pinned tarball URL with a tarball built from THIS
-# tree's manifests (root dir `kit-fixture/`, which the resolver FINDS rather
-# than assumes); the failure stub refuses every call.
 served_fetch_bin="$WORK/served-fetch-bin"
 served_tarball="$WORK/served/manifests.tgz"
 mkdir -p "$served_fetch_bin" "$WORK/served/src/kit-fixture/templates/substrate"
@@ -347,8 +218,6 @@ mkdir -p "$served_fail_bin"
 printf '#!/usr/bin/env bash\nexit 22\n' >"$served_fail_bin/curl"
 chmod +x "$served_fail_bin/curl"
 
-# served_run <fakebin> — run install.sh through a PIPE, exactly the front-door
-# shape; print its output and return the script's own exit status.
 served_run() {
   local fakebin="$1" out ec=0
   out="$(env PATH="$fakebin:$PATH" KIT_SUBSTRATE_RECEIPT="$WORK/served-receipt.json" \
@@ -357,9 +226,6 @@ served_run() {
   return "$ec"
 }
 
-# The static half: the read must carry the empty fallback in CODE, with comments
-# stripped — a check a comment can satisfy is not a check (the comment above
-# quotes the bare `${BASH_SOURCE[0]}` while explaining the crash).
 check_bash_source_fallback() {
   "$PY" - "$1" <<'PY'
 import re
@@ -383,9 +249,6 @@ PY
 run 'the served-script read of BASH_SOURCE carries an explicit empty fallback' green \
   check_bash_source_fallback "$SUBSTRATE/install.sh"
 
-# The red control: the fallback REMOVED, which is the pre-fix line. Under a pipe
-# this is the unbound-variable crash the packet measured, and a check that
-# cannot go red here is a check that would have shipped the defect.
 served_unsafe="$WORK/served-unsafe.sh"
 sed 's|KIT_SCRIPT_SOURCE="${BASH_SOURCE\[0\]:-}"|KIT_SCRIPT_SOURCE="${BASH_SOURCE[0]}"|' \
   "$SUBSTRATE/install.sh" >"$served_unsafe"
@@ -414,8 +277,6 @@ else
     'the sed did not restore the unguarded read, so the control would prove nothing'
 fi
 
-# GREEN 1: a served run fetches the pinned manifest set and plans all thirteen
-# steps — the front door works offline, from a pipe, with no checkout.
 served_ok_out="$(served_run "$served_fetch_bin")" && served_ok_ec=0 || served_ok_ec=$?
 served_ok=0
 case "$served_ok_out" in
@@ -432,9 +293,6 @@ else
     "exit=${served_ok_ec}: $(printf '%s\n' "$served_ok_out" | head -6)"
 fi
 
-# GREEN 2: a fetch that cannot complete is a REFUSAL naming the fetch, BEFORE
-# step 5 — not a run that limps on to demand a registry capability for public
-# artifacts.
 served_fail_out="$(served_run "$served_fail_bin")" && served_fail_ec=0 || served_fail_ec=$?
 served_refusal_ok=0
 if [ "$served_fail_ec" -ne 0 ]; then
@@ -456,14 +314,6 @@ else
     "exit=${served_fail_ec}: $(printf '%s\n' "$served_fail_out" | head -6)"
 fi
 
-# ===========================================================================
-# 4. Every manifest parses, and the Applications carry the fields Argo needs
-# ===========================================================================
-#
-# One python check over the whole directory: every file parses as YAML, every
-# document is an Application, and every Application has spec.source and
-# spec.destination. Run against the real manifests (green) and against a
-# fixture with a broken file (red).
 check_manifests() {
   "$PY" - "$1" <<'PY'
 import os
@@ -503,7 +353,6 @@ PY
 
 run 'every manifest parses and carries spec.source + spec.destination' green check_manifests "$MANIFESTS"
 
-# The control: a fixture directory with one broken manifest. Must go red.
 fixture_broken="$WORK/broken-manifests"
 mkdir -p "$fixture_broken"
 cp "$MANIFESTS/identity.yaml" "$fixture_broken/"
@@ -511,19 +360,6 @@ printf 'apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: 
   >"$fixture_broken/broken.yaml"
 run 'control: a manifest missing spec.source goes red' red check_manifests "$fixture_broken"
 
-# ===========================================================================
-# 5. The ClusterIssuers — staging and prod, HTTP-01 through Traefik
-# ===========================================================================
-#
-# A separate check from check_manifests, and the reason is the kind: that one
-# asserts `kind: Application` over manifests/applications, and folding a
-# ClusterIssuer into it would force the wrong kind on one of the two
-# directories. Without this note the next reader "simplifies" the two back
-# together and breaks one of them.
-#
-# Each assertion is a specific mistake a copy-paste makes — a shared account
-# key, a real email committed, one solver — and each failure names the
-# document and the field, so a red line is actionable.
 check_issuers() {
   "$PY" - "$1" <<'PY'
 import os
@@ -631,17 +467,13 @@ PY
 
 run 'the ClusterIssuers are staging and prod, distinct in every field' green check_issuers "$TLS_DIR"
 
-# The controls derive from the real manifests, so they need them to exist;
-# the green check above is the one that says what is missing when they do not.
 if ls "$TLS_DIR"/*.yaml >/dev/null 2>&1; then
-  # The control: a fixture whose issuers share one account key. Must go red.
   fixture_shared_key="$WORK/issuers-shared-key"
   mkdir -p "$fixture_shared_key"
   sed 's/letsencrypt-staging-account-key/letsencrypt-prod-account-key/' \
     "$TLS_DIR"/*.yaml >"$fixture_shared_key/clusterissuer.yaml"
   run 'control: issuers sharing one account key go red' red check_issuers "$fixture_shared_key"
 
-  # The control: a fixture whose issuers carry no solver. Must go red.
   fixture_no_solvers="$WORK/issuers-no-solvers"
   mkdir -p "$fixture_no_solvers"
   sed -e 's/^    solvers:/    solvers: []/' \
@@ -652,13 +484,6 @@ else
   fail 'controls: the issuer fixtures need the real manifests' "$TLS_DIR has no YAML — the green check above names what is missing"
 fi
 
-# ===========================================================================
-# 6. No image floats on `latest` anywhere in the substrate tree
-# ===========================================================================
-#
-# A floating tag in an install script is the defect this fleet exists to
-# avoid. The check greps the whole tree; the control plants a `:latest` and
-# requires the same grep to find it.
 if grep -rn ':latest' "$SUBSTRATE" >/dev/null 2>&1; then
   fail 'no :latest image tag in the substrate tree' "$(grep -rn ':latest' "$SUBSTRATE")"
 else
@@ -674,13 +499,6 @@ else
   fail 'control: a planted :latest tag is found by the same grep' "the grep did not find the planted tag"
 fi
 
-# ===========================================================================
-# 7. No secret is a literal in the tree
-# ===========================================================================
-#
-# Two forms: `stringData:` in a manifest (the inline-secret mechanism) and an
-# `echo` of the pull secret in install.sh (which would print it to the logs).
-# The control plants each and requires the same check to find it.
 if grep -rn 'stringData:' "$SUBSTRATE/manifests" >/dev/null 2>&1; then
   fail 'no inline secret (stringData) in the manifests' "$(grep -rn 'stringData:' "$SUBSTRATE/manifests")"
 else
@@ -702,10 +520,6 @@ else
   fail 'control: a planted stringData secret is found by the same grep' "the grep did not find the planted secret"
 fi
 
-# The operator values are never echoed either — in any mode. The check reads
-# every `echo` line mentioning one of the KIT_SUBSTRATE_* values and fails if
-# the line also dereferences it. Naming the VARIABLE in a message is fine
-# (every refusal below does); printing its VALUE is the leak.
 sourced_vars="KIT_SUBSTRATE_BOX_ID KIT_SUBSTRATE_REGISTRY_CAPABILITY KIT_SUBSTRATE_BOX_URL KIT_SUBSTRATE_ACME_EMAIL KIT_SUBSTRATE_DATABASES KIT_SUBSTRATE_POSTGRES_EXTENSIONS KIT_SUBSTRATE_SMTP_ADAPTER KIT_SUBSTRATE_SMTP_HOST KIT_SUBSTRATE_SMTP_PORT KIT_SUBSTRATE_SMTP_USERNAME KIT_SUBSTRATE_SMTP_PASSWORD KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET KIT_SUBSTRATE_CLOUDFLARE_API_KEY KIT_SUBSTRATE_CF_ACCOUNT_ID KIT_SUBSTRATE_MAIL_FROM KIT_SUBSTRATE_MAIL_FROM_NAME KIT_SUBSTRATE_STRIPE_API_KEY KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET KIT_SUBSTRATE_APP_BASE_URL KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY"
 echo_leak=""
 for v in $sourced_vars; do
@@ -719,13 +533,6 @@ else
   pass 'no operator value is ever echoed'
 fi
 
-# THE `sourced_vars` LIST AND install.sh MUST AGREE, and the direction that
-# matters is the one a rename breaks. The echo-leak check above only scans the
-# names this list names, so a rename that reached install.sh and NOT the list
-# would leave the list looking full while the scan quietly stopped covering
-# the variable that moved — the exact drift this packet's own env-var rename
-# could have introduced, and it would have been green. The assertion is about
-# the LIST: every name it names must still be read by the installer.
 stale_sourced=""
 for v in $sourced_vars; do
   if ! grep -qE "\\\$\{?$v" "$SUBSTRATE/install.sh"; then
@@ -738,13 +545,6 @@ else
   pass 'sourced_vars names only variables install.sh reads'
 fi
 
-# THE CONTROL is the drift itself, replayed: a copy of install.sh in which one
-# listed variable has been renamed — here the ACME contact, because a rename is
-# the only way this check can go red — must be CAUGHT by the same loop, since
-# the list still names the old spelling and the fixture no longer reads it. A
-# control that plants an absent name would only prove the grep works; this one
-# proves the check catches a rename that reached one file and not the other,
-# which is the defect this packet's own env rename could have introduced.
 control_script="$WORK/install.sh.renamed"
 sed 's/KIT_SUBSTRATE_ACME_EMAIL/KIT_SUBSTRATE_ACME_CONTACT/g' "$SUBSTRATE/install.sh" >"$control_script"
 control_stale=""
@@ -762,19 +562,7 @@ case "$control_stale" in
     ;;
 esac
 
-# ===========================================================================
-# 8. KIT_SUBSTRATE_DATABASES refuses in DRY_RUN: unset, empty, mismatched
-# ===========================================================================
-#
-# The refusal is the contract: a cluster with no database list is a cluster
-# with no databases, and a list that disagrees with the manifest is a
-# DATABASE_URL pointing at nothing. (The unset and empty cases are asserted
-# in section 2, beside the success path they gate; this section adds the
-# mismatch and the accepted-control.) Each refusing case must exit non-zero
-# NAMING the fix. The control is the valid list, which must be accepted — a
-# refusal that fires unconditionally proves nothing.
 databases_try() {
-  # $1: __UNSET__, __EMPTY__, or a value.
   local out ec=0
   case "$1" in
     __UNSET__) out="$(env -u KIT_SUBSTRATE_DATABASES DRY_RUN=1 bash "$SUBSTRATE/install.sh" 2>&1)" || ec=$? ;;
@@ -807,17 +595,6 @@ else
   fail 'control: DRY_RUN with the matching database list is accepted' "$refused_out"
 fi
 
-# ===========================================================================
-# 9. The Postgres Cluster manifest — one cluster, the per-role provisioning
-# ===========================================================================
-#
-# Parses as YAML, names one Cluster (postgres in data), carries the boundary
-# (REVOKE … FROM PUBLIC per database), the membership (inRoles, the
-# declarative GRANT <svc>_app TO <svc>), the connection limit, the timeouts
-# and the vector extension — and pointedly NO imageName (CNPG's standard image
-# already carries pgvector, so there is no custom image to pin). The control
-# is a fixture with the REVOKE removed, which must go red under the same
-# check the real manifest passes.
 DATA_DIR="$SUBSTRATE/manifests/data"
 check_cluster() {
   "$PY" - "$1" <<'PY'
@@ -883,9 +660,6 @@ for svc in svcs:
     ):
         if needle not in sql:
             problems.append(f"postInitSQL is missing: {needle}")
-# No postInitApplicationSQL assertion here: the manifest must NOT carry that
-# hook (asserted above), and the extension list lives in install.sh — the
-# check below it asserts the declaration and its default.
 roles = {r.get("name"): r for r in spec.get("managed", {}).get("roles", [])}
 for svc in svcs:
     owner, app = roles.get(svc), roles.get(f"{svc}_app")
@@ -917,54 +691,15 @@ PY
 
 run 'the Cluster manifest carries the per-role provisioning' green check_cluster "$DATA_DIR/postgres-cluster.yaml"
 
-# The control: the same check against a fixture with the REVOKE removed. This
-# MUST go red — a boundary the check cannot see missing is not a check.
 fixture_no_revoke="$WORK/no-revoke-cluster.yaml"
 grep -v 'REVOKE ALL ON DATABASE' "$DATA_DIR/postgres-cluster.yaml" >"$fixture_no_revoke"
 run 'control: a Cluster without the REVOKE goes red' red check_cluster "$fixture_no_revoke"
 
-# The second control: a fixture RE-ADDING the forbidden
-# postInitApplicationSQL hook. Must go red the same way — an absence the
-# check cannot see violated is not an assertion.
 fixture_app_sql="$WORK/app-sql-cluster.yaml"
 awk '/^      owner: app$/{print; print "      postInitApplicationSQL:"; print "        - SELECT 1"; next}1' \
   "$DATA_DIR/postgres-cluster.yaml" >"$fixture_app_sql"
 run 'control: a Cluster re-adding postInitApplicationSQL goes red' red check_cluster "$fixture_app_sql"
 
-# ===========================================================================
-# 9b. Every CRD field the manifests use is DECLARED by the operator the
-#     installer pins — the check that would have caught `storageConfiguration`
-# ===========================================================================
-#
-# WHY THIS EXISTS, and why every check above it was blind to the defect. The
-# Cluster was applied on the box and refused:
-#
-#   Cluster in version "v1" cannot be handled as a Cluster: strict decoding
-#     error: unknown field "spec.storageConfiguration"
-#
-# `storageConfiguration` is CNPG's PRE-1.24 name; v1.30.1 — the version
-# install_cnpg applies — declares `spec.storage`. The CRD is structural, so the
-# API server refuses the object rather than ignoring the unknown key. Every
-# check in this file passed on it, including check_cluster, which asserted
-# `spec.storageConfiguration.size` in so many words: a check written from the
-# manifest it was meant to grade is a check that can never disagree with it.
-#
-# THE MODEL IS DERIVED, NOT TYPED. tests/substrate-crd/schemas.json holds the
-# property-name graph of each pinned CRD's `spec`, produced by
-# tests/substrate-crd/regen.py from the SAME release URL install.sh applies —
-# so the allowed names come from the operator, never from the manifest under
-# test. A hand-typed allow-list would contain `storageConfiguration` the day
-# the manifest did, which is the failure this whole section is about.
-#
-# WHAT IT DOES, AND DOES NOT, PROVE. It proves every field NAME the manifests
-# write under `spec` exists in the pinned CRD at that path. It does not prove
-# types, required fields, enum values, or that a field means what the comment
-# says — those still need the box, and README says so. It is the strict-decoding
-# half only, and that half is what refused the install.
-#
-# The model carries the pin it was derived from; the check FAILS if the pin in
-# install.sh has moved without a re-derivation, so a version bump cannot
-# silently grade a manifest against a schema nobody re-fetched.
 CRD_MODEL="$ROOT/tests/substrate-crd/schemas.json"
 check_crd_fields() {
   "$PY" - "$1" "$2" "$3" <<'PY'
@@ -999,9 +734,6 @@ for key, src in sources.items():
     if key not in schemas:
         problems.append(f"{key}: named in sources but has no schema")
 
-# Core Kubernetes API groups carry no CRD of ours, and are not what this check
-# grades; a doc in one of them is counted and skipped. A doc in an UNKNOWN
-# group fails closed, so a CRD that arrives without a model is visible.
 CORE_GROUPS = {
     "", "apps", "batch", "policy", "autoscaling", "networking.k8s.io",
     "rbac.authorization.k8s.io", "storage.k8s.io", "apiextensions.k8s.io",
@@ -1058,8 +790,6 @@ for dirpath, _dirs, files in os.walk(manifests_root):
                     "apiVersion — model the CRD or confirm it is core"
                 )
 
-# A CRD no manifest exercises means a manifest was renamed and this check is
-# no longer looking at it. That is a silent skip, so it fails.
 for key in sources:
     if key not in verified:
         problems.append(
@@ -1081,15 +811,6 @@ PY
 run 'every CRD field is declared by the pinned operator CRD' green \
   check_crd_fields "$CRD_MODEL" "$SUBSTRATE/manifests" "$SUBSTRATE/install.sh"
 
-# The named control: the EXACT field the box refused. A fixture putting
-# `storageConfiguration` back must go red under the same check the real tree
-# passes. This is the red proof for the whole section — if this is green, the
-# check is not reading the CRD.
-#
-# The control directory mirrors the REAL manifest tree with exactly one line
-# changed. A directory holding only the mutated Cluster would go red on the
-# "a declared CRD is not exercised" guard instead of on the unknown field — a
-# red for the wrong reason, which proves nothing about the field check.
 fixture_storage_cfg="$WORK/crd-storage"
 mkdir -p "$fixture_storage_cfg/applications" "$fixture_storage_cfg/data" "$fixture_storage_cfg/tls"
 cp -R "$SUBSTRATE/manifests/applications/." "$fixture_storage_cfg/applications/"
@@ -1100,9 +821,6 @@ sed 's/^  storage:$/  storageConfiguration:/' \
 run 'control: spec.storageConfiguration goes red' red \
   check_crd_fields "$CRD_MODEL" "$fixture_storage_cfg" "$SUBSTRATE/install.sh"
 
-# A second control, at depth: a genuine v1.30.1 field with a retired spelling
-# (`storageClassName` instead of `storageClass`) must go red too, so the check
-# is not only looking at the top level. Same full-tree shape as above.
 fixture_nested="$WORK/crd-nested"
 mkdir -p "$fixture_nested/applications" "$fixture_nested/data" "$fixture_nested/tls"
 cp -R "$SUBSTRATE/manifests/applications/." "$fixture_nested/applications/"
@@ -1113,33 +831,12 @@ sed 's/^    storageClass: local-path$/    storageClassName: local-path/' \
 run 'control: a nested unknown field (storageClassName) goes red' red \
   check_crd_fields "$CRD_MODEL" "$fixture_nested" "$SUBSTRATE/install.sh"
 
-# A third control: the model's pin disagrees with install.sh. Bumping the
-# operator without re-deriving the model must go red, or the model silently
-# grades a manifest against a schema nobody re-fetched.
 fixture_pin_drift="$WORK/install-cnpg-drift.sh"
 sed 's/^CNPG_VERSION="v1.30.1"/CNPG_VERSION="v1.31.0"/' \
   "$SUBSTRATE/install.sh" >"$fixture_pin_drift"
 run 'control: a pin bump without re-deriving the model goes red' red \
   check_crd_fields "$CRD_MODEL" "$SUBSTRATE/manifests" "$fixture_pin_drift"
 
-# The bootstrap ORDER: postInitSQL runs once, at cluster creation, as the
-# superuser — BEFORE the operator reconciles spec.managed.roles (measured on
-# the live box: `role "identity" does not exist` inside postgres-1-initdb,
-# `kubectl get cluster` stuck in `Setting up primary`). So a bootstrap
-# statement that names a role must be preceded, IN THE SAME LIST, by a
-# CREATE ROLE for it — the grant belongs after the creation by construction
-# of the list order, not by luck of the operator's timing. And every role the
-# bootstrap names must also have a managed.roles entry, which is what gives
-# it its password and membership afterwards (a bootstrap-created role with no
-# managed entry is a role no service can log in as).
-#
-# The check walks the postInitSQL list in order, starting from the two roles
-# initdb itself guarantees (the `postgres` superuser, which the bootstrap
-# page forbids deleting, and the `app` owner the initdb database/owner block
-# creates), and fails on the first statement naming a role nothing above it
-# created. `FROM PUBLIC` and `ON DATABASE "x"` name no role and are ignored:
-# only OWNER "...", TO "..." and ROLE "..." are references, and only
-# CREATE ROLE "..." creates.
 check_cluster_bootstrap_order() {
   "$PY" - "$1" <<'PY'
 import re
@@ -1197,26 +894,15 @@ PY
 
 run 'the Cluster bootstrap SQL creates every role before it names it' green check_cluster_bootstrap_order "$DATA_DIR/postgres-cluster.yaml"
 
-# The control: the same check against a fixture with the CREATE ROLE lines
-# removed — the shape this file had when the box crash-looped. MUST go red.
 fixture_no_creates="$WORK/no-creates-cluster.yaml"
 grep -v 'CREATE ROLE' "$DATA_DIR/postgres-cluster.yaml" >"$fixture_no_creates"
 run 'control: bootstrap SQL naming roles it never creates goes red' red check_cluster_bootstrap_order "$fixture_no_creates"
 
-# The second control: a fixture whose bootstrap CREATES a role no
-# managed.roles entry adopts, then grants to it. The ordering half passes
-# (the CREATE precedes the GRANT) so only the coverage half can fire — a
-# bootstrap role with no managed entry is a login no secret can reach.
 fixture_ghost="$WORK/ghost-role-cluster.yaml"
 awk '/- CREATE DATABASE "identity" OWNER "identity"$/{print "        - CREATE ROLE \"ghost\" WITH LOGIN"; print "        - GRANT CONNECT ON DATABASE \"identity\" TO \"ghost\""}1' \
   "$DATA_DIR/postgres-cluster.yaml" >"$fixture_ghost"
 run 'control: bootstrap SQL naming a role no managed entry creates goes red' red check_cluster_bootstrap_order "$fixture_ghost"
 
-# The extension list is declared in install.sh with the compose default
-# (`vector`) and validated as identifiers — because no CNPG hook can create
-# extensions per database, the declaration is what the gate can hold. The
-# control drops the default; a declaration the check cannot see missing is
-# documentation, not a check.
 check_extensions() {
   code="$(sed -e 's/#.*//' "$1")"
   problems=""
@@ -1242,9 +928,6 @@ sed 's/KIT_SUBSTRATE_POSTGRES_EXTENSIONS:=vector/KIT_SUBSTRATE_POSTGRES_EXTENSIO
   "$SUBSTRATE/install.sh" >"$fixture_no_ext_default"
 run 'control: an extension list with no default goes red' red check_extensions "$fixture_no_ext_default"
 
-# ===========================================================================
-# 10. The Redis manifest — parses, exact tag, password by reference only
-# ===========================================================================
 check_redis() {
   "$PY" - "$1" <<'PY'
 import sys
@@ -1295,19 +978,10 @@ PY
 
 run 'the Redis manifest parses with an exact tag and no literal password' green check_redis "$DATA_DIR/redis.yaml"
 
-# The control: the same check against a fixture floating on latest. Must go red.
 fixture_latest_redis="$WORK/latest-redis.yaml"
 sed 's/image: redis:7.4.1-alpine/image: redis:latest/' "$DATA_DIR/redis.yaml" >"$fixture_latest_redis"
 run 'control: a Redis floating on latest goes red' red check_redis "$fixture_latest_redis"
 
-# ===========================================================================
-# 11. The recorded secret name-and-key list matches what install.sh creates
-# ===========================================================================
-#
-# The SECRET RECORD in install.sh is the drift tripwire both ways: every name
-# it lists must be created below it, and every key must appear as a
-# --from-literal. The control removes one key from a fixture copy and must go
-# red — a record the check cannot see drift in is documentation, not a check.
 check_secret_record() {
   "$PY" - "$1" <<'PY'
 import re
@@ -1319,32 +993,9 @@ records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
 if len(records) != 5:
     print(f"expected 5 RECORD lines, found {len(records)}")
     sys.exit(1)
-# A key is WRITTEN in one of two spellings: `--from-literal=KEY=` (the secrets
-# step 9 creates) or the merge patch step 11 sends, whose body is built as a
-# `stringData` object. Both are writes and both are checked, so the record
-# cannot be satisfied by a key that only appears in a comment or a variable
-# name. The patch keys are read out of EVERY `stringData` block rather than off
-# a `KEY:$t` literal, because a patch now carries a whole PAIR of keys
-# (`COURIER_BASE_URL` + `COURIER_TOKEN`, `COURIER_IDENTITY_URL` +
-# `COURIER_IDENTITY_TOKEN`) and a regex keyed to the trailing `:$t}` would see
-# only the token half. The controls below remove one `--from-literal` key and
-# one key out of a patch.
 patch_keys = set()
 for block in re.findall(r'"stringData"\s*:\s*\{([^}]*)\}', code):
     patch_keys.update(re.findall(r'"([A-Z_]+)"\s*:', block))
-# Conditional keys: set only when the operator sets the surface (identity's
-# OIDC block and its issuer, OAUTH_ENCRYPTION_KEY, courier's mail-from). They
-# are deliberately UNRECORDED — absent is a valid reduced surface, and the
-# record lists the keys every install creates. MFA_ENCRYPTION_KEY is NOT
-# conditional: the installer generates it on first creation, so every
-# install creates it and the record must name it. The COURIER credential pair
-# is NOT conditional either: step 11 always mints it on the live path, so
-# every install writes COURIER_BASE_URL + COURIER_TOKEN and
-# COURIER_IDENTITY_URL + COURIER_IDENTITY_TOKEN, and the record names them.
-# OIDC_SIGNING_KEY and its id are now GENERATED ON THE BOX rather than
-# supplied, but still only when the operator sets an issuer and a login UI —
-# the surface stays all-or-nothing, so they stay unrecorded beside the issuer
-# and login UI that gate them.
 conditional = {
     "OIDC_SIGNING_KEY",
     "OIDC_SIGNING_KEY_ID",
@@ -1381,16 +1032,10 @@ PY
 
 run 'the recorded secret name-and-key list matches install.sh' green check_secret_record "$SUBSTRATE/install.sh"
 
-# The control: a fixture with one key's --from-literal removed. Must go red.
 fixture_dropped_key="$WORK/install-dropped-key.sh"
 grep -v -- '--from-literal=COURIER_SMTP_PASSWORD=' "$SUBSTRATE/install.sh" >"$fixture_dropped_key"
 run 'control: a secret with a key removed goes red' red check_secret_record "$fixture_dropped_key"
 
-# The second control, for the other spelling: step 11's mint writes each pair
-# through a merge patch, and a fixture with one key removed from that patch
-# must go red too. Without it the widened check would be proven only by the
-# --from-literal path, which is the path that never changed. One control per
-# half of the pair: the courier token and identity's base URL.
 fixture_dropped_patch="$WORK/install-dropped-patch.sh"
 sed 's/,"COURIER_IDENTITY_TOKEN":\$t//' "$SUBSTRATE/install.sh" >"$fixture_dropped_patch"
 run 'control: a secret whose patched key is removed goes red' red check_secret_record "$fixture_dropped_patch"
@@ -1399,42 +1044,11 @@ fixture_dropped_url="$WORK/install-dropped-url.sh"
 sed 's/"COURIER_BASE_URL":\$url,//' "$SUBSTRATE/install.sh" >"$fixture_dropped_url"
 run 'control: a patched base URL removed from the pair goes red' red check_secret_record "$fixture_dropped_url"
 
-# The reverse control: a fixture setting a key the record does not name (and
-# the conditional set does not excuse). Must go red the other way.
 fixture_extra_key="$WORK/install-extra-key.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_extra_key"
 printf '\n--from-literal=EXTRA_UNRECORDED_KEY=x\n' >>"$fixture_extra_key"
 run 'control: a secret with an unrecorded key goes red' red check_secret_record "$fixture_extra_key"
 
-# ===========================================================================
-# 11b. Every secret key a CHART mounts or names is written by install.sh
-# ===========================================================================
-#
-# WHY THIS EXISTS. The defect this packet was written about: gateway's chart
-# points a `volumes.secret` item at gateway-secrets/ASSERTION_SIGNING_KEY, and
-# step 9 created that secret with REDIS_URL only. The pod sat in
-# ContainerCreating for 152 minutes on `FailedMount: references non-existent
-# secret key` while every other step reported success — a missing generator
-# surfacing as a pod that hangs, the class nobody attributes. The SECRET RECORD
-# check above proves the record and install.sh agree with each other; neither
-# half can see a chart that consumes a key neither names. This check closes the
-# loop: it reads the five service charts beside kit (READ-ONLY) and requires
-# every secret NAME and KEY they consume to be in install.sh's own inventory.
-#
-# THREE REFERENCES, and all three are checked because all three have failed in
-# the fleet at least once: `envFrom.secretRef` (the secret must exist — the
-# generated charts inject every secret key this way), `env.valueFrom.secretKeyRef`
-# (both the secret and the key must exist), and `volumes.secret` with `items`
-# (a required ITEM: a missing key is a `FailedMount`, not a missing env var).
-# Ingress TLS secrets (`*-tls`) are NOT in scope and not scanned: cert-manager
-# fills them from the ClusterIssuer, they are not pod mounts.
-#
-# THE FLEET IS ONE LEVEL UP AND NAMED, NEVER FURTHER — the AGENTS.md rule. A
-# service whose sibling checkout is absent is NAMED in a note; on a fresh clone
-# every service is a note. The check's ABILITY to see a missing writer is proved
-# by the controls below, which build a throwaway fixture fleet rather than
-# depend on a neighbour being present: one carries a key install.sh never
-# writes (must go red) and one carries the key it does (must stay green).
 check_chart_secret_keys() {
   "$PY" - "$1" "$2" <<'PY'
 import glob
@@ -1448,10 +1062,6 @@ install_path, fleet = sys.argv[1], sys.argv[2]
 
 SERVICES = ("identity", "gateway", "courier", "parlor", "billing")
 
-# install.sh's inventory: the SECRET RECORD maps a secret to the keys it writes,
-# and the two writers are the `--from-literal=KEY=` sites plus step 11's merge
-# patch (`{"stringData":{"KEY":$t}}`). check_secret_record above proves the
-# record and the writes agree; this check asks whether the charts are covered.
 src = open(install_path, encoding="utf-8").read()
 code = re.sub(r"(?m)^\s*#.*$", "", src)
 records = re.findall(r"^#\s+RECORD\s+(\S+):\s*(.*)$", src, re.M)
@@ -1474,11 +1084,6 @@ def dotted(values, path):
 
 
 def resolve(text, values):
-    # A chart template is not valid YAML while it carries Helm actions, so the
-    # secret references are resolved by name rather than rendered. `.Values.a.b`
-    # is the only expression the four generated charts put in a secret-name or
-    # secret-key position; anything else is left in place and reported below,
-    # never silently skipped.
     def sub(m):
         got = dotted(values, m.group(1).strip())
         return str(got) if got is not None else m.group(0)
@@ -1487,15 +1092,11 @@ def resolve(text, values):
 
 
 def refs_from(text):
-    refs = set()   # (secret, key) the pod REQUIRES
-    names = set()  # secret names referenced at all
     for m in re.finditer(r"secretRef:\s*\n\s*name:\s*([^\s]+)", text):
         names.add(m.group(1))
     for m in re.finditer(r"secretKeyRef:\s*\n\s*name:\s*([^\s]+)\s*\n\s*key:\s*([^\s]+)", text):
         names.add(m.group(1))
         refs.add((m.group(1), m.group(2)))
-    # A volume's secretName, and every `- key:` ITEM under it (items live at a
-    # deeper indent than the secretName that introduces them).
     for m in re.finditer(r"(?m)^(\s*)secretName:\s*([^\s]+)\s*$", text):
         indent = len(m.group(1))
         secret = m.group(2)
@@ -1567,17 +1168,10 @@ print(f"chart secret references: {len(SERVICES)} services checked, {len(notes)} 
 PY
 }
 
-# The real run: the sibling charts beside kit, when a checkout is there.
 run 'every secret key a chart mounts or names is written by install.sh' green \
   check_chart_secret_keys "$SUBSTRATE/install.sh" "$ROOT/.."
 
-# The controls run against a THROWAWAY fixture fleet, so the check's ability to
-# see a missing writer never depends on a neighbour being checked out. The
-# fixture carries all three reference shapes the five charts use, with the
-# gateway volume ITEM as the load-bearing one (it is the shape that produced the
-# 152-minute ContainerCreating).
 build_chart_fixture() {
-  # $1 = the directory; $2 = the assertion key the chart mounts.
   local dir="$1" key="$2"
   mkdir -p "$dir/gateway/charts/gateway/templates"
   cat >"$dir/gateway/charts/gateway/Chart.yaml" <<'YAML'
@@ -1628,7 +1222,6 @@ build_chart_fixture "$fixture_chart_good" "ASSERTION_SIGNING_KEY"
 run 'control: the same fixture with the written key stays green' green \
   check_chart_secret_keys "$SUBSTRATE/install.sh" "$fixture_chart_good"
 
-# The envFrom half: a secret NAME the chart reads but install.sh never creates.
 fixture_chart_name="$WORK/chart-fleet-missing-secret"
 build_chart_fixture "$fixture_chart_name" "ASSERTION_SIGNING_KEY"
 sed -i.bak 's/secretName: gateway-secrets/secretName: gateway-secrets-TYPO/' \
@@ -1637,28 +1230,6 @@ rm -f "$fixture_chart_name/gateway/charts/gateway/values.yaml.bak"
 run 'control: a chart reading a secret install.sh never creates goes red' red \
   check_chart_secret_keys "$SUBSTRATE/install.sh" "$fixture_chart_name"
 
-# ===========================================================================
-# 12. NATS with JetStream — the bus the local stack runs, on the box too
-# ===========================================================================
-#
-# The local stack runs NATS with JetStream (`nats` with `-js`, plus the
-# one-shot `nats-stream-init` defining stream `anywaye`); the substrate
-# installed no broker, so on the box every event with no matching stream is a
-# silent black hole — the exact failure `nats-stream-init`'s comment exists to
-# prevent. Step 10 installs one Deployment + Service + PVC in `data` and
-# defines the same stream, idempotently (`info || add`, mirroring the local
-# service). Three checks: the manifest carries the broker, install.sh applies
-# it and defines the stream, and the two renders agree — the drift check
-# parses BOTH contracts and fails on divergence, so local and substrate
-# cannot drift apart silently. Each has a fixture control that must go red.
-#
-# AND THE FIELD THE FLAGS LIVE IN IS PART OF THE CLAIM. The manifest used to
-# carry the compose flag list under `command:`, which Kubernetes reads as the
-# ENTRYPOINT rather than as arguments — the box refused to start the container
-# at all (`exec: "-js": executable file not found in $PATH`, CrashLoopBackOff,
-# step 10's wait timing out). The check now reads the union of `command` and
-# `args`, because that union is the argv the runtime execs, so no fixture can
-# pass by putting the flags in a field that is not the field.
 COMPOSE_STACK="$ROOT/templates/compose/docker-compose.yml"
 
 check_nats_manifest() {
@@ -1708,11 +1279,6 @@ if container.get("image") != "NATS_IMAGE_PLACEHOLDER":
         " the pin lives in install.sh ($NATS_VERSION) and is substituted at"
         " apply time; a literal tag here is a second opinion"
     )
-# The flags are read out of `command` AND `args` together, because that union
-# is the argv the runtime execs: Kubernetes replaces the image's entrypoint
-# with `command` and appends `args` to it. Reading only one of them would pass
-# a manifest whose flags sit in the wrong field — which is the defect this
-# packet is about, and which the check in §12b refuses by shape.
 tokens = list(container.get("command") or []) + list(container.get("args") or [])
 for flag in ("-js", "-sd", "/data", "-m", "8222"):
     if flag not in tokens:
@@ -1868,8 +1434,6 @@ PY
 
 run 'the NATS manifest carries the broker (Deployment + Service + PVC, -js, monitor probes)' green check_nats_manifest "$DATA_DIR/nats.yaml"
 
-# The controls: a fixture without -js, and a fixture floating on latest. Both
-# MUST go red under the same check the real manifest passes.
 fixture_no_js="$WORK/nats-no-js.yaml"
 if [ -r "$DATA_DIR/nats.yaml" ]; then
   grep -v '"-js"' "$DATA_DIR/nats.yaml" >"$fixture_no_js"
@@ -1883,38 +1447,16 @@ fi
 
 run 'install.sh applies the broker and defines stream anywaye idempotently' green check_nats_install "$SUBSTRATE/install.sh"
 
-# The control: a fixture with one publisher dropped from the subject set. Must
-# go red — a subject list the check cannot see shrink is documentation.
 fixture_subjects="$WORK/install-nats-subjects.sh"
 sed 's/muse\.>,darkroom\.>/muse.>/' "$SUBSTRATE/install.sh" >"$fixture_subjects"
 run 'control: a stream missing a publisher goes red' red check_nats_install "$fixture_subjects"
 
 run 'the substrate stream spec equals the compose stack nats-stream-init args' green check_nats_drift "$COMPOSE_STACK" "$SUBSTRATE/install.sh"
 
-# The drift control mutates ONE side only: a substrate copy with a 30d replay
-# window must disagree with the untouched stack. Must go red.
 fixture_drift="$WORK/install-nats-drift.sh"
 sed 's/--max-age 7d/--max-age 30d/' "$SUBSTRATE/install.sh" >"$fixture_drift"
 run 'control: a substrate with a drifted max-age goes red' red check_nats_drift "$COMPOSE_STACK" "$fixture_drift"
 
-# --- the broker's address reaches the services ---------------------------------
-#
-# THE BROKER ALONE IS NOT ENOUGH. install.sh installs NATS in `data` and
-# defines the stream, and the only NATS_URL it ever set was on the one-shot
-# stream-init pod — so every service that has a publisher has it dark on a
-# real box, and identity's outbox loop (built only when NATS_URL is set) has
-# never run in production. The local compose stack sets the variable; the
-# substrate now does too, into identity-secrets.
-#
-# The check is a COUPLING, not a presence test: the address in the secret must
-# be the fully qualified name of the broker's own Service (name, namespace and
-# port read out of manifests/data/nats.yaml), because identity runs in
-# `identity` and an unqualified `nats` resolves only inside `data` — the
-# compose spelling, which here would produce a pod that starts and a loop
-# that connects to nothing. The record half is section 11's (a key set but
-# unrecorded is already red there); what this adds is that the KEY EXISTS at
-# all, which is the direction nothing else asks — the two checks together are
-# what cover the literal and its record entry being removed in one commit.
 check_nats_service_url() {
   "$PY" - "$1" "$2" <<'PY'
 import re
@@ -1963,10 +1505,6 @@ PY
 run 'identity-secrets carries the in-cluster broker address (fully qualified)' green \
   check_nats_service_url "$SUBSTRATE/install.sh" "$DATA_DIR/nats.yaml"
 
-# The controls, one property each: the unqualified compose spelling, the
-# missing literal, and the two writers spelling the address separately. Each
-# must go red for the reason its own name gives — a control that fires for
-# some other reason proves nothing about the assertion it sits under.
 fixture_short_url="$WORK/install-nats-short.sh"
 sed 's|nats://nats.data.svc.cluster.local:4222|nats://nats:4222|' \
   "$SUBSTRATE/install.sh" >"$fixture_short_url"
@@ -1984,56 +1522,6 @@ sed 's|--env="NATS_URL=$NATS_URL"|--env="NATS_URL=nats://nats.data.svc.cluster.l
 run 'control: a second spelling of the address in the stream-init pod goes red' red \
   check_nats_service_url "$fixture_two_writers" "$DATA_DIR/nats.yaml"
 
-# ===========================================================================
-# 12b. A container's `command:` is an ENTRYPOINT, never a flag list — the
-#      compose/k8s field confusion, gated
-# ===========================================================================
-#
-# THE DEFECT, and why no reader of either file can catch it. The nats manifest
-# carried the local stack's flag list under `command:`, because the compose file
-# spells the same list under the same key. Compose APPENDS its `command:` to the
-# image's ENTRYPOINT; Kubernetes REPLACES the entrypoint with `command:` and
-# carries arguments in `args:`. One spelling, two meanings, two files. The box
-# said so once — `exec: "-js": executable file not found in $PATH`,
-# CrashLoopBackOff, and step 10's `kubectl wait --for=condition=Available
-# deployment nats` timing out with nothing in `gh run view --log-failed` to read,
-# because no step failed: the container never started.
-#
-# WHAT IS ASSERTED, AND HOW NARROWLY. Kubernetes execs `command[0]` as a binary
-# name resolved in the image's PATH. A first element beginning with `-` cannot
-# name a binary, so it cannot run — on ANY image, because the entrypoint it would
-# have been appended to has been replaced. So the check refuses exactly that
-# shape:
-#
-#   COVERED   every non-Argo document under manifests/: any LIST under a
-#             `command:` key whose FIRST element begins with `-`, and any
-#             `command:` spelled as one string beginning with `-`. That reaches
-#             a container's `command:` and a probe's or lifecycle handler's
-#             `exec.command:` alike, because both are argv.
-#
-#   NOT COVERED  argoproj.io Applications. Those are chart requests: a
-#             `command:` inside their values is a Helm value whose meaning
-#             belongs to the chart, not a Kubernetes field, and the charts are
-#             out of this packet's scope. They are COUNTED and reported as
-#             skipped, never passed over in silence.
-#
-#   ALSO NOT COVERED  whether a non-flag `command:` names a binary the image
-#             actually carries. `command: [nats-server]` and
-#             `command: [sh, -c, …]` are both accepted on shape. Whether those
-#             binaries exist is a property of the image, whose tag is pinned in
-#             install.sh — proving it needs a runtime, which is what README says
-#             this suite cannot do.
-#
-# NO ALLOWLIST, and that is deliberate. The brief allows an exception for "a
-# site whose entrypoint is documented as such"; there is no such site, because
-# replacing the entrypoint is what makes a flag-named binary unrunnable on every
-# image. An entry that permits nothing is a ratchet, which is the very thing the
-# static phase's allowlist rules exist to refuse.
-#
-# AND THE CHECK MUST NOT BE SATISFIABLE BY EXAMINING NOTHING. It prints how many
-# `command:` sites it read, and the assertion below reads that number back out of
-# the real tree's own output. A check that walks an empty tree and reports "0
-# flag-shaped" is green and worthless.
 check_container_command_fields() {
   "$PY" - "$1" <<'PY'
 import os
@@ -2116,8 +1604,6 @@ PY
 run 'no container command: starts with a flag (the compose/k8s field confusion)' green \
   check_container_command_fields "$SUBSTRATE/manifests"
 
-# The real tree's own site count, read back out of the output. Without this the
-# check is satisfiable by a tree it never walked.
 command_sites_out="$(check_container_command_fields "$SUBSTRATE/manifests")" || true
 case "$command_sites_out" in
   *"4 command site(s) read"*)
@@ -2129,10 +1615,6 @@ case "$command_sites_out" in
     ;;
 esac
 
-# THE RED CONTROL IS THE DEFECT ITSELF, restored: the flag list back under
-# `command:`, `args:` gone, nothing else in the tree touched. A fixture that has
-# silently stopped carrying the defect is a control that proves nothing, so the
-# fixture asserts its own premise before it is used.
 fixture_cmd_flags="$WORK/command-flag-shape"
 mkdir -p "$fixture_cmd_flags"
 cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_flags/"
@@ -2150,10 +1632,6 @@ else
     check_container_command_fields "$fixture_cmd_flags"
 fi
 
-# The other half, and the one that keeps the check honest about what it keys on:
-# a `command:` that NAMES the binary and carries the flags after it must stay
-# GREEN. Without this the check is "a flag appears somewhere in command:", and
-# the fix — naming the binary — would be refused along with the bug.
 fixture_cmd_binary="$WORK/command-binary-first"
 mkdir -p "$fixture_cmd_binary"
 cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_binary/"
@@ -2168,12 +1646,6 @@ else
     check_container_command_fields "$fixture_cmd_binary"
 fi
 
-# The third shape, and the reason the checker reads a scalar too: a `command:`
-# spelled as one string that begins with a flag. (`command` is a []string in the
-# Kubernetes schema, so the API server would reject this at apply — but the gate
-# sees the tree first, and a value that begins with a flag is the same defect one
-# shape over.) The premise asserts the fixture still PARSES, so a red here cannot
-# be a YAML error wearing the finding's clothes.
 fixture_cmd_scalar="$WORK/command-scalar-flag"
 mkdir -p "$fixture_cmd_scalar"
 cp -R "$SUBSTRATE/manifests/." "$fixture_cmd_scalar/"
@@ -2189,88 +1661,29 @@ else
     check_container_command_fields "$fixture_cmd_scalar"
 fi
 
-# ===========================================================================
-# 13. identity-secrets carries a generated MFA key by default
-# ===========================================================================
-#
-# A fresh substrate install with the documented minimum inputs must still
-# produce a usable Identity MFA surface: identity mounts GET /v1/mfa and the
-# enrollment routes only when MFA_ENCRYPTION_KEY is present, so an
-# identity-secrets without it boots an identity that cannot show the truthful
-# `Off` state or enroll a factor. The installer therefore generates a
-# cryptographically random 32-byte base64url-no-padding key on first creation
-# (the exact shape identity's config parser accepts — base64.RawURLEncoding,
-# exactly 32 bytes, the same generation as SIGNUP_SIGNING_KEY), keeps an
-# operator-supplied KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY override
-# (validated, never printed), and never rotates or patches an existing
-# secret — a legacy identity-secrets without the key is left alone, because
-# an imported database could hold ciphertext sealed under a key no longer
-# present.
-#
-# install.sh needs root, Linux and k3s, so none of this runs here. Instead the
-# installer is sourced with its trailing `main` call removed and
-# install_service_secrets is executed against a mocked kubectl backed by
-# files — local only, no cluster, no network. Each case gets a fresh store
-# under $WORK, swept by the EXIT trap. Every assertion below reads a
-# captured variable with a shell `case`, never a pipe (AGENTS.md: a piped
-# read flips on the pipe buffer, not on the content).
 fixture_sourced="$WORK/install-sourced.sh"
 sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$fixture_sourced"
 
-# mock_seed <namespace> <secret> <key> <value> — plant one stored value.
-# Every key planted here is a FAKE. Nothing in this file is a credential; the
-# strings are labels, and a label is what a test may print.
 mock_seed() {
   local d="$MOCK_ROOT/$1/$2"
   mkdir -p "$d"
   printf '%s' "$4" >"$d/$3"
 }
 
-# mock_get <namespace> <secret> <key> — the stored plaintext, or empty.
 mock_get() {
   cat "$MOCK_ROOT/$1/$2/$3" 2>/dev/null || true
 }
 
-# mock_namespace_exists <namespace> — has anything in this store created it?
-#
-# The boundary the packet's defect crosses, and the reason the mock needs a
-# namespace registry at all: `create secret` in a namespace NOBODY made is
-# refused by the API server with `Error from server (NotFound): namespaces "x"
-# not found`, exit 1. That is the exact error the live box produced on a wiped
-# machine, where step 4 had made argocd and step 6's Applications had yet to
-# make the other five. A mock that let a Secret be created in any namespace
-# would have been green on that failure for the whole life of this suite,
-# which is the same shape as the defect: an assertion that pins the destination
-# without modelling the destination's existence.
-#
-# GET and PATCH are deliberately NOT bound by this: `get secret -n x` on a
-# namespace that does not exist is NotFound too, but the fixture's own store is
-# the only thing those verbs read, and binding them would make a seeded secret
-# unreadable rather than wrong. The boundary is modelled where the defect
-# measured it — a WRITE into the namespace.
 mock_namespace_exists() {
   [ -n "${MOCK_ROOT:-}" ] || return 0
   [ -f "$MOCK_ROOT/namespaces" ] || return 1
   grep -qx -- "$1" "$MOCK_ROOT/namespaces" 2>/dev/null
 }
 
-# mock_has_control_bytes <file> — exit 0 iff the file carries a NUL byte, the
-# signature of the AppleDouble sidecar (`._name`) BSD tar writes for a file's
-# resource fork. Real kubectl fails to parse such a file; the mock's apply
-# branch calls this so a control that hands it one really does break.
 mock_has_control_bytes() {
   "$PY" -c 'import sys; sys.exit(0 if b"\x00" in open(sys.argv[1], "rb").read() else 1)' "$1"
 }
 
-# mock_apply_plant <manifest> — the ONE write path for `apply`, shared by the
-# three ways a manifest reaches it: a resolved `-f` FILE, a `-f` DIRECTORY (read
-# the way kubectl reads it), and the pipeline on stdin. Two boundaries meet
-# here, one from each packet, and they are independent: the namespace the
-# manifest NAMES must exist (the same NotFound `create secret` models, asked of
-# the write), and the bytes are then appended to the store verbatim. A manifest
-# with no top-level `namespace:` — the namespace stub `create namespace …
-# --dry-run=client -o yaml` prints, or a cluster-scoped object — is not bound by
-# the first, exactly as real kubectl does not bind it.
 mock_apply_plant() {
   local manifest="$1" apply_ns
   apply_ns="$(printf '%s\n' "$manifest" | sed -n 's/^  namespace: //p' | head -1)"
@@ -2279,12 +1692,6 @@ mock_apply_plant() {
     return 1
   fi
   printf '%s\n' "$manifest" >>"$MOCK_ROOT/applied.yaml"
-  # An object the installer applied EXISTS afterwards — apply is a synchronous
-  # round trip, so a later GET of the same object answers instead of 404ing.
-  # Modelled for the CNPG Cluster install_postgres_cluster applies: without
-  # the marker the step's own phase query (on the refusal path) would read a
-  # 404 for an object the step just created, and the refusal would name
-  # 'unknown' for a cluster that is really 'Setting up primary'.
   local apply_kind apply_name
   apply_kind="$(printf '%s\n' "$manifest" | sed -n 's/^kind: //p' | head -1)"
   apply_name="$(printf '%s\n' "$manifest" | sed -n 's/^  name: //p' | head -1)"
@@ -2292,26 +1699,11 @@ mock_apply_plant() {
     [ -f "$MOCK_ROOT/$apply_ns/cluster-$apply_name" ] || : >"$MOCK_ROOT/$apply_ns/cluster-$apply_name"
   fi
 }
-# mock_kubectl — the file-backed kubectl. Emulates only what
-# install_service_secrets and the pull-secret step use: `create namespace`
-# (REGISTERS the namespace and prints a stub down the pipe to `apply`),
-# `create secret generic … --from-literal=K=V …`,
-# `create secret docker-registry … --from-file=…`,
-# `get secret …` (existence), and `get secret … -o jsonpath={.data.KEY}`
-# (base64 of the stored value, the shape read_secret_key decodes).
-# Two of those verbs — `create secret` and `apply` — refuse a namespace nobody
-# made, with the API server's own NotFound. Anything else is a loud failure,
-# not a silent success.
 mock_kubectl() {
-  # EVERY invocation is recorded in full and in order, because the pull-secret
-  # contract is that the credential never appears in argv at all — and the
-  # only way to prove a negative is to have the whole command line to grep.
-  # Recorded before any shift, so what is written is what was called.
   if [ -n "${MOCK_ROOT:-}" ]; then
     printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
   fi
   local fallback_ns="" patch_file_arg=""
-  while [ $# -gt 0 ]; do
     case "$1" in
       --kubeconfig=*) shift ;;
       -n) fallback_ns="$2"; shift 2 ;;
@@ -2325,17 +1717,8 @@ mock_kubectl() {
       local resource="${1:-}"
       shift || true
       if [ "$resource" = "namespace" ]; then
-        # THE REGISTRY. Real kubectl keeps the namespace set in etcd; the mock
-        # keeps it in one name per line of $MOCK_ROOT/namespaces, and that file
-        # is what the two namespace-bound verbs below consult. Written before
-        # anything else, so the same `create | apply` pipeline that asks for the
-        # namespace is the one that makes it observable to the Secret beside it.
         local ns_name="${1:-}"
         shift || true
-        # THE RED CONTROL'S HOOK: a box whose admission policy, or a
-        # kubeconfig pointing at a cluster it cannot reach, refuses the
-        # namespace the step is about to write into. Answered the way the API
-        # server answers it — loudly, on stderr, exit 1.
         if [ -n "${MOCK_NAMESPACE_REFUSE:-}" ] && [ "$MOCK_NAMESPACE_REFUSE" = "$ns_name" ]; then
           printf 'Error from server (Forbidden): namespaces "%s" is forbidden: the mock refuses to create it\n' "$ns_name" >&2
           return 1
@@ -2354,13 +1737,11 @@ mock_kubectl() {
         local name="${1:-}"
         shift || true
         local ns="$fallback_ns" src="" client_dry_run=0
-        while [ $# -gt 0 ]; do
           case "$1" in
             -n) ns="$2"; shift 2 ;;
             --namespace=*) ns="${1#--namespace=}"; shift ;;
             --from-file=.dockerconfigjson=*) src="${1#--from-file=.dockerconfigjson=}"; shift ;;
             --dry-run=client) client_dry_run=1; shift ;;
-            -o) shift 2 ;;  # `-o yaml`, only ever alongside --dry-run=client
             *) shift ;;
           esac
         done
@@ -2368,11 +1749,6 @@ mock_kubectl() {
           echo "mock_kubectl: create secret docker-registry without a --from-file path" >&2
           return 1
         fi
-        # The namespace must EXIST. On a wiped box the pull-secret step runs
-        # before the Applications create them, and this is where that failure
-        # lives — `Error from server (NotFound): error when creating "STDIN":
-        # namespaces "identity" not found`, which `set -e` turns into the end
-        # of the install.
         if ! mock_namespace_exists "$ns"; then
           printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
           return 1
@@ -2381,11 +1757,6 @@ mock_kubectl() {
         mkdir -p "$d"
         cat "$src" >"$d/.dockerconfigjson"
         if [ "$client_dry_run" -eq 1 ]; then
-          # `--dry-run=client -o yaml` prints the object to stdout for the
-          # piped `apply -f -`. The .dockerconfigjson bytes are the base64
-          # credential exactly as kubectl encodes it, which is what makes the
-          # read-back assertions below mean anything — the value can be
-          # confirmed in the applied Secret and still never appear in argv.
           printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\ntype: kubernetes.io/dockerconfigjson\ndata:\n  .dockerconfigjson: %s\n' \
             "$name" "$ns" "$(base64 <"$d/.dockerconfigjson" | tr -d '\n')"
         fi
@@ -2395,16 +1766,12 @@ mock_kubectl() {
       shift || true
       local ns="$fallback_ns"
       local -a lits=()
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) ns="$2"; shift 2 ;;
           --from-literal=*) lits+=("${1#--from-literal=}"); shift ;;
           *) shift ;;
         esac
       done
-      # The namespace must EXIST, exactly as for the docker-registry Secret
-      # above. Step 9 makes its own four before it writes into them, which is
-      # why this is a boundary and not an obstruction.
       if ! mock_namespace_exists "$ns"; then
         printf 'Error from server (NotFound): namespaces "%s" not found\n' "$ns" >&2
         return 1
@@ -2421,21 +1788,10 @@ mock_kubectl() {
       ;;
     get)
       if [ "${1:-}" = "deployment" ]; then
-        # Existence by name in the file store, like `get secret` below: a GET
-        # of a missing object exits 0 and prints nothing (real kubectl), and
-        # --no-headers prints one line per object that exists. Step 11's await
-        # polls this until Argo creates the Deployment, so the mint's fixture
-        # seeds `deploy-<name>` the way a box past step 6 holds it.
-        #
-        # `-o jsonpath={…containers[0].image}` reads the image the Deployment
-        # runs — the value step 10's migrate Job is built from, so the fixture
-        # stores it in `deploy-<name>/image` and a missing file is an empty
-        # image, which is the same "no Deployment yet" state.
         shift || true
         local dep_name="${1:-}"
         shift || true
         local dep_ns="" dep_tmpl=""
-        while [ $# -gt 0 ]; do
           case "$1" in
             -n) dep_ns="$2"; shift 2 ;;
             -o) dep_tmpl="$2"; shift 2 ;;
@@ -2455,15 +1811,10 @@ mock_kubectl() {
         return 0
       fi
       if [ "${1:-}" = "pod" ]; then
-        # The one-shot pods steps 10 and 11 run: existence is `pod-<name>`, the
-        # phase is the file inside it. A missing pod exits 1, exactly as a real
-        # `get pod` does, so a wait loop can tell "not scheduled yet" from a
-        # phase.
         shift || true
         local pod_name="${1:-}"
         shift || true
         local pod_ns="$fallback_ns" pod_tmpl=""
-        while [ $# -gt 0 ]; do
           case "$1" in
             -n) pod_ns="$2"; shift 2 ;;
             -o) pod_tmpl="$2"; shift 2 ;;
@@ -2479,19 +1830,10 @@ mock_kubectl() {
         return 0
       fi
       if [ "${1:-}" = "cluster.postgresql.cnpg.io" ]; then
-        # The `cluster` guard's probe: does the CNPG Cluster object exist? The
-        # fixture plants `data/cluster-postgres` to say it does, which is how a
-        # re-run is modelled — and the only way a test can reach the guard
-        # branch of install_postgres_cluster that skips the re-provision.
-        # With `-o jsonpath={.status.phase}` it answers the Cluster's phase
-        # instead: the fixture plants `data/cluster-postgres-phase` beside the
-        # marker (absent means Unknown), which is what the step 8/10 refusals
-        # name. Anything else about the Cluster is unhandled, loudly.
         shift || true
         local cl_name="${1:-}"
         shift || true
         local cl_ns="$fallback_ns" cl_tmpl=""
-        while [ $# -gt 0 ]; do
           case "$1" in
             -n) cl_ns="$2"; shift 2 ;;
             -o) cl_tmpl="$2"; shift 2 ;;
@@ -2514,7 +1856,6 @@ mock_kubectl() {
       local name="${1:-}"
       shift || true
       local ns="" tmpl=""
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) ns="$2"; shift 2 ;;
           -o) tmpl="$2"; shift 2 ;;
@@ -2534,29 +1875,8 @@ mock_kubectl() {
       return 0
       ;;
     apply)
-      # The mock records what the installer SENT, because for the pull secret
-      # and the minted credential the manifest on stdin IS the claim: the
-      # secret's shape, and that the value in it came from the redemption
-      # rather than a literal in the tree. APPENDED, not numbered: every
-      # pipeline element is a fork, so a counter kept in the parent never
-      # advances and the sixth apply would overwrite the first.
-      #
-      # `-f` may name a real FILE or DIRECTORY, and then the mock READS it the
-      # way kubectl does — dotfiles in a directory included — and refuses a
-      # file carrying NUL bytes with the exact error the box reported for an
-      # AppleDouble sidecar. That is what makes the "filter removed" control
-      # below able to break the apply again rather than pass on a mock that
-      # never looked.
-      #
-      # EVERY manifest written — from a resolved `-f` file, a `-f` directory,
-      # or the pipeline on stdin — goes through mock_apply_plant, which reads
-      # the manifest's own namespace before storing it: the same NotFound
-      # boundary `create secret` models, asked of the write. The two packets'
-      # additions meet here and neither replaces the other: the file/directory
-      # reading is the transport fix's, the namespace registry is step 5's.
       mkdir -p "$MOCK_ROOT/applied"
       local -a apply_targets=()
-      while [ $# -gt 0 ]; do
         case "$1" in
           -f) apply_targets+=("$2"); shift 2 ;;
           -f=*) apply_targets+=("${1#-f=}"); shift ;;
@@ -2599,21 +1919,10 @@ mock_kubectl() {
       return 0
       ;;
     rollout)
-      # `rollout status` (a wait), `rollout restart` (a kick). Both are no-ops
-      # against the file store: the mint loop's contract is that it ASKS, and
-      # the value assertions below are what prove it wrote the right thing.
       return 0
       ;;
     patch)
-      # A merge patch, read from `--patch-file=/dev/stdin`: the mock MERGES the
-      # stringData keys into the stored secret, exactly as kubectl does. This
-      # is what makes the "no other key is wiped" assertion below mean
-      # anything — a mock that treated a patch as a replace would make the
-      # destructive and the correct write indistinguishable. `--patch-file=-`
-      # is refused with kubectl's own error below, because the real binary has
-      # no `-` stdin convention and this suite must not be green on one.
       local patch_ns="$fallback_ns" patch_name="" body=""
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) patch_ns="$2"; shift 2 ;;
           --namespace=*) patch_ns="${1#--namespace=}"; shift ;;
@@ -2631,12 +1940,6 @@ mock_kubectl() {
       case "${patch_file_arg:-}" in
         "") echo "mock_kubectl: patch without --patch-file" >&2; return 1 ;;
         -)
-          # THE LIVE DEFECT, MODELLED. Real kubectl has no `-` stdin
-          # convention for --patch-file: it opens a file literally named `-`,
-          # and this is the byte-for-byte error it prints when there is none.
-          # Measured on the Contabo box against the pinned kubectl. The mock
-          # used to treat `-` as stdin, which is why a step that could never
-          # run was green for the life of this suite.
           echo "error: unable to read patch file: open -: no such file or directory" >&2
           return 1
           ;;
@@ -2645,30 +1948,12 @@ mock_kubectl() {
       esac
       local d="$MOCK_ROOT/$patch_ns/$patch_name"
       mkdir -p "$d"
-      # Every key under stringData is merged over what is stored. The value is
-      # written VERBATIM, one jq call per key, rather than through a
-      # line-oriented `key=value` stream: a value with a newline in it — a
-      # multi-line PEM, which is exactly what gateway's assertion key is —
-      # would otherwise be split across writes and truncated to its last line.
-      # Real kubectl preserves the bytes; the mock has to as well, or the repair
-      # that patches a PEM in looks like it worked when it stored garbage.
       local -a patch_keys=()
       local patch_key
       while IFS= read -r patch_key; do
         [ -n "$patch_key" ] && patch_keys+=("$patch_key")
       done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
-      # A `"key":null` entry DELETES the stored key, exactly as a real merge
-      # patch does — the orphan sweep relies on it, and a mock that stored an
-      # empty file (or the string "null") would be green on a sweep that wrote
-      # the wrong patch. `data` is the persisted map, so a null there deletes
-      # the entry; a value there is base64, decoded the way read_secret_key
-      # decodes it.
       for patch_key in ${patch_keys[@]+"${patch_keys[@]}"}; do
-        # A null under stringData is a NO-OP, exactly as on the API server:
-        # stringData is write-only and is never persisted, so the stored
-        # object carries no such field for the null to delete. (The sweep
-        # deletes under `data` for this reason.) A mock that deleted here
-        # would be green on a patch the box silently ignores.
         if [ "$(printf '%s' "$body" | jq -r --arg k "$patch_key" '.stringData[$k] | type')" != "null" ]; then
           printf '%s' "$body" | jq -jr --arg k "$patch_key" '.stringData[$k] // empty' >"$d/$patch_key"
         fi
@@ -2688,23 +1973,15 @@ mock_kubectl() {
       return 0
       ;;
     run)
-      # `kubectl run <name> -n <ns> --restart=Never --image=… --env=K=V …
-      # --command -- <cmd>` — the one-shot pod shape steps 10 and 11 use. The
-      # mock stores what it was asked to run (image, command, env, phase) in
-      # `pod-<name>/`, so an assertion can read back the OWNER DSN the migrate
-      # Job was given rather than trusting the argv line. MOCK_POD_PHASE forces
-      # the red control: a migration that Failed.
       local run_name="${1:-}"
       shift || true
       local run_ns="$fallback_ns" run_image="" run_cmd="" run_env=""
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) run_ns="$2"; shift 2 ;;
           --restart=*) shift ;;
           --image=*) run_image="${1#--image=}"; shift ;;
           --env=*)
             run_env="${run_env}${run_env:+
-}${1#--env=}"
             shift
             ;;
           --command) shift ;;
@@ -2726,15 +2003,11 @@ mock_kubectl() {
       return 0
       ;;
     delete)
-      # `delete pod NAME` / `delete secret NAME`, with or without
-      # `--ignore-not-found`. Removing a directory that is not there is what
-      # --ignore-not-found means, so both spellings succeed.
       local del_res="${1:-}"
       shift || true
       local del_name="${1:-}"
       shift || true
       local del_ns="$fallback_ns"
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) del_ns="$2"; shift 2 ;;
           *) shift ;;
@@ -2748,11 +2021,9 @@ mock_kubectl() {
       return 0
       ;;
     logs)
-      # `logs pod/NAME -n NS` — the pod's stored logs, or nothing.
       local log_ref="${1:-}"
       shift || true
       local log_ns="$fallback_ns"
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) log_ns="$2"; shift 2 ;;
           *) shift ;;
@@ -2762,23 +2033,9 @@ mock_kubectl() {
       return 0
       ;;
     port-forward)
-      # A real one blocks forever; this one returns instantly, so the installer's
-      # background job is already gone when its RETURN trap kills it. The
-      # exchange it guards is mocked at the curl boundary, not here.
       return 0
       ;;
     wait)
-      # `wait --for=condition=Ready cluster.postgresql.cnpg.io/<name> -n <ns>
-      # --timeout=Ns` — the readiness waits steps 8 and 10 run against the
-      # Cluster object. The fixture says the object EXISTS by planting
-      # `<ns>/cluster-<name>` (the same marker the guard reads) and says its
-      # Ready condition is True by planting `<ns>/cluster-<name>-ready`
-      # beside it. Without the ready file the wait answers the way real
-      # kubectl answers a condition that never becomes True: the timeout
-      # error, exit 1. The bound itself is not slept out — the argv log
-      # carries the `--timeout` the installer passed, and the static audit
-      # pins its default — because a mock that slept 600s would prove nothing
-      # a faster mock does not. Any other wait shape is unhandled, loudly.
       local wait_args="$*"
       case "$wait_args" in
         *--for=condition=Ready\ cluster.postgresql.cnpg.io/*)
@@ -2809,9 +2066,6 @@ mock_kubectl() {
   esac
 }
 
-# mfa_shape_ok <value> — exit 0 iff the value is exactly what identity's
-# config parser accepts: 43 base64url-no-padding characters decoding to
-# 32 bytes (32 bytes is 3*10+2, so RawURLEncoding prints 10*4+3).
 mfa_shape_ok() {
   "$PY" - "$1" <<'PY'
 import base64
@@ -2833,10 +2087,6 @@ print("shape: 43 base64url characters, 32 bytes")
 PY
 }
 
-# mfa_seed_roles — the passwords install_service_secrets reads back: the
-# four <svc>_app role passwords (step 8 made them) and the redis password
-# (step 9's first half made it). Without them the step refuses naming step
-# 8, which is a different contract from the one proven here.
 mfa_seed_roles() {
   local svc
   for svc in identity gateway courier parlor billing; do
@@ -2845,38 +2095,25 @@ mfa_seed_roles() {
   mock_seed data redis-password password "redis-pw"
 }
 
-# mfa_smtp_env — the externally-sourced courier values the live path
-# requires. Dummy relay values: the shape of the refusal is proven
-# elsewhere; here they only open the gate to the secrets half. The box id and
-# capability are the two inputs the W2-P4 cut left, and both are fakes whose
-# shape is what the installer validates.
 mfa_smtp_env() {
   export DRY_RUN=0
   export KIT_SUBSTRATE_SMTP_HOST="relay.example.com"
   export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
   export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass"
   export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="provider-signing-secret"
-  # Empty, not unset: the sourced installer runs under `set -u` and reads
-  # these unconditionally, so an unset variable is a fatal rather than an
-  # absent surface. Empty is the absent surface the installer documents.
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
-  # billing's Stripe pair, dummies: the live path requires both whenever
-  # billing is deployed, and the shape of the refusal is proven elsewhere —
-  # here they only open the gate to the secrets half.
   export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
   export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
 }
 
-# Case A: no override — first creation generates a correctly shaped key.
 MOCK_ROOT="$WORK/mfa-a"
 mkdir -p "$MOCK_ROOT"
 mfa_a_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -2902,14 +2139,12 @@ case "$(cat "$WORK/mfa-a.log")" in
     ;;
 esac
 
-# Case B: a valid override is stored exactly, and never printed.
 MFA_OVERRIDE="Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
 MOCK_ROOT="$WORK/mfa-b"
 mkdir -p "$MOCK_ROOT"
 mfa_b_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -2933,15 +2168,11 @@ case "$(cat "$WORK/mfa-b.log")" in
     ;;
 esac
 
-# Case C: an invalid override is refused, naming the variable — and no
-# secret is written. A key the installer would happily store is a key
-# identity refuses at boot, so the refusal belongs here, not on the box.
 MOCK_ROOT="$WORK/mfa-c"
 mkdir -p "$MOCK_ROOT"
 mfa_c_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -2976,15 +2207,11 @@ else
   pass 'override: a refused run writes no identity-secrets'
 fi
 
-# Case D: reruns never rotate — the stored key survives a second run even
-# when the operator passes a different override. The whole fleet's
-# once-only rule applies: rotation is replace-the-secret, never re-run.
 MOCK_ROOT="$WORK/mfa-d"
 mkdir -p "$MOCK_ROOT"
 mfa_d_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -3016,11 +2243,6 @@ else
   fail 'rerun: two fresh installs generate distinct keys (never a constant)' "both stores hold the same value"
 fi
 
-# Case E: a legacy identity-secrets without the key is left alone. The
-# guard's per-secret refusal — not a patch — is the contract: an imported
-# database could hold ciphertext sealed under a key no longer present, so
-# guessing a fresh one in would fork it. (The other three secrets are
-# absent here, so the step runs its per-secret path rather than skipping.)
 MOCK_ROOT="$WORK/mfa-e"
 mkdir -p "$MOCK_ROOT"
 mfa_e_ec=0
@@ -3028,7 +2250,6 @@ mfa_e_ec=0
   mfa_seed_roles
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -3051,28 +2272,12 @@ else
   fail 'legacy: the pre-existing secret keeps its own values' "SIGNUP_SIGNING_KEY changed"
 fi
 
-# ===========================================================================
-# 12 (executed half). identity-secrets carries the broker's address
-# ===========================================================================
-#
-# Section 12 above PARSES the source; this RUNS it. The installer is sourced
-# with its trailing `main` removed and install_service_secrets is executed
-# against the file-backed kubectl the MFA cases above define, so the claim is
-# about the secret kubectl would actually create rather than about the text
-# of the script. It lives beside those cases rather than in section 12 because
-# the harness it needs is defined there.
-#
-# WHY IT IS WORTH RUNNING: identity builds its NATS publisher only when
-# NATS_URL is set, so the local compose stack publishes and a real box does
-# not — the one difference this packet closes. A parse can be satisfied by a
-# literal on a line that never executes; a mock store cannot.
 BROKER_URL="nats://nats.data.svc.cluster.local:4222"
 MOCK_ROOT="$WORK/nats-url"
 mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
 nats_url_1_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -3080,16 +2285,8 @@ nats_url_1_ec=0
 ) || nats_url_1_ec=$?
 first_broker_url="$(mock_get identity identity-secrets NATS_URL)"
 
-# Twice: the second run is the idempotency claim. A re-run must not rewrite
-# the address — and it cannot, by construction. When all four secrets exist
-# the step's own guard skips it ("already installed, skipping"); when only
-# some do (a half-finished first run) the step runs and the per-secret path
-# refuses to overwrite identity-secrets. Either way nothing is patched: the
-# address is fixed by the broker's own Service name, and a broker that moves
-# is a rotate-by-replacement (README), never a silent patch of a live secret.
 nats_url_2_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -3134,12 +2331,6 @@ case "$(cat "$WORK/nats-url-2.log")" in
     ;;
 esac
 
-# The control: the identical run against an installer carrying the COMPOSE
-# spelling (`nats://nats:4222`, which resolves only inside `data`) stores that
-# spelling verbatim. It proves the assertion above is about the INSTALLER and
-# not about the mock — a store that recorded whatever it was sent, wrongly,
-# would make the green assertion a tautology, and this is the fixture that
-# shows it can tell the two apart.
 fixture_short_live="$WORK/install-nats-short-live.sh"
 sed 's|--from-literal=NATS_URL="$NATS_URL"|--from-literal=NATS_URL="nats://nats:4222"|' \
   "$SUBSTRATE/install.sh" | sed '/^main "$@"/d' >"$fixture_short_live"
@@ -3148,7 +2339,6 @@ mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
 control_short_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_short_live"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -3161,32 +2351,7 @@ else
   fail 'control: the compose spelling is stored verbatim, and is not the broker address' "exit ${control_short_ec}; stored: '${control_short_url}'"
 fi
 
-# ===========================================================================
-# 12b. The mail adapter is a choice, and each choice writes its own keys
-# ===========================================================================
-#
-# install.sh accepts three mail adapters — smtp, postmark, cloudflare — and
-# the cloudflare branch is the one with a DIFFERENT secret shape: courier
-# sends through Cloudflare's Email Sending API, so it takes
-# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID instead
-# of the SMTP tuple. The failure this section is written about is not a typo
-# but a silent half-write: a run that keeps the SMTP validation while writing
-# only the Cloudflare key (or the reverse) leaves a secret that is missing a
-# key courier's boot gate demands, which surfaces as a CrashLoopBackOff whose
-# cause nobody attributes to the installer. So each branch is run and its
-# STORE is read back, and the negative assertion — the tuple absent under
-# cloudflare, the key absent under smtp — is the half that carries the claim.
-#
-# The mock kubectl records every `create secret` in full, so an assertion
-# about what was NOT written is an assertion about a file that exists.
 
-# cf_mail_env <adapter> — the secrets step's operator-sourced inputs for one
-# adapter. The SMTP values are the same FAKE relay labels the MFA cases use;
-# the Cloudflare token and account id are fake labels too. A second parameter
-# sets the signing secret's value, and an explicit EMPTY string is the absent
-# surface the installer documents (note `${2-…}`, not `${2:-…}`: an empty
-# argument must stay empty, because "the operator set nothing" is exactly
-# the case the cloudflare branch now accepts and the smtp branch refuses).
 cf_mail_env() {
   export DRY_RUN=0
   export KIT_SUBSTRATE_SMTP_ADAPTER="$1"
@@ -3195,15 +2360,10 @@ cf_mail_env() {
   export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
   export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass"
   export KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET="${2-provider-signing-secret}"
-  # The key value is always the same fake label; only emptiness differs, so an
-  # assertion about what was STORED is never reading back the test case's own
-  # intent. `${3:-set}` is the case name ("set" | "unset-key"), not the value.
   export KIT_SUBSTRATE_CLOUDFLARE_API_KEY="mailchannels-key-fake"
   if [ "${3:-set}" = "unset-key" ]; then
     export KIT_SUBSTRATE_CLOUDFLARE_API_KEY=""
   fi
-  # The account id follows the same shape: always the same fake label, and
-  # `${4:-set-account}` ("set-account" | "unset-account") picks the case.
   export KIT_SUBSTRATE_CF_ACCOUNT_ID="cf-account-id-fake"
   if [ "${4:-set-account}" = "unset-account" ]; then
     export KIT_SUBSTRATE_CF_ACCOUNT_ID=""
@@ -3212,19 +2372,10 @@ cf_mail_env() {
   export KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
-  # billing's Stripe pair, dummies: the live path requires both whenever
-  # billing is deployed, and the shape of the refusal is proven elsewhere —
-  # here they only open the gate to the secrets half.
   export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
   export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
 }
 
-# cf_run <mock-root> <adapter> [signing-secret] [key-handling] [account-handling] —
-# runs the secrets step for one adapter and leaves the exit code in `cf_ec`.
-# Deliberately NOT a `$(...)` command substitution: the mock store it writes is
-# read back afterwards by `mock_get`, and a command substitution would confine
-# the `MOCK_ROOT` assignment to a subshell — every later assertion would then
-# read the PREVIOUS case's store and pass on the wrong data.
 cf_run() {
   MOCK_ROOT="$1"
   local adapter="$2" secret="${3-provider-signing-secret}" key="${4:-set}" account="${5:-set-account}"
@@ -3232,7 +2383,6 @@ cf_run() {
   mfa_seed_roles
   cf_ec=0
   (
-    # shellcheck source=/dev/null
     . "$fixture_sourced"
     kubectl() { mock_kubectl "$@"; }
     cf_mail_env "$adapter" "$secret" "$key" "$account"
@@ -3240,11 +2390,6 @@ cf_run() {
   ) || cf_ec=$?
 }
 
-# Case A: cloudflare with its key AND its account id writes
-# COURIER_CLOUDFLARE_API_KEY + COURIER_CF_ACCOUNT_ID and NOT the SMTP tuple —
-# the shape courier's Cloudflare adapter boots on. With the signing secret
-# supplied it is written too (the conditional write, from the accepting
-# side); without it the run still succeeds and the key is absent (case A2).
 cf_run "$WORK/cf-a" cloudflare
 if [ "$cf_ec" -ne 0 ]; then
   fail 'cloudflare: the run succeeds with the MailChannels key supplied' "$(cat "$WORK/cf-a.log")"
@@ -3282,10 +2427,6 @@ cf_smtp_keys_absent() {
   printf 'the cloudflare branch writes no SMTP key'
 }
 run 'cloudflare: the SMTP tuple is not written' green cf_smtp_keys_absent
-# The signing secret on the cloudflare branch is a conditional write: supplied
-# means stored, so a branch that dropped it when given would silently lose
-# the inbound surface for a reason the outbound shape hides. Asserted here
-# so the cloudflare half cannot quietly lose it; the ABSENT half is case A2.
 if [ "$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)" = "provider-signing-secret" ]; then
   pass 'cloudflare: the inbound signing secret is still written'
 else
@@ -3293,11 +2434,6 @@ else
     "stored: '$(mock_get courier courier-secrets COURIER_INBOUND_RESEND_SECRET)'"
 fi
 
-# Case A2: cloudflare with the two Cloudflare facts and NO signing secret —
-# the packet's accepting case. The run succeeds, the store carries the
-# adapter, the token and the account id, and carries NO
-# COURIER_INBOUND_RESEND_SECRET (absent, not empty: the installer keeps the
-# key out of the --from-literal list when unset).
 cf_run "$WORK/cf-a2" cloudflare ""
 if [ "$cf_ec" -ne 0 ]; then
   fail 'cloudflare: the run succeeds with no signing secret supplied' "$(cat "$WORK/cf-a2.log")"
@@ -3320,10 +2456,6 @@ else
   pass 'cloudflare: no signing secret is a supported run, and the key stays absent'
 fi
 
-# Case B: cloudflare WITHOUT the key refuses BEFORE anything is written —
-# the refuse-before-write contract the whole externally-sourced gate is
-# built on. A half-written secret is worse than no secret: the operator sees
-# a successful install and a courier that cannot boot.
 cf_run "$WORK/cf-b" cloudflare "provider-signing-secret" "unset-key"
 if [ "$cf_ec" -eq 0 ]; then
   fail 'cloudflare: a missing MailChannels key refuses' "exit 0 — the run should have refused"
@@ -3335,10 +2467,6 @@ elif ! grep -q "KIT_SUBSTRATE_CLOUDFLARE_API_KEY" "$WORK/cf-b.log"; then
 else
   pass 'cloudflare: a missing MailChannels key refuses before any write, naming the variable'
 fi
-# The refusal names exactly the two Cloudflare facts — two, not three — and
-# no longer instructs the operator to go and find a Resend webhook signing
-# secret. Read off the operator message (the refusal's human text), the way
-# the case above does: the raw variable list goes to the receipt, not here.
 if grep -q "signing secret" "$WORK/cf-b.log"; then
   fail 'cloudflare: the refusal no longer names the signing secret' \
     "the old demand for a provider signing secret is still in the refusal log"
@@ -3347,8 +2475,6 @@ elif ! grep -q "export KIT_SUBSTRATE_CLOUDFLARE_API_KEY='<cloudflare-token>' and
 else
   pass 'cloudflare: the refusal names exactly the two Cloudflare variables'
 fi
-# And the key itself is never on stdout — the same no-print contract every
-# other operator value answers to, checked against the value the run held.
 case "$(cat "$WORK/cf-a.log")" in
   *"mailchannels-key-fake"*)
     fail 'cloudflare: the MailChannels key is never printed' "the key value appears in the output"
@@ -3366,10 +2492,6 @@ case "$(cat "$WORK/cf-a.log")" in
     ;;
 esac
 
-# Case B2: cloudflare with a key and NO account id refuses BEFORE anything
-# is written — the same refuse-before-write contract as the missing key.
-# A box installed without the account id would boot a courier whose URL has
-# no account in it, which is the defect this packet exists to end.
 cf_run "$WORK/cf-e" cloudflare "provider-signing-secret" "set" "unset-account"
 if [ "$cf_ec" -eq 0 ]; then
   fail 'cloudflare: a missing account id refuses' "exit 0 — the run should have refused"
@@ -3381,9 +2503,6 @@ elif ! grep -q "KIT_SUBSTRATE_CF_ACCOUNT_ID" "$WORK/cf-e.log"; then
 else
   pass 'cloudflare: a missing account id refuses before any write, naming the variable'
 fi
-# Same two-not-three shape on the account-id path: the whole refusal text is
-# one string, and both missing-fact paths must have stopped naming the
-# signing secret.
 if grep -q "signing secret" "$WORK/cf-e.log"; then
   fail 'cloudflare: the account-id refusal no longer names the signing secret' \
     "the old demand for a provider signing secret is still in the refusal log"
@@ -3391,9 +2510,6 @@ else
   pass 'cloudflare: the account-id refusal no longer names the signing secret'
 fi
 
-# Case C: the default smtp branch is unchanged — the tuple is written whole,
-# and neither Cloudflare value is. This is the bystander assertion: the new
-# branch must not have become the only branch.
 cf_run "$WORK/cf-c" smtp
 if [ "$cf_ec" -ne 0 ]; then
   fail 'smtp: the run still succeeds unchanged' "$(cat "$WORK/cf-c.log")"
@@ -3410,10 +2526,6 @@ else
   pass 'smtp: the default branch writes the SMTP tuple and no Cloudflare key'
 fi
 
-# Case C2 (bystander): the smtp branch still refuses WITHOUT the signing
-# secret. The asymmetry is deliberate — an SMTP operator has a provider
-# dashboard to mint a webhook secret from, a Cloudflare-only operator has
-# none — so the relaxation above must not have leaked into this branch.
 cf_run "$WORK/cf-c2" smtp ""
 if [ "$cf_ec" -eq 0 ]; then
   fail 'smtp: a missing signing secret still refuses' "exit 0 — the run should have refused"
@@ -3426,9 +2538,6 @@ else
   pass 'smtp: a missing signing secret still refuses before any write, naming the variable'
 fi
 
-# Case D: an unknown adapter still refuses, and the refusal now names all
-# three choices. The guard's message is the operator's documentation, so a
-# fourth spelling added without the message would send a reader elsewhere.
 cf_run "$WORK/cf-d" resend
 if [ "$cf_ec" -eq 0 ]; then
   fail 'guard: an unknown adapter refuses' "exit 0"
@@ -3443,13 +2552,6 @@ else
   pass 'guard: the refusal comes before any write'
 fi
 
-# The control for the negative assertion in case A: the identical cloudflare
-# run against an installer that ALSO writes the SMTP tuple must red it. Without
-# this, a mock that stored every key it was sent — or a branch that wrote both
-# shapes "to be safe" — would stay green, and the assertion that the cloudflare
-# branch is a DIFFERENT secret shape would prove nothing. The control is the
-# mistake stated directly in the file: the SMTP tuple added to the cloudflare
-# array, which is what a half-measured patch would look like.
 python_control="$WORK/install-cf-both.py"
 cat >"$python_control" <<'PY'
 import sys
@@ -3476,7 +2578,6 @@ mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
 control_cf_ec=0
 (
-  # shellcheck source=/dev/null
   . "$WORK/install-cf-both.sh"
   kubectl() { mock_kubectl "$@"; }
   cf_mail_env cloudflare
@@ -3489,54 +2590,15 @@ else
     "exit ${control_cf_ec}; COURIER_SMTP_HOST='$(mock_get courier courier-secrets COURIER_SMTP_HOST)'"
 fi
 
-# ===========================================================================
-# 12c. The role-secret wiring: every managed role's passwordSecret carries
-#      that ROLE's name in `username`, and DATABASE_URL reads the app secret
-# ===========================================================================
-#
-# THE DEFECT THIS SECTION EXISTS FOR, measured on the live box. CNPG's
-# managed-role reconciler sets a role's password from the Secret named in
-# `passwordSecret` ONLY when the Secret's `username` key equals the ROLE's
-# name. Step 8 named the Secret for the service (`postgres-role-identity-app`,
-# a hyphen) and wrote that same spelling into `username`, so CNPG refused to
-# set the password for all four `_app` roles and said so only in the Cluster's
-# status:
-#
-#   cannotReconcile:
-#     identity_app:
-#     - the username in secret "postgres-role-identity-app" does not match
-#       role "identity_app"
-#
-# `pg_authid.rolpassword` held a SCRAM verifier for `identity` and NULL for
-# `identity_app`, and every pod logged `FATAL: password authentication failed
-# for user "identity_app" (SQLSTATE 28P01)`.
-#
-# WHY THIS IS A CHECK AND NOT A PARAGRAPH. The mismatch is invisible to every
-# other check in this file: the Cluster applies, the roles exist, the Secret
-# exists, the Deployment's envFrom resolves, and the only witnesses are a
-# status field nobody reads and a NULL nobody selects. So the wiring is
-# asserted from BOTH ends the installer controls: step 8 is EXECUTED against
-# the file-backed kubectl, and its output is compared to the Cluster manifest
-# the same step applies. `database_url_for` — step 9's own naming function —
-# is executed too, and the DSN it builds must carry the app role's name and
-# the app Secret's password; a URL built from the owner Secret is a login as
-# the wrong role.
 check_role_secret_wiring() {
   local install_sh="$1" cluster="$2" root ec=0
   root="$(mktemp -d "$WORK/role-wiring.XXXXXX")"
-  # Source the installer with its `main` call removed, the same shape every
-  # other sourced fixture in this file uses: without the strip, `. install.sh`
-  # would RUN the install.
   sed '/^main "$@"/d' "$install_sh" >"$root/install-no-main.sh"
   (
     export MOCK_ROOT="$root"
     mkdir -p "$MOCK_ROOT"
-    # `data` exists by the time step 8 writes into it (step 8's own
-    # `create namespace data`); the mock's write verbs require it, exactly as
-    # the API server does.
     printf 'data\n' >"$MOCK_ROOT/namespaces"
     export KUBECONFIG=/dev/null
-    # shellcheck source=/dev/null
     . "$root/install-no-main.sh"
     kubectl() { mock_kubectl "$@"; }
     create_postgres_role_secrets >"$root/step8.log" 2>&1
@@ -3587,7 +2649,6 @@ for r in roles:
     if secret not in store:
         problems.append(f"role {name}: step 8 creates no secret named {secret}")
         continue
-    # THE ASSERTION THE LIVE DEFECT VIOLATED.
     if store[secret]["username"] != name:
         problems.append(
             f"role {name}: secret {secret} has username"
@@ -3600,8 +2661,6 @@ for secret in sorted(store):
     if secret not in declared:
         problems.append(f"step 8 creates {secret}, which no managed role names")
 
-# The DATABASE_URL half: step 9's naming function must read the APP role's
-# secret and password, and the DSN must name the app role and the database.
 for svc in ("identity", "gateway", "courier", "parlor"):
     try:
         url = open(os.path.join(root, f"url-{svc}.txt"), encoding="utf-8").read()
@@ -3635,56 +2694,39 @@ PY
 run 'the role secrets and the Cluster agree: username is the role name, DATABASE_URL reads the app secret' green \
   check_role_secret_wiring "$SUBSTRATE/install.sh" "$DATA_DIR/postgres-cluster.yaml"
 
-# Control A — the live defect reintroduced: step 8 hyphenates the app suffix
-# into `username` (the secret's spelling, not the role's). Must go red.
 fixture_user_drift="$WORK/install-username-drift.sh"
 sed 's|--from-literal=username="\$role"|--from-literal=username="${role//_/-}"|' \
   "$SUBSTRATE/install.sh" >"$fixture_user_drift"
 run 'control: a hyphenated app username (the live defect) goes red' red \
   check_role_secret_wiring "$fixture_user_drift" "$DATA_DIR/postgres-cluster.yaml"
 
-# Control B — one service's ROLE name drifts in the manifest. The secret is
-# unchanged, so the username no longer matches it. One service, one edit.
 fixture_role_drift="$WORK/cluster-role-name-drift.yaml"
 sed 's/^      - name: identity_app$/      - name: identity-app/' \
   "$DATA_DIR/postgres-cluster.yaml" >"$fixture_role_drift"
 run 'control: one role name drifting from its secret goes red' red \
   check_role_secret_wiring "$SUBSTRATE/install.sh" "$fixture_role_drift"
 
-# Control C — DATABASE_URL reads the OWNER secret instead of the app secret:
-# a DSN that logs in as the wrong role with the wrong password. Must go red.
 fixture_dsn_drift="$WORK/install-dsn-drift.sh"
 sed 's|read_secret_key data "postgres-role-\$1-app" password|read_secret_key data "postgres-role-$1" password|' \
   "$SUBSTRATE/install.sh" >"$fixture_dsn_drift"
 run 'control: a DATABASE_URL built from the owner secret goes red' red \
   check_role_secret_wiring "$fixture_dsn_drift" "$DATA_DIR/postgres-cluster.yaml"
 
-# The re-run half, EXECUTED. The live box already had a Cluster, so step 8's
-# `cluster` guard would skip the re-provision — and a reconcile placed behind
-# that guard would never run on the one box that needs it. This drives
-# `install_postgres_cluster` with the guard answering "the Cluster exists" and
-# every app role's Secret seeded with the broken `username` spelling, then
-# asserts the usernames were repaired and the passwords were NOT regenerated.
 check_rerun_repairs_username() {
   local install_sh="$1" root ec=0 svc problems=""
   root="$(mktemp -d "$WORK/rerun-repair.XXXXXX")"
   mkdir -p "$root/data"
   printf 'data\n' >"$root/namespaces"
-  : >"$root/data/cluster-postgres" # the guard's probe: a Cluster already exists
-  # The step resolves the Cluster manifest from its own directory, so the
-  # fixture carries the real manifests beside the stripped installer.
   cp -R "$SUBSTRATE/manifests" "$root/manifests"
   MOCK_ROOT="$root"
   for svc in identity gateway courier parlor; do
     mock_seed data "postgres-role-$svc" username "$svc"
     mock_seed data "postgres-role-$svc" password "pw-$svc"
-    mock_seed data "postgres-role-$svc-app" username "$svc-app" # the live defect's spelling
     mock_seed data "postgres-role-$svc-app" password "pw-$svc-app"
   done
   sed '/^main "$@"/d' "$install_sh" >"$root/install-no-main.sh"
   (
     export MOCK_ROOT="$root" KUBECONFIG=/dev/null
-    # shellcheck source=/dev/null
     . "$root/install-no-main.sh"
     kubectl() { mock_kubectl "$@"; }
     export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing"
@@ -3706,11 +2748,6 @@ check_rerun_repairs_username() {
     [ "$(mock_get data "postgres-role-$svc-app" password)" = "pw-$svc-app" ] ||
       problems="$problems; $svc-app password was regenerated"
   done
-  # The repair must have TRAVELLED on a `/dev/stdin` patch, not merely landed.
-  # The mock records every invocation in full and refuses `-`, so an argv
-  # naming the convention is the fact the live fix depends on — a store that
-  # changed through some other route would pass the username check above and
-  # still not be the path the box ran.
   if ! grep -q -- "patch secret postgres-role-identity-app .*--patch-file=/dev/stdin" \
     "$root/kubectl-argv" 2>/dev/null; then
     problems="$problems; the repair never issued a --patch-file=/dev/stdin patch"
@@ -3725,10 +2762,6 @@ check_rerun_repairs_username() {
 run 'a re-run repairs the app-role usernames even though the cluster guard skips the apply' green \
   check_rerun_repairs_username "$SUBSTRATE/install.sh"
 
-# Control D — the reconcile moved BELOW the guard (the shape this packet's fix
-# must not have). The guard then returns before it runs, the usernames stay
-# broken, and the check must go red. The fixture asserts its own premise: the
-# transform refuses to write a file it could not make.
 fixture_guard_first="$WORK/install-reconcile-behind-guard.sh"
 "$PY" - "$SUBSTRATE/install.sh" "$fixture_guard_first" <<'PY'
 import sys
@@ -3756,38 +2789,7 @@ PY
 run 'control: a reconcile behind the cluster guard never repairs a re-run' red \
   check_rerun_repairs_username "$fixture_guard_first"
 
-# ===========================================================================
-# 12d. `kubectl patch` reads its patch from `/dev/stdin`, not `-`
-# ===========================================================================
-#
-# THE HALF OF THE LIVE DEFECT THAT MADE 12c UNREACHABLE. 12c proves the
-# username is repaired; this proves the repair can REACH the API server at
-# all. `kubectl` has no `-` stdin convention for `--patch-file`: it opens a
-# file literally named `-` and dies before the request is built, so the repair
-# never happens on the box. Measured back to back on Contabo, against the
-# pinned kubectl:
-#
-#   $ echo '{"metadata":{"annotations":{"probe":"1"}}}' |
-#       kubectl patch secret postgres-role-identity -n data --type=merge \
-#         --patch-file=-
-#   error: unable to read patch file: open -: no such file or directory
-#   $ echo '{"metadata":{"annotations":{"probe":"1"}}}' |
-#       kubectl patch secret postgres-role-identity -n data --type=merge \
-#         --patch-file=/dev/stdin
-#   secret/postgres-role-identity patched
-#
-# `kubectl apply -f -` IS a real convention (step 6 and the pull secret use
-# it, and it is left alone); only the `--patch-file` spelling was wrong. The
-# mock modelled `-` as stdin and so was green over a step that cannot run — a
-# witness from a different program than the one on the box. Both mocks now
-# implement `/dev/stdin` and refuse `-` with the real binary's own error, so
-# the class cannot pass again.
 
-# check_patch_convention <mock-fn> <root> — one store, the two spellings,
-# against the mock named. `/dev/stdin` must read the pipe and merge; `-` must
-# fail with kubectl's EXACT message and leave the store untouched. Shared by
-# mock_kubectl (step 8) and rollout_kubectl (step 11) because they hold the
-# same contract and a divergence between them would be the defect again.
 check_patch_convention() {
   local mock="$1" root="$2" ec=0
   local want="error: unable to read patch file: open -: no such file or directory"
@@ -3796,18 +2798,12 @@ check_patch_convention() {
   (
     export MOCK_ROOT="$root"
     mock_seed data probe username old
-    # (1) the convention the installer uses: /dev/stdin reads the pipe.
     printf '%s' '{"stringData":{"username":"new"}}' |
       "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
       { echo "$mock refused the /dev/stdin patch"; exit 3; }
-    # (2) the spelling the real kubectl rejects: `-`.
     printf '%s' '{"stringData":{"username":"never"}}' |
       "$mock" -n data patch secret probe --type=merge --patch-file=- 2>"$root/dash.err" &&
       { echo "$mock accepted --patch-file=-, which real kubectl refuses"; exit 4; }
-    # (3) a null under `data` deletes the key — the orphan sweep's own
-    # spelling — while a null under `stringData` is a no-op, exactly as on
-    # the API server (stringData is write-only and never persisted, so the
-    # stored object carries no such field for the null to delete).
     mock_seed data probe doomed old
     printf '%s' '{"data":{"doomed":null}}' |
       "$mock" -n data patch secret probe --type=merge --patch-file=/dev/stdin ||
@@ -3848,11 +2844,6 @@ check_patch_convention() {
 run 'the step-8 mock reads --patch-file=/dev/stdin and refuses - as kubectl does' green \
   check_patch_convention mock_kubectl "$WORK/mock-dash"
 
-# The RED CONTROL on the real step: step 8's patch spelling reverted to `-`.
-# The mock now refuses it exactly as the box does, so the re-run repair aborts
-# and the check that is GREEN above goes red. The fixture asserts its own
-# premise before it is used: a transform that matched nothing would be a
-# control that proves nothing.
 fixture_patch_dash="$WORK/install-patchfile-dash.sh"
 sed -e '/^main "$@"/d' -e 's|--patch-file=/dev/stdin|--patch-file=-|g' \
   "$SUBSTRATE/install.sh" >"$fixture_patch_dash"
@@ -3865,43 +2856,12 @@ else
     "the fixture still holds /dev/stdin or lost the dashed spelling — the control cannot be built"
 fi
 
-# ===========================================================================
-# 13. No long-lived secret enters the installer (invariant 3's input side)
-# ===========================================================================
-#
-# W2-P4. Two values used to be handed TO this installer: a GHCR
-# dockerconfigjson and identity's OIDC signing key — both long-lived, both
-# belonging to the box, both arrived in a shell history. A third loop used to
-# cross a boundary twice: the operator minted courier's credential by hand and
-# pasted it into a second run.
-#
-# What this section proves:
-#   1. the retired input names are GONE from install.sh — an input nobody
-#      declared is still an input if somebody read it;
-#   2. what replaced the pull secret is SHORT-LIVED and BOX-BOUND: a capability
-#      of the minted shape, redeemed per run, and never printed;
-#   3. the OIDC signing key is BORN ON THE BOX — generated, shaped the way
-#      identity's own parser demands, stable across a re-run, and never echoed;
-#   4. the courier credential is minted, patched and restarted INSIDE one run,
-#      and the minted value reaches neither secrets nor logs.
-#
-# The no-print assertions are the SECRET RECORD's own idiom: the value must
-# not appear in the installer's output. Each has a control that plants the
-# value in a log and must go red.
 CAP_GOOD="cap_$(printf 'a%.0s' $(seq 64))"
 CAP_B64_PULL_SECRET="$(printf '{"auths":{"ghcr.io":{"auth":"ZmFrZS1ub3QtYS1jcmVkZW50aWFs"}}}' | base64 | tr -d '\n')"
 CAP_BOX_ID_UUID="11111111-2222-3333-4444-555555555555"
 CAP_OTHER_BOX_UUID="88888887-7777-6666-5555-444444444444"
 CAP_ACCOUNT_UUID="99999999-8888-7777-6666-555555555555"
 
-# 13a. The retired inputs are gone. The names below are the four spellings an
-# older runbook still carries; a file that reads any of them is a file that
-# still takes a long-lived secret in.
-#
-# The check reads CODE, with comments stripped — the same strip the SECRET
-# RECORD check above uses. A comment cannot read a variable, and this file
-# needs to be able to NAME the values it retired (that naming is the record of
-# the change); a `set -u` installer is what the check is actually about.
 installer_code="$WORK/install-code-only.sh"
 sed -e 's/^[[:space:]]*#.*$//' "$SUBSTRATE/install.sh" >"$installer_code"
 for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN; do
@@ -3912,8 +2872,6 @@ for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY
   fi
 done
 
-# The control: a fixture carrying every retired name must be found by the same
-# grep. A check that cannot see the thing it bans is a comment.
 fixture_retired="$WORK/install-retired-inputs.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_retired"
 for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY_ID KIT_SUBSTRATE_COURIER_IDENTITY_TOKEN KIT_SUBSTRATE_IDENTITY_COURIER_TOKEN; do
@@ -3925,52 +2883,18 @@ for retired in KIT_SUBSTRATE_PULL_SECRET KIT_SUBSTRATE_IDENTITY_OIDC_SIGNING_KEY
   fi
 done
 
-# 13b. The capability is validated by shape BEFORE any network call, so a
-# pasted dockerconfigjson — the value an older runbook asks for — is refused
-# on the box instead of sent somewhere as an opaque bearer.
-# shellcheck source=/dev/null
 . "$fixture_sourced"
 
 run 'the capability is validated: the minted shape is accepted' green registry_capability_shape_ok "$CAP_GOOD"
-# Step 5 derives its artifact list from MANIFEST_DIR, and the sourced
-# installer's SCRIPT_DIR is this temp fixture — so without the line below the
-# step reads $WORK/manifests/applications, which holds nothing, and refuses on
-# an unmeasured claim. Set AFTER the source: install.sh assigns MANIFEST_DIR
-# from SCRIPT_DIR at source time, so a value written before it would be
-# overwritten. (The same reason apps_step sets it per runner, below.)
 export MANIFEST_DIR="$MANIFESTS"
 run 'control: a dockerconfigjson is refused as a capability' red registry_capability_shape_ok "$CAP_B64_PULL_SECRET"
 run 'control: a short capability is refused' red registry_capability_shape_ok "cap_deadbeef"
 run 'control: an empty capability is refused' red registry_capability_shape_ok ""
 
-# 13c. The exchange itself: the capability is exchanged for a dockerconfigjson,
-# and the credential never touches a log, an argv, or the disk.
-#
-# The previous packet proved this step REFUSED, because no service in the fleet
-# traded a redeemed capability for a dockerconfigjson (seam audit §5a-5c). That
-# service now exists — anywaye/registry, the capability exchange — so the
-# assertions below flip from "it refuses, naming the gap" to the four
-# properties the exchange's own brief names, asserted at the installer's end:
-#   1. it speaks the exchange route, presenting the capability as a bearer and
-#      naming the box the capability is bound to;
-#   2. it writes the credential as a docker-registry Secret in every namespace
-#      that pulls the fleet's images, READ BACK as the base64 form
-#      kubectl would store;
-#   3. it never prints it, and never puts it in argv — a value in argv is a
-#      value in `ps`;
-#   4. it refuses, by name, every way the exchange can answer no.
-#
-# The credential below is a LABEL, not a credential — one of the fakes that
-# guard not the value but the deviation. The dockerconfigjson the mock
-# answers is real base64 so the decode is real.
 receipt_expires="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=58)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 receipt_past="$("$PY" -c 'import datetime; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 
-# The exchange's answer: the dockerconfigjson it minted, plus the lifetime. The
-# credential inside it is a label — what is asserted is the shape and the
-# destination, never the value.
 EXCHANGE_B64="$(printf '{"auths":{"ghcr.io":{"username":"x-access-token","password":"ghs_a-labelled-fake"}}}' | base64 | tr -d '\n')"
-exchange_body() { # <b64> <expires_at> <seconds_remaining>
   printf '{"registry":"ghcr.io","expires_at":"%s","seconds_remaining":%s,"dockerconfigjson":"%s"}' "$2" "$3" "$1"
 }
 
@@ -3978,9 +2902,6 @@ MOCK_ROOT="$WORK/pull-secret"
 mkdir -p "$MOCK_ROOT"
 rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/curl-response" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml" "$WORK/pull-secret.log"
 
-# The mock records what the installer SENT. The URL is the claim — the
-# exchange's route, not the redeem door the installer used to speak — and the
-# bearer and the body are the box-bound half.
 MOCK_CURL_MODE="answer"
 exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT/curl-response"
 pull_secret_ec=0
@@ -3990,11 +2911,6 @@ pull_secret_ec=0
     printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
     [ "${MOCK_CURL_MODE:-}" = "fail" ] && return 1
     cat "$MOCK_ROOT/curl-response"
-    # The installer asks for the status on a trailing `-w '\n%{http_code}'`
-    # line. curl writes the -w format verbatim after the body, escapes
-    # included, so the mock emits the newline the format string carries
-    # rather than inventing its own separator: the single-call read that
-    # spends the capability once is what is under test.
     case "$*" in
       *"-w"*) printf '\n%s\n' "${MOCK_CURL_STATUS:-200}" ;;
     esac
@@ -4006,17 +2922,12 @@ pull_secret_ec=0
   install_pull_secret >"$WORK/pull-secret.log" 2>&1
 ) || pull_secret_ec=$?
 
-# 1. The step SUCCEEDS. It used to refuse; the exchange exists now, so a
-# refusal is the failure, not the contract.
 if [ "$pull_secret_ec" -ne 0 ]; then
   fail 'the pull-secret step exchanges the capability and writes the secret' "exit $pull_secret_ec: $(cat "$WORK/pull-secret.log")"
 else
   pass 'the pull-secret step exchanges the capability and writes the secret'
 fi
 
-# 2. It speaks the EXCHANGE route, presenting the capability as a bearer and
-# naming the box — the box-bound half, enforced server-side at box by the
-# exchange on the capability's behalf.
 curl_call_ok() {
   local call
   call="$(cat "$MOCK_ROOT/curl-calls" 2>/dev/null || true)"
@@ -4032,8 +2943,6 @@ curl_call_ok() {
     *"$CAP_BOX_ID_UUID"*) ;;
     *) printf 'the exchange did not name the box\n'; return 1 ;;
   esac
-  # The capability rides in the bearer, not the URL: a path is logged by every
-  # proxy in front of the exchange and outlives the credential.
   case "$call" in
     *"Authorization: Bearer $CAP_GOOD"*) ;;
     *) printf 'the capability did not travel as a bearer header\n%s\n' "$call"; return 1 ;;
@@ -4043,16 +2952,11 @@ curl_call_ok() {
       printf 'the capability appears in the URL path\n%s\n' "$call"; return 1 ;;
     *) ;;
   esac
-  # The capability is box-bound, so the request names THIS box and never
-  # another one: a body carrying a foreign box id is the shape of a
-  # capability being cashed for somebody else's pull.
   case "$call" in
     *"$CAP_OTHER_BOX_UUID"*)
       printf 'the request names a box that is not this box\n%s\n' "$call"; return 1 ;;
     *) ;;
   esac
-  # The account rides INSIDE the capability, not in the request: a body naming
-  # an account is a caller trying to choose whose pull to buy.
   case "$call" in
     *"$CAP_ACCOUNT_UUID"*)
       printf 'the request names the account — it travels in the capability\n%s\n' "$call"; return 1 ;;
@@ -4062,12 +2966,6 @@ curl_call_ok() {
 }
 run 'the exchange speaks the registry-credentials route, bearer + box' green curl_call_ok
 
-# 3. The credential is WRITTEN as a docker-registry Secret in every namespace
-# that pulls the fleet's images — and the bytes the Secret carries are the
-# DECODED JSON, not the exchange's base64. --from-file encodes the file's
-# bytes into data, so the decoded bytes are what kubectl must receive; the
-# kubelet-shaped read in 3b proves it, and the control re-introduces the
-# double-encode to prove the read can fail.
 APPLIED_NAMESPACES=(argocd identity gateway courier parlor billing observability)
 applied_pull_secrets_ok() {
   local ns found
@@ -4077,8 +2975,6 @@ applied_pull_secrets_ok() {
       return 1
     fi
   done
-  # The applied Secret's type is the docker-registry type, which is what makes
-  # kubelet read it as image-pull credentials at all.
   grep -q "kubernetes.io/dockerconfigjson" "$MOCK_ROOT/applied.yaml" || {
     printf 'the applied Secret is not a dockerconfigjson Secret'
     return 1
@@ -4087,16 +2983,6 @@ applied_pull_secrets_ok() {
 }
 run 'the dockerconfigjson is written as a pull Secret in every pulling namespace' green applied_pull_secrets_ok
 
-# 3b. THE KUBELET'S READ, not kubectl's write. --from-file base64-encodes the
-# file's bytes into data[.dockerconfigjson], so the applied value decodes ONCE
-# — exactly what the kubelet does with it — to JSON carrying
-# auths["ghcr.io"].username. Writing the exchange's base64 through undecoded
-# stores base64(base64(json)): the API server decodes once and the kubelet
-# JSON-parses base64 text (measured: `invalid character 'e'`, the first
-# character of eyJhdXRocyI6). The mock above is faithful to the real kubectl
-# (it base64s the file content into data), which is what makes this read mean
-# anything — and what let the old assertion stay green over the broken
-# installer, since it pinned the destination without ever decoding it.
 pull_secret_kubelet_ok() {
   "$PY" - "$MOCK_ROOT/applied.yaml" <<'PY'
 import base64
@@ -4128,9 +3014,6 @@ PY
 }
 run 'the applied Secret decodes once, as the kubelet does, to a ghcr.io credential' green pull_secret_kubelet_ok
 
-# The control: the pre-fix shape — the exchange's base64 written through
-# without decoding — must go RED under the same read. A check that stays green
-# on base64(base64(json)) is the defect this packet fixes, asserted over.
 fixture_double="$WORK/install-double-encode.sh"
 sed '/REGISTRY_DOCKERCONFIGJSON" | base64 -d |/s/ | base64 -d |/ |/' \
   "$SUBSTRATE/install.sh" | sed '/^main "$@"/d' >"$fixture_double"
@@ -4143,7 +3026,6 @@ else
   MOCK_ROOT_DOUBLE="$WORK/pull-secret-double"
   mkdir -p "$MOCK_ROOT_DOUBLE"
   (
-    # shellcheck source=/dev/null
     . "$fixture_double"
     kubectl() { mock_kubectl "$@"; }
     export MOCK_ROOT="$MOCK_ROOT_DOUBLE"
@@ -4156,48 +3038,18 @@ else
   MOCK_ROOT="$MOCK_ROOT_SAVED"
 fi
 
-# ===========================================================================
-# 3c. THE NAMESPACE IS MADE BEFORE THE SECRET IS WRITTEN INTO IT
-# ===========================================================================
-# The defect this packet fixes, and the reason the mock above now has a
-# namespace registry. Measured live on a wiped box:
-#
-#       secret ghcr-pull-secret to be created in argocd
-#       secret ghcr-pull-secret to be created in identity
-#   Error from server (NotFound): error when creating "STDIN":
-#   namespaces "identity" not found
-#
-# Five of the six namespaces the pull secret is written into do not exist at
-# step 5 — the Argo CD Applications at step 6 create them, with
-# `CreateNamespace=true` — and `set -e` ended the install at its second
-# namespace. Only a box with nothing in it could show that, which is why the
-# store below starts EMPTY: no namespace exists, and the mock refuses a Secret
-# written into one that was never made, exactly as the API server does.
-#
-# The green case is therefore the whole claim in one run: six namespaces made
-# BY THE STEP, and the secret written into each of them. The order is read off
-# the recorded argv rather than asserted from the source, so "created first" is
-# a measurement and not a reading of the code.
 MOCK_ROOT_NS="$WORK/pull-secret-ns"
 mkdir -p "$MOCK_ROOT_NS"
 rm -f "$MOCK_ROOT_NS/curl-calls" "$MOCK_ROOT_NS/curl-response" "$MOCK_ROOT_NS/kubectl-argv" \
   "$MOCK_ROOT_NS/applied.yaml" "$MOCK_ROOT_NS/namespaces" "$WORK/pull-secret-ns.log" "$WORK/ns-runner.sh"
 exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_NS/curl-response"
-# A SEPARATE PROCESS, for the reason the control below states in full: a `|| ec`
-# guard suspends `set -e` for the whole guarded body, so a subshell run cannot
-# tell "the install finished" from "the install survived a failure it should
-# have died of". This one is the run that must answer the way a box does.
 cat >"$WORK/ns-runner.sh" <<RUNNER
 set -euo pipefail
 export MOCK_ROOT="$MOCK_ROOT_NS"
 export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
 export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
-# shellcheck source=/dev/null
 . "$fixture_sourced"
-# MANIFEST_DIR after the source: the sourced copy's SCRIPT_DIR is $WORK, so
-# without this the probe reads an empty dir and refuses on an unmeasured
-# claim instead of reaching the exchange this runner is about.
 export MANIFEST_DIR="$MANIFESTS"
 kubectl() { mock_kubectl "\$@"; }
 curl() {
@@ -4220,10 +3072,6 @@ else
   pass 'step 5 creates each namespace and then writes the pull secret into it'
 fi
 
-# The namespace the step MADE, in the step's own words. Read from the registry
-# the mock writes, because that is the record of what the cluster would now
-# hold — the state the manager produced by hand on the affected box, which is
-# the state a fixed installer has to produce itself.
 pull_secret_namespaces_ok() {
   local ns
   for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
@@ -4236,18 +3084,10 @@ pull_secret_namespaces_ok() {
 }
 run 'every pulling namespace is created by the step, not by hand' green pull_secret_namespaces_ok
 
-# THE ORDER, off the recorded argv: one `create namespace <ns>` line must sit
-# BEFORE the `secret <name> -n <ns>` line for the same namespace. A check that
-# only asked whether both happened would be satisfied by a step that wrote the
-# secret first and made the namespace afterwards, which is the wiped-box
-# failure with a happy ending nobody would see until a re-run.
 pull_secret_order_ok() {
   local ns made wrote
   for ns in "${REGISTRY_PULL_NAMESPACES[@]}"; do
     made="$(grep -n -m1 -- "create namespace $ns " "$MOCK_ROOT_NS/kubectl-argv" 2>/dev/null | cut -d: -f1 || true)"
-    # The recorded argv, in full: `create secret docker-registry <name> -n <ns>
-    # --from-file=… --dry-run=client -o yaml`. The `-n <ns>` after the name is
-    # what makes this the write for THIS namespace and not a neighbour's.
     wrote="$(grep -n -m1 -- "docker-registry $REGISTRY_PULL_SECRET_NAME -n $ns " "$MOCK_ROOT_NS/kubectl-argv" 2>/dev/null | cut -d: -f1 || true)"
     if [ -z "$made" ]; then
       printf 'no namespace creation was recorded for %s\n' "$ns"
@@ -4266,12 +3106,6 @@ pull_secret_order_ok() {
 }
 run 'the namespace is created BEFORE the secret is written into it' green pull_secret_order_ok
 
-# THE RED CONTROL. The namespace itself is refused — an admission policy, a
-# kubeconfig aimed at a cluster that will not answer, a box with the k3s
-# service down. The step must REFUSE BY NAME and stop, never skip the
-# namespace and carry on: a run that continued would report success while that
-# namespace pulled nothing, and the CrashLoopBackOff it produced would name
-# neither this line nor the namespace that was never made.
 MOCK_ROOT_REFUSE="$WORK/pull-secret-refuse"
 mkdir -p "$MOCK_ROOT_REFUSE"
 rm -f "$MOCK_ROOT_REFUSE/curl-calls" "$MOCK_ROOT_REFUSE/curl-response" "$MOCK_ROOT_REFUSE/kubectl-argv" \
@@ -4304,8 +3138,6 @@ refuse_ok() {
     *"identity could not be created"*) ;;
     *) printf 'the refusal does not name the namespace\n%s\n' "$(cat "$WORK/pull-secret-refuse.log")"; return 1 ;;
   esac
-  # And nothing was written into it. A refusal that leaves half a credential
-  # behind is the half-installed substrate the preflight's header forbids.
   local ns
   for ns in identity gateway courier parlor; do
     if grep -q "namespace: $ns" "$MOCK_ROOT_REFUSE/applied.yaml" 2>/dev/null; then
@@ -4317,16 +3149,8 @@ refuse_ok() {
 }
 run 'a namespace that cannot be created refuses the step, by name, with nothing written past it' green refuse_ok
 
-# THE BOUNDARY IS REAL, AND THE CREATION IS LOAD-BEARING. The same mock, with
-# the namespace creation DELETED from the installer, must now fail at the first
-# namespace with the API server's own NotFound — proving the mock is not merely
-# permissive and that nothing else in the step makes the namespaces. Without
-# this control a green run above could be a mock that always says yes.
 fixture_no_ns="$WORK/install-no-namespace.sh"
 rm -f "$fixture_no_ns"
-# Guarded by an `if`, not run bare: under this script's `set -e` a python exit
-# would take the whole suite down before the failure is reported as a failure
-# of the control rather than as an unexplained stop.
 if "$PY" - "$SUBSTRATE/install.sh" "$fixture_no_ns" <<'PY'
 import sys
 
@@ -4357,19 +3181,11 @@ for i in range(start, end):
         break
 if block_start is None or block_end is None:
     sys.exit("control fixture: the namespace-creation statement was not found")
-# The statement is an `if ! … ; then … fi`, so the closing `fi` is part of it:
-# deleting the body and leaving the `fi` behind would produce a fixture that
-# does not parse, which fails loudly rather than proving something by accident.
 while block_end + 1 < len(lines) and lines[block_end + 1].strip() == "fi":
     block_end += 1
 del lines[block_start:block_end + 1]
 out_lines = [ln for ln in lines if ln != 'main "$@"']
 out = "\n".join(out_lines)
-# The fixture must assert its own premise before it is used: the secret write
-# is still there (otherwise the control proves a different, dumber failure),
-# and the namespace creation is gone from apply_pull_secret while the other
-# call site, install_service_secrets' own loop, is untouched. A control whose
-# mutation silently stopped breaking the thing it names is a proof of nothing.
 body = out[out.index("apply_pull_secret() {"):out.index("install_pull_secret() {")]
 if 'create namespace "$ns"' in body:
     sys.exit("control fixture: the creation is still inside apply_pull_secret")
@@ -4377,8 +3193,6 @@ if '--from-file=.dockerconfigjson=/dev/stdin' not in body:
     sys.exit("control fixture: the secret write is no longer inside apply_pull_secret")
 if 'create namespace "$ns"' not in out:
     sys.exit("control fixture: the edit removed more than the one call site")
-# The trailing `main "$@"` is stripped the way every fixture in this file
-# strips it, so sourcing the fixture DEFINES the step rather than running it.
 if 'main "$@"' in out:
     sys.exit("control fixture: the main call is still there, so sourcing runs the install")
 open(sys.argv[2], "w", encoding="utf-8").write(out)
@@ -4398,30 +3212,14 @@ elif [ -s "$fixture_no_ns" ] && bash -n "$fixture_no_ns"; then
   rm -f "$MOCK_ROOT_NONS/curl-calls" "$MOCK_ROOT_NONS/kubectl-argv" "$MOCK_ROOT_NONS/applied.yaml" \
     "$MOCK_ROOT_NONS/namespaces" "$WORK/pull-secret-no-ns.log" "$WORK/no-ns-runner.sh"
   exchange_body "$EXCHANGE_B64" "$receipt_expires" 3480 >"$MOCK_ROOT_NONS/curl-response"
-  # The runner is a SEPARATE bash process, and that is the whole reason it
-  # exists. Every live case above runs as `( … ) || ec=$?`, and a command in a
-  # `||` list runs with `set -e` SUSPENDED for its whole body — MEASURED: with
-  # the creation deleted, the guarded run walked all six namespaces, applied
-  # nothing, and exited 0. A box does not do that; `set -e` ends the install at
-  # the first failure. So the case that must reproduce the box's behaviour runs
-  # in a process with no such context, where `set -e` is live, and its status
-  # is read off the child rather than inferred.
   cat >"$WORK/no-ns-runner.sh" <<RUNNER
 set -euo pipefail
 export MOCK_ROOT="$MOCK_ROOT_NONS"
 export KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID"
 export KIT_SUBSTRATE_REGISTRY_CAPABILITY="$CAP_GOOD"
 export KIT_SUBSTRATE_REGISTRY_URL="https://registry.svc.anywaye.test"
-# The state the box was ACTUALLY in: step 4 has made argocd, and nothing has
-# made the other five. With that seed the failure this control reproduces lands
-# on the same namespace the live run stopped on, so the evidence is the same
-# evidence rather than a nearby shape of it.
 printf 'argocd\n' >"\$MOCK_ROOT/namespaces"
-# shellcheck source=/dev/null
 . "$fixture_no_ns"
-# MANIFEST_DIR after the source, as in ns-runner above: without it the probe
-# refuses on an empty dir before the missing namespace is ever reached, and
-# the control would prove the probe rather than the creation.
 export MANIFEST_DIR="$MANIFESTS"
 kubectl() { mock_kubectl "\$@"; }
 curl() {
@@ -4446,9 +3244,6 @@ RUNNER
       *'namespaces "identity" not found'*) ;;
       *) printf 'the stop is not the API server NotFound for identity\n%s\n' "$(cat "$WORK/pull-secret-no-ns.log")"; return 1 ;;
     esac
-    # It stopped AT identity, so argocd — the namespace that existed — was
-    # written and the rest were not. That is the live evidence line for line,
-    # and it is what a silent skip would be missing.
     if ! grep -q "namespace: argocd" "$MOCK_ROOT_NONS/applied.yaml" 2>/dev/null; then
       printf 'argocd was not written, which is not the state the box was measured in\n'
       return 1
@@ -4468,9 +3263,6 @@ else
     "the edit did not remove the creation, so the control would prove nothing"
 fi
 
-# 4. THE CREDENTIAL IS NEVER ECHOED. Three assertions, each with a control
-# below that plants the value and must go red: the log, the argv, and the
-# variable that held it (dropped after use).
 log="$WORK/pull-secret.log"
 case "$(cat "$log")" in
   *"$EXCHANGE_B64"*)
@@ -4488,12 +3280,6 @@ case "$(cat "$log")" in
   *) pass 'the exchanged step never echoes the capability' ;;
 esac
 
-# 5. THE CREDENTIAL NEVER ENTERS ARGV. This is the one that cannot be read
-# off a log: `ps` sees the whole command line, and a credential in argv is a
-# credential on the box for as long as the process lives. The mock recorded
-# every kubectl invocation in full, so the negative is checkable — with the
-# control that the recorder does see planted argv when something puts a
-# secret there.
 case "$(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null || true)" in
   *"$EXCHANGE_B64"*)
     fail 'the dockerconfigjson never enters argv' "the credential appears in a kubectl invocation" ;;
@@ -4513,21 +3299,12 @@ case "$(cat "$MOCK_ROOT/kubectl-argv" 2>/dev/null || true)" in
   *) fail 'control: the argv recorder does see a secret planted in an invocation' "the recorder found nothing" ;;
 esac
 
-# 6. The credential is never written to disk outside the Secret's own bytes:
-# there is no temp file holding it, only the store the mock keeps as the
-# cluster would. The store holds the applied Secret, nothing else carries the
-# value.
 stray_files_ok() {
-  # A glob and a for loop rather than `ls | grep`, so a filename with a space
-  # or a newline is a name this test can actually count.
   local f
   for f in "$MOCK_ROOT"/*; do
     [ -e "$f" ] || continue
     case "${f##*/}" in
       curl-calls|curl-response|kubectl-argv|applied|applied.yaml) continue ;;
-      # The namespace registry the mock keeps: one name per line, held to prove
-      # the step MADE the namespaces it wrote into. It carries no credential —
-      # it holds names — which is why it is allowed to sit in the store.
       namespaces) continue ;;
       argocd|identity|gateway|courier|parlor|billing|observability) continue ;;
     esac
@@ -4538,10 +3315,6 @@ stray_files_ok() {
 }
 run 'no stray file on the box holds the credential' green stray_files_ok
 
-# 7. Every way the exchange can answer no is refused, BY NAME, and the fix
-# named. A green case here would mean the installer wrote a Secret from an
-# answer it did not read.
-exchange_case() { # <mode> <status> <response-body> <expected-log-substring> <case-name>
   local mode="$1" status="$2" body="$3" want="$4" name="$5"
   local log="$WORK/pull-secret-case.log"
   rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml" "$log"
@@ -4571,15 +3344,12 @@ exchange_case() { # <mode> <status> <response-body> <expected-log-substring> <ca
   else
     fail "$name" "exit $ec, log: $(cat "$log" 2>/dev/null)"
   fi
-  # A refusal must also not have written anything: no argv recorded, no Secret
-  # applied. A half-written refusal is the half-installed substrate.
   if [ -s "$MOCK_ROOT/kubectl-argv" ] 2>/dev/null || [ -s "$MOCK_ROOT/applied.yaml" ] 2>/dev/null; then
     fail "a refusal writes nothing: $name" "argv or applied.yaml is non-empty after the refusal"
   else
     pass "a refusal writes nothing: $name"
   fi
 }
-refusal_body() { # <code> <message>
   printf '{"error":{"code":"%s","message":"%s"}}' "$1" "$2"
 }
 exchange_case fail 000 ""   "the registry exchange did not answer"   'a dead exchange is a refusal, named for the operator'
@@ -4598,15 +3368,6 @@ exchange_case answer 200 '{"registry":"ghcr.io","expires_at":"'"$receipt_expires
 exchange_case answer 200 "$(exchange_body "$(printf 'not base64 at all' | base64 | tr -d '
 ')" "$receipt_expires" 3480)"   "not a ghcr.io credential"   'a dockerconfigjson that is not a ghcr.io credential is refused'
 
-# The control on the shape check: a pasted dockerconfigjson in the
-# capability's place is refused before the capability could be spent or sent.
-# Since step 5 probes first, the refusal is no longer preceded by zero
-# traffic — the anonymous probe runs before the shape check — so "no network
-# call" would fail on the probe's own anonymous halves. The property that
-# matters is what the probe never carries: the pasted value appears in no
-# call, and the exchange route is never spoken. (If this check was weakened
-# to get green, the commit message says so — it was not: the secret still
-# travels nowhere.)
 rm -f "$MOCK_ROOT/curl-calls" "$MOCK_ROOT/kubectl-argv" "$MOCK_ROOT/applied.yaml"
 (
   kubectl() { mock_kubectl "$@"; }
@@ -4624,35 +3385,8 @@ else
   fail 'control: a pasted dockerconfigjson is refused before the capability could be spent or sent' "$(cat "$WORK/pull-secret-paste.log")"
 fi
 
-# 13e. Step 5 asks GHCR first, and only reaches for the capability when an
-# artifact is private.
-#
-# The packet: step 5 DERIVES every GHCR chart and image the Applications name,
-# asks GHCR for an ANONYMOUS fetch of each, and takes the anonymous half (no
-# box id, no capability, no exchange) when all answer — the capability path
-# running unchanged when one does not, its refusal NAMING the artifact.
-# Five proofs, each with the control that must answer differently:
-#   1. the derivation off the real tree names the fleet's charts AND images
-#      (7 + 7) and nothing over plain HTTPS;
-#   2. all public, no box id, no capability: the step SUCCEEDS, writes an
-#      empty-auths pull secret, never speaks the exchange route, and says the
-#      anonymous line;
-#   3. one private artifact, no capability: the step REFUSES, naming that
-#      artifact, in the capability's own words;
-#   4. the probe is a FETCH check, not a token check: a token that answers
-#      with a manifest that 404s is still private (a public repo with a
-#      missing tag issues a token and refuses the manifest);
-#   5. the capability half is unchanged: private artifacts plus a valid box id
-#      and capability exchange and write the minted credential, saying the
-#      private line.
-# The mocks below answer GHCR's two anonymous halves from the environment, so
-# no test here needs the network: MOCK_TOKEN_DENY names the repo whose token
-# is refused, MOCK_MANIFEST_DENY names the manifest ref refused. A mock that
-# answered everything public would make cases 3 and 4 vacuous; each sets its
-# own denial.
 PROBE_APPS="$WORK/probe-apps"
 mkdir -p "$PROBE_APPS"
-probe_app() { # <file> <repoURL> <chart> <rev>
   cat >"$PROBE_APPS/$1.yaml" <<YAML
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -4674,14 +3408,6 @@ probe_app anon-identity oci://ghcr.io/anywaye/charts/identity identity 0.1.0
 probe_app anon-gateway oci://ghcr.io/anywaye/charts/gateway gateway 0.1.0
 probe_app anon-grafana https://grafana.github.io/helm-charts grafana 10.5.15
 
-# mock_probe_curl — GHCR's two anonymous halves, answered from the
-# environment, plus the exchange from the response file. The token half reads
-# the BODY, never the status: real GHCR answers a refused token with HTTP 401
-# and an error document, and curl without -f exits 0 on it — so the mock
-# prints the error document and exits 0, the shape the installer must read.
-# The manifest half prints only the bare status, the way `curl -o /dev/null
-# -w '%{http_code}' -I` does (under -I the headers ARE the output, so -o
-# discards them and only the -w line reaches stdout).
 mock_probe_curl() {
   printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
   case "$*" in
@@ -4712,11 +3438,6 @@ mock_probe_curl() {
   return 1
 }
 
-# 1. The derivation, off the real tree: 5 charts + 5 images (the five
-# services a customer runs — the launch four plus billing, which the
-# 2026-10-15 freeze-lift put on the substrate; pantry, box and keyholder
-# left with their Applications, so their charts and images are derived
-# nowhere), and no plain-HTTPS chart among them.
 derived_ok() {
   local rows n want
   rows="$(MANIFEST_DIR="$MANIFESTS" registry_derived_artifacts | sort)"
@@ -4740,10 +3461,6 @@ derived_ok() {
 }
 run 'the probe derives every GHCR chart and image off the real manifests' green derived_ok
 
-# The control: a fixture with one GHCR Application and one plain-HTTPS one
-# derives exactly the chart and its image — two rows, and the HTTPS chart is
-# nowhere. A derivation that listed everything would pass the count above by
-# accident.
 PROBE_FIX_DERIVE="$WORK/probe-derive"
 mkdir -p "$PROBE_FIX_DERIVE"
 cat >"$PROBE_FIX_DERIVE/demo.yaml" <<YAML
@@ -4783,8 +3500,6 @@ derived_fixture_ok() {
 }
 run 'control: the derivation lists a fixture chart plus its image, nothing else' green derived_fixture_ok
 
-# 2. All public, no box id, no capability: the step succeeds down the
-# anonymous half.
 MOCK_ROOT_ANON="$WORK/pull-secret-anon"
 mkdir -p "$MOCK_ROOT_ANON"
 rm -f "$MOCK_ROOT_ANON/curl-calls" "$MOCK_ROOT_ANON/curl-response" "$MOCK_ROOT_ANON/kubectl-argv" \
@@ -4825,10 +3540,6 @@ anon_ok() {
 }
 run 'all public with no box id and no capability: step 5 succeeds anonymously' green anon_ok
 
-# The anonymous Secret is INERT, not a credential: it decodes once to empty
-# auths. The kubelet-shaped read from 3b is reused in shape but asserts the
-# opposite content — a username here would be a credential the anonymous path
-# must never hold.
 pull_secret_anon_kubelet_ok() {
   "$PY" - "$MOCK_ROOT_ANON/applied.yaml" <<'PY'
 import base64
@@ -4855,10 +3566,6 @@ PY
 }
 run 'the anonymous Secret decodes once, as the kubelet does, to empty auths' green pull_secret_anon_kubelet_ok
 
-# The control: the same run against a fixture that answers the token but
-# 404s nothing must NOT take the anonymous half — inverted below in case 4.
-# Here the inverted control: point the derivation at a fixture with one
-# private TOKEN, and the anonymous assertions must fail.
 PROBE_PRIV="$WORK/probe-priv"
 mkdir -p "$PROBE_PRIV"
 cat >"$PROBE_PRIV/priv.yaml" <<YAML
@@ -4875,10 +3582,6 @@ spec:
     targetRevision: 9.9.9
 YAML
 
-# 3. One private artifact, no capability: the step refuses, NAMING it, in the
-# capability's own words. The fixture's image row (anywaye/priv-fixture:9.9.9)
-# stays public — the denial names only the chart repo — so the refusal proves
-# per-artifact granularity rather than a blanket private verdict.
 MOCK_ROOT_PRIV="$WORK/pull-secret-priv"
 mkdir -p "$MOCK_ROOT_PRIV"
 rm -f "$MOCK_ROOT_PRIV/curl-calls" "$MOCK_ROOT_PRIV/curl-response" "$MOCK_ROOT_PRIV/kubectl-argv" \
@@ -4912,10 +3615,6 @@ priv_ok() {
 }
 run 'one private artifact with no capability: the refusal names that artifact' green priv_ok
 
-# 4. The probe is a FETCH check, not a token check. The token answers; the
-# manifest 404s (a public repo with a missing tag). A probe that read only
-# the token would take the anonymous half here — and the assertion below
-# would go green on a probe that cannot fail.
 PROBE_TAG="$WORK/probe-tag"
 mkdir -p "$PROBE_TAG"
 cat >"$PROBE_TAG/tag.yaml" <<YAML
@@ -4956,10 +3655,6 @@ tag_ok() {
 }
 run 'control: a probe that cannot fail is not a probe — answered token, missing manifest' green tag_ok
 
-# 5. The capability half is unchanged: private artifacts plus a valid box id
-# and capability exchange and write the MINTED credential, saying the
-# private line. The kubelet-shaped read from 3b proves the content is the
-# exchange's credential and not the anonymous empty auths.
 MOCK_ROOT_CAP="$WORK/pull-secret-cap"
 mkdir -p "$MOCK_ROOT_CAP"
 rm -f "$MOCK_ROOT_CAP/curl-calls" "$MOCK_ROOT_CAP/curl-response" "$MOCK_ROOT_CAP/kubectl-argv" \
@@ -4996,9 +3691,6 @@ MOCK_ROOT="$MOCK_ROOT_CAP"
 run 'the capability-path Secret decodes once to the minted ghcr.io credential' green pull_secret_kubelet_ok
 MOCK_ROOT="$MOCK_ROOT_SAVED_CAP"
 
-# An empty manifest dir refuses rather than going anonymous: a probe that
-# listed nothing proved nothing, and the anonymous half on zero evidence is
-# the fail-open this packet exists to close.
 PROBE_EMPTY="$WORK/probe-empty"
 mkdir -p "$PROBE_EMPTY"
 probe_empty() {
@@ -5006,12 +3698,6 @@ probe_empty() {
 }
 run 'an empty manifest dir refuses rather than going anonymous' red probe_empty
 
-# The master-behavior control: the exchange ALONE still demands a capability
-# before seeing a single artifact. This is the shape step 5 had on master —
-# the live refusal on a workstation without a capability is quoted in the
-# packet's report — and the probe is what now gates it. The function returns
-# 1 (red) exactly when the refusal carries the capability line, so `run`
-# going green means the demand is still unconditional at this layer.
 master_refusal_pins() {
   local out ec=0
   out="$(KIT_SUBSTRATE_BOX_ID="$CAP_BOX_ID_UUID" KIT_SUBSTRATE_REGISTRY_CAPABILITY="" REGISTRY_PRIVATE_ARTIFACTS="" exchange_registry_credential 2>&1)" || ec=$?
@@ -5023,15 +3709,6 @@ master_refusal_pins() {
 }
 run 'control: the exchange alone still demands a capability before seeing any artifact' red master_refusal_pins
 
-# 13d. The OIDC signing key is born on THIS box.
-#
-# A private RSA key that has been in somebody's shell history is not the
-# customer's key any more, so the installer generates it: openssl at identity's
-# own floor (2048 bits, MinKeyBits), an id DERIVED FROM THE KEY (a public
-# thumbprint, so a cached verifier's `kid` keeps matching), read back
-# once-only, and never printed. A re-run does not regenerate: gateway caches
-# JWKS entries by `kid`, so a service that signs with a new key every boot is a
-# service nobody can verify.
 oidc_shape_ok() {
   local pem bits
   pem="$1"
@@ -5052,7 +3729,6 @@ oidc_shape_ok() {
 }
 
 oidc_log_clean() {
-  # $1 = the log, $2 = the value that must not be in it.
   case "$1" in
     *"$2"*)
       printf 'the value appears in the installer output\n'
@@ -5067,7 +3743,6 @@ mkdir -p "$MOCK_ROOT"
 oidc_a_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5104,14 +3779,11 @@ else
   fail 'oidc: the issuer and login UI ride along — the surface is issuer, key, id and login UI, or nothing' "OIDC_ISSUER: $(mock_get identity identity-secrets OIDC_ISSUER) OIDC_LOGIN_UI_URL: $(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)"
 fi
 
-# The re-run: nothing regenerates. The stored key is read back, the id is read
-# back with it, and a second box generates a different key (never a constant).
 MOCK_ROOT="$WORK/oidc-b"
 mkdir -p "$MOCK_ROOT"
 oidc_b_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5134,7 +3806,6 @@ mkdir -p "$MOCK_ROOT"
 oidc_rerun_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5161,21 +3832,14 @@ case "$oidc_id_rerun" in
   *) fail 'oidc: the key id is read back with the key' "id: $oidc_id_rerun" ;;
 esac
 
-# OIDC four-member surface: the installer as it stands on master wires three
-# keys (issuer + signing key + id) and leaves OIDC_LOGIN_UI_URL absent — the
-# shape identity refuses with `OIDC_LOGIN_UI_URL: no OIDC login UI configured`
-# (CrashLoopBackOff). The packet adds the fourth member and the all-or-nothing
-# refusal before any secret is written.
 OIDC_FOUR_ISSUER="https://identity.example.com"
 OIDC_FOUR_LOGIN="https://app.example.com/sign-in/oidc"
 
-# Green: with issuer and login UI both set, identity-secrets carries all four.
 MOCK_ROOT="$WORK/oidc-four-green"
 mkdir -p "$MOCK_ROOT"
 oidc_four_green_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5194,8 +3858,6 @@ elif [ "$(mock_get identity identity-secrets OIDC_ISSUER)" != "$OIDC_FOUR_ISSUER
 else
   pass 'oidc four: issuer and login UI both set wires all four keys'
 fi
-# Read-back on a warm box: a secret written but not readable is the defect the
-# whole record tripwire exists to catch. Verify the four round-trip.
 if [ "$oidc_four_green_ec" -eq 0 ]; then
   if [ "$(mock_get identity identity-secrets OIDC_ISSUER)" = "$OIDC_FOUR_ISSUER" ] && \
      [ "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL)" = "$OIDC_FOUR_LOGIN" ]; then
@@ -5205,8 +3867,6 @@ if [ "$oidc_four_green_ec" -eq 0 ]; then
   fi
 fi
 
-# Green: the login UI alone, or the issuer alone, is REFUSED before any secret
-# is written — and the refusal names the missing variable.
 oidc_refused_case() {
   local has_issuer="$1" has_login="$2" want_var="$3" name="$4"
   MOCK_ROOT="$WORK/oidc-refuse-$name"
@@ -5214,7 +3874,6 @@ oidc_refused_case() {
   mfa_seed_roles
   local ec=0 log="$WORK/oidc-refuse-$name.log"
   (
-    # shellcheck source=/dev/null
     . "$fixture_sourced"
     kubectl() { mock_kubectl "$@"; }
     mfa_smtp_env
@@ -5242,18 +3901,6 @@ oidc_refused_case() {
 run 'oidc four: issuer alone is refused, naming the missing login UI' green oidc_refused_case 1 0 "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" issuer-alone
 run 'oidc four: login UI alone is refused, naming the missing issuer' green oidc_refused_case 0 1 "KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER" login-alone
 
-# RED control: the installer as it stands on master (three keys, no refusal)
-# passes the issuer-alone shape through without complaint — i.e. the refusal
-# check actually discriminates. Revert the new code and the check must go red;
-# if it does not, the check is worthless. The fixture is the tree as it stood
-# BEFORE the commit that wired OIDC_LOGIN_UI_URL (that commit's parent) — the
-# pre-fix, three-key installer. It must NOT be HEAD~1: every commit this branch
-# lands after the four-key merge shifts the parent onto the four-key tree, so
-# a fixture taken from HEAD~1 silently becomes the new installer and `set -u`
-# trips its new variable reference as an "unbound variable" instead of showing
-# the pass-through this control is about (measured: the first commit after the
-# oidc-four merge turned this control red for exactly that reason, exit 1 with
-# KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL unbound).
 fixture_oidc_three_orig="$WORK/install-oidc-three-orig.sh"
 oidc_three_base="$(git -C "$ROOT" log --format=%H -S 'KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL' -- templates/substrate/install.sh | tail -1)"
 if [ -z "${oidc_three_base:-}" ] \
@@ -5267,7 +3914,6 @@ else
   oidc_three_ec=0
   (
     mfa_seed_roles
-    # shellcheck source=/dev/null
     . "$WORK/install-oidc-three-sourced.sh"
     kubectl() { mock_kubectl "$@"; }
     # The three-key installer reads KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER but not
@@ -5278,25 +3924,19 @@ else
     export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
     install_service_secrets >"$WORK/oidc-three-control.log" 2>&1
   ) || oidc_three_ec=$?
-  # The old installer PASSES issuer-alone (exit 0) and writes three keys.
   if [ "$oidc_three_ec" -eq 0 ] && [ -n "$(mock_get identity identity-secrets OIDC_ISSUER)" ] && [ -z "$(mock_get identity identity-secrets OIDC_LOGIN_UI_URL 2>/dev/null || true)" ]; then
     pass 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)'
   else
     fail 'control: the three-key installer passes issuer-alone without complaint (the refusal discriminates)' "exit $oidc_three_ec: $(cat "$WORK/oidc-three-control.log")"
   fi
 fi
-# And the new installer is the one that GOES RED on the same input — the
-# discrimination the control above proves is not vacuous.
 run 'control: the four-key installer refuses issuer-alone (the new code discriminates)' green oidc_refused_case 1 0 "KIT_SUBSTRATE_IDENTITY_OIDC_LOGIN_UI_URL" issuer-alone
 
-# Red control: a login UI that is not an http(s) origin is refused (that is
-# oidc.ValidateLoginUIURL's own rule — mirror it, do not re-derive it).
 MOCK_ROOT="$WORK/oidc-bad-login"
 mkdir -p "$MOCK_ROOT"
 oidc_bad_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5321,14 +3961,12 @@ if [ -d "$MOCK_ROOT/identity/identity-secrets" ]; then
 else
   pass 'oidc four: a refused bad login UI writes no secret'
 fi
-# Additional bad shapes, each refused: query, fragment, userinfo, no host.
 for bad in "https://app.example.com/sign-in?x=1" "https://app.example.com/sign-in#frag" "https://user@app.example.com/sign-in" "https:///sign-in"; do
   MOCK_ROOT="$WORK/oidc-bad-$(printf '%s' "$bad" | tr -c 'A-Za-z0-9' '-')"
   mkdir -p "$MOCK_ROOT"
   oidc_bad2_ec=0
   (
     mfa_seed_roles
-    # shellcheck source=/dev/null
     . "$fixture_sourced"
     kubectl() { mock_kubectl "$@"; }
     mfa_smtp_env
@@ -5343,11 +3981,6 @@ for bad in "https://app.example.com/sign-in?x=1" "https://app.example.com/sign-i
   fi
 done
 
-# oidc_jwks_curl — identity's JWKS route over the forwarded port, answered
-# from the environment. Prints the bare HTTP status the way
-# `curl -o /dev/null -w '%{http_code}'` does. OIDC_JWKS_STATUS forces the red
-# shapes: 404 is the live box (the route absent on the stale pod), anything
-# non-2xx must be fatal. Unmocked URLs fail loudly, never silently 200.
 oidc_jwks_curl() {
   printf '%s\n' "$*" >>"$MOCK_ROOT/curl-calls"
   case "$*" in
@@ -5362,16 +3995,10 @@ oidc_jwks_curl() {
   esac
 }
 
-# Warm-box reconcile: a pre-existing identity-secrets without OIDC_LOGIN_UI_URL
-# gains the fourth key when the operator now supplies both inputs, reusing the
-# stored signing key.
 MOCK_ROOT="$WORK/oidc-warm-reconcile"
 mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
-# The identity Deployment the live box holds: the pod whose environment the
-# patch must reach (started 28s BEFORE the secret on the measured box).
 mkdir -p "$MOCK_ROOT/identity/deploy-identity"
-# Legacy secret: three OIDC keys but no login UI (the crashloop shape).
 mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
 mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
 mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
@@ -5387,13 +4014,9 @@ mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/couri
 mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
 oidc_warm_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   curl() { oidc_jwks_curl "$@"; }
-  # The port-forward is stubbed (it never blocks here), so the port wait must
-  # be too — the mint harness stubs it for the same reason, and the wait
-  # itself is proven green and red against a real socket in 13f-2.
   kit_substrate_await_port() { return 0; }
   mfa_smtp_env
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
@@ -5409,9 +4032,6 @@ elif [ "$(mock_get identity identity-secrets OIDC_SIGNING_KEY)" != "$legacy_oidc
 else
   pass 'warm: a legacy secret without login UI is patched, reusing the stored signing key'
 fi
-# The patch must REACH the pod: identity is restarted, the rollout is watched
-# bounded, and the JWKS route is probed — the stale-pod gap is a restart the
-# installer never asked for.
 if grep -q 'rollout restart deployment/identity' "$MOCK_ROOT/kubectl-argv"; then
   pass 'warm: identity is restarted after its OIDC secret is patched'
 else
@@ -5431,35 +4051,7 @@ case "$(cat "$WORK/oidc-warm.log")" in
     ;;
 esac
 
-# ===========================================================================
-# 13d-oidc-restart. The OIDC patch restarts identity and watches its JWKS
-# route answer — a patched secret reaches no running pod (envFrom is read at
-# pod start).
-# ===========================================================================
-#
-# THE LIVE DEFECT (2026-10-14/15, test box, warm re-run with issuer and login
-# UI set): the secret gained all four keys and the read-back verified them,
-# but the pod never saw them —
-#   identity_jwks=404                      (from a pod in the gateway namespace)
-#   identity-secrets created: 2026-10-14T20:58:43Z
-#   identity pod startTime:   2026-10-14T20:58:15Z   (28 SECONDS BEFORE the secret)
-#   gateway readiness: 503 x61 over 10m
-# so OIDCEnabled() was false in that process, the routes absent rather than
-# present-and-500, and gateway's /readyz 503 forever — while the report said
-# the issuer was set.
-#
-# THE FIX. reconcile_oidc_identity_secrets restarts deployment/identity after
-# a patch that changed the secret, watches the rollout bounded, then probes
-# GET /.well-known/jwks.json for 2xx. Only the patch path: the creation path
-# has no running pod to restart, and the guard's early return (both keys
-# already stored) keeps a converged re-run a no-op.
-#
-# Green, real tree: patch restarts, the rollout is watched bounded, the route
-# answers. Green: converged re-run and creation path restart nothing. Red:
-# the master-shaped fixture (patch, no restart) fails the restart check; a
-# stuck rollout is fatal, never forgiven; a 404 JWKS is fatal.
 oidc_patch_seed() {
-  # The warm legacy box: three OIDC keys, no login UI, Deployment present.
   mfa_seed_roles
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity?sslmode=disable"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
@@ -5475,10 +4067,6 @@ oidc_patch_seed() {
   mkdir -p "$MOCK_ROOT/identity/deploy-identity"
 }
 
-# oidc_patch_kubectl — mock_kubectl with a stuck-rollout hook: OIDC_ROLLOUT_FAIL
-# set refuses `rollout status deployment/identity` the way a Deployment that
-# never completes answers it. The argv line is still recorded, so the check
-# can tell "the wait ran and lost" from "no wait ran".
 oidc_patch_kubectl() {
   case "$*" in
     *"rollout status deployment/identity"*)
@@ -5492,11 +4080,6 @@ oidc_patch_kubectl() {
   mock_kubectl "$@"
 }
 
-# oidc_nodeploy_kubectl — the API server on a box Argo has not synced yet: a
-# GET of the named Deployment is NotFound (exit 1), exactly as real kubectl
-# answers it. mock_kubectl cannot model this — its get-deployment branch
-# exits 0 on a missing object — so the restart-skipped branch needs its own
-# verbatim refusal.
 oidc_nodeploy_kubectl() {
   case "$*" in
     *"get deployment identity"*)
@@ -5510,20 +4093,12 @@ oidc_nodeploy_kubectl() {
   esac
 }
 
-# oidc_patch_run <sourced-fixture> — the warm legacy secret against that
-# fixture. Leaves the exit in $oidc_patch_ec, output in
-# $WORK/oidc-patch-run.log, argv in $MOCK_ROOT/kubectl-argv. OIDC_PATCH_TIMEOUT
-# overrides the rollout bound when set; OIDC_JWKS_STATUS answers the probe.
 oidc_patch_run() {
   oidc_patch_ec=0
   (
-    # shellcheck source=/dev/null
     . "$1"
     kubectl() { "${OIDC_KUBECTL_FN:-oidc_patch_kubectl}" "$@"; }
     curl() { oidc_jwks_curl "$@"; }
-    # The port-forward is stubbed (it never blocks here), so the port wait
-    # must be too — the mint harness stubs it for the same reason, and the
-    # wait itself is proven green and red against a real socket in 13f-2.
     kit_substrate_await_port() { return 0; }
     mfa_smtp_env
     export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER="$OIDC_FOUR_ISSUER"
@@ -5535,11 +4110,6 @@ oidc_patch_run() {
   ) || oidc_patch_ec=$?
 }
 
-# check_oidc_patch_restart <sourced-fixture> — one property per check: the
-# patch reaches the pod (restart), the restart is watched (bounded status),
-# and the route is verified (2xx in the log). Any failure names which half
-# is missing, so a red control that fails for another reason cannot satisfy
-# it by accident.
 check_oidc_patch_restart() {
   MOCK_ROOT="$WORK/oidc-patch-green"
   rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
@@ -5575,9 +4145,6 @@ check_oidc_patch_restart() {
 run 'warm: the OIDC patch restarts identity, watches the rollout bounded, and verifies the JWKS route' green \
   check_oidc_patch_restart "$fixture_sourced"
 
-# Converged re-run: the secret already carries all four keys, so the guard's
-# early return holds and NOTHING restarts — a needless restart is a needless
-# outage. Self-contained: converge the store first, then re-run against it.
 check_oidc_patch_noop() {
   MOCK_ROOT="$WORK/oidc-patch-noop"
   rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
@@ -5602,8 +4169,6 @@ check_oidc_patch_noop() {
 run 'warm: a converged OIDC box restarts nothing on a re-run' green \
   check_oidc_patch_noop "$fixture_sourced"
 
-# Creation path: a fresh box writes the keys with the secret and has no
-# running pod to restart.
 check_oidc_create_no_restart() {
   MOCK_ROOT="$WORK/oidc-patch-create"
   rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
@@ -5628,16 +4193,7 @@ check_oidc_create_no_restart() {
 run 'warm: the OIDC creation path writes the keys and restarts nothing' green \
   check_oidc_create_no_restart "$fixture_sourced"
 
-# THE RED CONTROL is the master shape: the patch without the restart — the
-# real tree with reconcile's restart/wait/probe block deleted, so the control
-# tracks future edits to the surrounding code. Its premise is asserted first:
-# the probe call is gone but the round-trip check stands, so the fixture is
-# the patch path that leaves the pod stale rather than some other breakage.
-# If the restart check passed against it, the check would be worthless.
 oidc_norestart_fixture="$WORK/install-oidc-norestart.sh"
-# From the main-stripped fixture, not the raw tree: sourcing a file that still
-# carries its trailing `main "$@"` would execute the install with the fixture
-# path as its argument rather than defining its functions.
 awk '
   /^reconcile_oidc_identity_secrets\(\)/ { in_fn=1 }
   in_fn && /^  if kubectl .* get deployment identity -n identity/ { skip=1; next }
@@ -5667,9 +4223,6 @@ else
   fi
 fi
 
-# A STUCK ROLLOUT IS FATAL. A wait that forgives it reports success over a box
-# still serving no route — worse than no wait. Same warm seed; only the
-# rollout status refuses.
 MOCK_ROOT="$WORK/oidc-patch-stuck"
 rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
 oidc_patch_seed
@@ -5700,9 +4253,6 @@ else
   esac
 fi
 
-# The live 404: the route absent on the restarted pod is fatal too — a secret
-# that round-trips while the service serves no route is the gap this packet
-# exists to close, and reporting success over it is the old defect exactly.
 MOCK_ROOT="$WORK/oidc-patch-404"
 rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
 oidc_patch_seed
@@ -5722,10 +4272,6 @@ else
   esac
 fi
 
-# No Deployment yet: the secret converges, no restart is attempted, and the
-# run still exits 0 — the next sync boots with the patched secret. The same
-# warm seed minus the Deployment Argo has not synced, and a kubectl that
-# answers the named GET the way the API server does (NotFound, exit 1).
 MOCK_ROOT="$WORK/oidc-patch-nodeploy"
 rm -rf "$MOCK_ROOT"; mkdir -p "$MOCK_ROOT"
 mfa_seed_roles
@@ -5760,14 +4306,8 @@ else
   esac
 fi
 
-# The done report names which OIDC state the run produced: verified this run,
-# patched-but-unwatched, or neither. The unset-issuer wording is asserted in
-# §27 and untouched; these three cover the set-issuer half the stale-pod gap
-# is about.
 oidc_report_final() {
-  # $1: OIDC_ROUTE_VERIFIED value. $2: OIDC_SECRET_PATCHED value.
   (
-    # shellcheck source=/dev/null
     . "$fixture_sourced"
     READINESS_TLS_PENDING=""
     READINESS_DNS_SPLIT=""
@@ -5807,12 +4347,6 @@ case "$oidc_report_out" in
     ;;
 esac
 
-# 13d-bis. A gateway-secrets that PREDATES the assertion key is healed on a
-# re-run. This is the live box exactly: all four service secrets exist (so the
-# `secrets` guard would skip install_service_secrets whole) and gateway-secrets
-# holds REDIS_URL only. The repair has to run above the guard, or it never runs
-# on the only box that needs it. The key is generated and merge-patched; the
-# stored REDIS_URL survives, and the key is a PKCS#8 PEM gateway can parse.
 pkey_shape_ok() {
   local pem line bits
   pem="$1"
@@ -5845,8 +4379,6 @@ mkdir -p "$MOCK_ROOT"
 legacy_ec=0
 (
   mfa_seed_roles
-  # All four secrets exist — the guard's own contract — and gateway-secrets is
-  # the pre-fix shape: REDIS_URL only.
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "legacy-signup"
   mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "legacy-mfa"
@@ -5854,7 +4386,6 @@ legacy_ec=0
   mock_seed gateway gateway-secrets REDIS_URL "redis://:pw@redis.data.svc.cluster.local:6379"
   mock_seed courier courier-secrets DATABASE_URL "ecto://courier_app:pw@host/courier"
   mock_seed parlor parlor-secrets DATABASE_URL "postgres://parlor_app:pw@host/parlor"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5873,19 +4404,12 @@ legacy_key="$(mock_get gateway gateway-secrets ASSERTION_SIGNING_KEY)"
 if [ -n "$legacy_key" ]; then
   run 'repair: the generated key is a PKCS#8 RSA PEM at the RSA floor' green pkey_shape_ok "$legacy_key"
   run 'repair: the generated key never reaches the installer output' green oidc_log_clean "$(cat "$WORK/legacy-gateway.log")" "$legacy_key"
-  # The control: a PKCS#1 PEM (the `-----BEGIN RSA PRIVATE KEY-----` header) must
-  # be refused by the same shape check, or the check cannot tell the two
-  # encodings apart. The header alone is the control because the header is
-  # exactly what the check tests first, and it is stable across OpenSSL versions
-  # (`genrsa` writes PKCS#1 on 1.1 and PKCS#8 on 3.x).
   run 'control: a PKCS#1 RSA PEM is refused (gateway parses PKCS#8)' red pkey_shape_ok \
     "$(printf -- '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKfake\n-----END RSA PRIVATE KEY-----')"
 fi
-# The re-run is stable: a second pass finds the key and does not touch it.
 MOCK_ROOT="$WORK/legacy-gateway" legacy_rerun_ec=0
 (
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   mfa_smtp_env
@@ -5897,18 +4421,9 @@ else
   fail 'repair: a second pass keeps the stored key (never rotates)' "the key changed or the re-run failed"
 fi
 
-# 13e. The courier loop is box-internal: one run mints the credential through
-# identity's own API, writes the SAME value into both secrets that have to hold
-# it, and restarts both deployments. Nothing is printed.
 COURIER_MINT_TOKEN="cap_box_minted_fake_token_value"
-# The public origin identity's mail links point at, for the tests that exercise
-# the CONFIGURED mail path. It is a test fixture, never a shipped default: the
-# installer has no default for KIT_SUBSTRATE_APP_BASE_URL on purpose (a guessed
-# or localhost value mails a reader to a screen that is not theirs).
 APP_BASE_URL="https://app.example.com"
 courier_mint_curl() {
-  # The URL is whichever argument is one — the calls put `-d` last, so taking
-  # the final argument would read the request body instead.
   local url="" arg
   for arg in "$@"; do
     case "$arg" in
@@ -5930,12 +4445,6 @@ courier_mint_curl() {
 
 MOCK_ROOT="$WORK/mint-loop"
 mkdir -p "$MOCK_ROOT"
-# A REAL local listener for the mint's port wait. The step now proves the
-# forwarded port is UP before it curls it (the (7) connect race), and a mock
-# port-forward that returns instantly does not open one — so the test opens a
-# socket on a random high port and points the mint at it. The real
-# kit_substrate_await_port then succeeds, which is what a working box looks
-# like; a fake override would have proven nothing about the wait.
 mint_port=$(( 20000 + (RANDOM % 20000) ))
 "$PY" -c 'import socket, sys, time
 s = socket.socket()
@@ -5944,7 +4453,6 @@ s.bind(("127.0.0.1", int(sys.argv[1])))
 s.listen(8)
 time.sleep(30)' "$mint_port" &
 mint_listener=$!
-# Wait for the listener to be bound before the mint races it.
 for _ in $(seq 1 50); do
   (exec 3<>"/dev/tcp/127.0.0.1/${mint_port}") 2>/dev/null && break
   sleep 0.1
@@ -5952,23 +4460,12 @@ done
 mint_loop_ec=0
 (
   mfa_seed_roles
-  # The box's secrets as step 9 left them — so the assertion below is about
-  # what the mint ADDS, not about a secret it created itself.
   mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"
   mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"
   mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"
-  # The Deployment Argo synced from step 6's Applications — step 12's await
-  # polls for it before watching its rollout, so the fixture carries it the
-  # way a box past step 6 does. Without this the await polls to its bound and
-  # refuses, which is the next section's control rather than this test.
   mock_seed identity deploy-identity ready yes
   export KIT_SUBSTRATE_IDENTITY_LOCAL_PORT="$mint_port"
-  # The CONFIGURED mail path: with the public origin set, identity's pair and its
-  # four link templates land together (and the legacy default is deleted), so
-  # the assertions below are about a complete block. The UNCONFIGURED path is
-  # proven separately in §18c.
   export KIT_SUBSTRATE_APP_BASE_URL="$APP_BASE_URL"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   curl() { courier_mint_curl "$@"; }
@@ -5986,9 +4483,6 @@ elif [ "$(mock_get identity identity-secrets COURIER_TOKEN)" != "$COURIER_MINT_T
 else
   pass 'the mint loop completes inside one run'
 fi
-# The patch is a PATCH. A whole-Secret `apply` would carry COURIER_TOKEN and
-# drop every key step 9 wrote — identity would boot without its DATABASE_URL
-# and nothing here would look broken until a pod restarted.
 for kept in DATABASE_URL SIGNUP_SIGNING_KEY MFA_ENCRYPTION_KEY; do
   if [ -n "$(mock_get identity identity-secrets "$kept")" ]; then
     pass "the mint patches identity-secrets without dropping ${kept}"
@@ -5999,15 +4493,6 @@ done
 run 'the mint loop never echoes the minted credential' green oidc_log_clean "$(cat "$WORK/mint-loop.log")" "$COURIER_MINT_TOKEN"
 run 'control: a minted credential echoed into the log is caught' red oidc_log_clean "patched with COURIER_IDENTITY_TOKEN=${COURIER_MINT_TOKEN}" "$COURIER_MINT_TOKEN"
 
-# --- the port wait the mint now takes before it curls -------------------------
-# The probe's (7) connect failure was a race: `kubectl port-forward` opens its
-# local listener asynchronously, and the curl ran the line after the `&`. The
-# fix is existence-then-use, so the wait must be able to BOTH succeed against a
-# live port and FAIL against a dead one — the green case alone would be
-# satisfied by a function that returns 0 unconditionally.
-#
-# A fresh listener: the mint's own was killed above, and a green case against a
-# dead port would prove the opposite of what it claims.
 wait_port=$(( 20000 + (RANDOM % 20000) ))
 "$PY" -c 'import socket, sys, time
 s = socket.socket()
@@ -6022,7 +4507,6 @@ for _ in $(seq 1 50); do
 done
 mint_await_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kit_substrate_await_port "$wait_port" 5
 ) || mint_await_ec=$?
@@ -6033,13 +4517,9 @@ if [ "$mint_await_ec" -eq 0 ]; then
 else
   fail 'the port wait succeeds against a live listener' "kit_substrate_await_port exited ${mint_await_ec}"
 fi
-# A port nothing listens on. `$mint_port + 1` is not guaranteed free, but a
-# random high port beside a bound one almost always is, and the red assertion
-# is what proves the wait is bounded and honest.
 dead_port=$(( 40000 + (RANDOM % 15000) ))
 dead_ec=0
 (
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kit_substrate_await_port "$dead_port" 2
 ) || dead_ec=$?
@@ -6050,57 +4530,18 @@ else
     "kit_substrate_await_port returned 0 for a port nothing listens on"
 fi
 
-# ===========================================================================
-# 13g. Step 10 — the services' schemas are applied, idempotently, and a failed
-#      migration fails the step naming the service
-# ===========================================================================
-#
-# THE DEFECT THIS STEP EXISTS FOR. Nothing ran a service's migrations, so a box
-# that "finished" the substrate booted identity against an empty database and
-# the outbox loop retried forever on `relation "outbox_events" does not exist`.
-# The step runs one one-shot Job per schema-owning service (identity, courier,
-# billing),
-# in that service's own RUNNING image (read back from the Deployment), as the
-# OWNER role, and waits for the pod's phase.
-#
-# Three things are asserted, each with a control that must answer differently:
-#
-#   1. THE RUN. Both pods are launched, identity's Job is given the OWNER DSN
-#      (`identity`, not `identity_app`), courier's Job is given
-#      `COURIER_OWNER_DATABASE_URL` (owner) AND `DATABASE_URL` (app, because its
-#      release eval raises without it). The marker secret is written.
-#   2. THE GUARD. A second run is a no-op — no `run` invocation is added — so a
-#      re-run applies nothing new.
-#   3. THE RED CONTROL. A pod that reaches `Failed` makes the step exit non-zero
-#      and name the service and its OWNER role — never a green install over an
-#      empty schema.
-#
-# The mock stores the image/command/env/phase of every `kubectl run`, and the
-# pod is deleted on success exactly as a real box deletes it — so the assertions
-# read the recorded argv, which survives the delete.
 migrate_seed_fixture() {
   mkdir -p "$MOCK_ROOT/data" "$MOCK_ROOT/identity" "$MOCK_ROOT/courier" "$MOCK_ROOT/billing"
   printf 'data\nidentity\ncourier\nbilling\n' >"$MOCK_ROOT/namespaces"
-  # The OWNER role passwords step 8 makes (the migrate Job's credential) and the
-  # app passwords step 8 makes beside them (courier's DATABASE_URL).
   mock_seed data postgres-role-identity password "owner-identity-pw"
   mock_seed data postgres-role-courier password "owner-courier-pw"
   mock_seed data postgres-role-courier-app password "app-courier-pw"
   mock_seed data postgres-role-billing password "owner-billing-pw"
   mock_seed data postgres-role-billing-app password "app-billing-pw"
-  # The Deployments Argo synced from step 6 — step 10 reads the image off them,
-  # so there is no second pin to keep in step.
   mock_seed identity deploy-identity image "ghcr.io/anywaye/identity:0.1.0"
   mock_seed courier deploy-courier image "ghcr.io/anywaye/courier:0.1.0"
   mock_seed billing deploy-billing image "ghcr.io/anywaye/billing:0.1.0"
-  # billing-secrets' SECRET_KEY_BASE, read back by the migrate env: the
-  # schema Job boots Rails in production, which refuses without one.
   mock_seed billing billing-secrets SECRET_KEY_BASE "base64-secret-for-the-gate"
-  # The Cluster step 8 left behind: the object EXISTS (the guard marker) and
-  # its Ready condition is True (the *-ready file the wait reads), at the
-  # settled phase the failure message names. Step 10 waits on this before
-  # launching a single migrate pod; a fixture without the ready file is the
-  # half-ready re-run the wait exists for.
   : >"$MOCK_ROOT/data/cluster-postgres"
   : >"$MOCK_ROOT/data/cluster-postgres-ready"
   printf 'Cluster in healthy state' >"$MOCK_ROOT/data/cluster-postgres-phase"
@@ -6112,7 +4553,6 @@ migrate_run_ec=0
 (
   migrate_seed_fixture
   export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-run-receipt.json"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   install_migrations >"$WORK/migrate-run.log" 2>&1
@@ -6123,8 +4563,6 @@ if [ "$migrate_run_ec" -ne 0 ]; then
 else
   pass 'step 10 runs and completes when both migrations succeed'
 fi
-# The OWNER DSN, proven by the role name in the recorded argv. `identity_app`
-# would be the application role, which owns nothing and cannot run DDL.
 if grep -q -- '--env=DATABASE_URL=postgres://identity:owner-identity-pw@' "$migrate_argv" 2>/dev/null; then
   pass "step 10 migrates identity as its OWNER role (identity, not identity_app)"
 else
@@ -6143,7 +4581,6 @@ else
   fail "step 10 also gives courier its app DATABASE_URL (its release eval raises without it)" \
     "argv did not carry the app DSN"
 fi
-# The image comes from the Deployment, not a literal in install.sh.
 if grep -q -- '--image=ghcr.io/anywaye/identity:0.1.0' "$migrate_argv" 2>/dev/null &&
    grep -q -- '--image=ghcr.io/anywaye/courier:0.1.0' "$migrate_argv" 2>/dev/null &&
    grep -q -- '--image=ghcr.io/anywaye/billing:0.1.0' "$migrate_argv" 2>/dev/null; then
@@ -6160,20 +4597,17 @@ else
   fail 'step 10 records the applied image per service (the re-run marker)' \
     "marker identity='$(mock_get data substrate-migrations identity)' courier='$(mock_get data substrate-migrations courier)' billing='$(mock_get data substrate-migrations billing)'"
 fi
-# A service with no schema is named in the plan and skipped, not run.
 if grep -q -- '--image=.*parlor' "$migrate_argv" 2>/dev/null; then
   fail 'step 10 does not run a migrate Job for parlor (it owns no schema)' "a parlor run was recorded"
 else
   pass 'step 10 does not run a migrate Job for parlor (it owns no schema)'
 fi
 
-# --- the guard: a re-run applies nothing new ----------------------------------
 runs_before="$(grep -c '^run ' "$migrate_argv" 2>/dev/null || true)"
 migrate_rerun_ec=0
 (
   migrate_seed_fixture
   export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-rerun-receipt.json"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   install_migrations >"$WORK/migrate-rerun.log" 2>&1
@@ -6190,7 +4624,6 @@ else
   pass 'step 10 is a no-op on a re-run (its guard skips)'
 fi
 
-# --- the red control: a failed migration fails the step, naming the service ---
 MOCK_ROOT="$WORK/migrate-fail"
 mkdir -p "$MOCK_ROOT"
 migrate_fail_ec=0
@@ -6199,7 +4632,6 @@ migrate_fail_ec=0
   export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-fail-receipt.json"
   export MOCK_POD_PHASE="Failed"
   export MOCK_POD_LOGS="permission denied for schema public"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   install_migrations >"$WORK/migrate-fail.log" 2>&1
@@ -6216,25 +4648,17 @@ elif ! grep -q 'OWNER' "$WORK/migrate-fail.log"; then
 else
   pass 'control: a failed migration fails the step, naming the service and its OWNER role'
 fi
-# The pod's logs are surfaced — a Failed phase with no explanation is a dead end.
 if grep -q 'permission denied for schema public' "$WORK/migrate-fail.log"; then
   pass 'control: the failed migration prints the pod logs'
 else
   fail 'control: the failed migration prints the pod logs' "the logs were not printed"
 fi
-# The failure names the Cluster and its phase beside the DSN — a `connection
-# refused` that is really "the primary is not up yet" must read as one.
 if grep -q "cluster: postgres in namespace data (phase: 'Cluster in healthy state')" "$WORK/migrate-fail.log"; then
   pass 'control: the failed migration names the Cluster and its phase'
 else
   fail 'control: the failed migration names the Cluster and its phase' \
     "no cluster phase in the failure: $(cat "$WORK/migrate-fail.log")"
 fi
-# The Cluster wait: step 10 waits for the Cluster's Ready condition before
-# launching a single migrate pod — the re-run path, where step 8's guard
-# skips its own wait because the object exists. Proven on the argv the green
-# run above recorded: a run that launched pods without first asking the
-# Cluster is the race step 8 just stopped losing on fresh installs.
 if grep -q -- 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres -n data --timeout=600s' "$migrate_argv" 2>/dev/null; then
   pass 'step 10 waits for the Cluster to be Ready before launching any migrate pod, under the 600s bound'
 else
@@ -6242,19 +4666,14 @@ else
     "no bounded Cluster wait in the recorded argv"
 fi
 
-# --- the red control: a half-ready Cluster refuses the migrations, naming its phase ---
 MOCK_ROOT="$WORK/migrate-halfready"
 mkdir -p "$MOCK_ROOT"
 migrate_halfready_ec=0
 (
   migrate_seed_fixture
-  # The re-run shape: the object EXISTS (step 8's guard would skip) but its
-  # Ready condition never becomes True — the primary is still setting up.
-  # Remove the ready file the green fixture plants; the phase stays planted.
   rm -f "$MOCK_ROOT/data/cluster-postgres-ready"
   printf 'Setting up primary' >"$MOCK_ROOT/data/cluster-postgres-phase"
   export KIT_SUBSTRATE_RECEIPT="$WORK/migrate-halfready-receipt.json"
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
   install_migrations >"$WORK/migrate-halfready.log" 2>&1
@@ -6271,13 +4690,8 @@ elif grep -q '^run kit-migrate' "$MOCK_ROOT/kubectl-argv" 2>/dev/null; then
 else
   pass 'control: a half-ready Cluster refuses the migrations, naming its phase, launching nothing'
 fi
-# The next checks read $MOCK_ROOT's argv for the FAILED run above them — put
-# it back, the way the pre-existing order expects.
 MOCK_ROOT="$WORK/migrate-fail"
 
-# The static shape: install_migrations is a step main calls, its guard exists,
-# and the inventory lists the two schema-owning services. A comment can satisfy
-# none of these, and the fixture above proves the live path.
 check_migration_step() {
   "$PY" - "$1" <<'PY'
 import re
@@ -6300,14 +4714,11 @@ if not re.search(r"(?m)^  install_migrations$", code):
     problems.append("main never calls install_migrations")
 if not re.search(r"(?m)^migration_guard_applied\(\)", code):
     problems.append("no migration_guard_applied guard")
-# The guard is USED, not merely defined: install_migrations must consult it, or
-# a re-run re-launches every migrate pod.
 body = re.search(r"(?m)^install_migrations\(\)\s*\{(.*?)\n\}", code, re.S)
 if not body or "migration_guard_applied" not in body.group(1):
     problems.append("install_migrations never consults its guard")
 if not re.search(r"(?m)^owner_database_url_for\(\)", code):
     problems.append("no owner_database_url_for — the migrate DSN must be the OWNER role")
-# The inventory: the two services with a schema, and no silent third.
 m = re.search(r"migration_service_has_schema\(\)\s*\{(.*?)\n\}", code, re.S)
 if not m:
     problems.append("no migration_service_has_schema inventory")
@@ -6315,12 +4726,8 @@ else:
     for svc in ("identity", "courier", "billing"):
         if svc not in m.group(1):
             problems.append(f"{svc} is not in the migration inventory")
-# The failure path names the service and prints the logs.
 need("did not succeed", "the failure path has no message")
 need("logs \"pod/kit-migrate-", "the failure path does not print the pod logs")
-# The banned shape: the migrate COMMAND swallowed so a failed migration reads
-# as a green step. `delete … || true` is fine (and required); `$cmd || true` is
-# the defect. Match the run's command position, not the pod's name.
 if re.search(r"--command -- \$cmd[^\n]*\|\| true", code):
     problems.append("the migrate command is swallowed with `|| true`")
 if problems:
@@ -6332,55 +4739,18 @@ PY
 
 run 'step 10 has a step, a guard and an OWNER-role inventory' green check_migration_step "$SUBSTRATE/install.sh"
 
-# The control: an inventory with courier removed must go red under the same
-# check — an inventory the check cannot see shrink is documentation. (This
-# control used to remove pantry; pantry left with its Application by
-# decision, so the control removes a service the substrate still ships.)
 fixture_mig_inventory="$WORK/install-mig-inventory.sh"
 sed 's/    identity | courier | billing) return 0 ;;/    identity) return 0 ;;/' \
   "$SUBSTRATE/install.sh" >"$fixture_mig_inventory"
 run 'control: an inventory missing a service goes red' red check_migration_step "$fixture_mig_inventory"
 
-# ===========================================================================
-# 13h. Step 10 — migrations run in parallel (the 25 s sequential cost)
-# ===========================================================================
-#
-# The measurement (provisioned in the packet brief):
-# step 10 costs 25 s of a 219.46 s cold install — the fourth-largest cost, after
-# Postgres bootstrap (72.26 s), NATS (36.63 s) and the pull-secret (11.81 s) —
-# and the only one that is not operator-bound: the Jobs are installer-created
-# and each paid a fresh image pull/scheduling wait. The structural fix is to
-# launch the independent Jobs together and wait for the set.
-#
-# INDEPENDENCE: identity and courier each own a separate database and OWNER role
-# (CREATE DATABASE "identity" OWNER "identity" vs "courier" OWNER "courier" in
-# templates/substrate/manifests/data/postgres-cluster.yaml and the local
-# equivalent templates/compose/postgres/initdb/10-cluster.sh). The REVOKE
-# boundary is per-database, so the three migrators touch disjoint catalogues and
-# no ordering constraint exists. A future service whose migration depends on
-# another's schema must be placed in a later wave, not in this launch set.
-#
-# Four guarantees must survive the parallelization:
-#   1. applies are grouped — no get between the runs (the mock's kubectl-argv
-#      shows run run … before get phase …);
-#   2. a failing Job still fails the install naming the Job;
-#   3. a Job that never Completes still times out on today's bound;
-#   4. the step's seconds remain reported.
-#
-# Two red controls discriminate:
-#   * the sequential shape (master) fails the grouped-applies check;
-#   * a dependent Job launched in the first wave fails the ordering check.
 
-# -- the live grouped-applies check ------------------------------------------
 check_migration_parallel() {
-  # $1 = MOCK_ROOT with migrate-run argv
   local argv="$1/kubectl-argv"
   if [ ! -f "$argv" ]; then
     echo "no kubectl-argv at $argv — the mock recorded nothing"
     return 1
   fi
-  # All `run kit-migrate-*` lines must appear before any `get pod kit-migrate-*`
-  # phase poll. An interleaved run/get is the sequential shape.
   local last_run first_get
   last_run="$(grep -n "run kit-migrate" "$argv" | tail -1 | cut -d: -f1)"
   first_get="$(grep -n "get pod kit-migrate" "$argv" | head -1 | cut -d: -f1)"
@@ -6403,13 +4773,9 @@ check_migration_parallel() {
   echo "applies grouped: $total_runs runs before first poll (first_get $first_get, last_run $last_run)"
 }
 
-# Green: the real tree launches together.
 run 'step 10 launches the independent Jobs before waiting on any (grouped)' green \
   check_migration_parallel "$MOCK_ROOT"
 
-# Green: a Job that never Completes still times out on today's bound.
-# Re-run with a pod stuck Pending — the install must exit non-zero after
-# ~36*5 s of polling, naming the Job, not hang or succeed.
 check_migration_timeout() {
   MOCK_ROOT="$WORK/migrate-timeout"
   mkdir -p "$MOCK_ROOT"
@@ -6421,31 +4787,24 @@ check_migration_timeout() {
     . "$fixture_sourced"
     kubectl() {
       if [ -n "${MOCK_ROOT:-}" ]; then printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"; fi
-      local fallback_ns=""; while [ $# -gt 0 ]; do case "$1" in --kubeconfig=*) shift;; -n) fallback_ns="$2"; shift 2;; *) break;; esac; done
       local verb="${1:-}"; shift || true
       case "$verb" in
         create) local r="${1:-}"; shift || true
           if [ "$r" = "secret" ]; then [ "${1:-}" = "generic" ] && shift; local n="${1:-}"; shift || true; local ns="$fallback_ns" lits=()
-            while [ $# -gt 0 ]; do case "$1" in -n) ns="$2"; shift 2;; --from-literal=*) lits+=("${1#--from-literal=}"); shift;; *) shift;; esac; done
             local d="$MOCK_ROOT/$ns/$n"; mkdir -p "$d"; local e k v; for e in ${lits[@]+"${lits[@]}"}; do k="${e%%=*}"; v="${e#*=}"; printf '%s' "$v" >"$d/$k"; done; return 0; fi; return 0;;
         get) if [ "${1:-}" = "deployment" ]; then shift; local dn="${1:-}"; shift || true; local d_ns="" d_tmpl=""
-            while [ $# -gt 0 ]; do case "$1" in -n) d_ns="$2"; shift 2;; -o) d_tmpl="$2"; shift 2;; *) shift;; esac; done
             if [ -d "$MOCK_ROOT/$d_ns/deploy-$dn" ]; then case "$d_tmpl" in *image*) cat "$MOCK_ROOT/$d_ns/deploy-$dn/image" 2>/dev/null || true;; *) printf '%s   1/1\n' "$dn";; esac; fi; return 0; fi
           if [ "${1:-}" = "pod" ]; then shift; local pn="${1:-}"; shift || true; local p_ns="$fallback_ns" p_tmpl=""
-            while [ $# -gt 0 ]; do case "$1" in -n) p_ns="$2"; shift 2;; -o) p_tmpl="$2"; shift 2;; *) shift;; esac; done
             local pdir="$MOCK_ROOT/$p_ns/pod-$pn"; [ -d "$pdir" ] || { printf 'Pending'; return 0; }
             case "$p_tmpl" in *status.phase*) cat "$pdir/phase" 2>/dev/null || printf 'Pending';; *) printf '%s   0/1\n' "$pn";; esac; return 0; fi
           if [ "${1:-}" != "secret" ]; then return 1; fi
           shift || true; local nm="${1:-}"; shift || true; local n_ns="" t=""
-          while [ $# -gt 0 ]; do case "$1" in -n) n_ns="$2"; shift 2;; -o) t="$2"; shift 2;; *) shift;; esac; done
           local dir="$MOCK_ROOT/$n_ns/$nm"
           if [ -z "$t" ]; then [ -d "$dir" ] && return 0 || return 1; fi
           local k2="${t#jsonpath={.data.}"; k2="${k2%\}}"; [ -z "$k2" ] || [ "$k2" = "$t" ] || [ ! -f "$dir/$k2" ] && return 1
           base64 <"$dir/$k2" | tr -d '\n'; return 0;;
         delete) return 0;;
         run) local rn="${1:-}"; shift || true; local r_ns="$fallback_ns" r_img="" r_cmd="" r_env=""
-          while [ $# -gt 0 ]; do case "$1" in -n) r_ns="$2"; shift 2;; --restart=*) shift;; --image=*) r_img="${1#--image=}"; shift;; --env=*) r_env="${r_env}${r_env:+
-}${1#--env=}"; shift;; --command) shift;; --) shift; r_cmd="$*"; break;; *) shift;; esac; done
           local rdir="$MOCK_ROOT/$r_ns/pod-$rn"; mkdir -p "$rdir"
           printf '%s' "$r_img" >"$rdir/image"; printf '%s' "$r_cmd" >"$rdir/command"; printf '%s' "$r_env" >"$rdir/env"
           printf 'Pending' >"$rdir/phase"
@@ -6453,7 +4812,6 @@ check_migration_timeout() {
         logs) return 0;;
         *) return 0;; esac
     }
-    # Speed the 36*5 s loop: sleep is a no-op in this harness.
     sleep() { :; }
     install_migrations >"$WORK/migrate-timeout.log" 2>&1
   ) || migrate_run_ec=$?
@@ -6466,7 +4824,6 @@ check_migration_timeout() {
     cat "$WORK/migrate-timeout.log" | head -20
     return 1
   fi
-  # Today's bound is 36 tries; the mock counts phase polls.
   local polls
   polls="$(grep -c "get pod kit-migrate" "$MOCK_ROOT/kubectl-argv" || true)"
   if [ "$polls" -lt 36 ]; then
@@ -6478,7 +4835,6 @@ check_migration_timeout() {
 run 'step 10 times out on today bound when a Job never Completes' green \
   check_migration_timeout
 
-# Green: the step timing is still reported (the packet's point).
 check_migration_timing() {
   local jsonl="$WORK/timing-migrate.jsonl"
   KIT_SUBSTRATE_RECEIPT="$WORK/timing-migrate-receipt.json" \
@@ -6492,7 +4848,6 @@ check_migration_timing() {
     echo "no step.done for migrations"
     return 1
   fi
-  # The done event carries a numeric seconds or "skipped", never missing.
   if ! grep -q '"event":"step.done".*"seconds":' "$jsonl"; then
     echo "step.done carries no seconds"
     return 1
@@ -6502,16 +4857,9 @@ check_migration_timing() {
 run 'step 10 seconds are still reported per-step (the measurement ledger)' green \
   check_migration_timing
 
-# -- red controls -----------------------------------------------------------
 
-# The sequential shape (master) must fail the grouped check.
-# Synthesized by restoring the old interleaved run/wait loop in a copy of
-# install.sh: one run, one wait, next run, next wait. Must go red under the
-# same check the real tree passes — otherwise the check cannot tell the two
-# apart and the 25 s structural cost is invisible.
 fixture_seq="$WORK/install-seq.sh"
 cat >"$fixture_seq" <<'FIXSEQ'
-# minimal sequential install_migrations — the master shape
 install_migrations() {
   for svc in identity courier; do
     kubectl run kit-migrate-$svc -n $svc --image=x --command -- /app/bin/migrate || true
@@ -6522,7 +4870,6 @@ FIXSEQ
 check_seq_grouped() {
   MOCK_ROOT="$WORK/migrate-seq"
   mkdir -p "$MOCK_ROOT"
-  # Simulate sequential argv: run get run get
   printf '%s\n' \
     "--kubeconfig=x run kit-migrate-identity -n identity --image=x" \
     "--kubeconfig=x get pod kit-migrate-identity -n identity -o jsonpath={.status.phase}" \
@@ -6534,16 +4881,7 @@ check_seq_grouped() {
 run 'control: the sequential (master) shape fails the grouped-applies check' red \
   check_seq_grouped
 
-# Ordering: identity and courier are independent (separate OWNER databases,
-# per templates/substrate/manifests/data/postgres-cluster.yaml). A fixture
-# that launches a dependent Job in the first wave must fail. The synthetic
-# dependency is courier needing identity's schema — the fixture claims it by
-# launching both together, and the ordering check refuses.
 check_migration_ordering() {
-  # $1 = install.sh to check; verifies no declared dependency is violated.
-  # The provenance: the manifest provisions distinct databases, so identity and
-  # courier have no ordering. A fixture that inserts a synthetic dependency
-  # comment and still launches both in one wave is the violation.
   local src="$1"
   local code
   code="$(sed -e 's/#.*//' "$src")"
@@ -6553,11 +4891,6 @@ check_migration_ordering() {
       return 1
     fi
   fi
-  # Green path: no dependency declared and code has the parallel shape.
-  # The launch set is `launched+=("$svc:$image")`. Use `case` over the variable
-  # rather than `printf | grep -q` — the pipe closes on first match, SIGPIPE
-  # kills printf, and `pipefail` promotes 141 (AGENTS.md: never read gate
-  # output through a pipe).
   case "$code" in
     *'launched+=('*'$svc'*) ;;
     *)
@@ -6579,45 +4912,11 @@ run 'step 10 ordering: no constraint between identity and courier (separate OWNE
   check_migration_ordering "$SUBSTRATE/install.sh"
 
 fixture_dep="$WORK/install-dep.sh"
-# Synthetic dependent: courier after identity, but install.sh still launches together — must go red.
 sed 's/# INDEPENDENCE:.*/# DEPENDS: courier after identity/' "$SUBSTRATE/install.sh" >"$fixture_dep"
-# Inject the dependency marker the ordering check looks for, keeping the parallel launch.
 printf '\n# courier depends on identity\n' >>"$fixture_dep"
 run 'control: a dependent Job launched in the first wave fails the ordering check' red \
   check_migration_ordering "$fixture_dep"
 
-# ===========================================================================
-# 14. --headless — stdout is progress-only, and progress is secret-free
-# ===========================================================================
-#
-# The claim `cafe box apply --phase N` rests on: run the installer with
-# --headless and stdout is a stream of JSONL progress events, one object per
-# line, and NOTHING ELSE — because an agent parsing that stream cannot tell a
-# prose line from a progress line, and a prose line is where a credential
-# would go if one ever did.
-#
-# The proof is in two halves, and both are needed.
-#
-#   A STATIC parse of every echo and printf in install.sh. It is the
-#     SECRET RECORD's own idiom — a check over the source, not over one run —
-#     and it is the half that holds for code paths no run reaches. Two rules:
-#     (1) a statement that writes to the process stdout must live inside one
-#     of the two emitters, and (2) no statement that can reach stdout, and no
-#     emitter call, may expand a variable that holds secret material. Rule 2
-#     is what makes the first one worth having: a stdout channel that only
-#     the emitters write to is still a channel a `$PASSWORD` could be poured
-#     into.
-#
-#   A LIVE run of the headless path against the mocked kubectl. It proves the
-#     two writers actually behave: stdout parsed line by line as JSON, the
-#     human text on stderr, and none of the run's real secret material — the
-#     generated keys, the role passwords, the operator's relay password —
-#     anywhere on stdout. A static check cannot see a value that only exists
-#     at runtime, which is exactly the half the generated keys occupy.
-#
-# The `$KIT_SUBSTRATE_RECEIPT` override is load-bearing here: the default path
-# is /var/lib/kit on a root-owned box, and a receipt the test cannot read is a
-# receipt the test has not checked.
 
 check_headless_stdout() {
   "$PY" - "$1" <<'PY'
@@ -6626,8 +4925,6 @@ import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
 
-# The two writers, plus the helpers they own. A statement inside one of these
-# may reach the process stdout; anywhere else it may not.
 EMITTERS = {
     "json_str",
     "kit_substrate_emit",
@@ -6636,15 +4933,6 @@ EMITTERS = {
     "kit_substrate_refuse",
 }
 
-# Functions whose stdout is a COMMAND SUBSTITUTION at every call site. Their
-# output is a value handed to another command — database_url_for builds a DSN
-# carrying a generated password, oidc_key_id_for builds a thumbprint, and the
-# three timing helpers build a clock reading or a duration — so it must reach
-# its caller and never a terminal. They are excused from rule 1 and NOT checked
-# by rule 2, because a printf that cannot carry `$pw` is a DSN with no password
-# in it, and a printf that cannot carry a duration is a clock with no reading.
-# The assertion at the bottom of this check keeps the list honest: a value
-# producer called anywhere else goes red.
 VALUE_PRODUCERS = {
     "database_url_for", "owner_database_url_for", "migration_env_args_for", "oidc_key_id_for",
     "kit_substrate_now", "kit_substrate_seconds", "kit_substrate_elapsed",
@@ -6656,24 +4944,13 @@ VALUE_PRODUCERS = {
     "registry_derived_artifacts",
 }
 
-# Every variable in install.sh that HOLDS secret material, by name. This is a
-# closed list, not a pattern: a `*SECRET*` glob would also match `secret_name`
-# (a Kubernetes object's name, which is not a value) and `secret_base`, and a
-# check that fires on correct work teaches its reader to ignore it. A new
-# secret-bearing variable must be added here in the same commit that adds it —
-# the list is the contract, and an absent name is a hole.
 SECRET_VARS = {
-    "OIDC_SIGNING_KEY",             # generated on the box, step 9
     "OIDC_SIGNING_KEY_ID",
-    "ASSERTION_SIGNING_KEY",        # generated on the box, step 9 (gateway mounts it)
     "KIT_SUBSTRATE_REGISTRY_CAPABILITY",
     "KIT_SUBSTRATE_SMTP_PASSWORD",
     "KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET",
     "KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY",
     "KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY",
-    "response",                     # step 5's redemption round trip — watched
-                                    # whether or not the answer carries a credential
-    "stored",                       # read_secret_key's return
     "signup_key", "mfa_key", "oidc_key", "oidc_key_id",
     "secret_base", "secret_box", "relay_token", "redis_pw", "pw",
     "token", "session_token", "owner_password",
@@ -6684,10 +4961,6 @@ fn_re = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{")
 stmt_re = re.compile(r"^\s*(echo|printf)\b(.*)$")
 var_re = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 
-# Continuation lines are joined first. The pipe that carries a rendered Secret
-# into `kubectl apply -f -` sits on the line AFTER the printf, so a line-based
-# read would flag the one statement in this file whose output most needs to
-# stay off the terminal.
 joined = []
 buf, start = "", None
 for n, line in enumerate(src.split("\n"), 1):
@@ -6714,15 +4987,8 @@ for n, line in joined:
     if not m:
         continue
     verb, rest = m.group(1), m.group(2)
-    # A refusal already names the channel it writes to.
     if ">&2" in rest:
         continue
-    # A printf whose output is a pipe or a command substitution never reaches
-    # the process stdout: it is an argument to another command. Those are the
-    # GOOD paths — the credential travels into kubectl, not into a terminal —
-    # and flagging them would fail the exact behaviour this install exists to
-    # have. Quoted text is stripped first so a `|` inside a message is not
-    # mistaken for a pipe.
     bare = re.sub(r"'[^']*'|\"[^\"]*\"", "", rest)
     if "|" in bare or "$(" in bare or "`" in bare:
         continue
@@ -6735,9 +5001,6 @@ for n, line in joined:
     if cur in VALUE_PRODUCERS:
         continue
     writers += 1
-    # Rule 2: a secret-bearing variable expanded into anything that can reach
-    # stdout, including through an emitter call. Parsed off the raw line so a
-    # value passed as an argument is seen wherever it sits.
     for name in var_re.findall(line):
         if name in SECRET_VARS:
             problems.append(
@@ -6745,8 +5008,6 @@ for n, line in joined:
                 "a secret-shaped variable must never be expanded there"
             )
 
-# Rule 2's other half: an emitter CALL SITE is checked the same way. A call is
-# not an echo or printf, so the loop above never sees it.
 for n, line in enumerate(src.split("\n"), 1):
     for name in ("kit_substrate_out", "kit_substrate_emit"):
         for call in re.finditer(re.escape(name) + r"\b(.*)", line):
@@ -6759,25 +5020,16 @@ for n, line in enumerate(src.split("\n"), 1):
 
 if "kit_substrate_out" not in src or "kit_substrate_emit" not in src:
     problems.append("the two writers are not both defined")
-# The human channel must really move in headless mode, or the claim is prose.
 out_body = re.search(r"^kit_substrate_out\(\)\s*\{(.*?)^\}", src, re.M | re.S)
 if not out_body or ">&2" not in out_body.group(1):
     problems.append("kit_substrate_out does not send the human channel to stderr")
 
-# And the VALUE_PRODUCERS exemption is only as good as its call sites: each one
-# must be read inside a `$(...)`. Called bare, `database_url_for` would print a
-# password to stdout and this check would have excused it. The definition line
-# is skipped — `name()` is not a call.
 for name in sorted(VALUE_PRODUCERS):
     for m in re.finditer(r"(?<![\w$])" + re.escape(name) + r"\s*\(", src):
         before = src[: m.start()]
         line_start = before.rfind("\n") + 1
         if not src[line_start : m.start()].strip():
-            continue  # the definition
         window = src[max(0, line_start - 2) : m.start()]
-        # A command substitution, either spelling: `$(...)` captures the output
-        # and `<(...)` feeds it to another command. Both keep the value off the
-        # process stdout; a bare call would not.
         if "$(" not in window and "<(" not in window:
             problems.append(
                 f"{name} is called outside a command substitution — its "
@@ -6794,9 +5046,6 @@ PY
 
 run 'every stdout echo/printf lives in the two writers' green check_headless_stdout "$SUBSTRATE/install.sh"
 
-# The control for rule 1: a step that goes back to a bare echo. Must go red —
-# without this the check is satisfied by a file with no echoes at all, which
-# is the state where the property has been deleted rather than kept.
 fixture_bare_echo="$WORK/install-bare-echo.sh"
 sed 's|^\( *\)kit_substrate_out "      applied letsencrypt|\1echo "      applied letsencrypt|' \
   "$SUBSTRATE/install.sh" >"$fixture_bare_echo"
@@ -6808,52 +5057,29 @@ else
   run 'control: a step that echoes straight to stdout goes red' red check_headless_stdout "$fixture_bare_echo"
 fi
 
-# The control for rule 2, through kit_substrate_out. The property the packet
-# is named for, in the one line that could break it.
 fixture_secret_out="$WORK/install-secret-out.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_secret_out"
 printf '\n  kit_substrate_out "relay password ${KIT_SUBSTRATE_SMTP_PASSWORD}"\n' >>"$fixture_secret_out"
 run 'control: a secret-shaped variable on the human channel goes red' red check_headless_stdout "$fixture_secret_out"
 
-# The second control for rule 2, through kit_substrate_emit — the stdout
-# channel itself, so the two writers are proven separately rather than by one
-# fixture that happens to satisfy only the first.
 fixture_secret_emit="$WORK/install-secret-emit.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_secret_emit"
 printf '\n  kit_substrate_emit progress "redeemed ${response}"\n' >>"$fixture_secret_emit"
 run 'control: a secret-shaped variable on the stdout channel goes red' red check_headless_stdout "$fixture_secret_emit"
 
-# The third control: rule 1's escape hatch. A printf redirected into a pipe is
-# excused because the value travels into a command's stdin, not the terminal.
-# Removing the pipe — leaving the redemption round trip on the process stdout
-# — must go red, or the piped exemption is a hole the check cannot see through.
 fixture_no_pipe="$WORK/install-no-pipe.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_no_pipe"
 printf '\n  printf "%%s" "$response"\n' >>"$fixture_no_pipe"
 run 'control: a piped secret moved onto stdout goes red' red check_headless_stdout "$fixture_no_pipe"
 
-# --- the live half -----------------------------------------------------------
-# The install needs root, Linux and k3s, so the headless path runs the way
-# section 13's cases do: the installer is sourced with its trailing `main`
-# stripped, kubectl is the file-backed mock, and the two writers are watched
-# on the real channels. This is the half a static parse cannot do: the values
-# asserted absent are GENERATED during the run.
 headless_receipt="$WORK/headless-receipt.json"
 MOCK_ROOT="$WORK/headless"
 mkdir -p "$MOCK_ROOT"
 headless_ec=0
 (
-  # The exports come BEFORE the source: `RECEIPT_PATH` is resolved from
-  # KIT_SUBSTRATE_RECEIPT at source time, so exporting after would leave the
-  # installer writing to the real /var/lib/kit — which on a developer machine
-  # it cannot create, so the receipt would silently never appear.
   export DRY_RUN=0
   export HEADLESS=1
   export KIT_SUBSTRATE_RECEIPT="$headless_receipt"
-  # The operator-sourced courier values. Every one is a FAKE — a label, not a
-  # credential — and each is asserted absent from stdout below, which is the
-  # point: a value the installer never prints is a value the check can look
-  # for by name.
   export KIT_SUBSTRATE_SMTP_HOST="relay.example.com"
   export KIT_SUBSTRATE_SMTP_USERNAME="relay-user"
   export KIT_SUBSTRATE_SMTP_PASSWORD="relay-pass-fake"
@@ -6861,21 +5087,14 @@ headless_ec=0
   export KIT_SUBSTRATE_IDENTITY_OIDC_ISSUER=""
   export KIT_SUBSTRATE_IDENTITY_MFA_ENCRYPTION_KEY=""
   export KIT_SUBSTRATE_IDENTITY_OAUTH_ENCRYPTION_KEY=""
-  # billing's Stripe pair, dummies: the live path requires both whenever
-  # billing is deployed, and the shape of the refusal is proven elsewhere —
-  # here they only open the gate to the secrets half.
   export KIT_SUBSTRATE_STRIPE_API_KEY="sk_test_dummy_for_the_gate"
   export KIT_SUBSTRATE_STRIPE_WEBHOOK_SECRET="whsec_dummy_for_the_gate"
   mfa_seed_roles
-  # shellcheck source=/dev/null
   . "$fixture_sourced"
   kubectl() { mock_kubectl "$@"; }
-  # shellcheck disable=SC2034  # read by the sourced installer's emit path
   CURRENT_PHASE="redis-and-secrets"
   log_step "Redis (single instance) and the services' secrets (identity, gateway, courier, parlor)"
   install_service_secrets
-  # A refusal, because that is where a receipt earns its keep: the agent's
-  # only touchpoint with a person is this event's input_needed and human.
   kit_substrate_refuse \
     "KIT_SUBSTRATE_ACME_EMAIL" \
     "export KIT_SUBSTRATE_ACME_EMAIL='<your-address@example.com>' on the box" \
@@ -6918,9 +5137,6 @@ PY
 }
 run 'headless: stdout is JSONL, one object per line' green headless_jsonl_ok "$WORK/headless.jsonl"
 
-# Every secret the run actually holds — generated during it, and read back
-# from the mock store so the assertion is about the run's own values rather
-# than about a literal planted in the test.
 headless_absent() {
   local log needle
   log="$(cat "$1")"
@@ -6952,19 +5168,11 @@ headless_secrets=(
 run 'headless: no secret value the run holds reaches stdout' green \
   headless_absent "$WORK/headless.jsonl" "${headless_secrets[@]}"
 
-# The DATABASE_URL is the interesting one: it carries a real generated
-# password inside a value the installer builds, so it is the shape most likely
-# to leak by accident.
 run 'headless: a generated DATABASE_URL never reaches stdout' green \
   headless_absent "$WORK/headless.jsonl" \
   "$(mock_get identity identity-secrets DATABASE_URL)" \
   "$(mock_get courier courier-secrets DATABASE_URL)"
 
-# The human channel survives. A headless run that swallowed the operator's
-# output would be a run nobody could debug, and the split only helps if both
-# halves still reach somebody. What it carries is the DETAIL lines: the step
-# headers became JSONL events, which is the point of the mode, so the human
-# channel is asserted on a detail line and on the refusal that ended the run.
 case "$(cat "$WORK/headless.human")" in
   *"secret identity-secrets created"*"error: KIT_SUBSTRATE_ACME_EMAIL is not set"*)
     pass 'headless: the human channel still carries the detail lines and the refusal'
@@ -6973,18 +5181,12 @@ case "$(cat "$WORK/headless.human")" in
     fail 'headless: the human channel still carries the detail lines and the refusal' "$(cat "$WORK/headless.human")"
     ;;
 esac
-# And the converse, which is the real claim: the human prose must NOT be on
-# stdout. A single non-JSON line on stdout would break `cafe box apply`'s
-# parser, so this is asserted separately from the JSONL parse above.
 if grep -q 'secret identity-secrets created' "$WORK/headless.jsonl"; then
   fail 'headless: the human detail lines are not on stdout' "a prose line reached the JSONL channel"
 else
   pass 'headless: the human detail lines are not on stdout'
 fi
 
-# The receipt: phase, next step, input needed, where the human goes. The
-# refusal above is what makes it a resumable-install contract rather than a
-# log — it names the variable the operator must supply and where.
 headless_receipt_ok() {
   "$PY" - "$1" <<'PY'
 import json
@@ -7014,27 +5216,14 @@ PY
 run 'headless: the receipt names phase, next step, input needed and the human' green \
   headless_receipt_ok "$headless_receipt"
 
-# The receipt's control: a receipt with no `human` field must go red. Without
-# it the shape check is satisfied by a status report, which is the thing the
-# receipt exists NOT to be.
 fixture_receipt_no_human="$WORK/receipt-no-human.json"
 sed 's/  "human": .*$/  "human": "",/' "$headless_receipt" >"$fixture_receipt_no_human"
 run 'control: a receipt with no human destination goes red' red headless_receipt_ok "$fixture_receipt_no_human"
 
-# And a receipt whose status is not the refusal's must go red too — the
-# direction that matters, because a refusal recorded as `running` is an
-# install the agent believes is still in progress.
 fixture_receipt_running="$WORK/receipt-running.json"
 sed 's/"status": "refused"/"status": "running"/' "$headless_receipt" >"$fixture_receipt_running"
 run 'control: a refusal recorded as running goes red' red headless_receipt_ok "$fixture_receipt_running"
 
-# The refusal's fix hint is on stderr, in interactive and headless mode alike.
-# This was a real regression while this section was written: a
-# kit_substrate_refuse that printed only `error: <message>` silently dropped the
-# `export KIT_SUBSTRATE_…` line that tells an operator how to unblock, and the
-# existing refusal checks still passed because the VARIABLE NAME appears in the
-# message. The hint is the contract's second half, so it gets its own
-# assertion — in both modes, because they take different branches.
 refusal_hint_ok() {
   local log mode="$2"
   case "$1" in
@@ -7058,10 +5247,6 @@ run 'control: a refusal with no hint goes red' red refusal_hint_ok "error: KIT_S
 
 headless_refuse_hint="$WORK/headless-refuse-hint.json"
 headless_refuse_ec=0
-# `|| ec=$?` is load-bearing, and the reason is the same one the `run` helper
-# documents: the installer is EXPECTED to exit non-zero here, and under
-# `set -e` a bare failing command takes the harness down before the status is
-# read. A refused plan is the success case of this assertion.
 KIT_SUBSTRATE_RECEIPT="$headless_refuse_hint" KIT_SUBSTRATE_DATABASES="" DRY_RUN=1 \
   bash "$SUBSTRATE/install.sh" --headless >"$WORK/headless-refuse.jsonl" \
   2>"$WORK/headless-refuse.human" || headless_refuse_ec=$?
@@ -7071,8 +5256,6 @@ else
   run 'the refusal names the variable and the fix that clears it (headless)' green \
     refusal_hint_ok "$(cat "$WORK/headless-refuse.human")" headless
 fi
-# And the headless half: the refusal EVENT carries input_needed and human, so
-# an agent reading stdout alone knows both what to collect and what to say.
 case "$(cat "$WORK/headless-refuse.jsonl")" in
   *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
     pass 'headless: the refusal event names the input needed and where the human goes'
@@ -7081,8 +5264,6 @@ case "$(cat "$WORK/headless-refuse.jsonl")" in
     fail 'headless: the refusal event names the input needed and where the human goes' "$(cat "$WORK/headless-refuse.jsonl")"
     ;;
 esac
-# Its control: an event with a null human must go red. An agent told what to
-# collect but not who to ask is told half a refusal.
 refusal_no_human='{"event":"refusal","step":8,"phase":"postgres","input_needed":"KIT_SUBSTRATE_DATABASES","human":null,"message":"x"}'
 case "$refusal_no_human" in
   *'"event":"refusal"'*'"input_needed":"KIT_SUBSTRATE_DATABASES"'*'"human":"export KIT_SUBSTRATE_DATABASES='*)
@@ -7093,58 +5274,13 @@ case "$refusal_no_human" in
     ;;
 esac
 
-# ===========================================================================
-# 14. THE APPLY MODE IS ASSIGNED BY WHERE THE MANIFEST COMES FROM
-# ===========================================================================
-#
-# Two installer defects, both measured only on a real k3s/k3d box, and neither
-# of which a compose run can see:
-#
-#   1. `kubectl apply -f <remote-url>` for CNPG's and Argo CD's manifests is
-#      refused by the API server with
-#        `CustomResourceDefinition ... is invalid: metadata.annotations:
-#         Too long: may not be more than 262144 bytes`
-#      Client-side apply stores the whole object in the
-#      last-applied-configuration annotation, and those CRDs are large enough
-#      to overflow Kubernetes's per-object annotation cap.
-#   2. On a RE-RUN after that was hand-repaired, the two halves collided:
-#      `field is managed by another client` — because one object had been
-#      written client-side and the next server-side, so the fix has to be
-#      consistent rather than per step.
-#
-# THE RULE, stated once and checked here: every apply whose target is a REMOTE
-# URL carries BOTH `--server-side=true` and `--force-conflicts`; every apply
-# whose target is a LOCAL file or stdin carries NEITHER. The remote half is
-# measured above; the local half is the reclaim side — these files are kit's
-# own, small, and re-applied on every run, so server-side apply there would take
-# away the re-run's ability to take back a field it previously owned.
-#
-# The assertions are BOTH DIRECTIONS and both spellings, because a one-way check
-# is satisfied by an installer that made the opposite mistake uniformly:
-#   * a remote apply missing either flag is RED (the defect that shipped)
-#   * a local apply carrying either flag is RED (the drift back into mixed mode)
-#   * the flags are required on the DRY_RUN plan string AND on the run, so the
-#     plan `cafe box apply` reads cannot describe a mode the installer does not
-#     use
-#   * the rule is over ANY remote URL, not over a remembered list of three: a
-#     new remote apply with no flags is RED, which is the shape a future
-#     fourth component arrives in
-#   * a tree with fewer than three remote applies is RED, so the check cannot
-#     be satisfied by converting all of them away and passing on nothing
 check_apply_modes() {
   "$PY" - "$1" <<'PY'
 import re
 import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
-# Comments stripped first, as everywhere in this file: the rule is about what
-# the installer RUNS, and a comment that spells the flags out is not a run.
-# (And this file's own prose names both flags, so a check that can be
-# satisfied by a comment would be green on the very tree it describes.)
 code = re.sub(r"(?m)^\s*#.*$", "", src)
-# A backslash continuation is ONE command: `kubectl apply -f \` on one line
-# and the URL on the next is a single remote apply, and reading it as two
-# statements would miss the flags entirely.
 code = code.replace("\\\n", " ")
 
 problems = []
@@ -7155,8 +5291,6 @@ for ln in code.splitlines():
         continue
     m = re.search(r"(?:^|\s)-f\s+\"?([^\s\"]+)\"?", ln)
     if not m:
-        # An apply with no target is not this check's subject (there is none
-        # here; it is refused rather than waved through).
         continue
     target = m.group(1)
     if target.startswith(("http://", "https://")):
@@ -7165,7 +5299,6 @@ for ln in code.splitlines():
             if flag not in ln:
                 problems.append(f"{target}: a remote apply without {flag}")
     elif target == "-" or target.startswith(("$", "/", ".")):
-        # Local: a file in this repository or a piped stream built here.
         local += 1
         for flag in ("--server-side=true", "--force-conflicts"):
             if flag in ln:
@@ -7181,8 +5314,6 @@ for ln in code.splitlines():
             " reader"
         )
 
-# Non-vacuity: the three upstream components are what the defect was measured
-# on, and a check whose subject disappeared would pass on the empty case.
 if remote < 3:
     problems.append(f"expected at least 3 remote applies, found {remote}")
 
@@ -7199,10 +5330,6 @@ PY
 run 'every remote-URL apply is server-side with force-conflicts, and every local apply is not' \
   green check_apply_modes "$SUBSTRATE/install.sh"
 
-# The control that matters most: the shape the box actually hit. A copy in
-# which --force-conflicts is gone from every remote apply must be RED, and must
-# be red NAMING the flag — a control that fires for some other reason proves
-# nothing about the assertion it sits under.
 fixture_no_force="$WORK/install-no-force-conflicts.sh"
 sed 's/ --force-conflicts//g' "$SUBSTRATE/install.sh" >"$fixture_no_force"
 mode_out=""; mode_ec=0
@@ -7219,9 +5346,6 @@ case "$mode_ec:$mode_out" in
     ;;
 esac
 
-# The other half: --server-side is what survives the annotation ceiling, and
-# removing it alone must be RED too. Two flags, two controls — a check that
-# only notices one of them is half a rule.
 fixture_no_ss="$WORK/install-no-server-side.sh"
 sed 's/ --server-side=true//g' "$SUBSTRATE/install.sh" >"$fixture_no_ss"
 mode_out=""; mode_ec=0
@@ -7238,76 +5362,30 @@ case "$mode_ec:$mode_out" in
     ;;
 esac
 
-# A THIRD remote component, arriving with no flags. This is the control that
-# stops the check being a list of three remembered lines rather than a rule.
 fixture_new_remote="$WORK/install-new-remote.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_new_remote"
 printf '  kubectl --kubeconfig="$KUBECONFIG" apply -f "https://example.com/some-new-operator.yaml"\n' \
   >>"$fixture_new_remote"
 run 'control: a fourth remote apply with no flags goes red' red check_apply_modes "$fixture_new_remote"
 
-# The OTHER DIRECTION: a local apply that grew the remote flags. Without this
-# control a check satisfied by "every apply has both flags" would be just as
-# happy with an installer that moved kit's own manifests into server-side mode
-# and lost the re-run's reclaim. Step 6's applications apply no longer carries a
-# literal `-f` (it applies the resolved list — see section 20), so the control
-# grows the flags on the Cluster apply, another LOCAL `-f "$…"` apply; the rule
-# is about the target's origin, not about which local line it is.
 fixture_local_ss="$WORK/install-local-server-side.sh"
 sed 's|apply -f "$DATA_DIR/postgres-cluster.yaml"|apply --server-side=true --force-conflicts -f "$DATA_DIR/postgres-cluster.yaml"|' \
   "$SUBSTRATE/install.sh" >"$fixture_local_ss"
 run 'control: a local apply carrying the remote flags goes red' red check_apply_modes "$fixture_local_ss"
 
-# And the plan half: the DRY_RUN string is what `cafe box apply` reads and what
-# the receipt describes, so a run that gained the flags while its plan did not
-# is the drift a future reader would notice at the box and not here.
 fixture_plan_drift="$WORK/install-plan-drift.sh"
 awk '/dry_run/ { gsub(/ --server-side=true --force-conflicts/, ""); } { print }' \
   "$SUBSTRATE/install.sh" >"$fixture_plan_drift"
 run 'control: a plan that lost the flags while the run kept them goes red' red \
   check_apply_modes "$fixture_plan_drift"
 
-# ===========================================================================
-# 16. The waits survive an empty list — the cold-box defect, executed
-# ===========================================================================
-#
-# `kubectl wait --for=condition=Ready node --all` is NOT a wait when the list
-# is empty: it fails within a second with `error: no matching resources found`,
-# and `set -e` makes that the end of the install. k3s is STARTED by the line
-# above it and the kubelet registers the Node object a few seconds LATER, so a
-# wiped box lost that race and died at step 1 (exit 1) while a warm box never
-# noticed.
-#
-# The harness above sources the installer and runs single steps against a
-# file-backed mock, which is exactly what this needs: step 1 is three lines
-# (start k3s, prove the node exists, wait for Ready), so the step can RUN and
-# be watched. THE MOCK IS THE CLUSTER, and it is a faithful one — a GET of an
-# empty list answers nothing and exits 0, which is what real kubectl does, and
-# the WAIT answers the way real kubectl does on an empty list, by failing.
-#
-# THREE CASES, and the third is the one that earns the first two:
-#   1. a cold box — the list is empty twice, then the kubelet registers. The
-#      step must reach Ready and return 0. The pre-fix installer aborts here.
-#   2. a broken box — the node never registers. The step must REFUSE inside its
-#      bound, naming the empty list, and must never claim to have waited.
-#   3. THE CONTROL — the same fixture with kit_substrate_await_list removed,
-#      which is the shape the box actually ran. Case 1 against it must ABORT,
-#      because a check that cannot see the defect it is named for is a comment.
-#
-# Each case records every kubectl invocation, so "reached Ready" is an order in
-# an argv log rather than a return code the loop could have produced by giving
-# up.
 K3S_DIR="$WORK/k3s"
 mkdir -p "$K3S_DIR"
 
-# node_kubectl — the cluster on a box where the kubelet has not registered its
-# Node object yet. NODE_APPEARS_AT is the poll after which it does.
 node_kubectl() {
   printf '%s\n' "$*" >>"$K3S_DIR/argv"
   case "$*" in
     *"wait --for=condition=Ready node"*)
-      # What real kubectl does on an empty list, and the whole defect: an
-      # error, not a wait. It only succeeds once the object exists.
       if [ ! -f "$K3S_DIR/node-registered" ]; then
         printf 'error: no matching resources found\n' >&2
         return 1
@@ -7315,8 +5393,6 @@ node_kubectl() {
       printf 'node/box condition met\n'
       ;;
     *"get node --no-headers"*)
-      # A GET of an empty list is not an error: kubectl exits 0 and prints
-      # nothing. The registration is a few seconds away, which is the race.
       local polls
       polls=$(( $(cat "$K3S_DIR/polls" 2>/dev/null || echo 0) + 1 ))
       printf '%s' "$polls" >"$K3S_DIR/polls"
@@ -7333,23 +5409,16 @@ node_kubectl() {
   esac
 }
 
-# k3s_step <fixture> <appears-at> <register-timeout> — run step 1 for real
-# against that fixture, and leave the exit status behind in $k3s_ec. The
-# install script, curl and the pipe into `sh -` are stubbed: none of them is
-# the subject, and the step's own two waits are.
 k3s_step() {
   rm -f "$K3S_DIR/argv" "$K3S_DIR/polls" "$K3S_DIR/node-registered"
   k3s_ec=0
   (
-    # BEFORE the source, because the installer reads each of these at source
-    # time and a value exported after it is a value it never saw.
     export DRY_RUN=0
     export HEADLESS=0
     export KIT_SUBSTRATE_RECEIPT="$K3S_DIR/receipt.json"
     export NODE_APPEARS_AT="$2"
     export NODE_REGISTER_TIMEOUT="$3"
     export NODE_READY_TIMEOUT=5
-    # shellcheck source=/dev/null
     . "$1"
     kubectl() { node_kubectl "$@"; }
     curl() { :; }
@@ -7363,18 +5432,12 @@ k3s_no_await="$WORK/install-no-await.sh"
 sed -e '/^main "$@"/d' -e '/kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node/d' \
   "$SUBSTRATE/install.sh" >"$k3s_no_await"
 
-# The control fixture is only a control if it really is the pre-fix shape: the
-# await must be gone from it, and the Ready wait must still be there. A
-# mutation that broke nothing would pass case 1 for the wrong reason.
 if grep -q 'kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node' "$k3s_no_await" \
   || ! grep -q 'wait --for=condition=Ready node' "$k3s_no_await"; then
   fail 'control fixture: the pre-fix k3s step is the shape the box ran' \
     "the await-line deletion did not apply, so case 3 would prove nothing"
   failures=$((failures + 1))
 else
-  # CASE 1, green: the cold box installs. The node registers on the second
-  # poll, so the loop has to tolerate an empty list once and keep going, and
-  # the Ready wait must come AFTER the registration rather than racing it.
   k3s_step "$k3s_cold" 2 5
   k3s_cold_ok() {
     if [ "$k3s_ec" -ne 0 ]; then
@@ -7382,16 +5445,11 @@ else
         "$k3s_ec" "$(cat "$K3S_DIR/run.log")"
       return 1
     fi
-    # The argv log is the ORDER, and the order is the whole fix: two GETs that
-    # found nothing, then the GET that found the node, then the Ready wait.
     if ! grep -q 'wait --for=condition=Ready node' "$K3S_DIR/argv"; then
       printf 'the Ready wait never ran — the step gave up before waiting\n%s\n' \
         "$(cat "$K3S_DIR/run.log")"
       return 1
     fi
-    # The empty polls really were empty: NODE_APPEARS_AT is 2, so the first
-    # poll must have seen nothing and the registration must be the SECOND
-    # one. A fixture that never ran the race would pass on a step that races.
     if [ "$(cat "$K3S_DIR/polls" 2>/dev/null || echo 0)" -ne 2 ]; then
       printf 'the fake registered the node on the first poll, so the empty-list case never happened\n'
       return 1
@@ -7401,12 +5459,6 @@ else
   run 'step 1 reaches Ready when the node registers a few seconds after k3s starts' \
     green k3s_cold_ok
 
-  # CASE 3, THE CONTROL: the pre-fix shape against the same cold box. It must
-  # abort with the empty-list error, and the signature that proves it is the
-  # ARGV: the pre-fix step never asked whether the node existed, so it went
-  # straight to a Ready wait that could not be satisfied. A control that
-  # merely exits non-zero would also be satisfied by a step that failed for
-  # some other reason, so the argv carries the assertion.
   k3s_step "$k3s_no_await" 2 5
   case "$k3s_ec:$(cat "$K3S_DIR/run.log" 2>/dev/null):$(cat "$K3S_DIR/argv" 2>/dev/null)" in
     0:*:*:*)
@@ -7432,10 +5484,6 @@ else
   esac
 fi
 
-# CASE 2: a node that never registers. The step must REFUSE inside its bound,
-# not hang and not lie. The bound is shortened to 2s here, and the elapsed time
-# is measured rather than asserted by exit status alone — a wait that exceeded
-# its own budget would pass a glance at the message.
 k3s_broken_ok() {
   local started elapsed
   started="$(date +%s)"
@@ -7467,71 +5515,13 @@ k3s_broken_ok() {
 }
 run 'step 1 refuses within its bound when the node never registers' green k3s_broken_ok
 
-# ===========================================================================
-# 17. A wait that can face an empty list proves existence first
-# ===========================================================================
-#
-# Section 16 proves step 1's wait. This is the RULE, so a wait added later is
-# covered by construction rather than by memory.
-#
-# `kubectl wait --for=<condition> <kind>` comes in two shapes and only one of
-# them can race:
-#
-#   LIST      `--all`, or a selector `-l key=value`. The list is a QUERY, and
-#             a query against a cluster where nothing matches YET is empty —
-#             which kubectl answers with `error: no matching resources found`
-#             rather than by waiting.
-#   NAMED     one named object. It exists or it does not, and a GET of the
-#             missing one fails loudly by name.
-#
-# So a LIST wait is excused by one of TWO things, and which one is the whole
-# classification:
-#
-#   1. an apply of the objects it selects, earlier in the SAME function. Apply
-#      is a synchronous round trip — the deployments exist the moment it
-#      returns, so the list cannot be empty. cert-manager's and Argo CD's
-#      `--all` waits are this, and they are safe.
-#   2. a kit_substrate_await_list of the same kind, selector and namespace.
-#      This is the one for objects a CONTROLLER creates asynchronously — the
-#      Node object behind the kubelet. (The CNPG pods were the second member
-#      of this population until roll-c5-cnpg-ready: the pod selector also
-#      matches the bootstrap Job's initdb pod, so the wait answered a question
-#      about the wrong object. Step 8 waits on the NAMED Cluster instead —
-#      applied synchronously above it — and step 10 pre-waits on the same
-#      object for re-runs that skip step 8 at its guard.)
-#
-# A NAMED wait needs neither: it runs after a synchronous apply of that same
-# object, and a GET of a missing named object fails loudly by name rather than
-# as an empty-list race. All three populations are asserted, because a check
-# that only fires on the awaits would be satisfied by deleting every wait.
-#
-# `rollout status` is the same race in a different verb, and the audit reads
-# it too. It watches a NAMED object — deployment/identity in step 11 — but
-# the NAMED excuse does not apply: nothing in that function applied the object
-# synchronously, because Argo creates it ASYNCHRONOUSLY from step 6's
-# Applications. A missing named object is NotFound, exit 1, not a wait (the
-# empty-list no-op branch is the path a named object never takes) — so a
-# rollout status is excused ONLY by a matching kit_substrate_await_list above
-# it, never by an apply. The `deployment/identity` spelling is split on `/`
-# where the wait path reads separate kind and name tokens.
-#
-# And the bound is part of the rule. Splitting one wait into two is the easiest
-# way to double a step's patience, so the paired numbers must still add up to
-# the totals the steps always had: 120s for the node. Step 8's wait is a
-# SINGLE wait on the NAMED Cluster under one 600s bound — the same total the
-# pod wait it replaced always had, asserted as a single rather than a pair —
-# and step 10's pre-wait reuses that same bound rather than adding its own.
 wait_lists_audit() {
   "$PY" - "$1" <<'PY'
 import re
 import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
-# Comments stripped first, as everywhere in this file: the rule is about what
-# the installer RUNS, and this file's own prose names both shapes.
 code = re.sub(r"(?m)^\s*#.*$", "", src)
-# A backslash continuation is ONE command, and the join is load-bearing here:
-# a `kubectl wait … -l \` split across lines is one wait.
 code = code.replace("\\\n", " ")
 
 funcs = {"<top>": []}
@@ -7570,9 +5560,6 @@ def split_args(toks):
 
 unexcused, awaited, applied, named, rollout_awaited = [], 0, 0, 0, 0
 for fn, lines in funcs.items():
-    # Walk the function IN ORDER, because an excuse that comes after the wait
-    # is not an excuse: an apply below it has not created the list the wait
-    # is about to query.
     awaits, apply_seen = [], False
     for ln in lines:
         m = re.search(r"""kit_substrate_await_list\s+"?\$[A-Za-z_]+"?\s+(.+)$""", ln)
@@ -7598,9 +5585,6 @@ for fn, lines in funcs.items():
             if (rkind, rname, rns) in [(a[0], a[2], a[3]) for a in awaits if a]:
                 rollout_awaited += 1
                 continue
-            # A rollout watches an object a CONTROLLER synced, so a synchronous
-            # apply above it is not an excuse the way it is for a wait — only
-            # a matching await excuses it.
             unexcused.append(
                 f"{fn}(): rollout status watches {rkind}/{rname} "
                 f"(ns {rns or 'cluster-scoped'}) with no kit_substrate_await_list "
@@ -7612,14 +5596,8 @@ for fn, lines in funcs.items():
         toks = re.search(r"\bwait\s+--for=condition=(\S+)\s+(.*)$", ln).group(2)
         kind, sel, name, ns = split_args(toks.split())
         if sel is None:
-            # A NAMED object: it exists or it does not, and the missing one
-            # fails loudly by name rather than as an empty-list race.
             named += 1
             continue
-        # The pairing key. `--all` and an absent selector are the same query,
-        # so an await that spells one is matched against a wait that spells
-        # the other — a rule that depended on the spelling would be a rule
-        # about spelling.
         key = (kind, None if sel == "--all" else sel, ns)
         if key in [(a[0], None if a[1] in ("--all", None) else a[1], a[3]) for a in awaits if a]:
             awaited += 1
@@ -7638,13 +5616,6 @@ if unexcused:
     print("; ".join(unexcused))
     sys.exit(1)
 
-# Non-vacuity, in all three populations. A file that deleted every wait would
-# find nothing to audit and would pass on the empty case.
-# The awaited bound is the POPULATION, not a threshold to protect: it was 2
-# (the node, the CNPG pods) and is 1 (the node) since roll-c5-cnpg-ready,
-# because the CNPG pod list wait was the defect — its selector is satisfied
-# by the initdb Job pod — and the Cluster wait that replaced it is NAMED.
-# Lowered with that reason, in the commit that deleted the wait.
 if awaited < 1:
     print(f"expected at least 1 awaited list wait (the node), "
           f"found {awaited}")
@@ -7653,12 +5624,6 @@ if applied < 2:
     print(f"expected the two --all waits that ride a synchronous apply "
           f"(cert-manager, Argo CD), found {applied}")
     sys.exit(1)
-# The bound is the POPULATION, not a threshold to protect: it moved from 4 to
-# 3 when step 6's named wait (argocd-server, which core-install does not ship)
-# was deleted — the three that remain are cnpg-controller-manager, redis and
-# nats. Lowered with that reason, in the commit that deleted the wait; a bound
-# that silently rotted past the population it counts is how a non-vacuity check
-# becomes a no-op.
 if named < 3:
     print(f"expected the named waits to still be there, found {named}")
     sys.exit(1)
@@ -7667,13 +5632,6 @@ if rollout_awaited < 1:
           "first (Argo syncs it asynchronously), found none")
     sys.exit(1)
 
-# The bound is part of the fix: two waits must not add up to more patience
-# than the one wait had — except where the split separates an external variable
-# (the image pull) from the controller's own readiness. The operator wait was
-# split for that reason: a cold pull alone is 3m17s (roll-c5-local-cycle §3.2),
-# so a single 180s Available wait expired 18s before the Deployment became
-# Available. 300s for the pull plus 180s/300s for Available is the split, and
-# the larger sum is deliberate (the pull is registry/cache, not the controller).
 defaults = dict(re.findall(r"^\s*: \"\$\{([A-Za-z_]+):=(\d+)\}\"", code, re.M))
 for a, b, total, what in (
     ("NODE_REGISTER_TIMEOUT", "NODE_READY_TIMEOUT", 120, "step 1"),
@@ -7689,10 +5647,6 @@ for a, b, total, what in (
             "— splitting a wait into two must not make the step more patient"
         )
         sys.exit(1)
-# Step 8's Cluster wait is a SINGLE wait under one bound — the same 600s
-# total the pod wait it replaced always had. Asserted as a single rather than
-# a pair, so neither growing it nor re-splitting it passes quietly; step 10's
-# pre-wait reuses this same bound rather than adding its own.
 for v, total, what in (
     ("CNPG_CLUSTER_READY_TIMEOUT", 600, "step 8 (fresh install) and step 10 (re-run pre-wait)"),
 ):
@@ -7714,8 +5668,6 @@ PY
 run 'every list wait proves the list exists first, and no bound grew' \
   green wait_lists_audit "$SUBSTRATE/install.sh"
 
-# The control that matters: delete the node's await and the rule must go red
-# NAMING the resource. This is the whole packet in one fixture.
 fixture_drop_node_await="$WORK/install-drop-node-await.sh"
 sed '/kit_substrate_await_list "\$NODE_REGISTER_TIMEOUT" node/d' \
   "$SUBSTRATE/install.sh" >"$fixture_drop_node_await"
@@ -7733,9 +5685,6 @@ case "$mode_ec:$mode_out" in
     ;;
 esac
 
-# Step 8's Cluster bound, proved separately: a fixture that grows it must go
-# red NAMING the bound. Growing the Cluster wait is the easiest way to make a
-# slow box pass, and it is not a fix — it is the same race with more room.
 fixture_grown_cluster_bound="$WORK/install-grown-cluster-bound.sh"
 sed 's/: "${CNPG_CLUSTER_READY_TIMEOUT:=600}"/: "${CNPG_CLUSTER_READY_TIMEOUT:=900}"/' \
   "$SUBSTRATE/install.sh" >"$fixture_grown_cluster_bound"
@@ -7759,8 +5708,6 @@ else
   esac
 fi
 
-# A THIRD list wait, arriving with no await and no apply above it — the control
-# that stops this being a list of two remembered lines rather than a rule.
 fixture_new_list_wait="$WORK/install-new-list-wait.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_new_list_wait"
 printf '  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd --all --timeout=120s\n' \
@@ -7768,9 +5715,6 @@ printf '  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available depl
 run 'control: a new list wait with no existence check goes red' red \
   wait_lists_audit "$fixture_new_list_wait"
 
-# And the bound, in the direction that would otherwise be invisible: growing
-# the registration budget is the easiest way to make a cold box pass, and it is
-# not a fix — it is the same race with more room.
 fixture_grown_bound="$WORK/install-grown-bound.sh"
 sed 's/: "${NODE_REGISTER_TIMEOUT:=90}"/: "${NODE_REGISTER_TIMEOUT:=300}"/' \
   "$SUBSTRATE/install.sh" >"$fixture_grown_bound"
@@ -7794,9 +5738,6 @@ else
   esac
 fi
 
-# Step 11's watch, proved the same way: drop its await and the rule must go
-# red NAMING the Deployment. A rule that cannot see the line it was widened
-# for is the exact blindness the handoff names.
 fixture_drop_deploy_await="$WORK/install-drop-deploy-await.sh"
 sed '/kit_substrate_await_list "\$IDENTITY_DEPLOY_TIMEOUT" deployment/d' \
   "$SUBSTRATE/install.sh" >"$fixture_drop_deploy_await"
@@ -7814,8 +5755,6 @@ case "$mode_ec:$mode_out" in
     ;;
 esac
 
-# A SECOND rollout watch, arriving with no await — the control that stops this
-# being a rule about one remembered line rather than about the verb.
 fixture_new_rollout="$WORK/install-new-rollout.sh"
 cp "$SUBSTRATE/install.sh" "$fixture_new_rollout"
 printf '  kubectl --kubeconfig="$KUBECONFIG" -n courier rollout status deployment/courier --timeout=60s\n' \
@@ -7823,9 +5762,6 @@ printf '  kubectl --kubeconfig="$KUBECONFIG" -n courier rollout status deploymen
 run 'control: a new rollout watch with no existence check goes red' red \
   wait_lists_audit "$fixture_new_rollout"
 
-# And step 11's bound, in the same direction: splitting 360s into 240+180 is
-# not a split, it is 60s of new patience for Argo (and the previous split
-# 120+180=300 was itself 60s short of the controller's 180s resync).
 fixture_grown_identity="$WORK/install-grown-identity-bound.sh"
 sed 's/: "${IDENTITY_DEPLOY_TIMEOUT:=180}"/: "${IDENTITY_DEPLOY_TIMEOUT:=240}"/' \
   "$SUBSTRATE/install.sh" >"$fixture_grown_identity"
@@ -7849,47 +5785,12 @@ else
   esac
 fi
 
-# ===========================================================================
-# 17b. The Postgres wait reads the Cluster, not its pods — the initdb race, executed
-# ===========================================================================
-#
-# THE DEFECT. Step 8 waited on `pod -l cnpg.io/cluster=postgres`, a selector
-# that also matches CloudNativePG's bootstrap Job pod. On a fresh box the run
-# logged `pod/postgres-1-initdb-s5lq8 condition met` while no instance pod
-# existed yet, step 10 launched, and the first migration to reach postgres-rw
-# died with `connection refused` — while the second one connected, the primary
-# having come up between the two, which is the ordering proof that the cluster
-# was healthy and the signal was wrong rather than Postgres being broken.
-#
-# THE FIX. Step 8 waits on the NAMED Cluster object — applied synchronously
-# above the wait, so no existence probe is needed — for its `Ready` condition
-# (`ConditionClusterReady`, api/v1/cluster_types.go in the pinned v1.30.1,
-# set by the operator from the instances' reported state), which no initdb
-# Job can satisfy, under the same 600s total the pod wait always had. Step 10
-# pre-waits on the same condition for re-runs that skip step 8 at its guard,
-# and every failure names the Cluster's phase beside the DSN.
-#
-# FOUR CASES:
-#   1. THE STATIC SHAPE, green on the real tree: the Cluster wait is present
-#      (both steps), the pod-selector wait is gone, and the old bound names
-#      are retired with it.
-#   2. THE CONTROLS, red on fixtures: the master pod wait restored goes red,
-#      and the Cluster wait deleted goes red — a wait that forgives a cluster
-#      that never comes up is worse than the race.
-#   3. THE STEP, executed: on a cold cluster (no instance pod, only the
-#      initdb Job's world) step 8 does not return until the Cluster reports
-#      Ready — proven on the argv, which must hold the Cluster wait and no
-#      pod query at all — and then succeeds with no retry.
-#   4. THE BOUND, executed: a Cluster that never reports Ready still fails,
-#      naming the Cluster and its phase.
 check_cnpg_cluster_wait() {
   "$PY" - "$1" <<'PY'
 import re
 import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
-# Comments stripped first, as everywhere in this file: the rule is about what
-# the installer RUNS, and this file's own prose names both shapes.
 code = re.sub(r"(?m)^\s*#.*$", "", src)
 problems = []
 
@@ -7922,7 +5823,6 @@ PY
 run 'step 8 and step 10 wait on the Cluster Ready condition, never on its pods' green \
   check_cnpg_cluster_wait "$SUBSTRATE/install.sh"
 
-# Control 1: the master shape — the pod-selector wait restored — goes red.
 fixture_pod_wait="$WORK/install-pod-wait.sh"
 "$PY" - "$SUBSTRATE/install.sh" "$fixture_pod_wait" <<'PY'
 import sys
@@ -7946,8 +5846,6 @@ else
   failures=$((failures + 1))
 fi
 
-# Control 2: the Cluster wait deleted — a wait that forgives a cluster that
-# never comes up — goes red.
 fixture_no_cluster_wait="$WORK/install-no-cluster-wait.sh"
 grep -v 'wait --for=condition=Ready cluster.postgresql.cnpg.io/postgres' \
   "$SUBSTRATE/install.sh" >"$fixture_no_cluster_wait"
@@ -7960,12 +5858,6 @@ else
     check_cnpg_cluster_wait "$fixture_no_cluster_wait"
 fi
 
-# pg8_seed <root> <ready: yes|no> — the cold cluster behind step 8: the
-# namespace the step creates is NOT pre-made (the step makes it), the Cluster
-# object is NOT planted (this is a fresh install — the guard must see it
-# absent and proceed), and only the wait's answer differs: the ready file
-# says the operator has reported Ready at the settled phase, its absence says
-# the primary is still setting up.
 pg8_seed() {
   mkdir -p "$1" "$1/data"
   if [ "$2" = "yes" ]; then
@@ -7976,12 +5868,6 @@ pg8_seed() {
   fi
 }
 
-# pg8_step <fixture> <root> — run install_postgres_cluster for real against
-# the file-backed mock, leaving the exit status in $pg8_ec. The bound is
-# shortened only in the sense that the mock answers instantly: the argv log
-# carries the --timeout the installer passed, and the static audit pins its
-# default, so "bounded" is proven by the number on the order rather than by
-# sleeping it out.
 pg8_step() {
   pg8_ec=0
   (
@@ -7990,14 +5876,8 @@ pg8_step() {
     export KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing"
     export KIT_SUBSTRATE_RECEIPT="$2/receipt.json"
     MOCK_ROOT="$2"
-    # shellcheck source=/dev/null
     . "$1"
     kubectl() { mock_kubectl "$@"; }
-    # The fixture is a COPY of the installer, so its SCRIPT_DIR is $WORK and
-    # its manifests are not beside it. Point DATA_DIR at the real tree: the
-    # subject is the wait, not manifest discovery (proven elsewhere), and a
-    # step that reads the wrong directory would refuse on the manifest
-    # agreement before ever reaching the wait.
     DATA_DIR="$SUBSTRATE/manifests/data"
     install_postgres_cluster >"$2/run.log" 2>&1
   ) || pg8_ec=$?
@@ -8006,10 +5886,6 @@ pg8_step() {
 pg8_cold="$WORK/install-pg8-cold.sh"
 sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$pg8_cold"
 
-# CASE 3, green: the cold cluster installs once the Cluster reports Ready. The
-# argv is the order: the Cluster wait ran under the 600s bound, and NO pod
-# query ran at all — a fixture whose pod list holds only the initdb pod
-# cannot satisfy a wait that never lists pods.
 MOCK_ROOT="$WORK/pg8-cold"
 pg8_seed "$MOCK_ROOT" yes
 pg8_step "$pg8_cold" "$MOCK_ROOT"
@@ -8023,8 +5899,6 @@ else
   pass 'step 8 succeeds once the Cluster reports Ready, waiting on the Cluster and never listing pods'
 fi
 
-# CASE 4, red: a Cluster that never reports Ready still fails — with the
-# bound, naming the Cluster and its phase.
 MOCK_ROOT="$WORK/pg8-stuck"
 pg8_seed "$MOCK_ROOT" no
 pg8_step "$pg8_cold" "$MOCK_ROOT"
@@ -8042,34 +5916,9 @@ case "$pg8_ec:$(cat "$MOCK_ROOT/run.log" 2>/dev/null)" in
     ;;
 esac
 
-# ===========================================================================
-# 18. Step 11 watches the Deployment only after it exists — the Argo race, executed
-# ===========================================================================
-#
-# Section 17 proves the rule; this proves the step. `rollout status` on a
-# Deployment Argo has not created yet is NotFound, exit 1 — not a wait — and
-# steps 7 through 10 sit between step 6's Applications and this watch, so a
-# warm box never notices while a slow Argo sync kills the install at step 11.
-#
-# The harness runs mint_courier_identity_token for real against a file-backed
-# kubectl with Argo's timing: a GET of a missing Deployment exits 0 printing
-# nothing (real kubectl), rollout status of one is NotFound (real kubectl),
-# and both succeed once the sync lands. Secrets and patches behave like
-# mock_kubectl's, so the mint's writes are still asserted, not just its exit.
-#
-# THREE CASES, the same shape as section 16:
-#   1. slow Argo — the Deployment lands on the second poll. The mint must
-#      complete, both secrets holding the one minted value.
-#   2. dead Argo — it never lands. The step must REFUSE inside its bound,
-#      naming the missing Deployment, with no watch run and nothing written.
-#   3. THE CONTROL — the pre-fix shape with the await removed, against slow
-#      Argo. It must abort with NotFound and no existence check before it.
 ROLLOUT_DIR="$WORK/rollout"
 mkdir -p "$ROLLOUT_DIR"
 
-# rollout_kubectl — Argo, on a slow box. DEPLOY_APPEARS_AT is the poll after
-# which the sync lands. Every invocation is recorded, because "watched after
-# it existed" is an order and not a return code.
 rollout_kubectl() {
   printf '%s\n' "$*" >>"$ROLLOUT_DIR/argv"
   case "$*" in
@@ -8085,12 +5934,9 @@ rollout_kubectl() {
       return 0
       ;;
     *"port-forward"*)
-      # A real one blocks forever; this one returns instantly, like mock_kubectl's.
       return 0
       ;;
     *"get deployment identity"*)
-      # A GET of an empty list is not an error: kubectl exits 0 and prints
-      # nothing. The sync is a few seconds away, which is the race.
       local polls
       polls=$(( $(cat "$ROLLOUT_DIR/polls" 2>/dev/null || echo 0) + 1 ))
       printf '%s' "$polls" >"$ROLLOUT_DIR/polls"
@@ -8101,8 +5947,6 @@ rollout_kubectl() {
       return 0
       ;;
     *"get secret "*)
-      # The two shapes read_secret_key uses — existence, and the base64 a
-      # jsonpath read decodes — over the same store mock_kubectl keeps.
       local seen="" rname="" rns="" rtmpl="" a
       for a in "$@"; do
         case "$a" in
@@ -8132,12 +5976,6 @@ rollout_kubectl() {
       return 0
       ;;
     *"patch secret "*)
-      # A merge patch, read from --patch-file=/dev/stdin and merged over the
-      # store — the same contract mock_kubectl's patch branch holds, so "no
-      # other key is wiped" means something here too. `--patch-file=-` is
-      # refused with kubectl's own error: the real binary reads a FILE named
-      # `-` and fails, so the mock must not be the only place the spelling
-      # works.
       local p prev="" patch_ns="" patch_name="" patch_file_arg="" body=""
       for p in "$@"; do
         case "$p" in
@@ -8166,19 +6004,12 @@ rollout_kubectl() {
       esac
       local pdir="$MOCK_ROOT/$patch_ns/$patch_name"
       mkdir -p "$pdir"
-      # A `"key":null` entry DELETES the stored key, exactly as a real merge
-      # patch does — the orphan sweep relies on it (see mock_kubectl's patch
-      # branch for the same contract). `data` is the persisted map: a null
-      # there deletes the entry, a value there is base64 and is decoded the
-      # way the jsonpath read decodes it.
       local -a rollout_patch_keys=()
       local rollout_patch_key
       while IFS= read -r rollout_patch_key; do
         [ -n "$rollout_patch_key" ] && rollout_patch_keys+=("$rollout_patch_key")
       done < <(printf '%s' "$body" | jq -r '.stringData // {} | keys[]')
       for rollout_patch_key in ${rollout_patch_keys[@]+"${rollout_patch_keys[@]}"}; do
-        # A null under stringData is a NO-OP here too — see mock_kubectl's
-        # patch branch for why the box ignores it.
         if [ "$(printf '%s' "$body" | jq -r --arg k "$rollout_patch_key" '.stringData[$k] | type')" != "null" ]; then
           printf '%s' "$body" | jq -jr --arg k "$rollout_patch_key" '.stringData[$k]' >"$pdir/$rollout_patch_key"
         fi
@@ -8204,22 +6035,6 @@ rollout_kubectl() {
   esac
 }
 
-# mint_step <sourced-fixture> <appears-at> <deploy-timeout> — run step 11 for
-# real against that fixture, and leave the exit status behind in $mint_ec.
-# The port-forward is stubbed (it never blocks here) and curl is the mint's
-# own exchange from 13e; the sleeps and the openssl rand are the real ones.
-#
-# The step runs in a CHILD bash, not in a `( … ) || ec=$?` subshell — and the
-# distinction is the whole mechanism. Under `set -e`, a subshell that is a
-# component of `||` runs with errexit DISABLED, and this bash does not
-# re-enable it on an inner `set -e` either (measured: `( set -e; false; echo
-# x ) || …` prints x). A guarded subshell would therefore march past a failing
-# `rollout status` and exit 0 — the opposite of the box, where the same
-# failure aborts the install, and exactly what the pre-fix control below
-# looked like before this harness existed. The child is a component of
-# nothing: its `set -e` is real, a failing kubectl aborts it, and the
-# parent's `||` reads an honest exit status. It carries the mocks via
-# `declare -f`, so there is still exactly one copy of each mock.
 mint_step() {
   rm -f "$ROLLOUT_DIR/argv" "$ROLLOUT_DIR/polls" "$ROLLOUT_DIR/deployed" "$ROLLOUT_DIR/run.log"
   rm -rf "$ROLLOUT_DIR/store"
@@ -8233,15 +6048,8 @@ mint_step() {
     printf 'DEPLOY_APPEARS_AT=%q\n' "$2"
     printf 'IDENTITY_DEPLOY_TIMEOUT=%q\n' "$3"
     printf 'IDENTITY_ROLLOUT_TIMEOUT=%q\n' "5"
-    # BEFORE the source, because the installer reads the receipt path at
-    # source time and a value exported after it is a value it never saw.
     printf 'KIT_SUBSTRATE_RECEIPT=%q\n' "$ROLLOUT_DIR/receipt.json"
     printf 'COURIER_MINT_TOKEN=%q\n' "$COURIER_MINT_TOKEN"
-    # identity's link templates are gated on this value. It is SET by default so
-    # the pair/template tests below exercise the CONFIGURED mail path; a caller
-    # runs `MINT_APP_BASE_URL=__UNSET__ mint_step …` for the deliberate no-mail
-    # path (see §18c). The literal `__UNSET__` means "emit nothing", so install.sh
-    # falls back to its own empty default rather than to a value the test chose.
     if [ "${MINT_APP_BASE_URL:-$APP_BASE_URL}" != "__UNSET__" ]; then
       printf 'KIT_SUBSTRATE_APP_BASE_URL=%q\n' "${MINT_APP_BASE_URL:-$APP_BASE_URL}"
     fi
@@ -8260,10 +6068,6 @@ mint_step() {
       'mock_seed identity identity-secrets DATABASE_URL "postgres://identity_app:pw@host/identity"' \
       'mock_seed identity identity-secrets SIGNUP_SIGNING_KEY "Ou1NSDx0wZAm5Mbykh8R7gxs8t6Y0-U1fI4kwRmSsd8"' \
       'mock_seed identity identity-secrets MFA_ENCRYPTION_KEY "z-thread-is-long-enough-0123456789-_Xab"'
-    # MINT_SEED_ORPHAN=1 plants the warm-box state: an orphaned COURIER_TOKEN
-    # with no base URL (the old installer wrote the token alone) plus a stray
-    # template pointing at a base this box no longer declares — beside the
-    # keys a converging sweep must NOT touch (NATS_URL and the OIDC triple).
     if [ "${MINT_SEED_ORPHAN:-}" = "1" ]; then
       printf '%s\n' \
         'mock_seed identity identity-secrets COURIER_TOKEN "orphan-token-from-old-installer"' \
@@ -8273,11 +6077,6 @@ mint_step() {
         'mock_seed identity identity-secrets OIDC_SIGNING_KEY "old-oidc-key"' \
         'mock_seed identity identity-secrets OIDC_SIGNING_KEY_ID "old-oidc-kid"'
     fi
-    # MINT_SEED_COMPLETE=1 plants the live-box state: a COMPLETE seven-key
-    # block — the pair plus all five link templates derived from
-    # https://app.anywaye.com, the box that boots and sends all four recovery
-    # messages. With no base URL this run cannot rewrite it, so the sweep
-    # must leave every key in place and say so.
     if [ "${MINT_SEED_COMPLETE:-}" = "1" ]; then
       printf '%s\n' \
         'mock_seed identity identity-secrets COURIER_BASE_URL "http://courier.courier.svc.cluster.local:4000"' \
@@ -8288,23 +6087,10 @@ mint_step() {
         'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://app.anywaye.com/verify-email/confirm?token={token}"' \
         'mock_seed identity identity-secrets INVITATION_LINK_TEMPLATE "https://app.anywaye.com/invitations/{token}"'
     fi
-    # MINT_SEED_LEGACY_RECOVERY=1 is the default, not a flag: every set-branch
-    # run plants the pre-fix box state — a RECOVERY_LINK_TEMPLATE an older
-    # installer wrote beside the per-purpose templates — so the rewrite must
-    # delete it in the same patch. A green run that never planted it would
-    # prove nothing about the deletion; the unset-branch runs sweep it as an
-    # orphan the same way (it is in IDENTITY_COURIER_KEYS).
-    # MINT_SEED_COMPLETE=1 already plants its own RECOVERY (the live box's), so
-    # the legacy seed below skips that shape — every other run gets it.
     if [ "${MINT_SEED_COMPLETE:-}" != "1" ]; then
       printf '%s\n' \
         'mock_seed identity identity-secrets RECOVERY_LINK_TEMPLATE "https://old.example.com/verify-email/confirm?token={token}"'
     fi
-    # The 4th argument is `wrap` to call the mint from inside a FUNCTION, the
-    # way `main` calls it. The distinction is the whole defect B control: a
-    # `RETURN` trap is global, so it fires at the CALLER's return too, where
-    # `forward_pid` has left scope. A top-level call (the default) never
-    # triggers that, so only the wrapped shape can prove the exit code.
     if [ "${4:-}" = wrap ]; then
       printf 'mint_caller() { mint_courier_identity_token; }\nmint_caller\n'
     else
@@ -8321,20 +6107,12 @@ mint_prefix="$WORK/install-mint-prefix.sh"
 sed -e '/^main "$@"/d' -e '/kit_substrate_await_list "\$IDENTITY_DEPLOY_TIMEOUT" deployment identity -n identity/d' \
   "$SUBSTRATE/install.sh" >"$mint_prefix"
 
-# The control fixture is only a control if it really is the pre-fix shape: the
-# await must be gone from it, and the rollout watch must still be there. A
-# mutation that broke nothing would pass case 3 for the wrong reason.
 if grep -q 'IDENTITY_DEPLOY_TIMEOUT" deployment' "$mint_prefix" \
   || ! grep -q 'rollout status deployment/identity' "$mint_prefix"; then
   fail 'control fixture: the pre-fix mint step is the shape step 11 ran' \
     "the await-line deletion did not apply, so case 3 would prove nothing"
   failures=$((failures + 1))
 else
-  # CASE 1, green: slow Argo still mints. The Deployment lands on the second
-  # poll, so the loop has to tolerate a missing object once and keep going —
-  # and the watch must come AFTER the sync rather than racing it. The order is
-  # proved the way section 16 proves it: a watch that ran early would have met
-  # NotFound and, under `set -e`, ended the run.
   mint_step "$mint_fixed" 2 5
   mint_slow_ok() {
     if [ "$mint_ec" -ne 0 ]; then
@@ -8355,9 +6133,6 @@ else
         "$(cat "$ROLLOUT_DIR/run.log")"
       return 1
     fi
-    # The empty polls really were empty: DEPLOY_APPEARS_AT is 2, so the first
-    # poll must have seen nothing and the sync must be the SECOND one. A
-    # fixture that never ran the race would pass on a step that races.
     if [ "$(cat "$ROLLOUT_DIR/polls" 2>/dev/null || echo 0)" -ne 2 ]; then
       printf 'Argo synced on the first poll, so the missing-object case never happened\n'
       return 1
@@ -8367,10 +6142,6 @@ else
   run 'step 11 mints when Argo creates the Deployment a few seconds late' \
     green mint_slow_ok
 
-  # CASE 3, THE CONTROL: the pre-fix shape against slow Argo. It must abort
-  # with NotFound, and the signature that proves it is the ARGV: the pre-fix
-  # step never asked whether the Deployment existed, so it went straight to a
-  # watch that could not be satisfied.
   mint_step "$mint_prefix" 2 5
   case "$mint_ec:$(cat "$ROLLOUT_DIR/run.log" 2>/dev/null):$(cat "$ROLLOUT_DIR/argv" 2>/dev/null)" in
     0:*:*:*)
@@ -8396,10 +6167,6 @@ else
   esac
 fi
 
-# CASE 2: an Argo sync that never lands. The step must REFUSE inside its
-# bound, not hang and not lie. The bound is shortened to 2s here, and the
-# elapsed time is measured rather than asserted by exit status alone — a wait
-# that exceeded its own budget would pass a glance at the message.
 mint_never_ok() {
   local started elapsed
   started="$(date +%s)"
@@ -8442,19 +6209,9 @@ mint_never_ok() {
 }
 run 'step 11 refuses within its bound when Argo never creates the Deployment' green mint_never_ok
 
-# ---------------------------------------------------------------------------
-# 18a. Step 11's mock holds the same `--patch-file` convention as step 8's
-# ---------------------------------------------------------------------------
-# The sibling of §12d: `rollout_kubectl` is the second mock with a patch
-# branch, and a divergence between the two would let the class back in through
-# the mint. One store, the two spellings, against this mock.
 run 'the step-11 mock reads --patch-file=/dev/stdin and refuses - as kubectl does' green \
   check_patch_convention rollout_kubectl "$WORK/rollout-dash"
 
-# check_mint_writes_both_secrets <fixture> — step 11 for real, and the one
-# minted value must land in both secrets. The red control below is the same
-# run with the patch spelling reverted to `-`: rollout_kubectl refuses it as
-# the box does, and under `set -e` the mint aborts.
 check_mint_writes_both_secrets() {
   mint_step "$1" 2 5
   if [ "$mint_ec" -ne 0 ]; then
@@ -8476,31 +6233,6 @@ run 'step 11 writes one minted value into both secrets through /dev/stdin' green
 run 'control: the - patch spelling aborts the mint, as it does on the box' red \
   check_mint_writes_both_secrets "$fixture_patch_dash"
 
-# ---------------------------------------------------------------------------
-# 18b. Step 11 writes BOTH HALVES of each credential pair, and exits 0
-# ---------------------------------------------------------------------------
-# Two live defects, one step. (A) the mint wrote `COURIER_TOKEN` alone, and
-# identity's fail-closed loader (`identity/internal/config/config.go`,
-# `loadCourier`) refused to boot on half a pair — the same for courier, whose
-# `COURIER_IDENTITY_URL` (`courier/config/runtime.exs`) otherwise falls back to
-# the compose-network spelling `http://identity:8080` that cannot cross a
-# namespace. (B) the `RETURN` trap that tears down the port-forward is global,
-# so it fired again when the CALLER (`main`) returned, where `forward_pid` had
-# left scope: `line …: forward_pid: unbound variable`, exit 1 AFTER
-# `install.done` printed.
-#
-# THE PAIR'S FOUR KEYS AND THEIR VALUES, read from the two charts:
-#   identity-secrets/COURIER_BASE_URL       = courier's Service, `courier`
-#     namespace, port 4000 (`courier/chart/values.yaml` service.port; Service
-#     `courier` in `courier/chart/templates/service.yaml`).
-#   identity-secrets/COURIER_TOKEN          = the value the mint returned.
-#   courier-secrets/COURIER_IDENTITY_URL    = identity's Service, `identity`
-#     namespace, port 8080 (`identity/chart/values.yaml`; Service `identity`).
-#   courier-secrets/COURIER_IDENTITY_TOKEN  = the same minted value.
-#
-# The sibling packet's chart-inventory check is not on this branch, so the
-# pair is asserted EXPLICITLY against those read values. check_secret_record
-# above is the textual half of the same claim — the record now names all four.
 COURIER_BASE_URL_EXPECTED="http://courier.courier.svc.cluster.local:4000"
 IDENTITY_BASE_URL_EXPECTED="http://identity.identity.svc.cluster.local:8080"
 
@@ -8532,16 +6264,11 @@ check_mint_writes_pair() {
 run 'step 11 writes both halves of each credential pair' green \
   check_mint_writes_pair "$mint_fixed"
 
-# The red control: the token half is written, the base URL half is not. This is
-# the exact shape that shipped and refused to boot.
 fixture_half_pair="$WORK/install-mint-half-pair.sh"
 sed 's/"COURIER_BASE_URL":\$url,//' "$mint_fixed" >"$fixture_half_pair"
 run 'control: a mint writing a token without its base URL goes red' red \
   check_mint_writes_pair "$fixture_half_pair"
 
-# The done path must be EXIT 0. `check_mint_exit_zero` runs the mint WRAPPED in
-# a function, as `main` calls it; the control is the pre-fix trap, with its
-# self-removal stripped, which must exit non-zero for the caller-return reason.
 check_mint_exit_zero() {
   mint_step "$1" 2 5 wrap
   if [ "$mint_ec" -ne 0 ]; then
@@ -8553,8 +6280,6 @@ check_mint_exit_zero() {
 }
 fixture_trap_nonself="$WORK/install-mint-trap-nonself.sh"
 sed -e '/^main "$@"$/d' -e 's/; trap - RETURN//' "$SUBSTRATE/install.sh" >"$fixture_trap_nonself"
-# The control fixture is only a control if the self-removal is really gone and
-# the trap is still there: a mutation that broke nothing would prove nothing.
 if grep -q "trap 'kill \"\$forward_pid\" 2>/dev/null || true; trap - RETURN' RETURN" "$fixture_trap_nonself" \
   || ! grep -q "trap 'kill \"\$forward_pid\" 2>/dev/null || true' RETURN" "$fixture_trap_nonself"; then
   fail 'control fixture: the pre-fix trap is the shape step 11 ran' \
@@ -8609,9 +6334,6 @@ identity_expected_template() {
   esac
 }
 
-# check_mint_mail_path <fixture> — run step 12 for real, then apply identity's
-# all-or-nothing rule to identity-secrets. Green means the box's identity boots
-# with whatever mail path the secret describes.
 check_mint_mail_path() {
   mint_step "$1" 2 5
   if [ "$mint_ec" -ne 0 ]; then
@@ -8622,7 +6344,6 @@ check_mint_mail_path() {
   base="$(cat "$store/identity/identity-secrets/COURIER_BASE_URL" 2>/dev/null || true)"
   token="$(cat "$store/identity/identity-secrets/COURIER_TOKEN" 2>/dev/null || true)"
   if [ -z "$base" ] && [ -z "$token" ]; then
-    # `present == 0`: no mail path. A template here would be the mirror refusal.
     for k in PASSWORD_RESET_LINK_TEMPLATE EMAIL_VERIFICATION_LINK_TEMPLATE EMAIL_CHANGE_LINK_TEMPLATE RECOVERY_LINK_TEMPLATE INVITATION_LINK_TEMPLATE; do
       if [ -n "$(cat "$store/identity/identity-secrets/$k" 2>/dev/null || true)" ]; then
         printf 'a link template (%s) was written with no base URL and no token — identity would refuse (ErrInvalidCourier)\n' "$k"
@@ -8646,24 +6367,12 @@ check_mint_mail_path() {
     printf 'a base URL and a token with no (valid) link template — identity would refuse (ErrInvalidCourier):%s\n' "$bad"
     return 1
   fi
-  # THE LEGACY DEFAULT IS GONE. mint_step plants a pre-fix RECOVERY_LINK_TEMPLATE
-  # on every run, so reaching here with one still stored means the rewrite did
-  # not delete it — and identity's shared-default warning compares VALUES
-  # (`LinkPurposesUsingTheDefault`: any purpose resolving to the default is
-  # reported, even one with a variable of its own), so a surviving default
-  # equal to either purpose re-fires the live-box warning on a configured box.
   if [ -n "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" ]; then
     printf 'RECOVERY_LINK_TEMPLATE survived the rewrite with value %s — identity would warn that %s\n' \
       "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE")" \
       "email_change and verify_email resolve to the shared default"
     return 1
   fi
-  # TWO PURPOSES, ONE SCREEN — named, not just unequal. EMAIL_CHANGE shares
-  # /verify-email/confirm with EMAIL_VERIFICATION because parlor serves no
-  # email-change screen (both route trees and routeTree.gen.ts agree); the
-  # reset and invitation screens are pairwise distinct from it and each other.
-  # A check that only counted distinct strings would bless any four different
-  # wrong paths, so the screen each purpose lands on is asserted literally.
   if [ "$(cat "$store/identity/identity-secrets/EMAIL_CHANGE_LINK_TEMPLATE")" != "$(cat "$store/identity/identity-secrets/EMAIL_VERIFICATION_LINK_TEMPLATE")" ]; then
     printf 'EMAIL_CHANGE_LINK_TEMPLATE is not the documented shared screen /verify-email/confirm — parlor serves no email-change screen of its own\n'
     return 1
@@ -8672,8 +6381,6 @@ check_mint_mail_path() {
     printf 'the reset link and the verification link are one string — two purposes sharing one screen they do not both redeem\n'
     return 1
   fi
-  # The installer's OWN report must say which mail path the box has, or the
-  # state is only in the secret and nobody reading the install output knows it.
   if ! grep -q 'TRUE mail path' "$ROLLOUT_DIR/run.log"; then
     printf 'the mint did not report the configured mail path on its own channel\n%s\n' \
       "$(cat "$ROLLOUT_DIR/run.log")"
@@ -8685,14 +6392,6 @@ check_mint_mail_path() {
 run 'step 11 writes identity'"'"'s courier pair AND its four link templates when KIT_SUBSTRATE_APP_BASE_URL is set, deleting the legacy default' green \
   check_mint_mail_path "$mint_fixed"
 
-# THE RED CONTROL is the derivation as it stands on master: the legacy default
-# written beside the per-purpose templates as a third identical string. The
-# fixture is the real tree with the pre-fix shape restored — recovery derived
-# from the same value and patched beside the others — so the control tracks
-# future edits to the derivation. Its premise is asserted first: the fixture
-# really carries three identical strings. If the mail-path check passed
-# against it, the check discriminates nothing, and the box's own warning is
-# the red proof it must reproduce.
 fixture_master_shape="$WORK/install-mint-master-shape.sh"
 cp "$mint_fixed" "$fixture_master_shape"
 "$PY" - "$fixture_master_shape" <<'PY'
@@ -8712,9 +6411,6 @@ new2 = '''        "EMAIL_CHANGE_LINK_TEMPLATE":$change,
         "INVITATION_LINK_TEMPLATE":$invite'''
 assert old2 in src, "the patch body site moved"
 src = src.replace(old2, new2)
-# The master shape never deleted the legacy default: drop the `data`-null the
-# real tree carries, or the fixture's own deletion wipes the re-added default
-# and the control passes for the opposite reason.
 old3 = '''      },"data":{
         "RECOVERY_LINK_TEMPLATE":null
       }}')'''
@@ -8742,13 +6438,6 @@ else
   fi
 fi
 
-# THE SECOND RED CONTROL is a fixture whose EMAIL_CHANGE_LINK_TEMPLATE points
-# at a path parlor does not serve. Parlor's route table (src/app and
-# src/routes, with routeTree.gen.ts) serves /reset-password,
-# /verify-email/confirm and /invitations/[token] and nothing for an address
-# change — not /email-change/confirm, which is identity's own compose spelling
-# for a screen the front door never mounted. A derivation the check cannot see
-# inventing that path is not a check. Its premise is asserted first too.
 fixture_unserved_change="$WORK/install-mint-unserved-change.sh"
 sed 's|change="\$verify"|change="${base}/email-change/confirm?token={token}"|' \
   "$mint_fixed" >"$fixture_unserved_change"
@@ -8769,10 +6458,6 @@ else
   fi
 fi
 
-# THE RED CONTROL is the pre-fix shape this packet exists for: the pair is
-# written and the templates are not, which is a restarted identity that refuses
-# on the next check. The fixture is asserted to really be that shape before the
-# control is allowed to count — a mutation that broke nothing would prove nothing.
 fixture_no_template="$WORK/install-mint-no-template.sh"
 sed -e '/^main "$@"$/d' -e '/LINK_TEMPLATE/d' "$SUBSTRATE/install.sh" >"$fixture_no_template"
 if grep -q 'LINK_TEMPLATE' "$fixture_no_template" \
@@ -8793,10 +6478,6 @@ else
   fi
 fi
 
-# THE OTHER BRANCH, green: no public origin means no identity courier keys at
-# all — identity's own "no mail path" state — while courier still gets its
-# required pair. A box that cannot know its public URL boots with all recovery
-# routes answering 503, never a rollout that never goes Ready.
 check_mint_mail_path_unset() {
   local saved="${MINT_APP_BASE_URL:-}"
   MINT_APP_BASE_URL=__UNSET__
@@ -8821,9 +6502,6 @@ check_mint_mail_path_unset() {
     printf 'courier-secrets lost the required pair when identity had no mail path\n'
     return 1
   fi
-  # The installer must SAY the mail path is off, so the operator learns the box
-  # boots without one from the install output rather than from a 503 later —
-  # and a run that removed nothing says so.
   if ! grep -q 'mail path is NOT configured' "$ROLLOUT_DIR/run.log" \
     || ! grep -q 'nothing removed' "$ROLLOUT_DIR/run.log"; then
     printf 'the mint did not report the no-mail path on its own channel\n%s\n' \
@@ -8835,20 +6513,6 @@ check_mint_mail_path_unset() {
 run 'step 11 writes NO identity courier key when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
   check_mint_mail_path_unset "$mint_fixed"
 
-# ===========================================================================
-# 18d. the unset branch CONVERGES: an orphaned courier block is removed, the
-#      rest of the secret is untouched, and the pre-fix shape fails the check
-# ===========================================================================
-#
-# THE LIVE DEFECT. One box runs identity in CrashLoopBackOff: an older
-# installer wrote COURIER_TOKEN without COURIER_BASE_URL, the current step's
-# happy path writes nothing when KIT_SUBSTRATE_APP_BASE_URL is unset, so the
-# orphan survives every re-run and identity's fail-closed loadCourier refuses
-# to boot on the half-pair. The fix is converge_identity_courier_block: read
-# the seven keys, delete whichever are present in one `"key":null` merge
-# patch, re-read to prove the block is empty, restart identity so the change
-# reaches the pod. The sweep runs above the mint guard too, so a warm box that
-# already minted still heals.
 check_mint_converges_orphan() {
   local saved_base="${MINT_APP_BASE_URL:-}" saved_orphan="${MINT_SEED_ORPHAN:-}"
   MINT_APP_BASE_URL=__UNSET__ MINT_SEED_ORPHAN=1 mint_step "$1" 2 5
@@ -8879,8 +6543,6 @@ check_mint_converges_orphan() {
     printf 'courier-secrets lost its required pair while identity converged\n'
     return 1
   fi
-  # The operator must SEE the edit: the log names the removed keys and why —
-  # each removed key by name, and no key that was not removed.
   if ! grep -q 'orphaned courier key' "$ROLLOUT_DIR/run.log" \
     || ! grep -q 'COURIER_TOKEN' "$ROLLOUT_DIR/run.log" \
     || ! grep -q 'EMAIL_CHANGE_LINK_TEMPLATE' "$ROLLOUT_DIR/run.log"; then
@@ -8891,7 +6553,6 @@ check_mint_converges_orphan() {
     printf 'the sweep report names a key it did not remove (NATS_URL was kept)\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
-  # And the change must REACH the pod: identity is restarted.
   if ! grep -q 'rollout restart deployment/identity' "$ROLLOUT_DIR/argv"; then
     printf 'identity was not restarted after its secret changed\n'
     return 1
@@ -8901,13 +6562,6 @@ check_mint_converges_orphan() {
 run 'step 11 converges an orphaned identity courier block when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
   check_mint_converges_orphan "$mint_fixed"
 
-# THE RED CONTROL is the write-forward shape: the sweep scans nothing, so it
-# removes nothing and the orphan survives. The fixture is the real tree with
-# the key list emptied — functionally the step as it stands on master, which
-# knows no key to delete — rather than a hand-edited approximation, so the
-# control tracks future edits to the sweep body. Its premise is asserted
-# first: the list is really empty. If the orphan-removal check passed against
-# it, the check would be worthless.
 mint_prefix_converge="$WORK/install-mint-prefix-converge.sh"
 sed -e '/^main "$@"/d' -e 's/^IDENTITY_COURIER_KEYS=(.*$/IDENTITY_COURIER_KEYS=()/' \
   "$SUBSTRATE/install.sh" >"$mint_prefix_converge"
@@ -8929,25 +6583,6 @@ else
   fi
 fi
 
-# ===========================================================================
-# 18e. the unset branch KEEPS a complete pair: a working mail path is not an
-#      orphan, and the sweep must say so
-# ===========================================================================
-#
-# THE LIVE DEFECT. The Contabo box carries a COMPLETE seven-key courier block
-# — COURIER_BASE_URL and COURIER_TOKEN both present, five link templates
-# derived from https://app.anywaye.com — and identity boots and reports
-# "account recovery can send all four messages through courier". The sweep as
-# it stood collected all seven keys into `orphans` and deleted them, printing
-# "leftovers from an installer that wrote half a pair": a provenance the
-# installer never checked, and a "removed" with no mention that the box went
-# from a working mail path to 503 on every recovery route.
-#
-# THE FIX. converge_identity_courier_block classifies first, mirroring
-# identity's own loadCourier rule: both halves present means a working mail
-# path, which stays — nothing deleted, identity not restarted — and the report
-# says the mail path stays and names KIT_SUBSTRATE_APP_BASE_URL as the
-# variable that would rewrite it. The half-pair sweep is unchanged.
 check_mint_keeps_complete_pair() {
   local saved_base="${MINT_APP_BASE_URL:-}" saved_complete="${MINT_SEED_COMPLETE:-}"
   MINT_APP_BASE_URL=__UNSET__ MINT_SEED_COMPLETE=1 mint_step "$1" 2 5
@@ -8963,11 +6598,6 @@ check_mint_keeps_complete_pair() {
       return 1
     fi
   done
-  # The legacy default this box still carries is kept too: the keep path
-  # deletes nothing, and a sweep that dropped it would rewrite the box's links
-  # without the rewriting variable being set. (A box written by the new
-  # installer carries no RECOVERY at all — the required set above is six keys,
-  # and absence there is the proved end-state, not a deletion.)
   if [ "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || true)" != "https://app.anywaye.com/verify-email/confirm?token={token}" ]; then
     printf 'the sweep touched the legacy default on a kept mail path — keep means keep: %s\n' \
       "$(cat "$store/identity/identity-secrets/RECOVERY_LINK_TEMPLATE" 2>/dev/null || echo '<missing>')"
@@ -8977,8 +6607,6 @@ check_mint_keeps_complete_pair() {
     printf 'the working token was rewritten by a run with no base URL to rewrite it with\n'
     return 1
   fi
-  # Keeping identity's path must not starve courier's: courier still gets its
-  # required pair, and the mint still completes (courier restarted).
   if [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_TOKEN" 2>/dev/null || true)" != "$COURIER_MINT_TOKEN" ] \
     || [ "$(cat "$store/courier/courier-secrets/COURIER_IDENTITY_URL" 2>/dev/null || true)" != "$IDENTITY_BASE_URL_EXPECTED" ]; then
     printf 'courier-secrets lost its required pair while identity kept its mail path\n'
@@ -8988,21 +6616,17 @@ check_mint_keeps_complete_pair() {
     printf 'courier was not restarted after its secret changed\n'
     return 1
   fi
-  # The report must say the box KEEPS a working mail path and name the
-  # variable that would rewrite it — and a run that removed nothing says so.
   if ! grep -q 'working mail path' "$ROLLOUT_DIR/run.log" \
     || ! grep -q 'KIT_SUBSTRATE_APP_BASE_URL' "$ROLLOUT_DIR/run.log" \
     || ! grep -q 'nothing removed' "$ROLLOUT_DIR/run.log"; then
     printf 'the run kept the mail path without saying so and naming the variable\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
-  # And the kept path must NOT be described with the orphan's sentence.
   if grep -q 'leftovers' "$ROLLOUT_DIR/run.log" \
     || grep -q 'orphaned courier key' "$ROLLOUT_DIR/run.log"; then
     printf 'a kept mail path was described with the orphan sentence\n%s\n' "$(cat "$ROLLOUT_DIR/run.log")"
     return 1
   fi
-  # Nothing changed in identity-secrets, so identity must NOT have restarted.
   if grep -q 'rollout restart deployment/identity' "$ROLLOUT_DIR/argv"; then
     printf 'identity was restarted although its secret was left untouched\n'
     return 1
@@ -9012,11 +6636,6 @@ check_mint_keeps_complete_pair() {
 run 'step 11 keeps a complete identity courier block when KIT_SUBSTRATE_APP_BASE_URL is unset' green \
   check_mint_keeps_complete_pair "$mint_fixed"
 
-# RED CONTROL 1: the sweep as it stands on master deletes a complete pair.
-# The fixture is the real tree with the classification disabled — the
-# SWEEP-HONEST-CLASSIFY branch forced false — so the control tracks future
-# edits to the sweep body. Its premise is asserted first: the branch is really
-# gone. If the keep-check passed against it, the check discriminates nothing.
 mint_noclassify="$WORK/install-mint-no-classify.sh"
 sed -e '/^main "$@"/d' \
   -e 's/if \[ -n "\$base_present" \] && \[ -n "\$token_present" \]; then # SWEEP-HONEST-CLASSIFY/if false; then # SWEEP-HONEST-CLASSIFY/' \
@@ -9039,11 +6658,6 @@ else
   fi
 fi
 
-# RED CONTROL 2: the orphan's sentence must not appear on a complete-pair run.
-# The fixture is the real tree with the keep-branch report rewritten to use
-# the orphan's word — the keys are still kept, so only the message assertion
-# can fire. Its premise is asserted first: the word is really in the
-# keep-branch and the classification itself is intact.
 mint_badword="$WORK/install-mint-badword.sh"
 sed -e '/^main "$@"/d' \
   -e 's/so the mail path stays, nothing removed,/so the mail path stays, nothing removed -- leftovers from an installer that wrote half a pair,/' \
@@ -9067,37 +6681,6 @@ else
   fi
 fi
 
-# ===========================================================================
-# 19. Step 6 waits on nothing — the core-install reality, executed
-# ===========================================================================
-#
-# Section 17 proves the wait RULE textually; this proves the step against the
-# reality of the install variant step 4 applies. The pinned core-install.yaml
-# (ARGOCD_VERSION, checked against the upstream manifest at the pin) ships
-# exactly four workloads in argocd: the Deployments argocd-applicationset-
-# controller, argocd-redis and argocd-repo-server, and the StatefulSet
-# argocd-application-controller. No argocd-server, no dex, no UI — so the wait
-# that closed this step failed with NotFound on every run and killed the
-# install at step 6. The suite was green over that bug because nothing
-# executed the wait against a cluster that does not have the object.
-#
-# argocd_kubectl models that cluster: the deployment list in argocd is exactly
-# the three core-install Deployments, a named wait for anything else is
-# answered the way real kubectl answers a missing named object — NotFound,
-# exit 1 — and every invocation is recorded, because "waited on nothing" is an
-# order and not a return code.
-#
-# THREE CASES:
-#   1. green — the step applies the Applications and waits on nothing. The
-#      mock would fail it had it waited on a missing object, so success IS the
-#      proof, and the argv is asserted to hold no argocd wait at all: step 4
-#      owns those, and this step has no business re-waiting on them.
-#   2. THE CONTROL — the pre-fix shape, with the argocd-server wait restored
-#      after the apply. It must abort with NotFound. This is the case the
-#      suite lacked: the bug lived in a line nothing executed.
-#   3. the coverage half — step 4's wait must stay the `--all` deployments
-#      wait in argocd, because that wait is what covers the readiness this
-#      step's wait used to (wrongly) reach for.
 ARGOCD_DIR="$WORK/argocd"
 mkdir -p "$ARGOCD_DIR"
 
@@ -9105,13 +6688,9 @@ argocd_kubectl() {
   printf '%s\n' "$*" >>"$ARGOCD_DIR/argv"
   case "$*" in
     *"wait"*"deployment -n argocd --all"*)
-      # A list wait: the list is non-empty on any box past step 4, so it
-      # succeeds — the assertion that this never runs is the argv below.
       return 0
       ;;
     *"wait"*"deployment -n argocd "*)
-      # A NAMED wait: the name must be in the core-install set. The name is
-      # the last token that is not a flag or a fixed literal of the command.
       local wname="" tok
       for tok in "$@"; do
         case "$tok" in
@@ -9135,11 +6714,6 @@ argocd_kubectl() {
   esac
 }
 
-# apps_step <sourced-fixture> — run step 6 for real against the core-install
-# mock, and leave the exit status behind in $apps_ec. A child bash, for the
-# reason mint_step's comment records: a guarded subshell would march past a
-# failing wait and exit 0 — the opposite of the box, where the same failure
-# aborts the install.
 apps_step() {
   rm -f "$ARGOCD_DIR/argv" "$ARGOCD_DIR/run.log"
   local script="$ARGOCD_DIR/apps-run.sh"
@@ -9147,13 +6721,6 @@ apps_step() {
     printf 'set -euo pipefail\n'
     printf 'ARGOCD_DIR=%q\n' "$ARGOCD_DIR"
     printf 'FIXTURE=%q\n' "$1"
-    # Step 6 now RESOLVES its manifest directory before applying (the transport
-    # fix), so the fixture points MANIFEST_DIR at the real applications dir.
-    # Without it the sourced installer's SCRIPT_DIR is this temp fixture, the
-    # dir holds no `*.yaml`, and the step refuses — a green that failed on the
-    # fixture's own shape rather than on the wait this case is about. Set AFTER
-    # the source: install.sh assigns MANIFEST_DIR from SCRIPT_DIR at source
-    # time, so a value written before it would be overwritten.
     declare -f argocd_kubectl
     printf '%s\n' \
       'export DRY_RUN=0 HEADLESS=0' \
@@ -9171,12 +6738,6 @@ apps_step() {
 apps_fixed="$WORK/install-apps-fixed.sh"
 sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$apps_fixed"
 
-# CASE 1, green: the step applies the Applications and waits on nothing. The
-# apply must be in the argv, and NO wait targeting the argocd namespace may
-# be — neither named nor --all: step 4's `--all` deployments wait already
-# holds until every core-install Deployment is Available before step 5 runs,
-# so this step has no wait to re-do, and a reintroduced one is a regression
-# the argv below must catch.
 apps_step "$apps_fixed"
 apps_apply_ok() {
   if [ "$apps_ec" -ne 0 ]; then
@@ -9196,26 +6757,11 @@ apps_apply_ok() {
 }
 run 'step 6 applies the Applications and waits on nothing' green apps_apply_ok
 
-# CASE 2, THE CONTROL: the pre-fix shape — the argocd-server wait restored
-# after the apply — against the same mock. It must abort with NotFound, and
-# the argv must show both the apply and the wait: the pre-fix step applied
-# the Applications and THEN died on the wait, which is the shape the box
-# showed.
 apps_prefix="$WORK/install-apps-prefix.sh"
 apps_wait_line='  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n argocd argocd-server --timeout=120s'
 awk -v wait_line="$apps_wait_line" '
   /^main "\$@"/ { next }
-  # Strip any NAMED argocd deployment wait (the --all wait belongs to step 4
-  # and the pattern excludes it), so the control is the pre-fix shape on BOTH
-  # trees: on the fixed tree nothing is stripped and the wait is inserted
-  # once; on the broken tree the live wait is stripped and re-inserted, still
-  # exactly once.
   /wait --for=condition=Available deployment -n argocd / && !/--all/ { next }
-  # The apply the wait used to follow is now the RESOLVED list the transport
-  # fix applies (install_applications no longer carries a literal
-  # `-f "$MANIFEST_DIR"`), so the insert anchors on that line. Anchoring on the
-  # old one left the wait uninserted and the premise below caught it — the
-  # control would otherwise have proved nothing.
   /^  kubectl --kubeconfig="\$KUBECONFIG" apply "\$\{apply_args\[@\]\}"$/ {
     print
     print wait_line
@@ -9224,9 +6770,6 @@ awk -v wait_line="$apps_wait_line" '
   { print }
 ' "$SUBSTRATE/install.sh" >"$apps_prefix"
 
-# The control fixture is only a control if it really is the pre-fix shape: the
-# restored wait must be there, exactly once. A mutation that broke nothing
-# would pass case 2 for the wrong reason.
 if [ "$(grep -c 'wait --for=condition=Available deployment -n argocd argocd-server' "$apps_prefix")" -ne 1 ]; then
   fail 'control fixture: the pre-fix wait did not apply' \
     "the restored wait is missing or duplicated, so the control would prove nothing"
@@ -9254,10 +6797,6 @@ else
   esac
 fi
 
-# CASE 3, the coverage half: step 4's wait must stay the `--all` deployments
-# wait in argocd. Narrowing it to a named Deployment would leave the rest of
-# the core-install set uncovered, and step 6 — having no wait — would have
-# nothing to catch the gap.
 case "$(sed -n '/^install_argocd()/,/^}/p' "$SUBSTRATE/install.sh")" in
   *'wait --for=condition=Available deployment -n argocd --all'*)
     pass 'step 4 waits for every argocd Deployment, the coverage step 6 deleted'
@@ -9268,10 +6807,6 @@ case "$(sed -n '/^install_argocd()/,/^}/p' "$SUBSTRATE/install.sh")" in
     ;;
 esac
 
-# The guard must probe a core-install workload. It probed argocd-server, which
-# core-install does not ship, so the guard never matched and step 4 re-applied
-# the largest manifest on every run — the same defect as the wait, in the
-# idempotency path.
 case "$(sed -n '/^    argocd)/,/^      ;;/p' "$SUBSTRATE/install.sh")" in
   *'get deployment -n argocd argocd-repo-server'*)
     pass 'the argocd guard probes a Deployment core-install ships'
@@ -9282,10 +6817,6 @@ case "$(sed -n '/^    argocd)/,/^      ;;/p' "$SUBSTRATE/install.sh")" in
     ;;
 esac
 
-# And nothing in the RUNNABLE code may name a component core-install does not
-# ship. Comments are stripped first, as everywhere in this file: the step 6
-# comment explains the deletion BY NAMING argocd-server, and a check that
-# could be falsified by a comment is not a check.
 run 'the runnable code names no component core-install does not ship' green \
   "$PY" - "$SUBSTRATE/install.sh" <<'PY'
 import re
@@ -9303,75 +6834,30 @@ if bad:
 print("the runnable code names no component core-install does not ship")
 PY
 
-# ===========================================================================
-# 20. A manifest directory is read DELIBERATELY — AppleDouble ignored, a stray
-#     file refused by name, and the filter proved load-bearing
-# ===========================================================================
-#
-# MEASURED LIVE ON THE BOX. The substrate tree was shipped from a macOS
-# workstation with the idiom an operator will reach for — `tar czf - . | ssh
-# box 'tar xzf -'` — and BSD tar left AppleDouble sidecars beside every real
-# file. Step 6's `kubectl apply -f <dir>` hands the directory's files, DOTFILES
-# INCLUDED, to the API server, so it read `._identity.yaml` and the install
-# DIED on the first sidecar:
-#
-#   error parsing /var/lib/anywaye/substrate/manifests/applications/._identity.yaml:
-#   error converting YAML to JSON: yaml: control characters are not allowed
-#
-# `COPYFILE_DISABLE=1 tar --no-xattrs` reduces the sidecars but does not remove
-# the class: a Windows copy, an editor's `foo~` backup or a `.DS_Store` is the
-# same defect from another transport. install.sh now resolves its file list (the
-# note above install_applications): AppleDouble ignored and named, a stray file
-# REFUSED by name, the intended `*.yaml` manifests applied and nothing else.
-#
-# THREE PROOFS, each executed against a mocked kubectl that READS what `-f`
-# names — dotfiles in a directory included — and refuses a file carrying NUL
-# bytes with the exact error above. A mock that swallowed everything would let
-# the "filter removed" control pass for the wrong reason, which is the whole
-# failure a red control exists to rule out.
 apple_double_tree="$WORK/apply-tree-sidecar"
 stray_tree="$WORK/apply-tree-stray"
 
-# plant_apple_double <path> — an AppleDouble sidecar: the BSD tar magic, an
-# "Mac OS X" attr header, and the NUL bytes that make kubectl refuse it.
 plant_apple_double() {
   printf '\000\005\026\007\000\002\000\000Mac OS X\000\000\000\002\000\000' >"$1"
   printf '\000\000\000\000\000\000\000\000' >>"$1"
 }
 
-# apply_step <installer> <manifest-tree> <mock-root> <log> — source <installer>
-# with `main` already stripped, point MANIFEST_DIR at <manifest-tree>, stub
-# kubectl with the file-backed mock, and run install_applications. Returns the
-# step's exit status; the mock's records land under <mock-root>.
 apply_step() {
   local installer="$1" tree="$2" mock="$3" log="$4" ec=0
   rm -rf "$mock"
   mkdir -p "$mock"
-  # The box state step 6 runs in: step 4 has already made `argocd`, and the
-  # Applications apply INTO it (metadata.namespace: argocd). The mock enforces
-  # the namespace registry on every write, so the fixture seeds the namespace
-  # the manifests name — otherwise the green would fail on the namespace the
-  # box already has, not on the transport this check is about.
   printf 'argocd\n' >"$mock/namespaces"
   (
-    # shellcheck source=/dev/null
     . "$installer"
-    # A failing kubectl KILLS the step here, the way it does on the box: the
-    # subshell is the left side of an `||`, which suppresses `set -e`, so the
-    # wrapper makes the failure fatal explicitly rather than letting
-    # install_applications carry on to its `wait`.
     kubectl() { mock_kubectl "$@" || exit $?; }
     export RECEIPT_PATH="$mock/receipt.json"
     export MOCK_ROOT="$mock"
-    # shellcheck disable=SC2034  # read by the sourced installer's install_applications
     MANIFEST_DIR="$tree"
     install_applications
   ) >"$log" 2>&1 || ec=$?
   return "$ec"
 }
 
-# GREEN: a tree with AppleDouble sidecars beside the real manifests must apply
-# and must not fail.
 apple_double_ok() {
   local ec=0 applied argv
   apply_step "$fixture_sourced" "$apple_double_tree" "$WORK/ad-mock" "$WORK/ad.log" || ec=$?
@@ -9403,8 +6889,6 @@ apple_double_ok() {
   printf 'sidecar ignored and named, only the real manifests applied'
 }
 
-# RED control #1: a stray non-sidecar YAML in the directory must be REFUSED,
-# by name, and for the stray file's reason rather than the sidecar's.
 stray_refused() {
   local ec=0 log
   apply_step "$fixture_sourced" "$stray_tree" "$WORK/stray-mock" "$WORK/stray.log" || ec=$?
@@ -9426,9 +6910,6 @@ stray_refused() {
   printf 'refused, naming stray.yml'
 }
 
-# RED control #2: the glob filter removed (the loop reads EVERY entry, as
-# `kubectl apply -f <dir>` always did) hands the sidecar to kubectl and the
-# apply breaks again — so the filter is proven load-bearing, not decorative.
 nofilter_breaks() {
   local installer="$1" ec=0 log
   if cmp -s "$installer" "$fixture_sourced"; then
@@ -9452,8 +6933,6 @@ nofilter_breaks() {
   printf 'the sidecar broke the apply again (exit %s)' "$ec"
 }
 
-# Build the two trees. The premise is asserted before the proof: a control whose
-# fixture is missing the thing it names proves nothing.
 mkdir -p "$apple_double_tree"
 cp "$MANIFESTS/identity.yaml" "$apple_double_tree/"
 cp "$MANIFESTS/gateway.yaml" "$apple_double_tree/"
@@ -9478,8 +6957,6 @@ else
   fail 'premise: the stray tree carries a non-sidecar YAML named stray.yml' 'the fixture is not the shape the control names'
 fi
 
-# The filter-removed fixture: one sed changes the helper's loop to read every
-# entry, exactly as the pre-fix directory apply did.
 nofilter_installer="$WORK/install-nofilter.sh"
 sed 's|for f in "$dir"/\*\.yaml; do|for f in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do|' \
   "$fixture_sourced" >"$nofilter_installer"
@@ -9488,55 +6965,6 @@ run 'the step applies a tree with AppleDouble sidecars (sidecar ignored and name
 run 'control: a stray non-sidecar YAML is refused by name (the apply goes red)' green stray_refused
 run 'control: removing the glob filter lets AppleDouble break the apply again' green nofilter_breaks "$nofilter_installer"
 
-# ===========================================================================
-# 21. The AppProject the Applications name actually exists — and they name the
-#     one that exists
-# ===========================================================================
-#
-# core-install.yaml ships the AppProject CRD but no AppProject object (neither
-# does the full install.yaml — both are CRD-only; the controller auto-creates
-# a maximal default in some installs, but the core variant does not), so an
-# Application with `spec.project: default` is `Unknown/Unknown` with
-#   Application referencing project default which does not exist
-# and creates nothing — step 11 times out waiting for deployment/identity
-# that Argo never made. The manager hand-fixed the box with a maximal project
-# (sourceRepos *, destinations */*, clusterResourceWhitelist */*); kit ships
-# the least-privilege one in manifests/argocd/appproject.yaml — sourceRepos
-# the two upstream Helm repoURLs plus the chart-path glob
-# oci://ghcr.io/anywaye/charts/*, destinations exactly the six namespaces they
-# deploy into on https://kubernetes.default.svc, and a clusterResourceWhitelist
-# of exactly the three cluster-scoped kinds the observability charts render
-# (see §28) — and step 4 applies it right after Argo CD is Available and
-# before any Application is applied (see install_argocd).
-#
-# The check is a STATIC equality over YAML: the project the Applications name
-# and the shipped AppProject's name must be one fact, one spelling. A static
-# check is the right shape here because the defect is a name that disagrees
-# across files rather than a runtime behaviour; the runtime behaviour is what
-# the box showed.
-#
-# AND THE SECOND SEAM THIS PACKET EXISTS FOR: the AppProject's sourceRepos and
-# the Applications' source.repoURL are TWO SETS OVER ONE FACT, and they drifted.
-# A sibling packet moved each Application from the registry ROOT to its own
-# chart's PATH (oci://ghcr.io/anywaye/charts/gateway, …/courier, …/identity,
-# …/parlor) because Argo resolves an OCI source's revision against the full
-# path; appproject.yaml still listed the bare root, so the controller refused
-# every Application with
-#   application repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
-#   project 'default'
-# The name-equality check above cannot see it — the project is named `default`
-# and the Applications name `default`, so it is green on the exact box that is
-# broken. The check below is over the OTHER two sets, and the control is that
-# historical pair: the pre-fix bare root + the per-chart Applications goes red.
-#
-# The permission test mirrors the pinned Argo (v3.5.4) exactly:
-# `IsSourcePermitted` normalises both sides with `git.NormalizeGitURL`
-# (lower-case, trim a `.git` suffix) and matches with `util/glob.Match(pat,
-# val, '/')` — gobwas/glob with `/` as the separator, so a `*` cannot cross a
-# `/`. This is glob-aware on purpose: the project permits ONE chart-name
-# segment under the root, not a fixed four, so a fifth service needs no edit
-# here, and a fixture adding a fifth chart must stay green while a fixture
-# naming another registry must go red.
 APP_PROJECT="$SUBSTRATE/manifests/argocd/appproject.yaml"
 
 check_appproject() {
@@ -9547,7 +6975,6 @@ import sys
 import yaml
 
 apps_dir, proj_path = sys.argv[1:3]
-# The Applications.
 apps = []
 for f in sorted(os.listdir(apps_dir)):
     if not f.endswith((".yaml", ".yml")):
@@ -9569,15 +6996,12 @@ if not apps:
     print("no Application manifests found")
     sys.exit(1)
 
-# All Applications must name the SAME project — a mixed set is a fleet where
-# some Applications sync and some never do, and the mixed state is the defect.
 projects = {p for _, p in apps}
 if len(projects) != 1:
     print(f"Applications name {len(projects)} distinct projects: {sorted(projects)} — one fact, one spelling")
     sys.exit(1)
 apps_project = projects.pop()
 
-# The shipped AppProject.
 try:
     proj_doc = yaml.safe_load(open(proj_path, encoding="utf-8"))
 except FileNotFoundError:
@@ -9605,15 +7029,6 @@ if shipped != apps_project:
     print(f"Applications name project {apps_project!r} but shipped AppProject is {shipped!r} — one fact, one spelling")
     sys.exit(1)
 
-# Least-privilege shape: the project must list exactly the repoURLs and
-# destinations the Applications use, and no bare wildcard. A maximal project
-# (sourceRepos *, destinations */*) would pass the equality check above while
-# being the boundary the packet exists to tighten, so the least-privilege
-# half is asserted here too — the same way the static phase's allowlist
-# hygiene refuses an entry matching nothing. A glob that is a PATH under a
-# repo this project owns (`oci://ghcr.io/anywaye/charts/*`) is not a bare `*`
-# and is allowed; the check is exact membership, so `"*" == repo` is what it
-# refuses, not any repo containing a `*`.
 spec = proj_doc.get("spec", {})
 repos = spec.get("sourceRepos", [])
 if "*" in repos:
@@ -9635,28 +7050,19 @@ PY
 run 'the Applications name the shipped AppProject (one fact, one spelling, least-privilege)' green \
   check_appproject "$MANIFESTS" "$APP_PROJECT"
 
-# The red control: a fixture where one Application names a different project.
-# Must go red — an equality the check cannot see disagree is not a check.
 fixture_project_drift="$WORK/appproject-drift"
 mkdir -p "$fixture_project_drift"
 cp "$MANIFESTS"/*.yaml "$fixture_project_drift/"
-# Change one Application's project.
 sed -i '' 's/project: default/project: other/' "$fixture_project_drift/identity.yaml" 2>/dev/null || \
   sed -i 's/project: default/project: other/' "$fixture_project_drift/identity.yaml"
 run 'control: an Application naming a different project goes red' red \
   check_appproject "$fixture_project_drift" "$APP_PROJECT"
 
-# The second control: the shipped project renamed. Must go red the same way —
-# a check satisfied by a file that contains the right name somewhere would
-# pass on a project named `default` and an Application naming `anywaye`.
 fixture_project_renamed="$WORK/appproject-renamed.yaml"
 sed 's/name: default/name: anywaye/' "$APP_PROJECT" >"$fixture_project_renamed"
 run 'control: a shipped AppProject with a different name goes red' red \
   check_appproject "$MANIFESTS" "$fixture_project_renamed"
 
-# --- The permission check: the AppProject's sourceRepos must permit every
-# Application's source.repoURL. This is the seam the name-equality check above
-# cannot see (see the section comment) and the exact on-box refusal.
 check_appproject_permits() {
   "$PY" - "$1" "$2" <<'PY'
 import os
@@ -9667,9 +7073,6 @@ import yaml
 
 
 def normalize(repo):
-    # Mirrors argo-cd v3.5.4 util/git/git.go NormalizeGitURL for the URL forms
-    # this substrate uses (https and oci, never git@/ssh): lower-case, trim a
-    # trailing `.git`, and leave everything else — including a `*`.
     repo = repo.strip().lower()
     if repo.endswith(".git"):
         repo = repo[:-4]
@@ -9677,9 +7080,6 @@ def normalize(repo):
 
 
 def glob_to_regex(pattern):
-    # gobwas/glob with '/' as the separator, which is what util/glob.Match is
-    # called with: `*` matches a run of non-'/' characters, `?` one non-'/'
-    # character, `[...]` a class. Everything else is literal.
     i, n, out = 0, len(pattern), []
     while i < n:
         c = pattern[i]
@@ -9710,16 +7110,12 @@ def glob_to_regex(pattern):
 
 
 def glob_match(pattern, value):
-    # The `pattern == "*"` shortcut is Argo's own (globMatch in
-    # app_project_types.go): a bare `*` allows everything before globbing.
     if pattern == "*":
         return True
     return bool(glob_to_regex(pattern).match(value))
 
 
 def permitted(repo_url, patterns):
-    # The exact algorithm of AppProject.IsSourcePermitted (v3.5.4): normalise
-    # both sides, match with '/' as separator, honour `!` deny patterns.
     src = normalize(repo_url)
     any_matched = False
     for raw in patterns:
@@ -9728,7 +7124,6 @@ def permitted(repo_url, patterns):
             norm = "!" + normalize(raw[1:])
             matched = not glob_match(norm[1:], src)
             if not matched:
-                return False  # a deny pattern that matches refuses the source
             any_matched = True
         else:
             if glob_match(normalize(raw), src):
@@ -9781,22 +7176,12 @@ print(f"{seen} Application(s), every repoURL permitted by {len(patterns)} source
 PY
 }
 
-# GRANT: the real tree. Every Application's repoURL is permitted.
 run 'every Application source.repoURL is permitted by the AppProject sourceRepos' green \
   check_appproject_permits "$MANIFESTS" "$APP_PROJECT"
 
-# RED CONTROL 1 — the historical PAIR. appproject.yaml used to list the bare
-# registry ROOT while the Applications name per-chart PATHS, which is the exact
-# refusal measured on the box:
-#   application repo oci://ghcr.io/anywaye/charts/gateway is not permitted in
-#   project 'default'
-# Rebuild the pre-fix project and require the check to see it.
 fixture_project_bare_root="$WORK/appproject-bare-root.yaml"
 sed 's|^    - oci://ghcr.io/anywaye/charts/\*$|    - oci://ghcr.io/anywaye/charts|' \
   "$APP_PROJECT" >"$fixture_project_bare_root"
-# The guard reads the LIST ITEM, not a substring of the file: the comment above
-# the list explains the glob and names it, so a whole-file grep would find the
-# explanation and call a correct fixture unbuilt.
 if grep -qE '^ +- oci://ghcr\.io/anywaye/charts/\*' "$fixture_project_bare_root"; then
   fail 'control fixture: the bare-root AppProject was not built' \
     "the sed did not strip the chart glob from sourceRepos, so the control would prove nothing"
@@ -9805,7 +7190,6 @@ else
     check_appproject_permits "$MANIFESTS" "$fixture_project_bare_root"
 fi
 
-# RED CONTROL 2 — an Application naming a repo OUTSIDE the project entirely.
 fixture_foreign_repo="$WORK/apps-foreign-repo"
 mkdir -p "$fixture_foreign_repo"
 cp "$MANIFESTS"/*.yaml "$fixture_foreign_repo/"
@@ -9821,9 +7205,6 @@ else
     "the sed did not rewrite courier's repoURL, so the control would prove nothing"
 fi
 
-# RED CONTROL 3 — the `*` cannot cross a `/`. A nested OCI path under the same
-# root is refused, which is the "it is not a bare `*`" posture the AppProject
-# comment claims; the check must encode the separator, not just a prefix.
 fixture_nested_repo="$WORK/apps-nested-repo"
 mkdir -p "$fixture_nested_repo"
 cp "$MANIFESTS"/*.yaml "$fixture_nested_repo/"
@@ -9839,18 +7220,9 @@ else
     "the sed did not nest the identity repoURL, so the control would prove nothing"
 fi
 
-# GREEN CONTROL — a FIFTH chart under the same root is permitted with no edit
-# to the project. This is the whole reason for the glob rather than four names:
-# a new service must not require an edit to appproject.yaml, and a check that
-# only knew the four shipped names would pass on an enumeration.
 fixture_fifth_chart="$WORK/apps-fifth-chart"
 mkdir -p "$fixture_fifth_chart"
 cp "$MANIFESTS"/*.yaml "$fixture_fifth_chart/"
-# A new Application, assembled rather than sed'ed from an existing one so its
-# name and chart agree. The example is a hypothetical `ledger`, never pantry:
-# pantry is Anywaye-operated and the §28b boundary refuses it — a "fifth
-# chart" control naming pantry would prove the glob by re-adding the one
-# service the packet removes.
 cat >"$fixture_fifth_chart/ledger.yaml" <<'YAML'
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -9870,37 +7242,7 @@ YAML
 run 'the project permits a FIFTH chart with no edit (the glob, not four names)' green \
   check_appproject_permits "$fixture_fifth_chart" "$APP_PROJECT"
 
-# ===========================================================================
-# 22. No other substrate manifest names an object core-install does not ship
-# ===========================================================================
-#
-# The AppProject was the one that shipped this packet; the sibling packets
-# already caught argocd-server (a Deployment and a guard that core-install
-# does not provide). This is the sweep for the same class — a reference to a
-# workload or Service the substrate assumes exists in the argocd namespace
-# because a full Argo CD install provides it, while the core variant this
-# substrate installs does not.
-#
-# The work is per REFERENCE, not per file: every workload/service name that
-# appears in the substrate's own manifests is listed, then each is checked
-# against the set of workloads/services the pinned core-install.yaml actually
-# ships (parsed rather than hand-typed, so the pin is the source of truth).
-# A hand-typed allowlist would contain argocd-server the day it was removed,
-# which is the failure the sibling packet exists to prevent.
-# The sweep is OFFLINE — no curl — because the gate must be green on a
-# development machine with no network, and a sweep that SKIPs offline is a
-# sweep that never ran on the machine that most needs it. The set is derived
-# from the pinned core-install workloads the installer actually waits on and
-# guards: the three Deployments and one StatefulSet core-install ships in
-# argocd (applicationset-controller, redis, repo-server, application-controller)
-# — not a hand-typed list a future Argo bump could silently invalidate, but the
-# same set section 19's runnable-code check is built from. A reference to
-# argocd-server, dex or notifications-controller is what the sibling packets
-# caught; this sweep lists EVERY argocd-* string the substrate mentions and
-# reports per reference whether it is in that set.
 CORE_ALLOWED="argocd-application-controller argocd-applicationset-controller argocd-redis argocd-repo-server"
-# The substrate's own workload/service references — every string that names a
-# component in argocd that the substrate waits on, guards, or ships.
 substrate_refs_raw="$(grep -h "argocd" "$SUBSTRATE/install.sh" "$APP_PROJECT" "$SUBSTRATE/manifests"/*.yaml "$SUBSTRATE/manifests"/*/*.yaml 2>/dev/null | grep -oE "argocd-[a-z0-9-]+" | sort -u || true)"
 missing_refs=""
 unknown_refs=""
@@ -9908,10 +7250,6 @@ for ref in $substrate_refs_raw; do
   case " $CORE_ALLOWED " in
     *" $ref "*) ;;
     *)
-      # argocd-server and the initial-admin-secret are the known absent pair;
-      # section 19 already proves the runnable code names neither, so a hit
-      # here is either a comment (allowed) or a new manifest reference that
-      # slipped through that check — separate the two.
       case "$ref" in
         argocd-server|argocd-dex-server|argocd-notifications-controller|argocd-initial-admin-secret)
           unknown_refs="${unknown_refs:+$unknown_refs }${ref}"
@@ -9929,10 +7267,6 @@ else
   pass 'sweep: substrate names no workload/service core-install does not ship (per reference)'
 fi
 if [ -n "$unknown_refs" ]; then
-  # The runnable-code check in §19 must have caught these; if they appear here
-  # they are in a comment or manifest rather than runnable code — report but
-  # do not double-fail the same names.
-  case "$(grep -E "argocd-(server|dex-server|notifications-controller|initial-admin-secret)" "$SUBSTRATE/install.sh" 2>/dev/null | grep -v "^[[:space:]]*#")" in
     *argocd-server*|*argocd-initial-admin-secret*)
       fail 'sweep: runnable code still names a component core-install does not ship' "$unknown_refs"
       ;;
@@ -9944,31 +7278,6 @@ else
   pass 'sweep: no reference to the absent pair beyond comments (§19)'
 fi
 
-# ===========================================================================
-# 23. THE SERVICES' TELEMETRY IS OFF ON THE BOX, ON ONE SPELLING
-# ===========================================================================
-#
-# THE DEFECT. Every service's COMPILED default OTLP endpoint is the COMPOSE
-# stack's name — `http://otel-collector:4318` for identity/courier/parlor and
-# `:4317` for gateway. The box deploys no such Service and no OTLP endpoint at
-# all: alloy is pinned at chart 1.13.0 with no values, so its default config is
-# `config/example.alloy` (a `logging` block and `discovery.kubernetes`, no
-# `otelcol.receiver.otlp`) and its default Service exposes only `http-metrics`
-# on 12345; and the substrate ships no Tempo. So a fresh box's services retry
-# forever and log a DNS failure every ten seconds.
-#
-# THE CLAIM. Every service the substrate configures is told to turn its SDK off
-# with the OTel spec's own switch — `OTEL_SDK_DISABLED=true`, the mechanism
-# core's `otel-endpoint.schema.json` pins for the no-op path — and the switch is
-# spelled ONCE and referenced, never retyped. The three generated-chart services
-# get it through their secret (their charts inject env with
-# `envFrom: secretRef`); gateway's hand-written chart reads clear env from a
-# ConfigMap, so its Application carries the same key/value in
-# `spec.source.helm.values`. The two sites must AGREE.
-#
-# THE CONTROLS answer differently: the switch dropped from the constant, the
-# switch NAME drifted in the constant, one secret's reference removed, and
-# gateway's Application losing the key or drifting its value — each must go red.
 check_service_telemetry() {
   "$PY" - "$1" "$2" <<'PY'
 import os
@@ -9979,7 +7288,6 @@ import yaml
 
 install_path, apps_dir = sys.argv[1], sys.argv[2]
 
-# The switch core's schema pins, named once here so a drift is a comparison.
 SWITCH_KEY = "OTEL_SDK_DISABLED"
 SWITCH_VALUE = "true"
 
@@ -9988,18 +7296,12 @@ code = re.sub(r"(?m)^\s*#.*$", "", src)
 
 problems = []
 
-# 1. The switch is DEFINED once, with the spec's own key and value. The
-#    `=(--from-literal=` anchor is what makes this the DEFINITION and not one of
-#    the references (`"${SERVICE_OTEL_DISABLED[@]}"`).
 defs = re.findall(r"SERVICE_OTEL_DISABLED=\(--from-literal=([A-Z_]+)=([^)]+)\)", code)
 if len(defs) != 1:
     problems.append(f"expected exactly one SERVICE_OTEL_DISABLED definition, found {len(defs)}")
 elif tuple(defs[0]) != (SWITCH_KEY, SWITCH_VALUE):
     problems.append(f"the off-switch is {defs[0]!r}, want {(SWITCH_KEY, SWITCH_VALUE)!r}")
 
-# 2. Every generated-chart service's secret carries it BY REFERENCE. A window
-#    after the create line is long enough for the multi-line invocations and
-#    short enough not to reach the next secret.
 for secret in ("identity-secrets", "courier-secrets", "parlor-secrets", "billing-secrets"):
     m = re.search(r"create secret generic " + re.escape(secret) + r"\b", code)
     if not m:
@@ -10011,8 +7313,6 @@ for secret in ("identity-secrets", "courier-secrets", "parlor-secrets", "billing
     elif f"--from-literal={SWITCH_KEY}=" in window:
         problems.append(f"{secret} retypes the switch instead of referencing the constant")
 
-# 3. gateway: the one chart that does not envFrom its secret. Its Application
-#    must carry the same key/value through spec.source.helm.values.
 gw_path = os.path.join(apps_dir, "gateway.yaml")
 try:
     with open(gw_path, encoding="utf-8") as fh:
@@ -10032,9 +7332,6 @@ else:
             f"want {SWITCH_VALUE!r}"
         )
 
-# 4. "Every service" is the four the substrate ships, and each must have a
-#    secret to carry the switch or an Application that does. A service dropped
-#    from the secret step is a service nothing configures.
 services = set(re.findall(r"create secret generic (\S+-secrets)", code))
 for svc in ("identity", "gateway", "courier", "parlor", "billing"):
     if f"{svc}-secrets" not in services:
@@ -10050,33 +7347,24 @@ PY
 run 'every service is told to disable its SDK, on one spelling' green \
   check_service_telemetry "$SUBSTRATE/install.sh" "$MANIFESTS"
 
-# The control that the switch can be dropped from the definition at all.
 fixture_no_switch="$WORK/install-no-switch.sh"
 sed 's/^SERVICE_OTEL_DISABLED=(--from-literal=OTEL_SDK_DISABLED=true)$/SERVICE_OTEL_DISABLED=()/' \
   "$SUBSTRATE/install.sh" >"$fixture_no_switch"
 run 'control: the off-switch dropped from the constant goes red' red \
   check_service_telemetry "$fixture_no_switch" "$MANIFESTS"
 
-# The control that the switch NAME is load-bearing — a name no SDK reads is the
-# defect wearing the fix's clothes, so the check must not accept it.
 fixture_drifted_switch="$WORK/install-drifted-switch.sh"
 sed 's/--from-literal=OTEL_SDK_DISABLED=true/--from-literal=OTEL_TELEMETRY_OFF=true/' \
   "$SUBSTRATE/install.sh" >"$fixture_drifted_switch"
 run 'control: a drifted switch name in the constant goes red' red \
   check_service_telemetry "$fixture_drifted_switch" "$MANIFESTS"
 
-# The control that one service's REFERENCE is load-bearing: identity keeps the
-# definition but stops referencing it, so its pod would fall back to the
-# compose name.
 fixture_identity_no_switch="$WORK/install-identity-no-switch.sh"
 sed 's/"\${identity_args\[@\]}" "\${SERVICE_OTEL_DISABLED\[@\]}"/"\${identity_args[@]}"/' \
   "$SUBSTRATE/install.sh" >"$fixture_identity_no_switch"
 run 'control: a service secret without the switch goes red' red \
   check_service_telemetry "$fixture_identity_no_switch" "$MANIFESTS"
 
-# The controls for gateway's half: its Application losing the key, and its value
-# drifting. A fixture apps directory holds only gateway.yaml — that is the only
-# file this check reads out of the directory.
 fixture_gw_name="$WORK/apps-gateway-name"
 mkdir -p "$fixture_gw_name"
 sed 's/OTEL_SDK_DISABLED: "true"/OTEL_DISABLED: "true"/' \
@@ -10091,46 +7379,6 @@ sed 's/OTEL_SDK_DISABLED: "true"/OTEL_SDK_DISABLED: "false"/' \
 run 'control: gateway losing the switch value goes red' red \
   check_service_telemetry "$SUBSTRATE/install.sh" "$fixture_gw_value"
 
-# ===========================================================================
-# 24. EVERY CROSS-SERVICE ADDRESS RESOLVES TO A SERVICE THE MANIFESTS SHIP
-# ===========================================================================
-#
-# THE DEFECT. The box puts every service in its own namespace — `identity`,
-# `gateway`, `courier`, `parlor` — and the data plane in `data`. A bare name
-# resolves only inside a namespace of that name (Kubernetes limits a query
-# naming no namespace to the CALLER's own), so `http://identity:8080` from a pod
-# in `gateway` resolves to nothing: gateway boots, `/readyz` answers
-# `identity: unavailable` forever, and nothing becomes Ready. The COMPOSE
-# spelling is correct for one flat network and wrong the moment the substrate
-# gives each service a namespace.
-#
-# THE CLAIM. Every cross-service address the substrate sets is
-# `<svc>.<ns>.svc.cluster.local` and names a Service the substrate's manifests
-# actually ship, in the namespace they ship it in. Two writers are covered: the
-# APPLICATIONS (`spec.source.helm.values`, which is where the substrate owns
-# gateway's and parlor's clear env) and the INSTALLER's own addresses (the
-# constants and DSNs it writes into the services' secrets — NATS_URL,
-# COURIER_BASE_URL, COURIER_IDENTITY_URL, REDIS_URL, the database DSNs).
-#
-# WHY A STATIC CHECK OVER YAML. The defect is a name that disagrees across two
-# trees (a chart default written for compose vs. the substrate's namespace
-# layout); the box showed the runtime symptom. The equality is a name, so a
-# static comparison of names is the check that would have caught it, and it runs
-# on a developer machine.
-#
-# THE SHIPPED SET IS DERIVED, NOT TYPED. The launch Services come from each
-# Application's `metadata.name` + `spec.destination.namespace`; the data Services
-# from the `Service` documents in `manifests/data/`; and CNPG's read-write
-# Service (`<cluster>-rw`) from the `Cluster` document. So an address to a name
-# no manifest creates — `billing` is the standing example (pantry was, until
-# it shipped, and is again since the operated-boundary packet removed it;
-# billing stays the example because pantry's re-addition is §28b's red
-# control, not §24's) — goes RED, which is the property
-# that keeps the check honest: the substrate may only name what it ships.
-#
-# THE CONTROLS answer differently: a bare name, a name in the wrong namespace, a
-# name no manifest ships (billing), a service that loses its address entirely,
-# and a drifted name in the installer — each must go red.
 check_cross_namespace_addresses() {
   "$PY" - "$1" "$2" "$3" <<'PY'
 import os
@@ -10143,9 +7391,6 @@ apps_dir, data_dir, install_path = sys.argv[1:4]
 
 problems = []
 
-# --- 1. the Services the manifests SHIP ------------------------------------
-# launch services: one Application per service, its name the Service's name and
-# its destination the service's own namespace.
 shipped = {}
 for entry in sorted(os.listdir(apps_dir)):
     if not entry.endswith(".yaml"):
@@ -10160,8 +7405,6 @@ for entry in sorted(os.listdir(apps_dir)):
     if name and ns:
         shipped.setdefault(name, set()).add(ns)
 
-# the data plane: every Service document, plus CNPG's derived read-write Service
-# (`<cluster>-rw`), which CNPG creates rather than a manifest.
 for entry in sorted(os.listdir(data_dir)):
     if not entry.endswith(".yaml"):
         continue
@@ -10180,14 +7423,12 @@ for entry in sorted(os.listdir(data_dir)):
 SUFFIX = ".svc.cluster.local"
 URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://([^\s\"'/]+)")
 
-addresses = []  # (host, where)
 
 
 def host_of(hostport):
     return hostport.split("@")[-1].split(":")[0]
 
 
-# --- 2. every address the APPLICATIONS set --------------------------------
 app_addresses = 0
 per_app = {}
 for entry in sorted(os.listdir(apps_dir)):
@@ -10202,8 +7443,6 @@ for entry in sorted(os.listdir(apps_dir)):
     if not values:
         continue
     where = f"{entry} (spec.source.helm.values)"
-    # The values block is a YAML STRING; parse it and read every scalar, so a
-    # URL nested in the route table is found the same way a top-level one is.
     try:
         parsed = yaml.safe_load(values)
     except yaml.YAMLError as exc:
@@ -10224,12 +7463,6 @@ for entry in sorted(os.listdir(apps_dir)):
     per_app[entry] = found
     app_addresses += found
 
-# The Applications whose clear env the substrate MUST override are named, not
-# inferred: gateway's and parlor's charts ship a COMPOSE default for a peer
-# (`http://identity:8080`), and the substrate is the only thing that can spell
-# the box's namespace. A vacuity guard on the total would be satisfied by
-# gateway's two addresses ALONE, so a service that silently lost its override —
-# the exact state this packet fixes for parlor — must be its own failure.
 for required in ("gateway.yaml", "parlor.yaml"):
     if per_app.get(required, 0) < 1:
         problems.append(
@@ -10242,7 +7475,6 @@ if app_addresses == 0:
         "proves nothing (gateway and parlor must each carry one)"
     )
 
-# --- 3. every `.svc.cluster.local` name the INSTALLER writes ---------------
 with open(install_path, encoding="utf-8") as fh:
     src_text = fh.read()
 code = re.sub(r"(?m)^\s*#.*$", "", src_text)
@@ -10256,7 +7488,6 @@ if len(install_addresses) < 5:
         "Postgres DSN host) — a check on a vanished writer proves nothing"
     )
 
-# --- 4. every address resolves to a shipped Service, in the right namespace -
 for host, where in addresses:
     if not host.endswith(SUFFIX):
         problems.append(
@@ -10293,8 +7524,6 @@ PY
 run 'every cross-service address names a Service the manifests ship' green \
   check_cross_namespace_addresses "$MANIFESTS" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
 
-# A fixture apps directory: the real Applications, so the shipped set is the real
-# one, with exactly one file mutated. `cp -R` then `sed` in place.
 fixture_apps() {
   local dir="$1"
   rm -rf "$dir"
@@ -10302,8 +7531,6 @@ fixture_apps() {
   cp -R "$MANIFESTS/." "$dir/"
 }
 
-# The control that a BARE name is the defect: gateway keeps its override but
-# drops the qualification, so `identity` resolves only inside `identity`.
 fixture_bare="$WORK/apps-bare"
 fixture_apps "$fixture_bare"
 sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://identity:8080|g' \
@@ -10312,8 +7539,6 @@ rm -f "$fixture_bare/gateway.yaml.bak"
 run 'control: a bare cross-service name goes red' red \
   check_cross_namespace_addresses "$fixture_bare" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
 
-# The control that the NAMESPACE segment is load-bearing: identity's Service
-# named in the wrong namespace is still a fully qualified name and still wrong.
 fixture_wrongns="$WORK/apps-wrongns"
 fixture_apps "$fixture_wrongns"
 sed -i.bak 's|identity.identity.svc.cluster.local|identity.gateway.svc.cluster.local|g' \
@@ -10322,27 +7547,14 @@ rm -f "$fixture_wrongns/gateway.yaml.bak"
 run 'control: a name in the wrong namespace goes red' red \
   check_cross_namespace_addresses "$fixture_wrongns" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
 
-# The control that a name the manifests DO NOT SHIP is refused. This is the
-# property that keeps the check from being satisfied by any well-spelled name:
-# billing is addressed by no substrate manifest, so a substrate Application
-# may not name it. (This control used to name pantry — the service this
-# packet ships. The day pantry gained its Application, the fixture naming it
-# turned green, which is the control doing its job: it proves the shipped
-# set, and the shipped set moved.)
 fixture_unshipped="$WORK/apps-unshipped"
 fixture_apps "$fixture_unshipped"
-# pantry, because it is the service whose Application is deliberately NOT
-# shipped (billing's arrived on 2026-10-15 with the freeze-lift, so it is now a
-# real Service a manifest ships and the mutation would no longer be a control).
 sed -i.bak 's|http://identity.identity.svc.cluster.local:8080|http://pantry.pantry.svc.cluster.local:8080|' \
   "$fixture_unshipped/gateway.yaml"
 rm -f "$fixture_unshipped/gateway.yaml.bak"
 run 'control: an address to a Service no manifest ships goes red' red \
   check_cross_namespace_addresses "$fixture_unshipped" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
 
-# The control that a SERVICE LOSING ITS ADDRESS is caught: parlor's override is
-# emptied, so parlor falls back to the compose spelling — the exact state this
-# packet fixes — and the address set shrinks.
 fixture_parlor_loss="$WORK/apps-parlor-loss"
 fixture_apps "$fixture_parlor_loss"
 "$PY" - "$fixture_parlor_loss/parlor.yaml" <<'PY'
@@ -10364,24 +7576,12 @@ PY
 run 'control: a service that loses its address goes red' red \
   check_cross_namespace_addresses "$fixture_parlor_loss" "$SUBSTRATE/manifests/data" "$SUBSTRATE/install.sh"
 
-# The control that the INSTALLER's half is load-bearing: the Redis address is
-# moved to a namespace redis does not live in.
 fixture_install_ns="$WORK/install-wrong-ns.sh"
 sed 's|redis\.data\.svc\.cluster\.local|redis.gateway.svc.cluster.local|g' \
   "$SUBSTRATE/install.sh" >"$fixture_install_ns"
 run 'control: a drifted in-cluster name in the installer goes red' red \
   check_cross_namespace_addresses "$MANIFESTS" "$SUBSTRATE/manifests/data" "$fixture_install_ns"
 
-# ===========================================================================
-# 24. EVERY RUN REPORTS ITS OWN SPEED — the step timing is present and honest
-# ===========================================================================
-# `install.sh` used to carry no timestamps at all, so a step's duration could
-# not be recovered after the fact. Now every step emits `seconds`, measured on
-# the step's own boundary, and the final event carries the total and the
-# per-step table. This check is what makes the number TRUSTWORTHY rather than
-# decorative: a step with no timing, a run with no positive duration, and a
-# total smaller than the steps it names all go red. The controls are fixtures
-# assembled here, never a copy of the tree.
 check_timing() {
   "$PY" - "$1" <<'PY'
 import json
@@ -10413,9 +7613,6 @@ with open(path, encoding="utf-8") as fh:
             if not isinstance(secs, (int, float)) or secs < 0:
                 problems.append(f"line {lineno}: step.start has no non-negative seconds: {secs!r}")
                 continue
-            # The offsets come off a monotonic clock, so they never go
-            # backwards; a decreasing offset is a clock that was edited or a
-            # number that was not measured.
             if last_offset is not None and secs < last_offset:
                 problems.append(f"line {lineno}: step.start offset {secs} is behind the previous {last_offset}")
             last_offset = secs
@@ -10480,16 +7677,12 @@ fi
 
 run 'the step timings are present and the total covers the steps' green check_timing "$timing_jsonl"
 
-# The install.done event's own `steps` table is the human table's source, so a
-# reader can take the whole answer off one line.
 if grep -q '"event":"install.done".*"steps":\[' "$timing_jsonl"; then
   pass 'the final event carries the per-step table'
 else
   fail 'the final event carries the per-step table' "$(tail -1 "$timing_jsonl")"
 fi
 
-# Control 1: a step.done with no `seconds` at all. This is the packet's named
-# red control — a step that reports no timing must not pass.
 fixture_no_timing="$WORK/timing-no-seconds.jsonl"
 {
   printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.100}'
@@ -10498,8 +7691,6 @@ fixture_no_timing="$WORK/timing-no-seconds.jsonl"
 } >"$fixture_no_timing"
 run 'control: a step that reports no timing goes red' red check_timing "$fixture_no_timing"
 
-# Control 2: a total that is a fabricated constant, smaller than the steps it
-# names. A number nobody measured is exactly what this check exists to refuse.
 fixture_short_total="$WORK/timing-short-total.jsonl"
 {
   printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.100}'
@@ -10508,9 +7699,6 @@ fixture_short_total="$WORK/timing-short-total.jsonl"
 } >"$fixture_short_total"
 run 'control: a total smaller than the steps it names goes red' red check_timing "$fixture_short_total"
 
-# Control 3: every duration is a constant zero. "Present, non-negative and
-# summing to no more than the total" is satisfied by twelve zeroes, so the
-# check refuses a run in which nothing was measured.
 fixture_zero_steps="$WORK/timing-zero.jsonl"
 {
   printf '%s\n' '{"event":"step.start","step":1,"phase":"k3s","message":"k3s","seconds":0.000}'
@@ -10519,14 +7707,6 @@ fixture_zero_steps="$WORK/timing-zero.jsonl"
 } >"$fixture_zero_steps"
 run 'control: a run of constant-zero durations goes red' red check_timing "$fixture_zero_steps"
 
-# THE SKIP HALF. A skipped step did no work, so it reports `skipped` — never a
-# `0` that would read as "this step is free". The fixture forces the guard to
-# answer "present" for every component, which is the state a warm box is in.
-# It lives in its OWN directory with a `manifests` symlink, because the script
-# resolves its manifests from `$SCRIPT_DIR` and the steps without a guard (5,
-# 6, 8, 10, 12) still plan against them in DRY_RUN. The premise is asserted
-# first: if the fixture produced no skip, the check below would be green on
-# nothing.
 fixture_skip_dir="$WORK/skip-fixture"
 mkdir -p "$fixture_skip_dir"
 ln -s "$SUBSTRATE/manifests" "$fixture_skip_dir/manifests"
@@ -10543,25 +7723,12 @@ fi
 run 'a run whose guards find the components present still times cleanly' green \
   check_timing "$skip_jsonl"
 
-# ===========================================================================
-# 25. The three operator applies are grouped, and their waits with them
-# ===========================================================================
-# THE MEASURED SPEED DECISION, PINNED. cert-manager, CNPG and Argo CD are three
-# independent operator installs — separate namespaces, separate CRDs, applies
-# that reference nothing the others create — so they are applied back to back in
-# steps 2-4 and waited on TOGETHER at the end of step 4. The controllers then
-# roll out concurrently instead of one behind another's wait. This check is what
-# stops a later edit from silently putting a wait back into step 2 or 3 (which
-# re-serializes the rollouts) or dropping one of the three from step 4 (which
-# would leave a controller unwatched before step 5 uses it).
 check_operator_overlap() {
   "$PY" - "$1" <<'PY'
 import re
 import sys
 
 src = open(sys.argv[1], encoding="utf-8").read()
-# Comments stripped first: the rule is about what the installer RUNS, and step
-# 2's own comment explains the decision by naming the waits.
 code = re.sub(r"(?m)^\s*#.*$", "", src)
 
 
@@ -10578,7 +7745,6 @@ for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg), ("install_
     if not b:
         problems.append(f"{name} not found")
 
-# The APPLIES are still where they were — the wait moved, the install did not.
 if "cert-manager.yaml" not in cm:
     problems.append("step 2 no longer applies the cert-manager manifest")
 if "cnpg-" not in cnpg:
@@ -10586,13 +7752,10 @@ if "cnpg-" not in cnpg:
 if "core-install.yaml" not in argo:
     problems.append("step 4 no longer applies the Argo CD core-install manifest")
 
-# Steps 2 and 3 WAIT ON NOTHING: a wait left here re-serializes the rollouts and
-# is the defect this section exists to catch.
 for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg)):
     if "wait --for=condition" in b:
         problems.append(f"{name} still waits — the three operator waits belong in step 4, grouped")
 
-# Step 4 waits for all three, by the exact selectors each step used to carry.
 for want, label in (
     ("wait --for=condition=Available deployment -n cert-manager --all", "cert-manager"),
     ("wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager", "CNPG"),
@@ -10601,8 +7764,6 @@ for want, label in (
     if want not in argo:
         problems.append(f"step 4 does not wait for {label}")
 
-# The pending mechanism is what keeps a warm re-run a true skip: each apply
-# registers, step 4 drains. A component present at its guard never registers.
 for name, b in (("install_cert_manager", cm), ("install_cnpg", cnpg), ("install_argocd", argo)):
     if "kit_substrate_pending" not in b:
         problems.append(f"{name} does not register its apply for the grouped wait")
@@ -10619,8 +7780,6 @@ PY
 run 'the three operator waits are grouped in step 4, after all three applies' green \
   check_operator_overlap "$SUBSTRATE/install.sh"
 
-# Control 1: the pre-change shape — cert-manager's wait put back into step 2.
-# This is the serialization the packet's speed decision removes.
 fixture_serial_wait="$WORK/install-serial-wait.sh"
 sed 's|^  kit_substrate_pending cert-manager$|  kubectl --kubeconfig="$KUBECONFIG" wait --for=condition=Available deployment -n cert-manager --all --timeout=180s|' \
   "$SUBSTRATE/install.sh" >"$fixture_serial_wait"
@@ -10635,8 +7794,6 @@ case "$cm_fixture_body" in
     ;;
 esac
 
-# Control 2: one of the three waits dropped from step 4 — a controller left
-# unwatched before step 5 depends on it.
 fixture_drop_cnpg_wait="$WORK/install-drop-cnpg-wait.sh"
 sed '/wait --for=condition=Available deployment -n cnpg-system cnpg-controller-manager/d' \
   "$SUBSTRATE/install.sh" >"$fixture_drop_cnpg_wait"
@@ -10648,55 +7805,9 @@ else
   run 'control: a dropped operator wait goes red' red check_operator_overlap "$fixture_drop_cnpg_wait"
 fi
 
-# ===========================================================================
-# 26. A WARM BOX RE-APPLIES THE APPPROJECT — the guard's boundary, executed
-# ===========================================================================
-#
-# THE DEFECT, MEASURED ON A LIVE BOX. §21 and §25 both PROVE the AppProject is
-# correct — the name matches, the sourceRepos permit every Application's
-# repoURL, and the three operator applies are grouped with their waits. None of
-# them asks the only question the warm box asked: DOES THE FILE EVER LAND?
-#
-# `install_argocd`'s guard answers "is the OPERATOR installed" — a probe of
-# deployment/argocd-repo-server — and it wrapped the WHOLE step, including
-# `kubectl apply -f appproject.yaml`. So a box that ever got past step 4 skipped
-# the project apply forever. The live Contabo box was exactly that box, and it
-# still carried the PRE-GLOB list while master had already written the glob:
-#
-#   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
-#   ["https://grafana.github.io/helm-charts",
-#    "https://prometheus-community.github.io/helm-charts",
-#    "oci://ghcr.io/anywaye/charts"]                    <- the ROOT, on the box
-#   oci://ghcr.io/anywaye/charts/*                      <- in appproject.yaml
-#
-# and every Application read `Unknown: repo oci://ghcr.io/anywaye/charts/gateway
-# is not permitted in project 'default'`. The only way to land the fix was to
-# delete Argo CD. A packet that passes on the next clean box and cannot reach a
-# warm one is not a fix, and the industrial-scale verification ("challenge the
-# verifier") fails on it.
-#
-# WHY THIS IS EXECUTED AND NOT STATIC. §25 reads step 4's SHAPE with comments
-# stripped and would be perfectly happy with the apply sitting inside
-# `if [ "$argocd_present" -eq 0 ]` — nothing in that check reads which side of
-# the guard a line is on. So the property is proven by RUNNING the step against
-# a box that has Argo CD and an out-of-date project, which is the state no other
-# section in this file models.
-#
-# TWO LIFETIMES, AND THE ASSERTION HOLDS BOTH HALVES:
-#   * the OPERATOR stays guarded — the warm box re-applies no remote manifest;
-#   * the PROJECT is always current — the apply happens on every run, so what
-#     the controller reads is what this repository wrote.
-# A guard covering both is what conflated them; the assertion that only the
-# second moved is what proves the fix is not "unguard everything".
 WARM_DIR="$WORK/appproject-warm"
 mkdir -p "$WARM_DIR"
 
-# THE WRITE PATH, AS A FILE AND NOT A HEREDOC. `declare -f warm_kubectl` re-emits
-# a function's body RE-INDENTED, which moves a heredoc terminator off column 0
-# and swallows the rest of the generated script — so nothing inside
-# `warm_kubectl` may carry one. This is that file, written once here and invoked
-# by path. It is also the box's own semantics: `kubectl apply -f` writes an
-# OBJECT, validated before it is stored.
 WARM_PLANTER="$WARM_DIR/plant_appproject.py"
 cat >"$WARM_PLANTER" <<'PY'
 import shutil
@@ -10717,21 +7828,11 @@ if not isinstance(doc, dict) or doc.get("kind") != "AppProject":
 if not (doc.get("spec") or {}).get("sourceRepos"):
     print(f"warm_kubectl: {src} carries no sourceRepos", file=sys.stderr)
     sys.exit(1)
-# The object becomes what the applied file describes, whole: a partial read
-# here would let a red control pass on a project that kept its old entries.
 shutil.copyfile(src, dst)
 PY
 
-# THE BOX'S APPPROJECT OBJECT. One file, because that is what the API server
-# holds: `kubectl apply -f` writes an OBJECT, and every read below is a read of
-# that object rather than of the file that was sent. The distinction is the
-# whole defect — the file was right and the object was stale.
 DEPLOYED_PROJECT="$WARM_DIR/deployed-appproject.yaml"
 
-# warm_seed — put the box in the state the live one was measured in: Argo CD
-# installed (the guard's probe will say so) and the PRE-GLOB AppProject
-# deployed. Re-run before every case, so a case cannot inherit the previous
-# case's write.
 warm_seed() {
   cat >"$DEPLOYED_PROJECT" <<'YAML'
 apiVersion: argoproj.io/v1alpha1
@@ -10749,10 +7850,6 @@ YAML
   rm -f "$WARM_DIR/argv"
 }
 
-# mock_get_appproject — the controller's own read:
-#   kubectl -n argocd get appproject default -o jsonpath='{.spec.sourceRepos}'
-# one sourceRepos entry per line, in the order the API server returns them.
-# Read from the OBJECT, so a test that ignores the apply sees the stale list.
 mock_get_appproject() {
   "$PY" - "$DEPLOYED_PROJECT" <<'PY'
 import sys
@@ -10766,21 +7863,11 @@ for repo in (doc.get("spec") or {}).get("sourceRepos") or []:
 PY
 }
 
-# warm_kubectl — the warm box, modelled. Exactly the calls step 4 makes against
-# a box whose operators are already installed, and nothing else: the guard's
-# probe, and the project apply. Anything beyond those is recorded and refused
-# loudly, because a warm box has no other work for this step to do — the
-# `--server-side` core-install apply is precisely what the guard must suppress.
 warm_kubectl() {
   printf '%s\n' "$*" >>"$WARM_DIR/argv"
   case "$*" in
     *"get deployment -n argocd argocd-repo-server"*) return 0 ;;
   esac
-  # Install.sh always prefixes `--kubeconfig=`, so the VERB is not `$1`. Strip
-  # the global flags before reading it — the same thing the real binary's arg
-  # parser does, and the reason the harness's own mock_kubectl strips them
-  # first too.
-  while [ $# -gt 0 ]; do
     case "$1" in
       --kubeconfig=*) shift ;;
       *) break ;;
@@ -10788,7 +7875,6 @@ warm_kubectl() {
   done
   local verb="${1:-}" f_target=""
   shift || true
-  while [ $# -gt 0 ]; do
     case "$1" in
       -f) f_target="$2"; shift 2 ;;
       -f=*) f_target="${1#-f=}"; shift ;;
@@ -10798,18 +7884,11 @@ warm_kubectl() {
   case "$verb" in
     apply)
       [ -n "$f_target" ] || { printf 'warm_kubectl: apply with no -f\n' >&2; return 1; }
-      # THE WRITE. The box's project becomes what the applied file describes.
-      # Validated rather than copied, so a fixture that applies a non-AppProject
-      # or an object with no sourceRepos is a red case and not a silent write.
       "$PY" "$WARM_PLANTER" "$f_target" "$DEPLOYED_PROJECT"
       ;;
     wait) return 0 ;;
     create) return 0 ;;
     *)
-      # A warm box must not re-install the operator: the remote manifest, a
-      # namespace create, a rollout kick. Recorded by the caller's argv
-      # assertion above, and refused here so a control cannot pass on a mock
-      # that answered everything with success.
       printf 'warm_kubectl: unhandled %s\n' "$*" >&2
       return 1
       ;;
@@ -10817,13 +7896,6 @@ warm_kubectl() {
   return 0
 }
 
-# warm_run <fixture> — run step 4 for real against the warm box. A child bash,
-# for the reason §19's apps_step records: a guarded subshell would march past a
-# failing step and exit 0 — the opposite of the box, where the same failure
-# aborts the install. `ARGOCD_MANIFEST_DIR` is set AFTER the source because the
-# installer derives it from `SCRIPT_DIR` at source time and the fixture lives in
-# $WORK; without it the apply would target a path that does not exist and the
-# step would refuse for a reason that has nothing to do with this packet.
 warm_run() {
   warm_seed
   local script="$WARM_DIR/run.sh"
@@ -10850,15 +7922,9 @@ warm_run() {
 warm_fixture="$WORK/install-warm.sh"
 sed '/^main "$@"/d' "$SUBSTRATE/install.sh" >"$warm_fixture"
 
-# THE PREMISE, ASSERTED BEFORE IT IS USED. The seeded box must hold the pre-glob
-# list, and that list must NOT permit the Applications — otherwise the green
-# case below is satisfied by a box that was never broken, which is the
-# "a green control two different states could satisfy proves neither" rule.
 warm_seed
 old_repos="$(mock_get_appproject | tr '\n' ' ')"
 old_repos="${old_repos% }"
-# The LIST ITEM, not a substring of the file: a grep over the whole YAML would
-# match the description line, which spells the bare root out in prose.
 warm_is_prefix_list=0
 while IFS= read -r warm_repo; do
   [ -n "$warm_repo" ] || continue
@@ -10885,7 +7951,6 @@ else
     'the seeded list already permits every repoURL, so the green case below would prove nothing'
 fi
 
-# THE CASE. Step 4 runs on a warm box. It must succeed...
 warm_ec=0
 warm_run "$warm_fixture" || warm_ec=$?
 if [ "$warm_ec" -ne 0 ]; then
@@ -10894,8 +7959,6 @@ else
   pass 'a warm box re-applies the AppProject (step 4 exits 0)'
 fi
 
-# ...and the apply must have HAPPENED. Argv, because "the project was applied"
-# is a command and not a return code — the mock answers success for everything.
 if grep -q 'apply -f .*appproject\.yaml' "$WARM_DIR/argv"; then
   pass 'a warm box re-applies the AppProject (the apply is in argv)'
 else
@@ -10903,10 +7966,6 @@ else
     "step 4 ran: $(tr '\n' ' | ' <"$WARM_DIR/argv")"
 fi
 
-# AND THE OPERATOR STAYS GUARDED. This is the half that stops the fix from
-# being "unguard everything": the remote core-install manifest, the namespace
-# create and any rollout kick must not appear. A warm box has nothing for those
-# to do, and one of them running is the defect §25 exists for.
 case "$(cat "$WARM_DIR/argv")" in
   *core-install.yaml*)
     fail 'a warm box re-applies ONLY the AppProject — the operator stays guarded' \
@@ -10917,10 +7976,6 @@ case "$(cat "$WARM_DIR/argv")" in
     ;;
 esac
 
-# AND THE RESULT THE CONTROLLER READS. Not the file — the object. The mock
-# applies what it was given, so `$DEPLOYED_PROJECT` is now what the box holds,
-# and it must permit every Application's repoURL under the SAME glob-aware
-# algorithm §21 uses (the glob fix's own semantics, not a second spelling).
 new_repos="$(mock_get_appproject | tr '\n' ' ')"
 new_repos="${new_repos% }"
 if [ "$new_repos" != "$old_repos" ]; then
@@ -10932,12 +7987,6 @@ fi
 run 'the re-applied AppProject permits every Application on a warm box' green \
   check_appproject_permits "$MANIFESTS" "$DEPLOYED_PROJECT"
 
-# THE RED CONTROL, AND IT IS THE PACKET'S OWN DEFECT. Rebuild the pre-fix
-# installer — the AppProject apply moved back inside `if [ "$argocd_present" -eq
-# 0 ]`, the whole step behind the operator's guard — and run the IDENTICAL warm
-# box. The box must stay broken: the old list, and the refuse. This is the state
-# the live Contabo box was measured in, and it is what makes the green case
-# above a proof rather than a restatement.
 warm_prefix="$WORK/install-warm-prefix.py"
 cat >"$warm_prefix" <<'PY'
 import sys
@@ -10950,8 +7999,6 @@ guarded = False
 closed = False
 for line in lines:
     if line.startswith('  if dry_run "kubectl apply -f ${ARGOCD_MANIFEST_DIR}/appproject.yaml'):
-        # The pre-fix shape: the project's apply sits inside the operator's
-        # guard, so a box whose Argo CD is present suppresses it.
         out.append('  if [ "$argocd_present" -eq 0 ]; then\n')
         out.append(line)
         guarded = True
@@ -10973,10 +8020,6 @@ PY
 fixture_warm_prefix="$WORK/install-warm-prefix.sh"
 if "$PY" "$warm_prefix" "$warm_fixture" "$fixture_warm_prefix" &&
   bash -n "$fixture_warm_prefix" >/dev/null 2>&1; then
-  # The fixture's PREMISE, asserted before it is run: the apply really is inside
-  # the operator's guard again. A transform that matched nothing would otherwise
-  # run the FIXED installer as the control and go green — the failure mode
-  # §26's own comment names at the top.
   argo_body="$(sed -n '/^install_argocd()/,/^}/p' "$fixture_warm_prefix")"
   case "$argo_body" in
     *'if [ "$argocd_present" -eq 0 ]; then'*)
@@ -11019,13 +8062,6 @@ fi
 run 'control: the pre-fix guard is red on the warm box — every Application refused' red \
   check_appproject_permits "$MANIFESTS" "$DEPLOYED_PROJECT"
 
-# THE PLAN HALF, GREEN AND RED WITHOUT A MOCK AT ALL. Force every guard to
-# answer "present" — the state a warm box is in — and require the DRY_RUN plan
-# to STILL name the AppProject apply. This is the property a static check cannot
-# read: §25 compares step bodies against each other and would be perfectly happy
-# with the apply behind `if [ "$argocd_present" -eq 0 ]`, because nothing in it
-# reads which side of a guard a line sits on. The plan is the one output that
-# records it, and it needs no kubectl.
 warm_plan_dir="$WORK/warm-plan"
 mkdir -p "$warm_plan_dir"
 ln -s "$SUBSTRATE/manifests" "$warm_plan_dir/manifests"
@@ -11040,7 +8076,6 @@ else
   fail 'a warm box plans the AppProject apply even with every guard present' \
     "the DRY_RUN plan never names appproject.yaml"
 fi
-# The red half: the pre-fix installer, same forced guards, must NOT plan it.
 sed 's/^kit_substrate_guard() {$/kit_substrate_guard() { STEP_SKIPPED=1; return 0;/' \
   "$fixture_warm_prefix" >"$warm_plan_dir/install-prefix.sh"
 plan_prefix_out="$WORK/warm-plan-prefix.out"
@@ -11092,10 +8127,6 @@ fi
 HONEST_BAD_HOST="tls-pending-never-resolves.invalid"
 HONEST_BAD_URL="https://${HONEST_BAD_HOST}"
 
-# honest_dry_run <install.sh> — DRY_RUN to completion, all output on stdout.
-# The case's APP_BASE_URL / OIDC_ISSUER ride in the environment; DATABASES
-# and RECEIPT are fixed here so every case shares them. Prints the output;
-# the exit status is the install's (a verdict must never become a refusal).
 honest_dry_run() {
   local script="$1" out ec=0
   out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
@@ -11104,8 +8135,6 @@ honest_dry_run() {
   return "$ec"
 }
 
-# 1. Green, real tree: an ingress host that does not resolve is reported in
-# the pending-TLS section with its consequence — and the install exits 0.
 check_tls_pending() {
   local script="$1" out ec=0
   out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
@@ -11159,9 +8188,6 @@ check_oidc_unset() {
   printf 'unset issuer names the never-Ready state and its fix\n'
 }
 
-# 3. Green, real tree: resolving host plus set issuer prints NEITHER warning
-# — while still printing the verdict header, so a report that says nothing
-# at all fails this check rather than passing it.
 check_clean() {
   local script="$1" out ec=0
   out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
@@ -11185,9 +8211,6 @@ check_clean() {
   printf 'clean box: verdict present, neither warning printed\n'
 }
 
-# The headless half: the JSONL stream carries the same verdict as a
-# `readiness` event — field `tls_pending_hosts` beside `oidc_configured` —
-# and the existing events are untouched (install.done still closes the run).
 check_headless_readiness() {
   local script="$1" out ec=0
   out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
@@ -11234,8 +8257,6 @@ PY
   printf 'readiness event with tls_pending_hosts, install.done untouched, every line JSON\n'
 }
 
-# The wrong-host control: a check aimed at a host that DOES resolve must NOT
-# warn. localhost resolves on every machine, with no network.
 check_no_warn_resolving_host() {
   local script="$1" out ec=0
   out="$(KIT_SUBSTRATE_DATABASES="$DBS" KIT_SUBSTRATE_RECEIPT="$WORK/honest-receipt.json" \
@@ -11248,12 +8269,6 @@ check_no_warn_resolving_host() {
   printf 'no warning for the resolving control host\n'
 }
 
-# The intended-hosts unit: hosts are READ out of what the installer writes —
-# the two operator URLs plus public hosts in the Applications' helm.values —
-# never out of a second hard-coded list. A fixture Application carries all
-# four shapes: a public values host (listed), an in-cluster values host
-# (dropped), a fetch coordinate (repoURL — dropped), and a URL in a comment
-# (dropped).
 check_intended_hosts() {
   local script="$1"
   local adir="$WORK/honest-apps"
@@ -11314,13 +8329,6 @@ run 'headless stdout carries the readiness event with tls_pending_hosts' green c
 run 'control: a resolving host does not warn' green check_no_warn_resolving_host "$SUBSTRATE/install.sh"
 run 'intended hosts are read from values and operator URLs, not listed twice' green check_intended_hosts "$SUBSTRATE/install.sh"
 
-# The RED controls: the report as it stands on master — the real install.sh
-# with the honest-done block deleted — must fail each check above. The
-# fixture asserts its own premise first: it really lacks the verdict, it
-# still parses, and a DRY_RUN over it still exits 0 (so a red below is the
-# missing verdict, not a broken fixture). The fixture lives in its own
-# directory with the real manifests beside it, because a relocated
-# install.sh finds its manifests through its own SCRIPT_DIR.
 fixture_master_dir="$WORK/master-shape"
 fixture_master="$fixture_master_dir/install-master.sh"
 mkdir -p "$fixture_master_dir"
@@ -11348,34 +8356,7 @@ case "$(cat "$fixture_master")" in
     ;;
 esac
 
-# ===========================================================================
-# 27 (continued). The intended-hosts derivation reads INGRESS hosts — every
-#     served name, from where names are actually declared
-# ===========================================================================
-#
-# THE DEFECT, MEASURED ON THE BOX. The readiness event named 2 pending hosts
-# (app.anywaye.com, auth.anywaye.com) on a box whose `kubectl get ingress -A`
-# held THREE — gateway's api.anywaye.com among them — and gateway's
-# Certificate had sat READY=False for 98 minutes. The installer reported a
-# box with FEWER conditions than it had. WHY: an Ingress host is a BARE
-# hostname (`spec.rules.host`, or a chart's `host` value) and the URL grep
-# the derivation used cannot match one by construction — the pattern
-# requires a scheme. app.anywaye.com survived only because
-# KIT_SUBSTRATE_APP_BASE_URL happens to name the same host as parlor's
-# Ingress; the coincidence hid the gap for one of three.
-#
-# The fix parses the `host:` key where hosts are declared — in the manifests
-# and in the charts' values — as key lines over comment-stripped text. Four
-# greens and one count unit against the real install.sh (sourced, `main`
-# stripped — §27's idiom), the over-reporting control, and two reds: the
-# master-shaped derivation (URLs only) and a loose-grep mutant that reads a
-# host no manifest serves. `*.invalid` never resolves (RFC 2606); localhost,
-# 127.0.0.1 and in-cluster names never enter the list. No network, no flake.
 
-# 1. Green, real tree: an Ingress host is intended — BOTH shapes. A `host:`
-# key in an Application's chart values (where a chart's ingress host lives)
-# and a `- host:` in an Ingress manifest (spec.rules) are listed, alongside
-# the two URL sources they must not replace.
 check_ingress_hosts_listed() {
   local script="$1" adir="$WORK/ingress-apps"
   mkdir -p "$adir"
@@ -11444,10 +8425,6 @@ YAML
     *'operator-auth.example.com'*) ;;
     *) printf 'the OIDC issuer host is not listed\n%s' "$out"; return 1 ;;
   esac
-  # The real-tree half: every `host:` key the SHIPPED manifests declare is in
-  # the derivation. The shipped Applications carry none today, so this half
-  # is the ratchet for the day one appears — the fixture above is the
-  # load-bearing proof, and a vacuous half is named as the vacuous half it is.
   local shipped shippedout h
   shipped="$(grep -hE '^[[:space:]]*(-[[:space:]]+)?host:[[:space:]]+' "$MANIFESTS"/*.yaml 2>/dev/null \
     | sed -E -e 's/^[[:space:]]*(-[[:space:]]+)?host:[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\1/" \
@@ -11468,9 +8445,6 @@ EOF
   printf 'intended hosts include the chart-values host, the Ingress host and the URL sources\n'
 }
 
-# 2. Green, real tree: a host named by BOTH an Ingress and a URL is reported
-# ONCE. The assertion is a COUNT, not a containment test, because a count is
-# the only shape that tells one line from two.
 check_ingress_host_dedup() {
   local script="$1" adir="$WORK/dual-apps"
   mkdir -p "$adir"
@@ -11510,10 +8484,6 @@ YAML
   printf 'a host named by an Ingress and a URL is reported once\n'
 }
 
-# 3. Green, real tree: in-cluster names, localhost and 127.0.0.1 stay out of
-# the list now that a bare host can reach it. The fixture carries one
-# checkable host too, because an extractor listing nothing would otherwise
-# pass this check without proving it.
 check_ingress_host_exclusions() {
   local script="$1" adir="$WORK/exclude-apps"
   mkdir -p "$adir"
@@ -11569,13 +8539,6 @@ YAML
   printf 'localhost, in-cluster, loopback and single-label host values stay out\n'
 }
 
-# 4. Green, real tree: a host NAMED BY NO MANIFEST is not added. The fixture's
-# chart values carry the host in a comment — the shape a chart default
-# deliberately not set takes (auth.anywaye.com in gateway's values is exactly
-# this) — and the derivation must not probe it: a check reporting a condition
-# that does not exist is the check an operator learns to ignore. The fixture
-# also carries a live host, because an extractor listing nothing would
-# satisfy this check without proving it.
 check_no_manifestless_host() {
   local script="$1" adir="$WORK/ghost-apps"
   mkdir -p "$adir"
@@ -11590,14 +8553,12 @@ spec:
     chart: ghost
     helm:
       values: |
-        # host: ghost.example.com
         ingress:
           host: live.example.com
   destination:
     server: https://kubernetes.default.svc
     namespace: ghost
 YAML
-  # The fixture's own premise: the commented host is really there to be caught.
   grep -q '# host: ghost.example.com' "$adir/ghost.yaml" \
     || { printf 'the fixture lost its commented host — the red below would prove nothing\n'; return 1; }
   local src="$WORK/ghost-sourced.sh"
@@ -11617,10 +8578,6 @@ YAML
   printf 'a host no manifest serves is not added; the live one is\n'
 }
 
-# 5. Green, real tree: the readiness COUNT equals the pending list — one per
-# unresolving host, plus the OIDC half. The number on the live box becomes 3
-# because the LIST becomes 3; this is the unit that proves the number
-# follows the list rather than being computed beside it.
 check_readiness_count() {
   local script="$1" src="$WORK/count-sourced.sh"
   sed '/^main "\$@"/d' "$script" >"$src"
@@ -11672,14 +8629,6 @@ run 'a host named only in a comment is not added' green \
 run 'the readiness count equals the pending list, plus the OIDC half' green \
   check_readiness_count "$SUBSTRATE/install.sh"
 
-# The RED controls, each asserting its own premise before the red runs —
-# a red from a broken fixture is not a red.
-#
-# R1: the master-shaped derivation — the real install.sh with the
-# Ingress-host parse and its call site deleted — i.e. the URL-only derivation
-# this packet replaced. Its derivation must list the URL hosts and NOT the
-# Ingress hosts, and DRY_RUN must still exit 0, so a red below is the missing
-# hosts and not a broken file.
 fixture_master_hosts_dir="$WORK/master-shape-hosts"
 fixture_master_hosts="$fixture_master_hosts_dir/install-master-hosts.sh"
 mkdir -p "$fixture_master_hosts_dir"
@@ -11725,13 +8674,6 @@ YAML
     check_ingress_host_exclusions "$fixture_master_hosts"
 fi
 
-# R2: the loose mutant. One function changed instead of deleted: the `host:`
-# read runs over RAW text with a loose `.*host:` match — no comment strip, no
-# key anchoring, exactly the "grep -h host:" the packet's parsing rule
-# forbids — so a host named only in a comment reaches the probe list. Built
-# by python because the replacement is a function body, not a whole line. Its
-# premise: the mutant still parses, still DRY_RUNs to 0, and its derivation
-# DOES list the commented host — the over-report in action.
 fixture_over_dir="$WORK/over-shape"
 fixture_over="$fixture_over_dir/install-over.sh"
 mkdir -p "$fixture_over_dir"
@@ -11742,10 +8684,6 @@ import sys
 
 src, out = sys.argv[1], sys.argv[2]
 text = open(src, encoding="utf-8").read()
-# The mutant swaps the READER for a loose one — raw text, a `.*host:` match,
-# no comment strip and no key anchoring, exactly the "grep -h host:" shape
-# the parsing rule forbids. The normalizer beside it stays the production
-# one: what changes is what is read, not how a value is reduced.
 loose_fn = '''kit_substrate_ingress_hosts() {
   local dir="$1"
   grep -h 'host:' "$dir"/*.yaml 2>/dev/null | sed -E -e 's/.*host:[[:space:]]+//' -e 's/[[:space:]]+$//' -e 's/^"(.*)"$/\\1/' -e "s/^'(.*)'\\$/\\1/" | grep -v '^$' || true
@@ -11780,38 +8718,11 @@ else
     check_no_manifestless_host "$fixture_over"
 fi
 
-# ===========================================================================
-# 26. The residual ReplicaSets are converged (step 13)
-# ===========================================================================
-# MEASURED, ON THE LIVE BOX. One Deployment at spec.replicas 1 held two live
-# ReplicaSets: the digest-pinned current one and a tag-based older generation
-# burning CPU on a readiness probe that could never succeed — and each
-# generation leaves one more behind, because Argo CD converges the
-# Applications rather than the ReplicaSets a previous revision left. Step 13
-# scales a live non-current RS to 0 and reports it with its image, its age
-# and its Deployment. It never touches the current RS, never touches a
-# deliberately scaled-to-zero Deployment, and never touches a rollout in
-# flight.
-#
-# install.sh needs a cluster, so none of this runs against one. The installer
-# is sourced with its trailing `main` call removed (the same fixture_sourced
-# the secrets section built) and converge_one_deployment_rs is executed
-# against a file-backed kubectl mock: $MOCK_ROOT/<ns>/deploy-<name>.json is
-# the Deployment, $MOCK_ROOT/<ns>/rs.json is the ReplicaSet list, and a scale
-# mutates the list and appends to $MOCK_ROOT/scaled. Every assertion below
-# reads a captured variable with a shell `case`, never a pipe.
 
-# rs_mock_kubectl — the file-backed kubectl for step 13. Emulates only what
-# converge_one_deployment_rs uses: `get deployment <name> -o json` (missing
-# object exits 1, the "Argo has not synced yet" state) and `get rs -o json`
-# (an empty namespace is an empty list, not an error), and
-# `scale replicaset/<name> --replicas=0`, which sets the RS's spec.replicas
-# to 0 in the store and records the scale. Anything else is a loud failure.
 rs_mock_kubectl() {
   if [ -n "${MOCK_ROOT:-}" ]; then
     printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
   fi
-  while [ $# -gt 0 ]; do
     case "$1" in
       --kubeconfig=*) shift ;;
       -n) RS_MOCK_NS="$2"; shift 2 ;;
@@ -11825,7 +8736,6 @@ rs_mock_kubectl() {
       local res="${1:-}"
       shift || true
       local name="" is_json=0
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) RS_MOCK_NS="$2"; shift 2 ;;
           -o) if [ "${2:-}" = "json" ]; then is_json=1; fi; shift 2 ;;
@@ -11853,7 +8763,6 @@ rs_mock_kubectl() {
       local target="${1:-}"
       shift || true
       local replicas=""
-      while [ $# -gt 0 ]; do
         case "$1" in
           -n) RS_MOCK_NS="$2"; shift 2 ;;
           --replicas=*) replicas="${1#--replicas=}"; shift ;;
@@ -11887,12 +8796,6 @@ PY
   esac
 }
 
-# rs_seed_standard <root> — the live-box shape in miniature: gateway holds a
-# live current RS (digest image), a live residual RS (old tag, old timestamp)
-# and a dead RS at 0; identity holds only its current RS; parlor is
-# deliberately scaled to 0 with its RS still live; courier is mid-rollout
-# (updated 0 of 1) with a live old RS. Every image, hash and timestamp is a
-# FAKE label, and each is asserted in the output below.
 rs_seed_standard() {
   "$PY" - "$1" <<'PY'
 import json
@@ -11949,20 +8852,12 @@ print("standard RS store seeded")
 PY
 }
 
-# check_rs_converge <sourced-install.sh> <store> — the residual is reported
-# with its image, its age and its Deployment, and converged to 0, while the
-# current RS keeps its replica.
 check_rs_converge() {
   local src="$1"
   local MOCK_ROOT="$2"
   local out ec=0
   out="$(
     DRY_RUN=0 HEADLESS=0
-    # The suite sources the real installer into its MAIN shell (the
-    # registry section does), so its functions are inherited here — and
-    # sourcing a fixture WITHOUT them does not undefine them. Forget both
-    # before sourcing, so the master control really meets the installer as
-    # it stands on master; a no-op when the sourced script defines them.
     unset -f converge_one_deployment_rs converge_residual_replicasets
     . "$src"
     kubectl() { rs_mock_kubectl "$@"; }
@@ -11992,8 +8887,6 @@ print("residual at 0, current at 1")
 PY
 }
 
-# check_rs_idempotent <sourced-install.sh> <store> — a second run on a
-# converged box reports no residual and scales nothing new.
 check_rs_idempotent() {
   local src="$1"
   local MOCK_ROOT="$2"
@@ -12022,10 +8915,6 @@ check_rs_idempotent() {
   esac
 }
 
-# check_rs_safe <sourced-install.sh> <store> — the current RS of every
-# Deployment is never touched, a Deployment at replicas 0 is left to its
-# operator, a mid-rollout Deployment is left to its controller, and a
-# Deployment Argo has not synced yet is silent. NOTHING is scaled.
 check_rs_safe() {
   local src="$1"
   local MOCK_ROOT="$2"
@@ -12062,8 +8951,6 @@ check_rs_safe() {
   printf 'current, scaled-to-zero, mid-rollout and unsynced Deployments all untouched\n'
 }
 
-# check_rs_dryrun <sourced-install.sh> <store> — the dry run prints the
-# residual it would converge (with the plan line) and scales nothing.
 check_rs_dryrun() {
   local src="$1"
   local MOCK_ROOT="$2"
@@ -12095,18 +8982,12 @@ print("dry run changed nothing")
 PY
 }
 
-# check_rs_current_untouched <sourced-install.sh> <store> — a box whose only
-# live RS IS the current one is converged to nothing. This is the defect the
-# step could introduce if the hash check is wrong, and the reason this check
-# exists: it fails the moment the step scales what the Deployment names.
 check_rs_current_untouched() {
   local src="$1"
   local MOCK_ROOT="$2"
   local out ec=0
   out="$(
     DRY_RUN=0 HEADLESS=0
-    # Same inherited-function rule as check_rs_converge: forget before
-    # sourcing, so the fixture under test is what runs.
     unset -f converge_one_deployment_rs converge_residual_replicasets
     . "$src"
     kubectl() { rs_mock_kubectl "$@"; }
@@ -12144,18 +9025,10 @@ rs_seed_standard "$rs_store_dry" >/dev/null
 run 'the dry run prints the residual it would converge and converges nothing' green \
   check_rs_dryrun "$fixture_sourced" "$rs_store_dry"
 
-# A check that passes against an empty directory is not a check: with no
-# Deployment and no RS in the store there is no residual to report, so the
-# converge check must go red here.
 mkdir -p "$WORK/rs-empty"
 run 'control: the converge check needs its fixture (empty store goes red)' red \
   check_rs_converge "$fixture_sourced" "$WORK/rs-empty"
 
-# The whole step at once, the way main calls it: all four Deployments, the
-# timing events the rest of the installer emits, and STEP_SKIPPED cleared by
-# real work. HEADLESS=1 so stdout is the JSONL event stream (step.start /
-# step.done with seconds) and the human lines land on stderr beside the
-# STEP_SKIPPED marker the subshell prints there.
 rs_store_full="$WORK/rs-full"
 mkdir -p "$rs_store_full"
 rs_seed_standard "$rs_store_full" >/dev/null
@@ -12183,7 +9056,6 @@ else
     *) fail 'the whole step emits step.start/step.done with seconds' "$(printf '%s' "$rs_full_out" | head -4)" ;;
   esac
   if [ "$failures" -ne 0 ]; then
-    : # the event-shape failure above is already recorded; skip the rest
   elif ! grep -q 'residual gateway/gateway-bbbbbb' "$rs_full_human"; then
     fail 'the whole step reports the residual' "$(head -8 "$rs_full_human")"
   elif ! grep -q 'STEP_SKIPPED=0' "$rs_full_human"; then
@@ -12195,19 +9067,12 @@ else
   fi
 fi
 
-# The RED controls. First: the installer as it stands on master — the step
-# deleted — leaves the residual live. The fixture asserts its own premise
-# (it really lacks the step, it still parses), then the converge check that
-# is green above must go red against it.
 fixture_rs_master="$WORK/rs-master.sh"
 sed -e '/^converge_residual_replicasets() {$/,/^}$/d' \
     -e '/^converge_one_deployment_rs() {$/,/^}$/d' \
     -e '/^  CURRENT_PHASE="rs-residual"$/d' \
     -e '/^  converge_residual_replicasets$/d' \
     "$SUBSTRATE/install.sh" >"$fixture_rs_master"
-# A check that a comment can satisfy is not a check, and the mirror holds
-# for a premise: the step's own comment names the function, so the premise
-# strips full-line comments before asking whether the CODE is gone.
 case "$(grep -v '^[[:space:]]*#' "$fixture_rs_master")" in
   *'converge_one_deployment_rs'* | *'converge_residual_replicasets'* | *'rs-residual'*)
     fail 'control fixture: the master shape still carries the RS step' \
@@ -12229,11 +9094,6 @@ case "$(grep -v '^[[:space:]]*#' "$fixture_rs_master")" in
     ;;
 esac
 
-# Second: the defect this step could introduce. A box whose only live RS is
-# the current one must be converged to nothing — green on the real tree, and
-# red on a tree whose hash comparison is inverted (the one-character defect
-# that scales what the Deployment names). The inverted fixture asserts its
-# own premise first: it still parses, and it really carries the inversion.
 rs_store_current="$WORK/rs-current"
 mkdir -p "$rs_store_current/gateway"
 "$PY" - "$rs_store_current" <<'PY'
@@ -12289,75 +9149,16 @@ case "$(cat "$fixture_rs_inverted")" in
     ;;
 esac
 
-# ===========================================================================
-# 27. Loki: the Application Argo could not render is gone, and install.done is
-#     honest about where logs go
-# ===========================================================================
-# THE EVIDENCE, FROM THE LIVE BOX (this packet's seam):
-#
-#   kubectl -n argocd get applications
-#   alloy        OutOfSync     Healthy
-#   courier      Synced        Healthy
-#   gateway      Synced        Healthy
-#   grafana      OutOfSync     Healthy
-#   identity     Synced        Healthy
-#   loki         Unknown       Healthy   <-- ComparisonError, never Synced
-#   parlor       Synced        Healthy
-#   prometheus   OutOfSync     Healthy
-#
-#   ComparisonError=Failed to load target state: failed to generate manifest
-#   for source 1 of 1: rpc error: code = Unknown desc = Manifest generation
-#   error (cached): failed to execute helm template command:
-#   failed running helm: `helm template . --name-template loki --namespace
-#   observability ...` failed exit status 1: Error: execution error at
-#   (loki/templates/write/statefulset-write.yaml:50:28):
-#   Please define loki.storage.bucketNames.chunks
-#
-# The upstream loki chart 7.3.0 in SimpleScalable mode requires
-# loki.storage.bucketNames.{chunks,ruler,admin} and an object-storage backend
-# (endpoint/bucket/access_key/secret_key). This substrate provisions no object
-# store (no S3/MinIO), so an Application whose chart this substrate cannot
-# satisfy is a claim it cannot keep. Inventing bucket names to make the render
-# pass is a log pipeline that stores nothing — worse than honestly saying it
-# is not installed.
-#
-# THE FIX, AND WHY IT IS REMOVAL RATHER THAN A VALUES PATCH:
-#   * SingleBinary with filesystem would render (and was measured with
-#     `helm template --set deploymentMode=SingleBinary --set
-#     loki.storage.type=filesystem ...` → 1207 lines), but it is a single
-#     replica on emptyDir/local PVC, untuned, and unproven on this box. It
-#     trades a render error for a persistence and sizing decision nobody asked
-#     for.
-#   * Object-storage with invented bucket names plus a missing endpoint is the
-#     half-config defect the second red control proves.
-#   * Removing the Application is honest: logs remain in journald / kubectl
-#     logs (kubectl -n <ns> logs <pod>), Alloy still runs but ships nowhere
-#     centrally, and the install report says so beside the TLS/OIDC verdict —
-#     the same seam roll-c5-honest-done opened. If a future substrate
-#     provisions an object store, the Application returns with its full storage
-#     block.
-#
-# THE CHECK IS EXECUTED, NOT STATIC. A static list of Applications is a list,
-# not a proof. The green case asserts the file is gone AND the report is
-# present (human + headless JSON); a file re-added without a report is not
-# green. The red controls re-add the broken shape (no bucketNames) and the
-# half-config shape (bucketNames without endpoint/bucket/keys) and require the
-# same check to go red — a control that passes on the broken tree is the
-# defect.
 check_loki_honest() {
   local apps_dir="$1" install_sh="$2"
   local problems=""
-  # Vacuity guard: a check that passes against an empty directory is not a check.
   local count
   count="$(ls -1 "$apps_dir"/*.yaml 2>/dev/null | wc -l)"
   if [ "$count" -lt 7 ]; then
     printf 'apps_dir has %s manifest(s), expected 7 (empty or partial directory proves nothing)\n' "$count"
     return 1
   fi
-  # 1. The Application is gone
   if [ -f "$apps_dir/loki.yaml" ]; then
-    # If it exists, it must be a valid, renderable loki — validate its helm values.
-    # This is the "every Application renders" branch; removal is the other branch.
     "$PY" - "$apps_dir/loki.yaml" <<'PY'
 import sys
 import yaml
@@ -12380,28 +9181,21 @@ if not isinstance(v, dict):
 loki = v.get("loki") or {}
 storage = loki.get("storage") or {}
 bucketNames = storage.get("bucketNames") or {}
-# Accept either the removed case (no file) is the expected path; if file exists we require a complete config.
-# For this packet the green case is removal, so any present file must be complete S3 or SingleBinary filesystem.
-# Check bucketNames present for S3 mode, or filesystem for SingleBinary.
 deploymentMode = v.get("deploymentMode") or "SimpleScalable"
 storage_type = storage.get("type") or "s3"
 if storage_type == "filesystem":
     if deploymentMode != "SingleBinary":
         print(f"filesystem storage requires deploymentMode SingleBinary, not {deploymentMode}")
         sys.exit(1)
-    # also need singleBinary.replicas and loki.useTestSchema or schemaConfig
     if v.get("singleBinary", {}).get("replicas", 0) == 0:
         print("filesystem SingleBinary requires singleBinary.replicas > 0")
         sys.exit(1)
 else:
-    # s3 path: require bucketNames chunks/ruler/admin and endpoint/bucket/credentials
     for k in ("chunks", "ruler", "admin"):
         if not bucketNames.get(k):
             print(f"loki.storage.bucketNames.{k} is missing — chart fails at write statefulset with 'Please define loki.storage.bucketNames.{k}'")
             sys.exit(1)
     s3 = storage.get("s3") or {}
-    # endpoint, bucket-equivalent (bucketNames already), access/secret
-    # The chart's s3 block needs endpoint/region/accessKeyId/secretAccessKey or the hosted storage will store nowhere.
     missing = []
     if not s3.get("endpoint"):
         missing.append("endpoint")
@@ -12409,8 +9203,6 @@ else:
         missing.append("accessKeyId")
     if not s3.get("secretAccessKey"):
         missing.append("secretAccessKey")
-    # bucket is via bucketNames, but s3 bucket is also needed via storage config object_store or s3 bucketNames mapping.
-    # For the test we require at least endpoint + keys; half-config fails here.
     if missing:
         print(f"half object-storage config: missing {', '.join(missing)} — bucketNames alone stores nothing (ComparisonError would persist as a runtime error)")
         sys.exit(1)
@@ -12420,7 +9212,6 @@ PY
     if [ "$ec" -ne 0 ]; then
       return 1
     fi
-    # Present and valid — also require install.sh to report loki
     local out
     out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
     case "$out" in
@@ -12429,7 +9220,6 @@ PY
     esac
     return 0
   fi
-  # 2. Not present — require the honest report (human + headless JSON)
   local out
   out="$(KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-report.json" DRY_RUN=1 bash "$install_sh" 2>&1 || true)"
   case "$out" in
@@ -12444,7 +9234,6 @@ PY
     *"journald"* ) ;;
     *) printf 'install.sh log report does not name journald/kubectl logs (what replaces Loki)\n'; return 1 ;;
   esac
-  # 3. Headless JSON carries log_store journald beside the existing readiness fields
   local jsonl="$WORK/loki-headless.jsonl"
   KIT_SUBSTRATE_DATABASES="identity,gateway,courier,parlor,billing" KIT_SUBSTRATE_RECEIPT="$WORK/loki-headless-receipt.json" HEADLESS=1 DRY_RUN=1 bash "$install_sh" --headless >"$jsonl" 2>/dev/null || true
   if ! grep -q '"event":"readiness"' "$jsonl"; then
@@ -12465,8 +9254,6 @@ PY
 run 'loki Application absent and install.done reports journald + bucketNames evidence (headless log_store journald)' green \
   check_loki_honest "$MANIFESTS" "$SUBSTRATE/install.sh"
 
-# Red control 1: the values as they stand on master (no bucketNames) fail the render check.
-# Re-add the broken loki.yaml (the exact file master carried) into a fixture and require red.
 fixture_loki_broken="$WORK/loki-broken"
 mkdir -p "$fixture_loki_broken"
 cp "$MANIFESTS"/*.yaml "$fixture_loki_broken"/ 2>/dev/null || true
@@ -12496,14 +9283,12 @@ spec:
 YAML
 run 'control: the broken loki values (no bucketNames) go red' red \
   check_loki_honest "$fixture_loki_broken" "$SUBSTRATE/install.sh"
-# Premise guard: the fixture really is the broken shape (no helm.values at all, which is what master carried)
 if grep -q "bucketNames" "$fixture_loki_broken/loki.yaml"; then
   fail 'control fixture premise: broken loki must carry no bucketNames' 'fixture has bucketNames, so it would not test the master shape'
 else
   pass 'control fixture premise: broken loki carries no bucketNames (master shape)'
 fi
 
-# Red control 2: bucketNames without storage backend endpoint/bucket/access_key/secret_key — half config.
 fixture_loki_half="$WORK/loki-half"
 mkdir -p "$fixture_loki_half"
 cp "$MANIFESTS"/*.yaml "$fixture_loki_half"/ 2>/dev/null || true
@@ -12530,7 +9315,6 @@ spec:
               admin: admin
             s3:
               region: us-east-1
-              # endpoint, accessKeyId, secretAccessKey deliberately absent — half an object-storage config
   destination:
     server: https://kubernetes.default.svc
     namespace: observability
@@ -12538,76 +9322,11 @@ YAML
 run 'control: half object-storage config (bucketNames without endpoint/keys) goes red' red \
   check_loki_honest "$fixture_loki_half" "$SUBSTRATE/install.sh"
 
-# Empty-directory vacuity guard: a check that passes against an empty directory is not a check.
 empty_apps="$WORK/empty-apps"
 mkdir -p "$empty_apps"
 run 'control: empty apps directory goes red (vacuity guard)' red \
   check_loki_honest "$empty_apps" "$SUBSTRATE/install.sh"
 
-# ===========================================================================
-# 28. The AppProject whitelists exactly the cluster-scoped kinds the
-#     observability charts create — and nothing else
-# ===========================================================================
-#
-# THE DEFECT, MEASURED ON A LIVE BOX. Four Applications never synced:
-#
-#   kubectl -n argocd get applications
-#   alloy        OutOfSync     Missing
-#   grafana      OutOfSync     Missing
-#   prometheus   OutOfSync     Missing
-#   (courier/gateway/identity/parlor all Synced/Healthy)
-#
-#   kubectl -n observability get pods
-#   No resources found in observability namespace.
-#
-# Argo's own reason for alloy:
-#
-#   SyncError=Failed last sync attempt to [1.13.0]: one or more synchronization
-#   tasks are not valid: resource apiextensions.k8s.io:CustomResourceDefinition
-#   is not permitted in project default; resource
-#   rbac.authorization.k8s.io:ClusterRole is not permitted in project default;
-#   resource rbac.authorization.k8s.io:ClusterRoleBinding is not permitted in
-#   project default (retried 5 times).
-#
-# The AppProject listed no clusterResourceWhitelist, so the default applied
-# (no cluster-scoped resources) — and its own comment claimed the
-# observability charts "do the same inside observability", i.e. create nothing
-# cluster-scoped. That sentence is false. Rendered with the pinned versions,
-# defaults, and --include-crds (the flags Argo itself passes):
-#
-#   helm template alloy grafana/alloy --version 1.13.0 --include-crds
-#     CustomResourceDefinition podlogs.monitoring.grafana.com
-#       (apiextensions.k8s.io), ClusterRole alloy + ClusterRoleBinding alloy
-#       (rbac.authorization.k8s.io)
-#   helm template grafana grafana/grafana --version 10.5.15 --include-crds
-#     ClusterRole grafana-clusterrole + ClusterRoleBinding
-#     grafana-clusterrolebinding (rbac.authorization.k8s.io), no CRDs
-#   helm template prometheus prometheus-community/prometheus --version 29.36.0
-#     --include-crds
-#     ClusterRole + ClusterRoleBinding x2 (kube-state-metrics, server)
-#     (rbac.authorization.k8s.io), no CRDs
-#
-# So the substrate shipped a policy its own manifests violate. The four
-# service Applications really are namespaced-only and converge; the three
-# observability ones never could.
-#
-# THE SHAPE. Each Application declares the cluster-scoped kinds its chart
-# creates in the `anywaye.io/cluster-resources` annotation (absent means none
-# — the service Applications and the pin below assert that). The AppProject
-# whitelists exactly the union, one {group, kind} per need with the reason
-# beside it. The checks:
-#   * check_appproject_cluster_scope — every declared need is whitelisted
-#     (completeness: the live-box SyncError), every whitelist entry is
-#     declared by at least one Application (no over-grant: an allowlist entry
-#     matching nothing is a ratchet that only turns one way), and no entry
-#     carries `*` (bounded, never */*).
-#   * check_appproject_cluster_scope_pins — every Application's annotation
-#     equals the pinned render above, and an Application with no pin record
-#     fails closed (a new chart whose scope nobody measured is visible).
-#   * check_appproject_no_star — the whitelist contains no `*` entry on its
-#     own line, so the over-grant direction has its own verdict.
-# A check that passes against an empty directory is not a check: fewer than
-# eight manifests is red before anything else is read.
 check_appproject_cluster_scope() {
   "$PY" - "$1" "$2" <<'PY'
 import os
@@ -12698,9 +9417,6 @@ print(f"{len(files)} Applications, every declared cluster-scoped kind whiteliste
 PY
 }
 
-# The pin: each Application's annotation must equal the render measured above.
-# Keyed by manifest file (one Application per file); an Application with no
-# record fails closed so a new chart's scope is measured, not assumed.
 check_appproject_cluster_scope_pins() {
   "$PY" - "$1" <<'PY'
 import os
@@ -12710,20 +9426,6 @@ import yaml
 
 apps_dir = sys.argv[1]
 
-# The renders this table is read from (defaults, --include-crds, the pinned
-# targetRevision each Application names):
-#   alloy.yaml       alloy 1.13.0:        CRD podlogs.monitoring.grafana.com,
-#                                        ClusterRole + ClusterRoleBinding alloy
-#   grafana.yaml     grafana 10.5.15:     ClusterRole + ClusterRoleBinding
-#                                        grafana-clusterrole[grafana-clusterrolebinding]
-#   prometheus.yaml  prometheus 29.36.0:  ClusterRole + ClusterRoleBinding x2
-#                                        (kube-state-metrics, server)
-#   identity/courier/gateway/parlor/billing: namespaced-only (Deployments,
-#                                        Services, ConfigMaps, Secrets in their
-#                                        own namespace; nothing cluster-scoped).
-#   billing joined 2026-10-15 with the freeze-lift: it is an internal service
-#   (Ingress off), so its chart renders a Deployment, a Service and nothing
-#   cluster-scoped — the same shape as the other four services.
 EXPECTED = {
     "billing.yaml": set(),
     "alloy.yaml": {
@@ -12743,11 +9445,6 @@ EXPECTED = {
     "gateway.yaml": set(),
     "identity.yaml": set(),
     "parlor.yaml": set(),
-    # pantry, box and keyholder carry NO record: the §28b boundary refuses
-    # their Applications outright, so a record here would be a second list
-    # claiming a chart the substrate must not render. An Application naming
-    # one of them fails the "no cluster-scope record" branch the way any
-    # unrecorded chart does — and then fails §28b by name.
 }
 
 files = sorted(f for f in os.listdir(apps_dir) if f.endswith((".yaml", ".yml")))
@@ -12820,9 +9517,6 @@ run 'every Application annotation equals its pinned chart render (services: no c
 run 'the clusterResourceWhitelist contains no wildcard entry' green \
   check_appproject_no_star "$APP_PROJECT"
 
-# RED CONTROL 1 — the project as it stands on master: no whitelist at all.
-# That is the live-box failure reproduced (SyncError ... is not permitted in
-# project default), and it must go red.
 fixture_project_no_wl="$WORK/appproject-no-whitelist.yaml"
 "$PY" - "$APP_PROJECT" "$fixture_project_no_wl" <<'PY'
 import sys
@@ -12845,10 +9539,6 @@ case "$(cat "$fixture_project_no_wl")" in
     ;;
 esac
 
-# RED CONTROL 2 — a chart grows a cluster-scoped kind nobody whitelisted.
-# grafana's annotation gains admissionregistration.k8s.io/
-# MutatingWebhookConfiguration while the project is untouched: the check doing
-# the job it exists for must go red naming the missing pair.
 fixture_apps_grown="$WORK/apps-grown-kind"
 rm -rf "$fixture_apps_grown"
 mkdir -p "$fixture_apps_grown"
@@ -12874,8 +9564,6 @@ else
     'grafana.yaml carries no MutatingWebhookConfiguration, so the control would prove nothing'
 fi
 
-# RED CONTROL 3 — over-granting is the defect the other direction, and the
-# more dangerous one. A project whitelisting */* must go red.
 fixture_project_star="$WORK/appproject-star.yaml"
 "$PY" - "$APP_PROJECT" "$fixture_project_star" <<'PY'
 import sys
@@ -12895,54 +9583,9 @@ else
     'the fixture carries no wildcard entry, so the control would prove nothing'
 fi
 
-# Empty-directory vacuity guard: a check that passes against an empty directory
-# is not a check.
 run 'control: empty apps directory goes red (vacuity guard)' red \
   check_appproject_cluster_scope "$empty_apps" "$APP_PROJECT"
 
-# ===========================================================================
-# 28b. The substrate carries only what a customer runs
-# ===========================================================================
-#
-# THE BOUNDARY. Anywaye Box is the place a customer sets up their box to run
-# anywaye services from the pantry; Box Pro is the paid layer on top. The
-# substrate therefore carries the services a customer RUNS on their own
-# machine — identity, gateway, courier, parlor, plus the observability
-# three — and never the services Anywaye OPERATES, which the box reaches over
-# HTTPS: pantry at https://pantry.anywaye.com, the registry exchange at
-# KIT_SUBSTRATE_REGISTRY_URL (default https://registry.svc.anywaye.com), the
-# control plane at KIT_SUBSTRATE_BOX_URL.
-#
-# THREE SERVICES, THREE REASONS, each in its own repository:
-#   pantry    proprietary by decision (OPS-D10): "the operated registry … it
-#             runs on Anywaye infrastructure. Nothing here may be run as a
-#             second, forked catalog."
-#   box       proprietary by decision (OPS-D2): "never part of … the Kit
-#             deployment substrate" — the operated control plane.
-#   keyholder BSL-1.1, so a licence check PASSES it — and it is excluded by
-#             the flow argument instead: the installer's step 5 exchanges a
-#             capability at KIT_SUBSTRATE_REGISTRY_URL, and keyholder IS that
-#             exchange (its chart serves host registry.svc.anywaye.com; its
-#             manifest requires box). A box running keyholder would exchange
-#             against itself, and would need its own GitHub App — exactly
-#             what the capability design exists to avoid.
-#
-# THE CHECKS, and why there are three. A licence check alone cannot see
-# keyholder (BSL passes it); an absence list alone is a list to drift. So:
-#   (1) absence — no Application, database, role, secret or migration names
-#       pantry, box or keyholder, with the reason beside it;
-#   (2) licence — every fleet Application's licence permits a customer's box
-#       to run it (BSL-1.1 runnable; either proprietary operated sentence
-#       refused; anything else failed closed);
-#   (3) deployment role — a fleet Application whose service manifest declares
-#       a load-bearing dependency on a licence-refused (operated) service is
-#       itself operated-side. Keyed on the service's own anywaye.yml, not on
-#       a list in kit: the anchor set is derived from the licences, so no
-#       service name is typed here.
-# Plus (4): gateway's ROUTE_TABLE names the operated pantry origin for both
-# pantry routes — the route is the published contract's surface, and "the
-# operated registry is not up yet" (an honest 503) is a different fact from
-# "there is no such route".
 check_substrate_operated_absent() {
   "$PY" - "$1" <<'PY'
 import os
@@ -12955,9 +9598,6 @@ apps_dir = sys.argv[1]
 OPERATED = ("pantry", "box", "keyholder")
 
 problems = []
-# (a) No Application file, and no Application document, names an operated
-# service. The filename and the metadata.name are checked separately: a
-# renamed file carrying the old name would satisfy either half alone.
 for f in sorted(os.listdir(apps_dir)):
     if not f.endswith((".yaml", ".yml")):
         continue
@@ -12989,8 +9629,6 @@ PY
 run 'the substrate ships no pantry, box or keyholder Application' green \
   check_substrate_operated_absent "$MANIFESTS"
 
-# The Cluster manifest and the installer agree: comments stripped first, so
-# the reason written beside the removal cannot satisfy the check.
 check_substrate_operated_wiring() {
   "$PY" - "$1" "$2" <<'PY'
 import re
@@ -13036,10 +9674,6 @@ PY
 run 'the Cluster and the installer wire no operated service' green \
   check_substrate_operated_wiring "$SUBSTRATE/manifests/data/postgres-cluster.yaml" "$SUBSTRATE/install.sh"
 
-# RED CONTROL — the tree as it stands on master, with pantry and keyholder
-# (and box) Applications present, fails the absence check. Assembled from a
-# shipped Application by name-swap, the way the any-box packet added box —
-# and the premise is asserted, not assumed.
 fixture_apps_operated="$WORK/apps-operated"
 rm -rf "$fixture_apps_operated"
 mkdir -p "$fixture_apps_operated"
@@ -13162,10 +9796,6 @@ PY
 run 'every fleet Application carries a licence permitting a customer box to run it' green \
   check_substrate_licences "$MANIFESTS" "$ROOT/.."
 
-# The fixture fleet: the four shipped services under BSL-1.1 (the runnable
-# shape), pantry under its proprietary operated-registry sentence, box
-# under its proprietary substrate sentence, keyholder under BSL-1.1 — the
-# shape that proves the licence check alone cannot see keyholder.
 fixture_fleet="$WORK/operated-fleet"
 rm -rf "$fixture_fleet"
 mkdir -p "$fixture_fleet/identity" "$fixture_fleet/gateway" "$fixture_fleet/courier" "$fixture_fleet/parlor" \
@@ -13205,10 +9835,8 @@ LICENSE
 if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
    grep -q 'forked catalog' "$fixture_fleet/pantry/LICENSE" && \
    grep -q 'Business Source License 1.1' "$fixture_fleet/keyholder/LICENSE"; then
-  # GREEN: the shipped four grade runnable where checkouts exist.
   run 'licences: the shipped services classify runnable (BSL)' green \
     check_substrate_licences "$MANIFESTS" "$fixture_fleet"
-  # RED CONTROL 1 — pantry's proprietary operated sentence is refused.
   fixture_apps_pantry="$WORK/apps-pantry-licence"
   rm -rf "$fixture_apps_pantry"
   mkdir -p "$fixture_apps_pantry"
@@ -13220,7 +9848,6 @@ if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
     fail 'control fixture: the pantry Application did not land' \
       'the fixture carries no pantry chart reference, so the control would prove nothing'
   fi
-  # RED CONTROL 2 — box's proprietary substrate sentence is refused.
   fixture_apps_box="$WORK/apps-box-licence"
   rm -rf "$fixture_apps_box"
   mkdir -p "$fixture_apps_box"
@@ -13232,7 +9859,6 @@ if grep -q 'never part of a customer' "$fixture_fleet/box/LICENSE" && \
     fail 'control fixture: the box Application did not land' \
       'the fixture carries no box chart reference, so the control would prove nothing'
   fi
-  # RED CONTROL 3 — an unclassifiable licence fails closed.
   mkdir -p "$fixture_fleet/stranger"
   printf 'Copyright (c) 2026 Anywaye. All rights reserved. Ask nicely.\n' >"$fixture_fleet/stranger/LICENSE"
   fixture_apps_stranger="$WORK/apps-stranger-licence"
@@ -13253,16 +9879,6 @@ else
     'a fixture LICENCE carries no classifying sentence, so the controls would prove nothing'
 fi
 
-# The deployment-role half: a fleet Application whose service manifest
-# declares a load-bearing dependency on a licence-refused (operated)
-# service is itself operated-side. keyholder is the shape: BSL-1.1, so
-# the licence half passes it — but its anywaye.yml requires box, the
-# operated control plane it exchanges capabilities against, so a box
-# running keyholder would exchange against itself. The anchor set is
-# DERIVED from the sibling licences (the same classifier as above), so no
-# service name is typed in kit: an absent checkout is a note, and a
-# dependency on it is not asserted. A dependency marked `required: false`
-# is not load-bearing and does not refuse.
 check_substrate_deployment_role() {
   "$PY" - "$1" "$2" <<'PY'
 import os
@@ -13300,8 +9916,6 @@ def fleet_service(app_file):
             return chart, None
     return None, None
 
-# The anchor set: every sibling service whose licence classifies refused.
-# Derived, never typed — an absent checkout contributes nothing.
 refused = set()
 for svc in sorted(os.listdir(fleet_dir)):
     lic = os.path.join(fleet_dir, svc, "LICENSE")
@@ -13364,11 +9978,6 @@ PY
 run 'no fleet Application requires an operated service at runtime' green \
   check_substrate_deployment_role "$MANIFESTS" "$ROOT/.."
 
-# RED CONTROL — a BSL-but-operated service fails the deployment-role check.
-# `ledger` is BSL (the licence half passes it, the way keyholder passes)
-# and requires the licence-refused `box`, the way keyholder requires the
-# control plane it exchanges against. A check that only reads licences
-# cannot see it; this one must.
 fixture_apps_ledger="$WORK/apps-ledger-role"
 rm -rf "$fixture_apps_ledger"
 mkdir -p "$fixture_apps_ledger"
@@ -13399,11 +10008,6 @@ else
     'the fixture names no ledger chart, no box dependency or no refused anchor, so the control would prove nothing'
 fi
 
-# The route half: gateway's ROUTE_TABLE names the operated pantry origin
-# for both pantry routes, from the one chart value. An in-cluster baseUrl
-# (http://pantry*) is the shape that produced the live 503 — a route at an
-# address no box serves. An absent gateway checkout is a note, not a
-# verdict (the §11b precedent); a present checkout is graded.
 OPERATED_PANTRY_ORIGIN="https://pantry.anywaye.com"
 check_gateway_operated_pantry() {
   "$PY" - "$1" "$2" <<'PY'
@@ -13456,8 +10060,6 @@ PY
 run 'gateway routes pantry at the operated origin' green \
   check_gateway_operated_pantry "$MANIFESTS" "$ROOT/.."
 
-# RED CONTROL — a fixture whose ROUTE_TABLE names an in-cluster pantry
-# fails. The shape that produced the live 503 must not come back.
 fixture_gw="$WORK/gateway-incluster"
 rm -rf "$fixture_gw/gateway/charts/gateway"
 mkdir -p "$fixture_gw/gateway/charts/gateway"
@@ -13473,30 +10075,6 @@ else
     'the fixture names no in-cluster pantry, so the control would prove nothing'
 fi
 
-# ===========================================================================
-# 16. THE CLUSTER THAT IS ALREADY THERE — KIT_SUBSTRATE_KUBECONFIG
-# ===========================================================================
-#
-# THE PACKET. A cycle against a VPS is a wipe, a setup and an install, over
-# SSH, against a machine on another continent — and every defect costs another
-# full pass. `KIT_SUBSTRATE_KUBECONFIG` is the installer's entry for a cluster
-# that is already reachable: no k3s is installed on the host the script runs on,
-# and steps 1-3 ask the CLUSTER whether the component is there instead of asking
-# the host whether /usr/local/bin/k3s is. It is the same capability a customer
-# with their own Kubernetes needs, which is why it is written as that and not as
-# a test backdoor.
-#
-# THE THREE CLAIMS, EACH WITH A CONTROL THAT MUST ANSWER DIFFERENTLY:
-#   1. a supplied cluster is provisioned into, not provisioned (steps 1-3 read
-#      the cluster's evidence);
-#   2. UNSET IS THE PRODUCT — on this workstation, with the input unset, the run
-#      still refuses the way it does today, and the host probe is still what
-#      decides step 1. If a later edit made the local cycle possible WITHOUT the
-#      input, this pair goes red, which is the whole point of asserting it;
-#   3. headless stdout is ONE OBJECT PER LINE, and the way that is true is a
-#      file descriptor rather than a policy — because the lines that broke it
-#      were printed by a command this file spawns (`kubectl apply`), and no audit
-#      of this file's own statements can see those.
 lc_kubeconfig="$WORK/lc-kubeconfig.yaml"
 cat >"$lc_kubeconfig" <<'EOF'
 apiVersion: v1
@@ -13517,10 +10095,6 @@ users:
     token: fixture
 EOF
 
-# A mock kubectl that answers the cluster the way a real one does, and — the
-# load-bearing half — that PRINTS THE WAY A REAL ONE PRINTS. `kubectl apply`
-# writes one line per object it applies, and those lines went to stdout in
-# headless mode and broke the JSONL stream a consumer reads.
 lc_mock_kubectl() {
   if [ -n "${MOCK_ROOT:-}" ]; then
     printf '%s\n' "$*" >>"$MOCK_ROOT/kubectl-argv"
@@ -13544,32 +10118,17 @@ lc_mock_kubectl() {
       return 0
       ;;
     *"get deployment"*)
-      # Absent by default, so the operator steps take their apply path — which
-      # is where the pollution above is reached.
       return 1
       ;;
   esac
   return 0
 }
 
-# lc_cycle <name> <want: green|red> <installer> <kubeconfig-or-empty> [NO_NODE]
-#
-# One cycle: a mock curl (so the ghcr reachability probe answers and the k3s
-# install would be RECORDED if it were attempted), a mock kubectl, the installer
-# sourced with its `main` stripped, and the preflight plus step 1 run against it.
-# The assertions read the argv logs, so "the cluster was asked" and "the host's
-# k3s was never fetched" are measurements of what the run did.
 lc_cycle() {
   local name="$1" want="$2" installer="$3" kubeconfig="$4" no_node="${5:-}"
   local dir="$WORK/lc-$name"
   rm -rf "$dir"
   mkdir -p "$dir"
-  # A fake `openssl` on PATH, because the trust preflight verifies the control
-  # plane's chain with the openssl BINARY — and through the resolved `timeout`
-  # binary, so a shell function cannot intercept it. The fake verifies, so the
-  # preflight reaches step 1; without it this cycle would depend on the real
-  # anywaye hosts and a real trust store, which is neither offline nor
-  # deterministic.
   mkdir -p "$dir/bin"
   {
     printf '#!/usr/bin/env bash\n'
@@ -13594,7 +10153,6 @@ lc_cycle() {
       else
         export KIT_SUBSTRATE_KUBECONFIG="$kubeconfig"
       fi
-      # shellcheck source=/dev/null
       . "$installer"
       kubectl() { lc_mock_kubectl "$@"; }
       curl() {
@@ -13669,24 +10227,12 @@ lc_cycle() {
   return 0
 }
 
-# 1. GREEN: the supplied cluster is provisioned INTO, not provisioned. The four
-#    host refusals (root, Linux, arch, memory) are the facts that make a
-#    developer machine fail today, and none of them decides this run.
 run 'a supplied cluster: the preflight answers on the cluster and step 1 skips on the cluster evidence' green \
   lc_cycle supplied green "$fixture_sourced" "$lc_kubeconfig"
 
-# 2. RED CONTROL: a supplied cluster with NO node refuses, naming the input. It
-#    does not fall through to the host's k3s install, because that is the one
-#    thing a supplied cluster must never do — the operator is typing at a
-#    workstation, not at the box.
 run 'a supplied cluster with no Node refuses naming the input, and installs no host k3s' green \
   lc_cycle no-node red "$fixture_sourced" "$lc_kubeconfig" NO_NODE
 
-# 3. THE PACKET'S OWN RED CONTROL: with the input UNSET, this workstation still
-#    refuses the way it does today. macOS is not root, is not Linux and reports
-#    0 kB of memory from a /proc that is not there, so the host probe is what
-#    stops the run — and that is exactly the behaviour a fresh Linux box keeps.
-#    If the local cycle ever became possible WITHOUT the input, this goes red.
 lc_unsets_the_input() {
   local dir="$WORK/lc-unset"
   rm -rf "$dir"
@@ -13701,7 +10247,6 @@ lc_unsets_the_input() {
       export KIT_SUBSTRATE_ACME_EMAIL='dev@anywaye.test'
       export HEADLESS=1
       unset KIT_SUBSTRATE_KUBECONFIG
-      # shellcheck source=/dev/null
       . "$fixture_sourced"
       kubectl() { lc_mock_kubectl "$@"; }
       preflight
@@ -13728,11 +10273,6 @@ lc_unsets_the_input() {
 run 'RED control: with the input unset, this workstation still refuses on the host probe' green \
   lc_unsets_the_input
 
-# 4. THE DEFECT THE LOCAL CYCLE FOUND, AND ITS CONTROL. `kubectl apply` prints
-#    one line per object it writes; in headless mode those lines went to the
-#    process stdout, which is the JSONL stream, and the first consumer to read
-#    the stream died on line 7. The fix is a file descriptor, so the control is
-#    the same run against an installer with the descriptor removed.
 lc_stdout_is_jsonl() {
   local installer="$1" dir="$2"
   local out
@@ -13746,7 +10286,6 @@ lc_stdout_is_jsonl() {
       export KIT_SUBSTRATE_KUBECONFIG="$3"
       export HEADLESS=1
       export DRY_RUN=0
-      # shellcheck source=/dev/null
       . "$installer"
       kubectl() { lc_mock_kubectl "$@"; }
       curl() { printf '{}'; }
@@ -13767,12 +10306,6 @@ mkdir -p "$lc_pollution_dir"
 run 'a headless run whose kubectl apply prints its own progress still emits one JSON object per line' green \
   lc_stdout_is_jsonl "$fixture_sourced" "$lc_pollution_dir" "$lc_kubeconfig"
 
-# The control: the same install with the saved descriptor removed. That is
-# byte-for-byte the shape that shipped, so the pair proves the descriptor is what
-# keeps `kubectl apply`'s output off the channel rather than luck. The fixture is
-# built by a python that STRIPS COMMENTS as it goes, because the installer's own
-# prose now explains the descriptor in eleven comment lines and a fixture built
-# by deleting matching lines would delete the explanation and keep the code.
 lc_fixture_no_fd3="$WORK/lc-install-no-fd3.sh"
 "$PY" - "$fixture_sourced" "$lc_fixture_no_fd3" <<'PY'
 import re
@@ -13782,7 +10315,6 @@ src = open(sys.argv[1], encoding="utf-8").read()
 out = []
 drop_function = False
 for ln in src.split("\n"):
-    # The opener is defined and called, so both the definition and the call go.
     if ln.startswith("kit_substrate_open_jsonl_channel() {"):
         drop_function = True
     if drop_function:
@@ -13804,19 +10336,6 @@ else
     lc_stdout_is_jsonl "$lc_fixture_no_fd3" "$WORK/lc-pollution-control" "$lc_kubeconfig"
 fi
 
-# 5. AND THE DEVELOPER'S ENTRY IS NOT A SECOND IMPLEMENTATION, AND NOT A WAY
-#    BACK TO THE LIVE BOX. k3d lives in the developer's script and nowhere
-#    else: the installer has no k3d dependency, because a customer with their
-#    own Kubernetes has a kubeconfig and no k3d. The script also carries no IP
-#    literal and no ssh, so a later edit that reaches for a box's address is a
-#    red gate rather than a surprise.
-#
-#    AND BOTH CHECKS STRIP COMMENTS FIRST, which is not caution: the installer's
-#    own prose now names k3d six times while explaining why it has no k3d
-#    dependency, and the first version of the check below went red on a tree
-#    whose only k3d was in an explanation. A check that a comment can falsify is
-#    the same defect as one a comment can satisfy, in the more expensive
-#    direction.
 check_no_remote_box() {
   "$PY" - "$1" <<'PY'
 import re
@@ -13849,9 +10368,6 @@ else
     'the fixture carries no ssh line, so the control would prove nothing'
 fi
 
-# The installer itself took no k3d dependency, and that is a direction worth
-# asserting rather than a paragraph: the developer's script is the only file in
-# this directory that may name k3d.
 installer_has_no_k3d() {
   local code
   code="$("$PY" - "$1" <<'PY'
@@ -13871,62 +10387,8 @@ PY
 }
 run 'the installer has no k3d dependency' green installer_has_no_k3d "$SUBSTRATE/install.sh"
 
-# ===========================================================================
-# 29. The readiness preflight resolves through the cluster's DNS as well as
-#     the node's — and the provider's stale NXDOMAIN is fixed by a public
-#     resolver
-# ===========================================================================
-#
-# THE EVIDENCE, MEASURED ON THE LIVE BOX. Three A records (api, app, auth →
-# 169.58.108.209, proxied off) existed and 1.1.1.1 answered, the box answered
-# on port 80, but cert-manager's self check failed:
-#
-#   Waiting for HTTP-01 challenge propagation: failed to perform self check
-#     GET request 'http://api.anywaye.com/.well-known/acme-challenge/...':
-#     Get "http://api.anywaye.com/...": dial tcp: lookup api.anywaye.com on
-#     10.43.0.10:53: no such host
-#
-# 10.43.0.10 is k3s's CoreDNS. The box's own resolver could not either:
-#
-#   $ getent hosts api.anywaye.com   (no output)
-#   $ dig +short @1.1.1.1 api.anywaye.com
-#   169.58.108.209
-#   $ resolvectl status | grep 'Current DNS'
-#   Current DNS Server: 209.126.15.53   (Contabo)
-#
-# Contabo's resolver held a stale NXDOMAIN for minutes after 1.1.1.1 answered.
-# The fix: /etc/systemd/resolved.conf.d/99-anywaye.conf with DNS=1.1.1.1 8.8.8.8,
-# then a CoreDNS restart, then recreating the challenges — both Certificates
-# went True.
-#
-# THE PACKET. The preflight resolved on the node (getent) while ACME resolves
-# through CoreDNS, which forwards to the node's /etc/resolv.conf. When the
-# provider holds a stale negative answer, the preflight reported resolving and
-# the certificate failed anyway. The packet requires:
-#   * resolve through the cluster's DNS as well as the node's, reporting as
-#     resolving only when BOTH answer; a split is a pending condition with its
-#     own sentence (node-resolves/cluster-does-not is the live-box shape);
-#   * either write a public resolver (99-anywaye.conf) when the box serves
-#     public names, or detect and name the stale answer — shape 1 chosen here
-#     because it fixes the provider dependency at the substrate rather than
-#     reporting it for the operator to fix;
-#   * name the CoreDNS path in the readiness report; and
-#   * the opposite split (cluster yes, node no) is also pending — the check is
-#     about agreement, not which side wins.
-#
-# WHY SHAPE 1. The box serves public names that are most likely to have been
-# created minutes earlier; every provider runs its own negative cache, so the
-# substrate should not leave resolution to luck. Writing DNS=1.1.1.1 8.8.8.8 is
-# the fix measured on the box, and it is the only shape that prevents the
-# 170 minutes of pending rather than reporting it. It is written only when the
-# box serves public names, is idempotent, and is visible in the output so a
-# customer's own DNS policy is not overridden silently.
 DNS_SPLIT_HOST="dns-split-never-resolves.invalid"
 DNS_BOTH_HOST="localhost"
-# For the resolver-config tests the intended host must be checkable, so a
-# public name is used; for the DNS split the fixture host is *.invalid (RFC
-# 2606) which never resolves, and localhost which always does — but the split
-# itself is mocked, so no network is needed.
 
 check_dns_split_pending() {
   local script="$1" src="$WORK/dns-split-sourced.sh"
@@ -13951,7 +10413,6 @@ spec:
   destination: {server: https://kubernetes.default.svc, namespace: test}
 YAML
     kit_substrate_compute_readiness
-    # Must be pending and split
     case "$READINESS_TLS_PENDING" in *dns-split-never-resolves.invalid*) ;; *) printf "pending does not contain split host\n"; exit 1;; esac
     case "$READINESS_DNS_SPLIT" in *dns-split-never-resolves.invalid*) ;; *) printf "split does not contain host\n"; exit 1;; esac
     out=$(kit_substrate_readiness_preflight 2>&1)
@@ -14035,7 +10496,6 @@ check_resolver_config() {
   local script="$1" src="$WORK/resolver-sourced.sh"
   sed '/^main "$@"/d' "$script" >"$src"
   bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
-  # No public host => no write
   local conf_no="$WORK/resolver-no-public.conf"
   rm -f "$conf_no"
   bash -c '
@@ -14048,7 +10508,6 @@ check_resolver_config() {
     kit_substrate_ensure_public_resolver
   ' bash "$src" "$conf_no" 2>&1
   if [ -f "$conf_no" ]; then printf 'resolver written when no public host\n'; return 1; fi
-  # With public host => writes correct content (DRY_RUN first, then real)
   local conf_yes="$WORK/resolver-yes.conf"
   rm -f "$conf_yes"
   bash -c '
@@ -14073,7 +10532,6 @@ YAML
   if ! grep -q "DNS=1.1.1.1 8.8.8.8" "$conf_yes"; then printf 'resolver content wrong\n'; cat "$conf_yes"; return 1; fi
   if ! grep -q "FallbackDNS=1.0.0.1 8.8.4.4" "$conf_yes"; then printf 'resolver fallback wrong\n'; cat "$conf_yes"; return 1; fi
   if ! grep -q "wrote public resolver" "$WORK/resolver-out.txt"; then printf 'resolver write not reported\n'; cat "$WORK/resolver-out.txt"; return 1; fi
-  # Second run is idempotent
   bash -c '
     . "$1"
     export KIT_SUBSTRATE_APP_BASE_URL="https://public.example.com"
@@ -14086,16 +10544,10 @@ YAML
   printf 'resolver written only when serving public names, content correct, visible and idempotent\n'
 }
 
-# The RED control: the node-only preflight (the master shape) reports the split
-# case as RESOLVING — i.e. it would have been green on the live box while the
-# certificate sat pending. This proves the check discriminates.
 check_node_only_red() {
   local script="$1" src="$WORK/node-only-sourced.sh"
   sed '/^main "$@"/d' "$script" >"$src"
   bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
-  # Build a fixture that is the current script with compute_readiness replaced
-  # by the node-only version (pre-packet). The fixture must still parse and
-  # DRY_RUN, but its readiness must be empty for the split case.
   local fixture="$WORK/install-node-only.sh"
   "$PY" - "$src" "$fixture" <<'PY'
 import re, sys
@@ -14177,19 +10629,10 @@ run 'a host that resolves through cluster DNS but not on node is reported as pen
 run 'the public resolver is written only when serving public names, content correct and visible' green check_resolver_config "$SUBSTRATE/install.sh"
 run 'control: node-only preflight reports split as resolving' green check_node_only_red "$SUBSTRATE/install.sh"
 
-# The second RED control from the packet: CoreDNS answers, node does not, must
-# not be reported as resolving either — the check is about agreement.
-# Reuse the opposite-split check as its green, and the node-only fixture
-# above already proves discrimination; this is the agreement proof.
-# Explicitly: a fixture where the mock is inverted must still be pending, not
-# resolving — already proven by check_dns_opposite_split, but also assert that
-# a fixture that mocked the wrong side would be wrong.
 check_dns_agreement() {
   local script="$1" src="$WORK/dns-agree-sourced.sh"
   sed '/^main "$@"/d' "$script" >"$src"
   bash -n "$src" || { printf 'sourced copy does not parse\n'; return 1; }
-  # The same as opposite split, but assert that the pending list is NOT empty
-  # and that the preflight does NOT say "every host resolves"
   local out ec=0
   out="$(bash -c '
     . "$1"
@@ -14219,89 +10662,11 @@ YAML
 }
 run 'control: a fixture where CoreDNS answers and node does not is not reported as resolving' green check_dns_agreement "$SUBSTRATE/install.sh"
 
-# ===========================================================================
-# 30. The trust preflight — a box that cannot verify its control plane is
-#     refreshed, or refused naming the origin and the verification error
-# ===========================================================================
-#
-# THE DEFECT, MEASURED ON THE BOX. The Contabo dogfood box (2026-10-15) had a
-# trimmed OS trust store — /etc/ssl/certs/ca-certificates.crt held 122
-# certificates and not one major root (no ISRG Root X1, no DigiCert Global
-# Root) — so `cafe boxd` (a Go client, reading the SYSTEM store) could not
-# verify https://box.svc.anywaye.com:8443 and failed with `x509: certificate
-# signed by unknown authority`, while a Mac client with a whole store could.
-# The remedy that worked was one command: `apt-get install --reinstall
-# ca-certificates && update-ca-certificates --fresh`.
-#
-# THE CHECKS, and what each proves:
-#   1. a verifiable box is reported verified for BOTH origins, openssl IS invoked
-#      with the origin in `-connect` and `-servername`, and the package manager
-#      is NOT — the control that keeps "verified" from being a line printed
-#      unconditionally;
-#   2. a chain that fails and is fixed by a trust-store refresh is re-checked
-#      (TWICE per failing origin, read off the openssl log) and reported fixed,
-#      with the remedy ATTEMPTED — the fake update-ca-certificates rebuilds the
-#      fake store, so the re-check sees a real state rather than a scripted
-#      reply;
-#   3. a chain that stays broken REFUSES, naming the origin and openssl's own
-#      verification error, after the remedy was attempted (a verdict is not a
-#      silent pass), and the second origin is never reached;
-#   4. an origin that never answers a HANDSHAKE is a different finding from an
-#      unverifiable chain, and it refuses as REACHABILITY without running the
-#      remedy — measured on this host, openssl prints no `Verify return code:`
-#      line for a refused port, so the store was never consulted;
-#   5. a remedy that itself FAILS is named in the refusal, so the operator is
-#      never told to run a command that has just been refused;
-#   6. the installer's OWN preflight() reaches the trust check, and STOPS at it:
-#      with a fake curl, the ghcr.io probe is visible in the record after a pass
-#      and absent after a refusal. Every other check calls
-#      kit_substrate_trust_preflight directly, which is exactly why this one
-#      exists — they would all stay green on a tree where preflight() had
-#      stopped making the call;
-#   7. DRY_RUN plans the check and touches NOTHING — openssl is not called and
-#      the package manager is not run, because a plan must be offline and must
-#      not be able to refuse.
-#
-# HOW THE SUITE FAKES IT. The trust check calls the `openssl` BINARY, not a
-# shell function, so it is faked on PATH (the idiom fetch_test.sh uses for
-# docker): a fakebin with openssl / apt-get / update-ca-certificates, plus
-# kubectl and curl for the preflight-wiring case. The fake openssl answers three
-# shapes — unreachable (no verify verdict), unverifiable (`Verify return code:
-# 20`) and verified (exit 0) — because a fake with one shape would let the
-# installer collapse two different findings into one. It fails for a named host
-# until FAKE_TRUST_MARKER exists; the fake update-ca-certificates creates that
-# marker, so "refreshed" is a real state the re-check can observe rather than a
-# scripted reply. Every fake logs its argv, so "the remedy ran", "the check
-# ran" and "the install went no further" are read back rather than assumed.
-#
-# FIVE RED CONTROLS, ONE MUTATION EACH, and each one is the thing its check
-# names: the `trust-preflight BEGIN/END` block stripped (no verification at all,
-# so check 1 must go red); the DRY_RUN guard deleted (a plan that runs openssl
-# and apt-get); the remedy emptied (a refreshable box now refuses); the
-# reachability discriminator disabled (an unreachable origin run through the
-# trust-store remedy); and the call removed from preflight() itself (a tree
-# where nothing runs the check). A control that stays green would prove nothing
-# about the check it guards.
 
 trust_fakebin="$WORK/trust-fakebin"
 mkdir -p "$trust_fakebin"
 cat >"$trust_fakebin/openssl" <<'TRUST_OPENSSL'
 #!/usr/bin/env bash
-# A fake openssl for the trust-preflight test. Records its argv and answers
-# `s_client -verify_return_error` in THREE shapes, because the installer has to
-# tell them apart and a fake with one shape would let it collapse them all into
-# "the trust store is stale":
-#
-#   unreachable  FAKE_OPENSSL_UNREACHABLE_HOST — the connect fails (errno 61
-#                plus an openssl error block) and NO verify verdict is printed,
-#                which is what a real refused port or unresolvable name does;
-#   unverifiable FAKE_OPENSSL_FAIL_HOST while FAKE_TRUST_MARKER is absent — the
-#                session completes, the chain is refused, and
-#                `Verify return code:` IS printed: the line that separates a
-#                stale store from a dead network, in the words openssl itself
-#                uses (`Verify return code: 20 (unable to get local issuer
-#                certificate)` is the live box's own failure);
-#   verified     everything else — exit 0 with `Verify return code: 0 (ok)`.
 printf '%s\n' "$*" >>"${FAKE_OPENSSL_LOG:-/dev/null}"
 host=""; prev=""
 for a in "$@"; do
@@ -14329,11 +10694,6 @@ chmod +x "$trust_fakebin/openssl"
 
 cat >"$trust_fakebin/apt-get" <<'TRUST_APT'
 #!/usr/bin/env bash
-# A fake apt-get: records the call and does nothing. The point is only that the
-# remedy is ATTEMPTED — the re-check after it is what decides. FAKE_APT_FAIL_ON
-# names a sub-command that must exit 100, which is how a case puts the box in
-# "the remedy itself failed": the refusal has to name the command that failed
-# rather than recommending a command that has already been refused.
 printf 'apt-get %s\n' "$*" >>"${FAKE_APT_LOG:-/dev/null}"
 if [ -n "${FAKE_APT_FAIL_ON:-}" ] && [ "$1" = "${FAKE_APT_FAIL_ON}" ]; then
   exit 100
@@ -14344,9 +10704,6 @@ chmod +x "$trust_fakebin/apt-get"
 
 cat >"$trust_fakebin/update-ca-certificates" <<'TRUST_UPD'
 #!/usr/bin/env bash
-# A fake update-ca-certificates: records the call and, when FAKE_TRUST_MARKER is
-# set, creates it — that file is what the fake openssl reads as "the store was
-# refreshed", so the re-check can go green.
 printf 'update-ca-certificates %s\n' "$*" >>"${FAKE_APT_LOG:-/dev/null}"
 if [ -n "${FAKE_TRUST_MARKER:-}" ]; then
   : >"$FAKE_TRUST_MARKER"
@@ -14355,11 +10712,6 @@ exit 0
 TRUST_UPD
 chmod +x "$trust_fakebin/update-ca-certificates"
 
-# Two fakes for the WIRING cases only. The installer's own preflight is what
-# those cases run, so the cluster and ghcr.io probes it makes either side of the
-# trust check need something to talk to. They record argv, which is how "the
-# install stopped at the trust check" is MEASURED rather than assumed: nothing
-# is logged after a refusal, and the ghcr.io probe is logged after a pass.
 cat >"$trust_fakebin/kubectl" <<'TRUST_KUBECTL'
 #!/usr/bin/env bash
 printf 'kubectl %s\n' "$*" >>"${FAKE_KUBECTL_LOG:-/dev/null}"
@@ -14374,20 +10726,10 @@ exit 0
 TRUST_CURL
 chmod +x "$trust_fakebin/curl"
 
-# An empty manifest dir and a readable kubeconfig: the two things the installer
-# resolves at source time. The empty dir is what keeps these runners off public
-# DNS, so a wiring case measures the trust check and not the host's resolver.
 trust_empty_manifests="$WORK/trust-empty-manifests"
 mkdir -p "$trust_empty_manifests"
 : >"$WORK/trust-kubeconfig"
 
-# trust_run <installer> <one-function-body> — write and run a child that sources
-# <installer> the way every case in this file sources it (the trailing
-# `main "$@"` stripped, so sourcing DEFINES rather than runs) with the trust
-# fakes on PATH, then calls <one-function-body>. The environment comes from
-# $TRUST_CHILD_ARGS so a case adds its own FAKE_* variables without a second
-# copy of this preamble. Prints the child's combined output; the exit status is
-# the child's.
 trust_run() {
   local src="$1" body="$2" child="$WORK/trust-child.sh" ec=0 out
   sed '/^main "$@"/d' "$src" >"$child.sourced"
@@ -14425,9 +10767,6 @@ TRUST_CHILD_ARGS=""
 TRUST_DRY_RUN=0
 TRUST_HEADLESS=0
 
-# 1. Green, real tree: both origins verify, openssl IS invoked, and the
-# package manager is NOT — the control that keeps "verified" from being a line
-# printed unconditionally.
 check_trust_verified() {
   local script="$1" src="$WORK/trust-verified-src.sh" out ec=0
   local olog="$WORK/trust-verified-openssl.log" alog="$WORK/trust-verified-apt.log"
@@ -14462,8 +10801,6 @@ check_trust_verified() {
   printf 'a verifiable box is reported verified, both origins openssl-checked, the remedy untouched\n'
 }
 
-# 2. Green, real tree: a failing chain fixed by a refresh is re-checked and
-# reported fixed, and the remedy was actually attempted.
 check_trust_remedied() {
   local script="$1" src="$WORK/trust-remedied-src.sh" out ec=0
   local olog="$WORK/trust-remedied-openssl.log" alog="$WORK/trust-remedied-apt.log" marker="$WORK/trust-remedied.marker"
@@ -14486,9 +10823,6 @@ check_trust_remedied() {
     *'trust store refreshed: https://box.svc.anywaye.test now verifies'*) ;;
     *) printf 'the refresh was not reported as fixing the chain\n%s\n' "$out"; return 1 ;;
   esac
-  # Both openSSL calls for the failing origin: the one that failed, and the
-  # RE-CHECK. A remedy without a re-check is a hope, and this is the assertion
-  # that would catch it.
   [ "$(grep -c 'box.svc.anywaye.test' "$olog")" -ge 2 ] || {
     printf 'the failing origin was verified only %s time(s) — the remedy was not re-checked\n' \
       "$(grep -c 'box.svc.anywaye.test' "$olog")"
@@ -14499,8 +10833,6 @@ check_trust_remedied() {
   printf 'a failing chain is refreshed, re-checked, and reported fixed\n'
 }
 
-# 3. Green, real tree: a chain that stays broken REFUSES, naming the origin and
-# openssl's own verification error, with the remedy attempted first.
 check_trust_refused() {
   local script="$1" src="$WORK/trust-refused-src.sh" out ec=0
   local olog="$WORK/trust-refused-openssl.log" alog="$WORK/trust-refused-apt.log"
@@ -14524,20 +10856,12 @@ check_trust_refused() {
     *) printf 'the refusal does not carry the verification error\n%s\n' "$out"; return 1 ;;
   esac
   [ -s "$alog" ] || { printf 'the remedy was not attempted before refusing\n'; return 1; }
-  # The registry origin is never reached: a refusal STOPS the install, and the
-  # second origin being unchecked is what that means.
   case "$(cat "$olog")" in
     *registry.svc.anywaye.test*) printf 'the run continued to the registry origin after refusing\n'; return 1 ;;
   esac
   printf 'an unfixable chain refuses, naming the origin and the verification error\n'
 }
 
-# 4. Green, real tree: an origin that never answers a handshake is a DIFFERENT
-# finding from an unverifiable chain, and the distinction is the point.
-# Refreshing the trust store cannot make a dead port answer, so running the
-# remedy there would burn the refresh budget and then tell the operator the
-# store is stale. Measured on this host: a refused port prints no
-# `Verify return code:` line, and the installer reads that line.
 check_trust_unreachable() {
   local script="$1" src="$WORK/trust-unreachable-src.sh" out ec=0
   local olog="$WORK/trust-unreachable-openssl.log" alog="$WORK/trust-unreachable-apt.log"
@@ -14570,8 +10894,6 @@ check_trust_unreachable() {
   printf 'an unreachable origin refuses as reachability, and the remedy is not run\n'
 }
 
-# 5. Green, real tree: a remedy that itself FAILS is named in the refusal, so the
-# operator is never told to run a command that has just been refused.
 check_trust_remedy_failure() {
   local script="$1" src="$WORK/trust-remedyfail-src.sh" out ec=0
   local olog="$WORK/trust-remedyfail-openssl.log" alog="$WORK/trust-remedyfail-apt.log"
@@ -14593,13 +10915,6 @@ check_trust_remedy_failure() {
   printf 'a remedy that failed is named in the refusal\n'
 }
 
-# 6. Green, real tree: the installer's OWN preflight reaches the trust check.
-# Every check above calls kit_substrate_trust_preflight directly, which means
-# they would all stay green on a tree where preflight() had stopped calling it —
-# the exact shape of the reusable-workflow defect this repo has already been
-# bitten by. So the function the box actually runs is what is exercised here,
-# and with a FAKE curl the ghcr.io probe is visible in the record: after a pass
-# it appears, which proves the trust check did not refuse its way past it.
 check_trust_preflight() {
   local script="$1" mode="$2" out ec=0
   local olog="$WORK/trust-child-openssl.log" clog="$WORK/trust-child-curl.log"
@@ -14632,8 +10947,6 @@ check_trust_preflight() {
         *'cannot verify the TLS chain of https://box.svc.anywaye.test'*) ;;
         *) printf 'preflight did not refuse naming the origin\n%s\n' "$out"; return 1 ;;
       esac
-      # Nothing is created past a refusal, and ghcr.io is the next probe the
-      # installer would have made. Its absence is the measurement.
       case "$(cat "$clog")" in
         *'https://ghcr.io/v2/'*)
           printf 'the ghcr.io probe ran after the trust refusal — the install went past it\n'
@@ -14646,12 +10959,6 @@ check_trust_preflight() {
   esac
 }
 
-# 4. Green, real tree: DRY_RUN plans and touches NOTHING. A plan runs on a
-# developer machine with no box store and often no network, so a plan that ran
-# openssl could not be offline, and a plan that ran the remedy would mutate the
-# machine that was only asked what it would do. The plan must also be unable to
-# REFUSE: an unreachable origin is not an origin that verifies, and a plan is
-# not the place to discover that.
 check_trust_dry_run() {
   local script="$1" src="$WORK/trust-dryrun-src.sh" out ec=0
   local olog="$WORK/trust-dryrun-openssl.log" alog="$WORK/trust-dryrun-apt.log"
@@ -14688,13 +10995,6 @@ run "preflight verifies the control plane's TLS chain, and continues when it ver
 run 'preflight stops at an unverifiable origin, before anything is created' green check_trust_preflight "$SUBSTRATE/install.sh" stops
 run 'DRY_RUN plans the trust check and runs neither the check nor the remedy' green check_trust_dry_run "$SUBSTRATE/install.sh"
 
-# The RED controls. Each one mutates exactly ONE thing in a copy of the tree and
-# requires the check above that names that thing to answer DIFFERENTLY. A control
-# that stays green proves nothing about the check it is guarding.
-# The RED control fixture: the `trust-preflight BEGIN/END` block stripped. With
-# it gone there is no verification at all, so check 1 must go red. The fixture
-# asserts its own premise first — the block is really absent and the copy still
-# parses — so a red cannot be a broken fixture wearing the finding's clothes.
 trust_stripped="$WORK/trust-stripped.sh"
 sed -e '/trust-preflight BEGIN/,/trust-preflight END/d' "$SUBSTRATE/install.sh" >"$trust_stripped"
 if grep -q 'kit_substrate_trust_preflight()' "$trust_stripped" || ! bash -n "$trust_stripped"; then
@@ -14705,8 +11005,6 @@ else
     check_trust_verified "$trust_stripped"
 fi
 
-# DRY_RUN: the early return deleted, so a PLAN would run openssl and apt-get on
-# a developer machine — offline no more, and able to refuse.
 if "$PY" - "$SUBSTRATE/install.sh" "$WORK/trust-nodryrun.sh" <<'PY'
 import sys
 
@@ -14768,8 +11066,6 @@ else
     'the fixture is empty or unparseable, so the control would prove nothing'
 fi
 
-# The remedy: the function emptied, so a refreshable box now refuses. This is the
-# control that makes the remedy load-bearing rather than a comment.
 if "$PY" - "$SUBSTRATE/install.sh" "$WORK/trust-noremedy.sh" <<'PY'
 import sys
 
@@ -14801,10 +11097,6 @@ else
     'the fixture is empty or unparseable, so the control would prove nothing'
 fi
 
-# The discriminator: the guard that separates an unreachable origin from an
-# unverifiable chain, INVERTED. A copy that cannot see the difference runs the
-# unreachable origin through the trust-store remedy, and must go red on the
-# case that names it.
 if "$PY" - "$SUBSTRATE/install.sh" "$WORK/trust-nodiscriminator.sh" <<'PY'
 import sys
 
@@ -14833,9 +11125,6 @@ else
     'the fixture is empty or unparseable, so the control would prove nothing'
 fi
 
-# The wiring: BOTH calls removed from preflight() itself — the DRY_RUN plan and
-# the live check. Every check above calls the function directly, so this is the
-# control that keeps them from being satisfied by a private helper nothing runs.
 if "$PY" - "$SUBSTRATE/install.sh" "$WORK/trust-unwired.sh" <<'PY'
 import sys
 
@@ -14868,9 +11157,6 @@ else
     'the fixture is empty or unparseable, so the control would prove nothing'
 fi
 
-# ===========================================================================
-# Summary
-# ===========================================================================
 printf -- '-- substrate_test: %d passed, %d failed, %d skipped\n' "$passes" "$failures" "$skips"
 
 if [ "$failures" -ne 0 ]; then

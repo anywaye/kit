@@ -1,72 +1,9 @@
 #!/usr/bin/env bash
-# tests/rls_perf_test.sh — P1-24: the policy JOIN DIRECTION, measured on a real
-# cluster, and asserted as a number rather than described in a report.
-#
-# WHAT IT MEASURES. The packet's two shapes, on kit's own identity seam
-# (`anywaye.begin_account` / `anywaye.current_account_id`), against a membership
-# table indexed in BOTH directions:
-#
-#   SLOW  using ((select anywaye.current_account_id()) in
-#                (select m.caller_account from member_of m
-#                   where m.subject_account = doc.subject_account_id))
-#          -- the membership subquery is CORRELATED to the policy's own row.
-#
-#   FAST  using (doc.subject_account_id in
-#                (select m.subject_account from member_of m
-#                   where m.caller_account = (select anywaye.current_account_id())))
-#          -- membership resolved once into a set; IN against the ROW COLUMN.
-#
-#   KIT   using (account_id = (select anywaye.current_account_id()))
-#          -- what protect_table writes. No membership table, so no join either way.
-#
-#   EDGE  the same delegation reachable only through a link table, so the OUTER
-#         hop has no local membership column to invert. This is the boundary the
-#         packet asks to be written down, and it is measured rather than asserted.
-#
-# FOUR ASSERTIONS, and each is one a wrong implementation fails:
-#
-#   1. All four shapes return the SAME row count. The three delegation forms
-#      compute one predicate over one membership table keyed
-#      (caller, subject), so a disagreement is a fixture bug — and a check that
-#      only compared timings would happily report a 100x win for a predicate that
-#      returns nothing.
-#   2. SLOW is at least 10x SLOWER than FAST. The direction of the effect is the
-#      claim; the constant is not, and a fixture too small to separate them would
-#      fail this rather than pass it by noise.
-#   3. FAST's membership subquery is evaluated ONCE (`loops=1`) and SLOW's is
-#      evaluated once per candidate row (`loops` = the row count). This is the
-#      MECHANISM, asserted separately from the timing, because a number that moves
-#      with machine load and a number that is a loop counter fail for different
-#      reasons and only one of them is a bug.
-#   4. The EDGE case resolves its membership ONCE even though its outer hop is
-#      correlated — because the INNER hop is inverted and Postgres can then
-#      re-associate the EXISTS into a semi-join. That is the finding, and it is
-#      the reason the rule shipped in advisor.sql targets `IN (correlated)` and not
-#      correlation in general.
-#
-# IT SKIPS LOUDLY without docker, like tests/tenancy_test.sh and
-# tests/isolation_test.sh: exit 3, one sentence naming what is missing.
-#
-# THE IMAGE IS `postgres:<tag>`, the base kit's Dockerfile builds FROM, and NOT
-# kit's built cluster image. The measurement is about the planner, not about the
-# pglayers extension, and building the full image needs ghcr.io; a perf gate that
-# silently skips whenever a registry is slow is a gate nobody trusts. The tag is
-# read out of templates/compose/postgres/Dockerfile rather than written here, for
-# the reason tests/isolation_test.sh gives about the pgvector pin.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SUBSTRATE="$ROOT/templates/database/tenancy/substrate.sql"
 WORK="${TMPDIR:-/tmp}/kit-rlsperf.$$"
-# The container this tier owns. It was `kit-rlsperf-pg`, spelled out, and
-# `docker run --name` plus `docker rm -f` both take a BARE name that does not care
-# which run made it — so two concurrent runs were one container with two owners,
-# and one run's teardown removed the cluster the other was still measuring on.
-#
-# Found by the guard added for tests/isolation_test.sh and
-# tests/tenancy_test.sh, which is the argument for deriving the guard's scope from
-# the directory rather than from a list of the two files that were known to be
-# broken: this tier was not on anybody's list and is the same defect.
 C="kit-rlsperf-pg-$$"
 
 say() { printf '%s\n' "$*"; }
@@ -92,9 +29,6 @@ if ! docker info >/dev/null 2>&1; then
   exit 3
 fi
 
-# The pin, read rather than restated. `templates/compose/postgres/Dockerfile`
-# writes `ARG POSTGRES_TAG=17`, and a copy of that number here is a second place
-# for it to drift.
 IMAGE="$(sed -n 's/^ARG POSTGRES_TAG=//p' "$ROOT/templates/compose/postgres/Dockerfile" | head -1)"
 [ -n "$IMAGE" ] || fail "templates/compose/postgres/Dockerfile declares no ARG POSTGRES_TAG, so the perf gate has no image to run on"
 
@@ -117,8 +51,6 @@ for _ in $(seq 1 60); do
 done
 [ "$ready" = "1" ] || fail "postgres:$IMAGE did not accept a query in 60s"
 
-# The REAL substrate, not a stand-in for the identity seam: the whole claim is
-# about the policies this template writes and about the function they call.
 docker cp "$SUBSTRATE" "$C:/tmp/substrate.sql" >/dev/null
 if ! docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf \
      -v ON_ERROR_STOP=1 -q -f /tmp/substrate.sql >"$WORK/substrate.log" 2>&1; then
@@ -267,15 +199,11 @@ docker exec -e PGPASSWORD=anywaye "$C" psql -U postgres -d rlsperf \
   || { say "FAIL: the measurement did not run. Last lines:"; tail -20 "$WORK/measure.out" | sed 's/^/       /'; fail "the measurement did not run"; }
 
 row() { grep "^rows_$1|" "$WORK/measure.out" | head -1 | cut -d'|' -f2; }
-ms()  { # ms <shape> -- the Execution Time of that shape's plan
   awk -v want="PLAN|$1" '
     $0 == want { inplan = 1; next }
     inplan && /Execution Time:/ { gsub(/[^0-9.]/, "", $3); print $3; exit }
   ' "$WORK/measure.out"
 }
-# How many times the MEMBERSHIP subquery ran, read from the plan's own loop
-# counter rather than inferred from a timing.
-loops_on_member_of() { # loops_on_member_of <shape> -- the slow shape's per-row
   awk -v want="PLAN|$1" '
     $0 == want { inplan = 1; next }
     inplan && /Scan on member_of/ && match($0, /loops=[0-9]+/) {
@@ -283,7 +211,6 @@ loops_on_member_of() { # loops_on_member_of <shape> -- the slow shape's per-row
     }
   ' "$WORK/measure.out"
 }
-hashed_or_once() { # 1 when the membership was resolved once, 0 when per row
   awk -v want="PLAN|$1" '
     $0 == want { inplan = 1; next }
     inplan && /member_of/ && /loops=1/ { print 1; exit }
@@ -303,8 +230,6 @@ say "   KIT   protect_table, no membership      ${KIT_MS} ms   (no join in eithe
 say "   EDGE  outer hop not invertible          ${EDGE_MS} ms   (inner hop inverted; membership resolved once)"
 say ""
 
-# 1. SAME ANSWER. A timing measured against a predicate that returns nothing is
-#    not a faster predicate, and only the row counts catch that.
 if [ "$ROWS_SLOW" != "$ROWS_FAST" ] || [ "$ROWS_SLOW" != "$ROWS_EDGE" ] || [ -z "$ROWS_SLOW" ]; then
   say "FAIL: the three delegation shapes did not return the same rows"
   say "      (slow=${ROWS_SLOW:-?} fast=${ROWS_FAST:-?} edge=${ROWS_EDGE:-?})."
@@ -316,8 +241,6 @@ fi
 say "   same answer from every shape: ${ROWS_SLOW} rows. A speed claim measured against a predicate"
 say "   that returns nothing is not a speed claim."
 
-# 2. THE DIRECTION, with a floor so noise cannot satisfy it. The constant is not
-#    a promise; the sign is the claim.
 awk -v s="$SLOW_MS" -v f="$FAST_MS" 'BEGIN {
   if (s == "" || f == "" || f + 0 <= 0) { print "no timing captured"; exit 1 }
   r = s / f; printf "   %.1fx\n", r;
@@ -333,8 +256,6 @@ say "   yours: the ratio is set by the membership table's SIZE (a per-row probe 
 say "   a 200-row table is cheap per row and ruinous in aggregate) and by the row"
 say "   count. What is claimed here is the direction and the mechanism."
 
-# 3. THE MECHANISM, asserted separately from the timing: a loop counter does not
-#    move with machine load, so this half fails differently from the half above.
 [ -n "$SLOW_LOOPS" ] || fail "the slow shape's plan had no member_of scan to read a loop count from"
 if [ "$SLOW_LOOPS" -lt 1000 ]; then
   fail "the slow shape's membership subquery ran ${SLOW_LOOPS} times, not once per candidate row — the fixture no longer measures what this gate claims"
@@ -342,8 +263,6 @@ fi
 say "   mechanism: the slow form's membership lookup ran ${SLOW_LOOPS} times — one per candidate row."
 say "   The inverted form's ran once, which is the whole difference."
 
-# 4. THE BOUNDARY. Written down because the packet asks for it and because it is
-#    the reason the shipped rule targets `IN (correlated)` rather than correlation.
 if [ "$EDGE_ONCE" != "1" ]; then
   say "FAIL: the boundary case did not resolve its membership once."
   say "      Its OUTER hop is correlated and cannot be inverted, so this was expected"

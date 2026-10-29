@@ -1,28 +1,3 @@
-// kit template — the serialisation and error-string detectors.
-//
-// Vectors 2, 3 and 4 of the canary contract, in ../README.md. Vector 1 is in
-// canary.go and vector 5 is in typecover.go, because vector 5 is a static check
-// over source and these three are runtime checks over values.
-//
-// WHAT MAKES THESE THREE SEPARATE CHECKS
-//
-//	They fail for different reasons and a single "did the canary leak" test
-//	cannot tell them apart:
-//
-//	- vector 2 fires when a value REACHES THE WIRE under a key nobody declared.
-//	  The struct had a field and somebody forgot the tag.
-//	- vector 3 fires when a value reaches a LOG through an error message. The
-//	  struct was fine; the error constructor was not.
-//	- vector 4 fires when NO value leaked at all, and that is the point: a type
-//	  that marshals an empty `token` key has taught every consumer to look for
-//	  one, and the refactor that fills it in is a separate commit that no test
-//	  in this file would catch.
-//
-// A harness that collapsed them into one assertion would go green the moment
-// any two of them stopped working, which is the failure this repository keeps
-// paying for in its other checks.
-//
-// NO DEPENDENCIES. Stdlib only.
 package kitsecrets
 
 import (
@@ -33,16 +8,8 @@ import (
 
 // SerialisedSweep is what vectors 2 and 4 found.
 type SerialisedSweep struct {
-	// UnknownKeys are keys that carried the canary and were not in the
-	// caller's declared-safe set. This is vector 2's finding: an unrecognised
-	// key is how a forgotten `json:"-"` reaches production.
 	UnknownKeys []string
-	// CredentialKeys are keys that NAME a credential, whether or not they
-	// carried a value. This is vector 4's finding, and it is non-empty for a
-	// perfectly innocent-looking struct.
 	CredentialKeys []string
-	// Carried is any key whose value contained the canary, declared-safe or
-	// not. It is the raw fact; the two fields above are what you act on.
 	Carried []string
 }
 
@@ -96,13 +63,6 @@ func SweepSerialised(v any, declaredSafe, credentialKeys []string) (SerialisedSw
 	return out, nil
 }
 
-// walkJSON visits every scalar in a decoded JSON tree, reporting the path it
-// sits at, the key that owns it, and its value.
-//
-// Depth-limited on purpose. A structure that nests a thousand levels deep is
-// either a bug or an attack, and a harness that walks it either blows the stack
-// or takes the gate down with it; either way the finding that mattered is in
-// the first two levels and is already reported.
 func walkJSON(path string, node any, visit func(path, key, value string)) {
 	const maxDepth = 32
 	walk(path, node, "", 0, visit)
@@ -114,9 +74,6 @@ func walk(path string, node any, key string, depth int, visit func(string, strin
 	}
 	switch v := node.(type) {
 	case map[string]any:
-		// Sorted so the report is the same on every run. An unsorted map walk
-		// produces a different order per process, which makes a red sweep
-		// unreviewable and a green one untestable.
 		keys := sortedKeys(v)
 		for _, k := range keys {
 			child := k
@@ -125,16 +82,6 @@ func walk(path string, node any, key string, depth int, visit func(string, strin
 			}
 			walk(child, v[k], k, depth+1, visit)
 		}
-		// An object with nothing in it is still a key, and that is vector 4's
-		// whole finding: a type that marshals `"token": {}` has taught every
-		// consumer to look for a credential, and there is no scalar in the
-		// subtree for the walk to report.
-		//
-		// It was found by breakage 32 in tests/self_test.sh: dropping the
-		// `json:"-"` from a field whose type marshals to an empty object left
-		// every sweep reporting clean, because the key existed and held nothing.
-		// A walk that only visits scalars cannot see a key whose value is the
-		// absence of one.
 		if len(keys) == 0 && key != "" {
 			visit(path, key, "")
 		}
@@ -148,8 +95,6 @@ func walk(path string, node any, key string, depth int, visit func(string, strin
 	case string:
 		visit(path, key, v)
 	case float64, bool, nil:
-		// A number cannot carry a 46-character string, and reporting
-		// `expires_at: 0` as a finding would bury the one that matters.
 	}
 }
 
@@ -160,8 +105,6 @@ func sortedKeys(m map[string]any) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	// Insertion sort: the maps here have a handful of keys, and this file has a
-	// no-dependency rule that is not worth a sort library.
 	for i := 1; i < len(keys); i++ {
 		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
 			keys[j], keys[j-1] = keys[j-1], keys[j]
@@ -172,13 +115,7 @@ func sortedKeys(m map[string]any) []string {
 
 // ErrorSweep is what vector 3 found: the formattings that printed the canary.
 type ErrorSweep struct {
-	// Formats are the format verbs that leaked, e.g. "%+v at depth 1". The
-	// verb matters: `%v` on a struct and `%v` on a bare string are the same
-	// format and completely different bugs, and a report that only said "a
-	// format string leaked" would send the reader looking in the wrong place.
 	Formats []string
-	// Depth is how many Unwrap hops away the leaking error was, so the report
-	// says whether the top-level error was safe.
 	Depth int
 }
 
@@ -206,7 +143,6 @@ func SweepErrorChain(err error) ErrorSweep {
 		if e == nil {
 			return
 		}
-		// Every formatting a caller plausibly uses on an error value.
 		for _, tc := range []struct {
 			verb string
 			rend func(error) string
@@ -231,8 +167,6 @@ func SweepErrorChain(err error) ErrorSweep {
 		case interface{ Unwrap() error }:
 			walk(u.Unwrap(), depth+1)
 		case interface{ Unwrap() []error }:
-			// errors.Join and its relatives. Sorted by message so the report is
-			// stable across runs for the same error value.
 			joined := append([]error(nil), u.Unwrap()...)
 			for i := 1; i < len(joined); i++ {
 				for j := i; j > 0 && joined[j].Error() < joined[j-1].Error(); j-- {

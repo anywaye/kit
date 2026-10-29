@@ -1,124 +1,4 @@
-# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
-#
-# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
-# on the machine the developer chose. This file is the SPECIFICATION those
-# checks read — the steps, the floors, the exemptions — kept where the
-# repository can hold it and read it.
-#
-# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
-# `ci.workflow`), and the CI service reads that declaration and runs it.
-#
-# The GitHub Actions spelling is retired, not deleted, because the checks in
-# this repository read this file to hold the specification still: a gate that
-# checks a specification nobody executes is a gate checking a fiction, and a
-# gate that checks nothing is worse. The steps below are the specification
-# the executable CI is measured against, and the day this file stops being
-# that, the checks move with it.
 ---
-# kit — the image path every anywaye service repo runs.
-#
-# Consumers do not copy this file; they call it, exactly as they call
-# `ci/ci.reusable.yml`:
-#
-#   # ci/publish.yml
-#   name: publish
-#   on:
-#     push:
-#       branches: [master]
-#   permissions:
-#     contents: read
-#     packages: write          # REQUIRED, and the caller's to grant — see below
-#   jobs:
-#     image:
-#       uses: anywaye/kit/ci/image.reusable.yml@master
-#       with:
-#         push: true
-#
-# WHY THIS EXISTS, IN ONE SENTENCE. `config/deploy.yml` in every deployable
-# service says `image: <org>/<repo>` with `registry.server: ghcr.io`, and as of
-# kit-32 not one repository in the fleet built or pushed the image that file
-# deploys. The deploy config was a description of a deploy nothing produced, so
-# "ready to launch" was blocked on an artifact with no pipeline behind it.
-#
-# WHY A REUSABLE WORKFLOW AND NOT SIX COPIES. The same argument
-# `ci.reusable.yml` makes, and it is the same argument: a fix to how an image is
-# built has to reach every service without a per-repo pull request, or it
-# reaches none of them and the fleet drifts one deploy at a time.
-#
-# GITUB PACKAGES, NOT A REGISTRY ACCOUNT. The registry is
-# `ghcr.io` and the credential is the workflow's own `GITHUB_TOKEN`. There is no
-# PAT, no `secrets:` entry, no registry password to rotate, and no second
-# identity to grant and revoke. `docker/login-action` needs
-# `packages: write`, which the CALLER grants — a reusable workflow can ask for a
-# permission but cannot grant itself one, and a job that silently ends up with
-# the default read-only token fails at the push with a 401 that reads like a
-# wrong password rather than like a missing grant. That is why the example
-# above shows the permission on the caller.
-#
-# THE IMAGE NAME IS DERIVED, NEVER PASSED IN. It is
-# `ghcr.io/${{ github.repository }}`, lowercased, and there is deliberately no
-# `image-name` input. An input here is a string a service copies into its own
-# repository, and a copied string is a string that drifts from the repository it
-# names: the deploy would then `kamal build` and push to one place while CI
-# pushed to another, and the deploy would fail at the PULL, hours later, on a
-# release whose build was green. The repository that builds an image is the only
-# authority on what it is called. The one cost is an org rename, which orphans
-# the old images — recorded here rather than solved with a knob.
-#
-# LOWERCASED, AND NOT COSMETICALLY. GitHub Packages rejects an uppercase path
-# with a 404 at the push, and neither an org name nor a repository name is
-# required to be lowercase. `github.repository` is verbatim, so
-# `Anywaye/Site` pushes nothing and the error names a package rather than
-# naming a character. The `resolve image` step below is where the lowercasing
-# happens, and it is a real step rather than a claim in a comment because a
-# comment does not lowercase anything.
-#
-# THE TAG SET, AND WHY `sha-` IS THE ONE THAT MATTERS:
-#
-#   sha-<full 40 chars>   immutable. A commit's image never changes, so a
-#                         deploy can name it and mean it. This is the tag
-#                         `kamal deploy` should be given.
-#   <branch>              moving. What a human reads on the package page.
-#   latest                moving, and only on the default branch.
-#   <appVersion>          moving with a release, and the reason the seam
-#                         holds: the chart the box pulls pins
-#                         `image.tag` to its own appVersion, so the
-#                         registry must hold a tag by that name. It is
-#                         DERIVED — publish.reusable.yml reads it from
-#                         Chart.yaml and passes it in as `app-version` —
-#                         because a tag a human must remember to push in
-#                         two places is a tag one of them forgets. Empty
-#                         input means no fourth tag, unchanged behavior.
-#
-# NO SEMVER TAG OTHER THAN THE CHART'S OWN. A release tag is a claim about
-# a version of the software, and cutting one is a decision. This workflow's
-# whole output is "the commit's image exists"; the `appVersion` above is
-# the one version string that is NOT a decision made here — it is copied
-# from the chart that consumes the image, which is the only place the box
-# will ever ask for a version by name.
-#
-# `provenance: mode=max` and `sbom: true` are ON, and they cost one manifest
-# index entry each. A registry holding launch artifacts with no recorded
-# provenance is a registry nobody can audit after the fact, and the alternative
-# — adding provenance later — means it was never there for the images that
-# mattered.
-#
-# STRICTNESS NOTES (read before loosening anything):
-#   - `push` is an input and it DEFAULTS TO FALSE. A reusable workflow that
-#     pushes by default is a reusable workflow every caller publishes from by
-#     accident, including the one that was only meant to check the Dockerfile
-#     still builds. Publishing is opt-in, spelled out, at the call site.
-#   - The `push:` value the build action receives is `inputs.push &&
-#     github.event_name != 'pull_request'`, so even a caller that adds a
-#     `pull_request` trigger to its own workflow cannot publish from a fork. A
-#     fork's `GITHUB_TOKEN` is read-only and would 403 anyway; refusing before
-#     the attempt is better than failing after it.
-#   - `actions/checkout` sets `persist-credentials: false` for the same reason
-#     every job in `ci.reusable.yml` does: this job checks out a tree and then
-#     runs `docker build` over it, and a token left in `.git/config` outlives the
-#     job for no reason.
-#   - No `secrets:` are consumed beyond `GITHUB_TOKEN`, so a service adopting
-#     this needs no secret configured, and nothing here is worth rotating.
 name: image
 
 on:
@@ -228,29 +108,11 @@ jobs:
   build:
     name: build (and publish, if asked)
     runs-on: ubuntu-latest
-    # THE SLOWEST JOB KIT HANDS OUT. It builds and pushes a multi-arch image
-    # (default `linux/amd64,linux/arm64`) under QEMU — every arm64 layer is
-    # emulated — so the bound is generous on purpose: a bound tight enough to
-    # kill a healthy cold build is a worse failure than a large one, and 60
-    # is still a sixth of the 360-minute default. It bounds billing when a
-    # registry push or a build stage hangs.
     timeout-minutes: 60
-    # `packages: write` is DECLARED HERE AND GRANTED BY THE CALLER. In a
-    # reusable workflow this is a ceiling, not a grant: the effective
-    # permission is the caller's, intersected with this. A caller that omits
-    # it gets read-only and a 401 at the push, which is a genuinely confusing
-    # way to learn a line is missing from another repository.
     permissions:
       contents: read
       packages: write
     outputs:
-      # The digest comes from the BUILD action, which is the one that
-      # writes a manifest list to a registry. It used to be read from
-      # `steps.meta.outputs.digest` — an output docker/metadata-action has
-      # never produced — so the image workflow's `digest` output was empty
-      # for every caller and actionlint's schema flagged it on every run.
-      # The tag set is unaffected: metadata-action still owns the tags, the
-      # build owns the digest, and the two are different jobs' outputs.
       digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.resolve.outputs.image }}
     steps:
@@ -258,20 +120,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # THE LOWERCASE, AS A STEP.
-      #
-      # Not a comment, and not an input. `github.repository` is
-      # `owner/repo` verbatim, `tr` is in coreutils on every runner, and the
-      # failure without this line is a 404 from the registry naming a package
-      # rather than a character.
       - name: resolve image
         id: resolve
-        # `github.repository` goes in through `env`, not into the script body.
-        # zizmor's `template-injection` audit is right in principle: a `${{ }}`
-        # interpolated into a `run:` block is a value the shell will execute,
-        # and the defense is to not do it. It is a two-line cost here and it
-        # keeps this workflow clean under the audit kit's CI already runs on
-        # every adopting repository.
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
@@ -280,11 +130,6 @@ jobs:
           echo "image=$image" >>"$GITHUB_OUTPUT"
           echo "pushing to $image" >>"$GITHUB_STEP_SUMMARY"
 
-      # arm64 on an amd64 runner. Registered before buildx so the emulators
-      # exist by the time a build asks for a foreign architecture, and not
-      # conditional on the platform list: a service that narrows `platforms`
-      # to amd64 would otherwise silently lose the setup when it later widens
-      # them back.
       - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
@@ -294,46 +139,21 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          # NOT an input and NOT a secret this repository defines. `GITHUB_TOKEN`
-          # is minted per run by GitHub, scoped to this repository, and dies
-          # with the job. There is nothing here to leak into another repository
-          # and nothing here to rotate.
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: work out the tags
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # The derived name from the step above. See the header for why this is
-          # not an input.
           images: ${{ steps.resolve.outputs.image }}
           tags: |
             type=sha,format=long
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
-          # Labels only; nothing below reads a label back.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      # THE CHART'S APPVERSION AS A TAG — the seam. The chart a box pulls
-      # pins `image.tag` to its Chart.yaml appVersion (gateway's Chart.yaml
-      # says so in prose), so a publish that produces only sha/branch/latest
-      # leaves the chart pointing at a tag nothing creates: ImagePullBackOff,
-      # weeks later, with nothing in the failure naming the publish path.
-      #
-      # Why it is a step and not a `type=raw` line in the metadata action
-      # above: the metadata action's `enable=` grammar does not take this
-      # workflow's inputs, so an empty value could not blank the line — the
-      # empty default (an image-only service, a direct caller) would push a
-      # tag named ''. Appending in a shell step is refused by construction
-      # instead. The dedupe is exact-line: `awk` drops any existing
-      # `image:appVersion` line and this appends the derived one, so a
-      # caller that already names the appVersion is unchanged, and
-      # `type=sha` and friends never collide with a semver string.
-      #
-      # Everything goes in through `env:`, never the script body — the same
-      # template-injection discipline the `resolve image` step above states.
       - name: add the chart's appVersion as a tag
         id: apptag
         env:
@@ -347,58 +167,12 @@ jobs:
             tags="$(printf '%s\n' "$tags" | awk -v want="$IMAGE:$APP_VERSION" '$0 != want')"
             tags="$(printf '%s\n%s' "$tags" "$IMAGE:$APP_VERSION")"
           fi
-          # Multiline output through GITHUB_OUTPUT's heredoc form; a plain
-          # `key=value` line would carry only the first tag.
           {
             echo 'tags<<TAGS_EOF'
             printf '%s\n' "$tags"
             echo 'TAGS_EOF'
           } >>"$GITHUB_OUTPUT"
 
-      # THE STAMPER'S HOME, AND WHY IT IS FETCHED RATHER THAN ASSUMED.
-      #
-      # `docker/provenance.sh` lives in KIT. It does not live in a caller's
-      # repository — identity, gateway, courier and parlor have no `docker/`
-      # directory at all — so the step below, which used to run
-      # `sh docker/provenance.sh --validate`, was reading a path that has never
-      # existed in the CALLER's checkout. On the first run that ever reached it,
-      # in every caller, it failed with
-      #
-      #   sh: 0: cannot open docker/provenance.sh: No such file
-      #
-      # and no image in the fleet has ever been published. The script is in kit;
-      # the workflow that needs it was executing in a checkout of the service.
-      #
-      # THE REF IS THE REUSABLE WORKFLOW'S OWN COMMIT — NOT `master`, AND NOT AN
-      # INPUT A SERVICE MUST REMEMBER TO RAISE. `job.workflow_sha` is documented
-      # as "the commit SHA of the workflow file that defines the current job"
-      # and, for a reusable workflow, that file is THIS one rather than the
-      # caller's (`job.workflow_ref` says the same for the path). So the stamper
-      # is read from the exact commit of kit that is running this job — the same
-      # commit image.reusable.yml and publish.reusable.yml were resolved from.
-      # There is no `master` literal to go stale, and no second pin beside the
-      # caller's `uses:` line. A caller pinned to a SHA gets that SHA's stamper.
-      #
-      # WHY A `git fetch` INTO $RUNNER_TEMP AND NOT `actions/checkout`. The
-      # checkout action refuses a `path:` outside the workspace (its own
-      # `input-helper.ts` throws "Repository path … is not under …"), and a kit
-      # checkout INSIDE the workspace would be a second git repository sitting
-      # in the build CONTEXT — this job builds from `inputs.context`, which
-      # defaults to `.`, so its files would be swept into every `docker build`.
-      # `$RUNNER_TEMP` is per-job scratch, outside the context, emptied when the
-      # job ends. This is the same shape `ci.reusable.yml`'s conformance
-      # fallback already uses for the same two reasons.
-      #
-      # NO SECRET. `anywaye/kit` is public, so the clone needs no token;
-      # `GIT_TERMINAL_PROMPT=0` makes a future private repo fail instead of
-      # hanging on a prompt CI cannot answer.
-      #
-      # AND IT REFUSES BY NAME IF THE FILE IS ABSENT. A stamp that silently
-      # skips when the script is missing is worse than no stamp: the image ships
-      # unstamped and nothing says so. So the fetch asserts the file exists at
-      # the path it computed and names both the path and the ref it fetched, and
-      # exits non-zero. The consumer-facing refusal is that sentence, not the
-      # shell's "No such file" three layers down.
       - name: kit (the provenance stamper)
         env:
           KIT_REF: ${{ job.workflow_sha }}
@@ -421,14 +195,6 @@ jobs:
           fi
           echo "KIT_PROVENANCE_SCRIPT=$script" >>"$GITHUB_ENV"
 
-      # THE STAMP'S FIELDS, resolved through the stamper rather than assembled
-      # here. This step exists so that the REFUSAL is real: `github.repository`
-      # is `owner/repo` verbatim and `github.sha` is a sha, but an
-      # `if: [ -z … ]` over them is a check nobody can exercise, and the
-      # grammars are what actually keep a hostname or a path out of a registry.
-      # Every value goes in through `env`, never into the script body —
-      # zizmor's `template-injection` audit is right about that, and the header
-      # explains the same point for the `resolve image` step above.
       - name: stamp provenance
         id: provenance
         env:
@@ -437,31 +203,6 @@ jobs:
           KIT_PROVENANCE_TEMPLATE_VERSION: ${{ inputs.kit-version }}
         run: |
           set -euo pipefail
-          # `built_at` IS A SHELL VARIABLE, AND MUST BE, because the block below
-          # reads it. It was written as a PREFIX ASSIGNMENT on the `sh` line —
-          # `KIT_PROVENANCE_BUILT_AT=… KIT_PROVENANCE_SOURCE_DIRTY=clean sh …`
-          # — which sets that name in the environment of `provenance.sh` and
-          # nowhere else, so the `echo "built_at=$KIT_PROVENANCE_BUILT_AT"`
-          # two lines down was reading a shell variable that had never been set.
-          # Under `set -u` that is not an empty value, it is a FATAL: this step
-          # died with `KIT_PROVENANCE_BUILT_AT: unbound variable` on every run
-          # of every caller that reached it, which for `anywaye/site` means no
-          # image has ever been published. The other three fields work because
-          # they arrive through this step's `env:` block, which really does
-          # populate the shell environment — `built_at` was the only one created
-          # inside the body, and the only one created as a prefix assignment.
-          #
-          # So: assign on its own line, export, and the prefix assignment for
-          # `source_dirty` stays a prefix assignment because nothing reads it
-          # here — the stamper is its only consumer. Two different shapes for two
-          # different jobs, which is the point: the shape follows the consumer.
-          #
-          # THE PATH IS THE FETCHED SCRIPT, NOT THE CHECKOUT'S. `$KIT_PROVENANCE_
-          # SCRIPT` is written by the `kit (the provenance stamper)` step above to
-          # `$GITHUB_ENV`, so it is the `docker/provenance.sh` from kit at this
-          # workflow's own commit — the one file no service repository carries.
-          # A bare `docker/provenance.sh` here reads the CALLER's checkout, which
-          # has never held it.
           KIT_PROVENANCE_BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           export KIT_PROVENANCE_BUILT_AT
           KIT_PROVENANCE_SOURCE_DIRTY=clean sh "$KIT_PROVENANCE_SCRIPT" --validate
@@ -482,24 +223,6 @@ jobs:
           push: ${{ inputs.push && github.event_name != 'pull_request' }}
           tags: ${{ steps.apptag.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # THE STAMP. Every build arg the seven Dockerfiles declare, passed
-          # explicitly, including the ones this workflow already knew: the
-          # revision IS `github.sha`, which is what `org.opencontainers.image.
-          # revision` said above and what nothing read.
-          #
-          # The build args are passed rather than left to the `labels:` block
-          # above because the DOCKERFILE is the only sink both build paths go
-          # through. The e2e artifacts are pushed by `bin/e2e-stack
-          # publish-siblings` with a bare `docker build`, which never runs this
-          # workflow — so a stamp that lives only in the `labels:` input is
-          # absent from exactly the images this packet is about. `labels:` is
-          # kept, and writes the same two keys, because it is the path that
-          # works for a caller with a Dockerfile of its own.
-          #
-          # `KIT_PROVENANCE_SOURCE_DIRTY` is `clean`, not derived: a checkout at
-          # a push event IS the pushed commit, so "dirty" would be a claim this
-          # job cannot honestly make in either direction. Refusing to guess is
-          # the stamp's whole discipline applied to itself.
           build-args: |
             KIT_PROVENANCE_SOURCE=${{ steps.provenance.outputs.source }}
             KIT_PROVENANCE_REVISION=${{ steps.provenance.outputs.revision }}
@@ -508,24 +231,10 @@ jobs:
             KIT_PROVENANCE_TEMPLATE_VERSION=${{ steps.provenance.outputs.template_version }}
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
-          # Both on. The cost is two extra referrers on the manifest; the
-          # absence is an artifact nobody can audit later, which is the more
-          # expensive direction for anything we are about to sell.
-          #
-          # The provenance attestation is NOT the stamp a consumer reads, and
-          # `docker/provenance.sh`'s header says why at length: reading one
-          # fetches a referrer from the registry, and these images are consumed
-          # out of a plain-HTTP local registry. It stays on because it costs one
-          # manifest entry and answers a different question.
           provenance: mode=max
           sbom: true
 
       - name: say what landed
-        # The digest is the deployable artifact and a log line is the only
-        # place a person can copy it from without opening the Actions API.
-        # Skipped rather than printed empty when nothing was pushed, because a
-        # blank digest in a green job reads as "the build produced no image"
-        # when the truth is "the caller did not ask for one".
         if: inputs.push && github.event_name != 'pull_request'
         run: |
           set -euo pipefail

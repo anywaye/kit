@@ -8,14 +8,11 @@ insert into m.flags values (1, false), (2, true);
 create table m.doc   (id int primary key, account_id int not null);
 create table m.ctrl  (id int primary key, account_id int not null);
 
--- the login role, which can WRITE m.flags
 create role login_app login;
 grant usage on schema m to login_app;
 grant select, insert, update on m.flags to login_app;
 grant select on m.doc, m.ctrl to login_app;
 
--- THE HELPER. security definer, owned by the cluster admin (so it is not the
--- login role), and its BODY reads a table the login role can write.
 create function m.can_read() returns boolean
   language sql stable security definer
   set search_path = m, pg_temp

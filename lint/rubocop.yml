@@ -1,18 +1,4 @@
 ---
-# rubocop config — copy to .rubocop.yml in a Ruby service repo.
-#   bundle exec rubocop --parallel
-#
-# STRICTNESS NOTES
-#   - TargetRubyVersion tracks the oldest interpreter we deploy, not the newest
-#     installed. Raising it is a deliberate support decision, not a bump.
-#   - NewCops: enable means a new cop fails CI on upgrade instead of warning
-#     forever. That is the point: warnings nobody reads are not strictness.
-#   - SuggestExtensions is on so `rubocop -a` proposes the extra gems
-#     (rubocop-rails, -rspec) a Rails or RSpec repo needs.
-#   - We do NOT disable Metrics/*. Long methods are the thing a reviewer should
-#     see in a diff, and Rails controllers/controllers are the usual offender —
-#     extract a plain object instead of adding an exclusion.
-#   - Layout/LineLength is 120 to match the rest of the org's YAML and CI logs.
 AllCops:
   TargetRubyVersion: 3.4
   NewCops: enable
@@ -25,56 +11,19 @@ AllCops:
     - 'vendor/**/*'
 Layout/LineLength:
   Max: 120
-# The size metrics are NOT applied to test files, and this is the one place kit
-# relaxes a rule. It is deliberate, narrow, and here is the reason.
-#
-# `Metrics/AbcSize` counts the calls a method makes. A test method's entire job
-# is to make calls — eight assertions in one test is eight branches, and the cop
-# cannot tell that apart from eight unrelated responsibilities. The only way to
-# satisfy it is to assert less per test, which is the exact opposite of what a
-# test suite is for. That is why this is a relaxation and not a refactor: there
-# is no better shape for "assert these eight things are true". Same argument for
-# `ClassLength` on a test class, where more lines means more rules asserted.
-#
-# Scope: test files ONLY, and only the size metrics. AbcSize,
-# CyclomaticComplexity, PerceivedComplexity, MethodLength and ClassLength all
-# measure "how much is this thing doing", which is a real signal in application
-# code and a false signal in a spec suite. Everything else — Style, Lint,
-# Security, Naming, Layout — applies to tests exactly as it does everywhere else.
-# A test with an unused variable or a shadowed name still fails.
-#
-# If you would rather have the metrics on tests too, delete this block. Do not
-# raise the numbers instead: 17 -> 40 would also stop `parse_traceparent` being
-# 36-ABC, which is the one place the metric earned its keep.
 Metrics/AbcSize:
   Exclude: &test_files
     - 'test/**/*'
     - 'spec/**/*'
-    # By filename as well as by directory. `test/**/*` alone misses a suite that
-    # lives somewhere else — kit's own copy is
-    # `templates/otel/ruby/test_traceparent.rb`, and a service that keeps tests
-    # beside the code has the same problem. A test file is identified by its
-    # name, not by where someone put it.
     - '**/test_*.rb'
     - '**/*_test.rb'
 Metrics/CyclomaticComplexity:
   Exclude: *test_files
 Metrics/PerceivedComplexity:
   Exclude: *test_files
-# `Max` and `Exclude` on the SAME key. They were two separate `Metrics/
-# MethodLength:` blocks in an earlier draft of this file, and YAML keeps the last
-# one silently — so the exclusion was applied to nothing and the file still
-# failed. Duplicated keys in a lint config are the quietest kind of dead config
-# there is; there is now exactly one of each cop here.
 Metrics/MethodLength:
   Max: 15
   Exclude: *test_files
-# ClassLength and ModuleLength are set to the SAME number on purpose. The config
-# used to raise ClassLength to 150 and leave ModuleLength at RuboCop's default
-# 100, which is not a decision — it is one of the two containers being
-# accidentally stricter than the other, and which one bites depends on whether
-# you happened to write `class` or `module`. A namespace module holding a codec
-# is not a smell; a 400-line class is.
 Metrics/ClassLength:
   Max: 150
   Exclude: *test_files
@@ -82,11 +31,6 @@ Metrics/ModuleLength:
   Max: 150
 Style/Documentation:
   Enabled: true
-# Renamed from Naming/PredicateName in RuboCop 1.78. The old name still loads —
-# it prints an obsolete-configuration warning on every run and applies nothing,
-# so `is_*`/`has_*` prefixes stopped being enforced without anyone deciding
-# that. Found by running this config against kit's own files, which is the only
-# way an obsolete key surfaces before six service repos inherit it.
 Naming/PredicatePrefix:
   Enabled: true
 Naming/MethodParameterName:

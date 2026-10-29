@@ -1,31 +1,4 @@
 #!/usr/bin/env bash
-#
-# focused_tier.sh — the tier focused proof: family syntax + disclosure.
-#
-#   bash tests/focused_tier.sh
-#
-# WHAT IT RUNS. The per-file parse for every file under templates/tier/,
-# using the SAME commands as the gate's artifact-parse loop in
-# tests/validate.sh (same tool, same flags, same skip-when-missing rule):
-#
-#   go (*.go)        gofmt -e  (the gate's telemetry gofmt; not reported twice there)
-#   python (*.py)    compile(), never py_compile (no __pycache__ side effects)
-#   ruby (*.rb)      ruby -c
-#   elixir (*.ex)    Code.string_to_quoted/1 (stdlib parse, offline)
-#   rust (*.rs)      rustc --test, then --list (parse + strongest offline check)
-#   typescript       SKIP, loud: node --check cannot read TypeScript (gate's words)
-#   README.md        presence is its check (markdown has no syntax to be wrong about)
-#   skip-allowlist   SKIP, loud: the gate has no parser for it either
-#
-# WHAT IT DOES NOT RUN. Everything else in tests/validate.sh: the other
-# families' parses, telemetry, observability, lint, tenancy, substrate,
-# chart publish. The tail of this script says so by name, because a focused
-# run reported as a platform-test pass is the defect this packet exists to
-# remove. The full proof is `bash tests/validate.sh` with no flags.
-#
-# Offline and dependency-free beyond the language toolchains themselves:
-# no venv, no network, no docker. A missing toolchain is a loud SKIP for
-# that file — never a silent pass, never a failure of the template.
 
 set -euo pipefail
 

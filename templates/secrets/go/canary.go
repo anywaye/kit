@@ -1,49 +1,3 @@
-// kit template — the runtime credential-leak canary.
-//
-// WHAT THIS IS
-//
-//	No off-the-shelf tool finds a credential that leaks at RUN time. gosec's
-//	`credentials.Match` switches on four AST node types and has no
-//	`*ast.CallExpr` case, so it finds literals and not a token passed to a
-//	logger. Bandit matches `ast.Constant` only. Brakeman's secret check is
-//	optional and off. Of 268 Semgrep taint rules, zero intersect CWE-532.
-//
-//	That is a finding, not a gap in the search, and it is why this file exists.
-//	A committed-history scanner answers "was a secret committed". Nothing
-//	answers "does a secret leave the process while the tests run".
-//
-// THE CANARY
-//
-//	A fake credential that is unmistakably fake AND unmistakably a credential:
-//	the `anywaye_canary_` prefix, then 32 bytes. Planted in the service's own
-//	configuration, run through the whole suite, and then swept for in every
-//	place it could have gone.
-//
-//	It is BUILT, not written out, and that is a security property rather than a
-//	style one. A committed 46-character `anywaye_canary_…` literal is, to every
-//	scanner in the world, a high-entropy string with a credential-ish prefix —
-//	it is exactly the thing a secret scanner is built to report, and adding
-//	one to an allowlist to make it go away would be the exact failure the
-//	allowlist's reason-per-entry rule exists to prevent. So
-//	the value is assembled at run time, the full string never appears in any
-//	committed file, and no allowlist needs an entry for it. `TestCanaryIsSafe`
-//	asserts the absence directly, over this template's own sources.
-//
-// THE CONTRACT
-//
-//	Language-neutral, in ../README.md. This file is the Go adapter. The five
-//	vectors are:
-//
-//	  1  canary            the string appears in no log, stdout or stderr
-//	  2  unknown-field     serialise it; no unrecognised key carries the value
-//	  3  stringified-error %v / %+v / Sprint over the whole error chain
-//	  4  absent-field      no credential-named key is marshalled at all, even
-//	                       empty — the absence is a signal too
-//	  5  type-coverage     no credential-bearing type is printable or an error
-//	                       (typecover.go, and it is a TYPE check, not a call
-//	                       graph — read its LIMITATION note)
-//
-// NO DEPENDENCIES. Stdlib only, so the harness runs with GOPROXY=off.
 package kitsecrets
 
 import (
@@ -68,17 +22,8 @@ const CanaryPrefix = "anywaye_canary_"
 // heuristics in a logger.
 const CanaryBytes = 32
 
-// canaryBody is 14 bytes, and the value is three of them truncated to 32. Built
-// this way so that no committed file contains a contiguous credential-shaped
-// string; see the comment above and TestCanaryIsSafe.
 const canaryBody = "notarealsecret"
 
-// Canary is the fake credential this harness plants.
-//
-// It is a var rather than a const because it is assembled. A service overrides
-// it at run time with a value of its own — from a fixture, from an env var, from
-// a test-only loader — using SetCanary, so that the harness sweeps for whatever
-// this run actually planted rather than for a constant the tests agree on.
 var (
 	canaryMu sync.RWMutex
 	canary   = CanaryPrefix + strings.Repeat(canaryBody, 3)[:CanaryBytes]
@@ -169,19 +114,12 @@ func SweepOutput(fn func()) (ProcessOutput, error) {
 	}
 	os.Stdout, os.Stderr = outW, errW
 
-	// Drained on their own goroutines, before the write ends are closed. A pipe
-	// has a finite buffer (64KB on Linux, 16KB on macOS): a run that writes more
-	// than that to stdout without a reader blocks forever, which is a hung test
-	// rather than a failed one, and a hung test in a gate is a gate that is
-	// never coming back.
 	outC := make(chan string, 1)
 	errC := make(chan string, 1)
 	go func() { outC <- readAll(outR) }()
 	go func() { errC <- readAll(errR) }()
 
 	func() {
-		// A panic must still close the write ends, or the drainers block and the
-		// panic's own output has nowhere to go. Repanicked below, unchanged.
 		defer func() {
 			_ = outW.Close()
 			_ = errW.Close()
@@ -230,9 +168,6 @@ func SweepSinks(sinks []ReadSink, fn func(ReadSink)) (leaked []string) {
 	for i, s := range sinks {
 		fn(s)
 		if strings.Contains(s.Contents(), needle) {
-			// The index, not the contents and not the name: two sinks in one
-			// service often write to the same file, and "sink 2 of 5" is enough
-			// to find it.
 			leaked = append(leaked, "sink "+strconv.Itoa(i)+" received the canary")
 		}
 	}

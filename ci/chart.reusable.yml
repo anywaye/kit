@@ -1,136 +1,4 @@
-# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
-#
-# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
-# on the machine the developer chose. This file is the SPECIFICATION those
-# checks read — the steps, the floors, the exemptions — kept where the
-# repository can hold it and read it.
-#
-# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
-# `ci.workflow`), and the CI service reads that declaration and runs it.
-#
-# The GitHub Actions spelling is retired, not deleted, because the checks in
-# this repository read this file to hold the specification still: a gate that
-# checks a specification nobody executes is a gate checking a fiction, and a
-# gate that checks nothing is worse. The steps below are the specification
-# the executable CI is measured against, and the day this file stops being
-# that, the checks move with it.
 ---
-# kit — the chart path every anywaye service repo runs.
-#
-# Consumers do not copy this file; they call it, exactly as they call
-# `ci/image.reusable.yml`. Most call it through the composed
-# `publish.reusable.yml` (see that file's header); a service that ships a chart
-# and no image calls it directly:
-#
-#   # .github/workflows/publish-chart.yml
-#   name: publish-chart
-#   on:
-#     push:
-#       branches: [master]
-#   permissions:
-#     contents: read
-#     packages: write          # REQUIRED, and the caller's to grant — see below
-#   jobs:
-#     chart:
-#       uses: anywaye/kit/ci/chart.reusable.yml@master
-#       with:
-#         push: true
-#
-# WHY THIS EXISTS, IN ONE SENTENCE. `anywaye/notes/deployment.md`'s deploy loop is
-# pull-based — a commit changes a chart, Argo makes the box agree — and only
-# one end of that loop existed: eight Argo CD `Application`s pull each chart's
-# own path under `oci://ghcr.io/anywaye/charts`, and nothing in the fleet ever
-# ran `helm push` or `helm package`, so every `Application` pointed at a
-# registry nothing wrote to. Argo synced nothing; the box never converged. This
-# is the other half.
-#
-# THE TWO SEAMS THAT MUST NOT DRIFT, AND WHY BOTH ENDS LIVE IN KIT.
-#
-#   1. THE REGISTRY PATH. This workflow pushes to the registry root; `helm
-#      push` APPENDS the chart's name, so the artifact is
-#      `oci://ghcr.io/anywaye/charts/<chart>`, and every `Application` in
-#      `templates/substrate/manifests/applications/` must carry that path as
-#      its `source.repoURL`. Argo resolves an OCI source's revision against
-#      `repoURL` ITSELF, so an `Application` naming the bare root asks for an
-#      artifact named after nothing — measured on the fleet's first end-to-end
-#      install, `HEAD https://ghcr.io/v2/anywaye/charts/manifests/0.1.0` → 403
-#      and every service Application un-synced. Both files are in kit, which
-#      is what makes this provable in this repository's own gate:
-#      `check_chart_publish` in `tests/validate.sh` asserts
-#      `repoURL == registry + "/" + chart` for every service `Application` and
-#      fails on a disagreement. A path that drifts fails SILENTLY — Argo
-#      reports no error, it just never finds the artifact.
-#
-#   2. THE VERSION. Each `Application` pins `targetRevision: 0.1.0`, and a
-#      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
-#      Helm chart IS its `version`, so the push tag and the pull
-#      `targetRevision` must be the chart's version — not a git sha, not
-#      `latest`. A chart pushed as `0.1.1` while the `Application` says `0.1.0`
-#      is a service that never deploys. So the name and version are READ FROM
-#      `Chart.yaml` and never taken as inputs: an input is a string a service
-#      copies into its own repo, and a copied string drifts from the chart it
-#      names.
-#
-#   3. THE IMAGE DIGEST — THE ONE THAT REACHES THE POD, AND THE ONE THAT WAS
-#      MEASURED MISSING. The `appVersion` tag is overwritten on every push
-#      (it is this workflow's own hand-off, re-published per master push),
-#      and charts pinned the image by that tag: the rendered Deployment was
-#      textually IDENTICAL before and after a build, so Argo's diff reported
-#      `Synced`, rolled nothing, and the box sat on the old image while the
-#      registry held the new one. Measured (roll-c5-image-digest): the
-#      registry's `ghcr.io/anywaye/gateway:0.1.0` held `sha256:c264…37165`
-#      while the node ran `sha256:8e60…e79b`, six hours after the fix was
-#      merged and published; a refresh reported `Synced` with no diff and
-#      `imagePullPolicy: IfNotPresent` re-served the stale copy on every pod
-#      restart. A DIGEST cannot move, so this workflow writes the digest of
-#      the image the compose run just built into the chart's `values.yaml`
-#      (`image.digest`) BEFORE `helm package`: the chart that lands in the
-#      OCI registry names the bytes the registry holds beside it, a new build
-#      is a textual diff Argo rolls, and the chart VERSION (seam 2) does not
-#      move — the substrate Application's targetRevision is untouched. The
-#      composer hands the digest down; see `publish.reusable.yml`, the only
-#      party that knows both ends.
-#
-# WHY A REUSABLE WORKFLOW AND NOT EIGHT COPIES. The same argument
-# `image.reusable.yml` makes: a fix to how a chart is published has to reach
-# every service without a per-repo pull request, or it reaches none of them.
-# The per-service ADOPTION is a separate packet per repo; this file is the
-# contract.
-#
-# GITHUB PACKAGES, NOT A REGISTRY ACCOUNT. The registry is `ghcr.io` and the
-# credential is the workflow's own `GITHUB_TOKEN`. There is no PAT, no
-# `secrets:` entry, no registry password to rotate. `helm registry login`
-# needs `packages: write`, which the CALLER grants — a reusable workflow can
-# ask for a permission but cannot grant itself one, and a caller that omits it
-# gets a 401 at the push that reads like a wrong password rather than like a
-# missing grant.
-#
-# HELM IS PINNED, NOT `latest`. A floating toolchain is the thing the fleet's
-# pins exist to prevent. `v4.3.0` is installed with the upstream script's own
-# pin mechanism (`get-helm-3 --version v4.3.0`), never `@latest`.
-#
-# STRICTNESS NOTES (read before loosening anything):
-#   - `push` is an input and it DEFAULTS TO FALSE, exactly as the image
-#     workflow's does. A reusable workflow that publishes by default is one
-#     every caller publishes from by accident, including the caller that only
-#     meant to check the chart still packages. Publishing is opt-in at the
-#     call site.
-#   - The job REFUSES to publish from a `pull_request`, regardless of what a
-#     caller asks: publishing from a fork is a registry write by untrusted
-#     code, and a fork's token is read-only anyway. Refusing before the attempt
-#     beats failing after it with a 401.
-#   - The chart the repo declares is the chart that is pushed. `version` and
-#     `appVersion` are never rewritten from git, and no `latest` tag is added.
-#     The chart's identity is the repo's statement; a publish step that
-#     overrides it is a second author. THE ONE EXCEPTION IS `image.digest`,
-#     and it is an exception because the field's whole job is to name what
-#     THIS run just built: the committed value pins the last published
-#     image, and a publish that left it in place would push a chart naming
-#     the previous build — the measured two-digest gap this workflow closed.
-#     The digest is DERIVED from the image job's output, never typed, and
-#     refused when malformed, so the override is a hand-off and not an edit.
-#   - No `secrets:` are consumed beyond `GITHUB_TOKEN`, so a service adopting
-#     this needs no secret configured, and nothing here is worth rotating.
 name: chart
 
 on:
@@ -190,14 +58,7 @@ jobs:
   chart:
     name: chart (and publish, if asked)
     runs-on: ubuntu-latest
-    # Curl-install helm (pinned), read Chart.yaml, `helm package`, log in and
-    # push. All small and local except the helm download; 15 bounds a stalled
-    # download or registry push.
     timeout-minutes: 15
-    # `packages: write` is DECLARED HERE AND GRANTED BY THE CALLER — see the
-    # header. In a reusable workflow this is a ceiling, not a grant: the
-    # effective permission is the caller's, intersected with this. A caller
-    # that omits it gets read-only and a 401 at the push.
     permissions:
       contents: read
       packages: write
@@ -206,12 +67,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # THE REFUSAL, BEFORE THE ATTEMPT — and before the install, the read and
-      # the package too: a pull_request that asked to publish has no business
-      # costing a helm download before it is told no. Fails the job when a
-      # caller asks for a publish from a pull_request. A fork's GITHUB_TOKEN is
-      # read-only and would 403 anyway; refusing before the attempt beats
-      # failing after it with a 401 that reads like a wrong password.
       - name: refuse to publish from a pull request
         if: inputs.push && github.event_name == 'pull_request'
         run: |
@@ -223,31 +78,6 @@ jobs:
           echo "wrong password." >&2
           exit 1
 
-      # HELM, PINNED, AND THE PIN IS CHECKED RATHER THAN PRINTED.
-      #
-      # The upstream script's own pin mechanism; never @latest. The pin is one
-      # shell value below, used twice — once to install and once to verify — so
-      # the number cannot be written in two places and drift.
-      #
-      # THE VERIFICATION USED TO KILL THE JOB, EVERYWHERE, ON ITS FIRST RUN.
-      # It ran `helm version --client`, which is valid for Helm 3 and is
-      # REFUSED by Helm 4: this file pins v4, and v4 removed `--client` along
-      # with the client/server split Tiller needed. The step printed
-      # `Error: unknown flag: --client`, exited 1, and the chart job — which had
-      # never once run to completion in the fleet — died at its own verification
-      # line, before it packaged anything. Measured on identity's publish run.
-      #
-      # `helm version --template '{{.Version}}'` is the form v4 DOES have. Per
-      # Helm 4.3.0's own `helm version` documentation the options are `--short`
-      # and `--template` (and `-h`); `--client` is gone. A developer's local
-      # helm is typically v3, where `--client` is valid — which is exactly why
-      # the bug slipped through: nothing local could see it.
-      #
-      # AND THE CHECK CAN FAIL. A version printed for the log is a log line, not
-      # a verification: if the installer resolves anything other than the pin,
-      # this step names the version it got and the version it asked for, and
-      # exits non-zero. That is the difference between "the log shows the pin"
-      # and "the job refuses a version that is not the pin".
       - name: install helm (pinned)
         env:
           HELM_PIN: v4.3.0
@@ -263,10 +93,6 @@ jobs:
           fi
           echo "chart: helm $helm_version (the pin)"
 
-      # THE CHART'S IDENTITY, READ FROM THE CHART. Not inputs — see the header.
-      # Refuses loudly when either is empty: a chart with no name or version
-      # is a chart `helm package` would reject anyway, but the message here
-      # names the file and the field rather than helm's parse error.
       - name: read the chart's name and version
         id: chart
         env:
@@ -278,9 +104,6 @@ jobs:
             echo "chart: no Chart.yaml at $chart — set chart-dir to the directory that holds it" >&2
             exit 1
           fi
-          # `|| true` because a grep with no match exits 1 and the pipeline
-          # would take the step down under set -e before the empty check below
-          # can say what is wrong. The empty check is the real refusal.
           name="$(grep -m1 '^name:' "$chart" | sed 's/^name:[[:space:]]*//' | tr -d "\"'" || true)"
           version="$(grep -m1 '^version:' "$chart" | sed 's/^version:[[:space:]]*//' | tr -d "\"'" || true)"
           if [ -z "$name" ] || [ -z "$version" ]; then
@@ -290,32 +113,6 @@ jobs:
           echo "name=$name" >>"$GITHUB_OUTPUT"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
-      # PIN THE IMAGE BY DIGEST — the step that makes a new build a change
-      # Argo can SEE. THE MEASURED DEFECT (roll-c5-image-digest, gateway):
-      # the registry's `ghcr.io/anywaye/gateway:0.1.0` held `sha256:c264…37165`
-      # (the merged Redis AUTH fix) while the node ran `sha256:8e60…e79b`,
-      # six hours older. The chart pinned the image by TAG, the tag is
-      # overwritten on every master push, so the rendered Deployment was
-      # textually identical before and after the build: Argo's diff reported
-      # `Synced`, rolled nothing, and `IfNotPresent` re-served the node's
-      # stale copy on every restart. The digest is the one image name that
-      # cannot move, so it is written into the chart BEFORE the chart is
-      # packaged — a package is a tarball of the directory, so an edit after
-      # `helm package` would pin nothing.
-      #
-      # WHO SUPPLIES THE VALUE: the composer, from the image job's build
-      # output (`needs.image.outputs.digest`) — derived, never typed, the
-      # same rule the appVersion hand-off states. An EMPTY input (a direct
-      # caller; or `push: false`, where nothing was pushed and there is no
-      # digest to read) skips this step and packages the chart as committed,
-      # which is what the committed digest in values.yaml is for.
-      #
-      # IT REFUSES RATHER THAN WRITES A MALFORMED DIGEST: a value that is
-      # not `sha256:<64 hex>` would render `repository@nonsense`, which
-      # looks like a pin and fails at image-pull with nothing naming this
-      # step. `sha256:` plus 64 lowercase hex is the registry's own manifest
-      # digest grammar, the same shape gateway's own gate asserts
-      # (`bin/prime-go`) at the chart end.
       - name: pin the image by digest
         if: inputs.image-digest != ''
         env:
@@ -348,10 +145,6 @@ jobs:
             exit 0
           fi
           if grep -qE '^  digest:' "$values"; then
-            # REPLACE the committed digest. One line at the image block's
-            # own indent; a second occurrence would be invalid YAML (two
-            # values for one key), so the count is checked rather than
-            # assumed before one `sed` rewrites the file.
             count="$(grep -cE '^  digest:' "$values")"
             if [ "$count" -ne 1 ]; then
               echo "chart: $values has $count 'digest:' lines at the image block's" >&2
@@ -362,9 +155,6 @@ jobs:
             sed "s|^  digest:.*|  digest: \"$IMAGE_DIGEST\"|" "$values" >"$values.new"
             mv "$values.new" "$values"
           else
-            # INSERT it, for a chart that has not adopted the field yet: the
-            # publish pins what the template can read, and a deployment that
-            # does not render image.digest ignores a value it never reads.
             awk -v d="$IMAGE_DIGEST" '
               /^image:[[:space:]]*$/ { print; print "  digest: \"" d "\""; next }
               { print }
@@ -374,9 +164,6 @@ jobs:
           echo "chart: $values pins image.digest $IMAGE_DIGEST"
           grep -nE '^  (repository|tag|digest):' "$values" | sed 's/^/chart:   /'
 
-      # PACKAGE, ALWAYS. `push: false` means "check the chart still packages",
-      # exactly as the image workflow's `push: false` means "check the image
-      # still builds". The package step is what makes that check real.
       - name: package the chart
         id: package
         env:
@@ -394,9 +181,6 @@ jobs:
           fi
           echo "package=${packages[0]}" >>"$GITHUB_OUTPUT"
 
-      # LOGIN, WITH THIS WORKFLOW'S OWN TOKEN. The host is derived from the
-      # registry input so a self-hoster's registry works; the credential is
-      # always the workflow's own GITHUB_TOKEN, never a PAT.
       - name: log in to the registry with this workflow's own token
         if: inputs.push && github.event_name != 'pull_request'
         env:
@@ -407,20 +191,6 @@ jobs:
           host="$(printf '%s' "$REGISTRY" | sed 's|^oci://||; s|/.*$||')"
           echo "$GITHUB_TOKEN" | helm registry login "$host" --username "$GITHUB_ACTOR" --password-stdin
 
-      # PUSH, WITH THE CHART'S OWN VERSION AS THE TAG. `helm package` names the
-      # artifact <name>-<version>.tgz and `helm push` tags it with the chart's
-      # version — the same version the Application's targetRevision names.
-      #
-      # THE REMOTE IS THE REGISTRY, NOT THE REGISTRY PLUS THE NAME, and the
-      # difference was measured rather than assumed: `helm push` APPENDS the
-      # chart's own name and version to whatever remote it is given, so
-      #   helm push probe-0.1.0.tgz oci://localhost:5555/charts
-      # reports `Pushed: localhost:5555/charts/probe:0.1.0`, while the same
-      # package pushed at `oci://localhost:5555/charts/probe` reports
-      # `Pushed: localhost:5555/charts/probe/probe:0.1.0` — a chart no
-      # `helm pull oci://…/charts/probe` will ever find. The name is read from
-      # Chart.yaml above and used in the reference below; it is deliberately
-      # not part of the push target.
       - name: push the chart
         if: inputs.push && github.event_name != 'pull_request'
         env:
@@ -433,13 +203,6 @@ jobs:
           helm push "$PACKAGE" "$REGISTRY"
           echo "pushed $REGISTRY/$NAME:$VERSION"
 
-      # SAY WHAT LANDED. The full OCI reference and the tag, because a log line
-      # is the only place a person can copy it from — and, since this packet,
-      # the image digest the chart now pins, because THAT is the number the
-      # box's Deployment renders and the number an operator compares against
-      # `docker manifest inspect ghcr.io/<org>/<repo>:<appVersion>`. Empty
-      # (a `push: false` run, a direct caller) prints no digest line rather
-      # than a blank one.
       - name: say what landed
         if: inputs.push && github.event_name != 'pull_request'
         env:
