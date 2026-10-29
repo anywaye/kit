@@ -1,29 +1,4 @@
 #!/usr/bin/env bash
-#
-# Two concurrent port-block selections with the SAME seed must not return the
-# same block. No docker, no stack: this exercises the `--select-block` seam of
-# tests/onecluster_test.sh only, which is the selection step two live
-# onecluster runs execute before either has bound anything.
-#
-#   bash tests/onecluster_ports_race_test.sh
-#
-# WHY THIS EXISTS. `port_block_free` probes and then closes the sockets it
-# opened, so between the probe and `bin/dev up` binding the block another run
-# can take it — and the `$$ % 400` seed does not prevent two concurrent runs
-# from starting at the same offset and both seeing the same block free.
-# Measured 2026-10-07: a false-RED onecluster run on a tree whose files were
-# absent from the onecluster path. The single-run test proves one run passes;
-# that is exactly what did not catch it. This control starts two selections at
-# the same time, with the same forced seed (the worst case), while each holds
-# its claim for the bind window — and requires different blocks.
-#
-# IT CAN GO RED, AND THAT WAS MEASURED. Against the pre-claim selection loop
-# (probe, no mkdir claim), two concurrent selectors forced to the same start
-# offset both printed 15500. With the claim, the second skips the block the
-# first holds and prints the next one.
-#
-# The claim directory is a per-run temp dir (KIT_ONECLUSTER_CLAIM_DIR), so this
-# control never touches live runs' claims and live runs never touch its.
 
 set -uo pipefail
 

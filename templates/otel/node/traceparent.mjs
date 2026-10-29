@@ -1,51 +1,12 @@
-// kit template — W3C Trace Context propagation for a Hono/TypeScript service.
-//
-// Copy traceparent.mjs and traceparent.test.mjs into your service. For inbound
-// requests, hono.ts.snippet wires this into middleware; keep the test suite
-// either way.
-//
-// The upstream OTel SDK does this for you — see hono.ts.snippet for the
-// versioned wiring. Use this file when you need the header handling on its own:
-// a queue consumer, a webhook signer, or a test that asserts propagation without
-// standing up an SDK.
-//
-// REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-// https://www.w3.org/TR/trace-context/
-//
-// IMPLEMENTED SECTIONS (every one is asserted in traceparent.test.mjs)
-//   §3.2.1     header name: accept any case, send lowercase
-//   §3.2.2.1   version is 2 hex chars; ff is forbidden
-//   §3.2.2.2   version-format for version 00
-//   §3.2.2.3   invalid trace-id -> ignore the traceparent (all zeroes forbidden)
-//   §3.2.2.4   invalid parent-id -> ignore the traceparent (all zeroes forbidden)
-//   §3.2.2.5   trace-flags is a bit field; mask on read
-//   §3.2.2.5.1 the sampled flag is the only flag in version 00
-//   §3.2.2.5.2 reserved flags MUST be set to zero on the wire
-//   §3.2.4     higher version: parse positionally, re-emit at 00, drop unknowns
-//   §3.3       a failed traceparent MUST NOT be rescued by a tracestate
-//   §3.3.1.5   tracestate: propagate >=512 chars, truncate whole entries only
-//   §4.2/§4.3  no traceparent -> new trace; invalid -> restart, never an error
-//
-// NO DEPENDENCIES. node:crypto, full stop — so this drops into any Hono service
-// and the suite runs without `npm install`. Import it from TypeScript directly;
-// there is nothing here that needs a build step.
 
 import { randomBytes } from "node:crypto";
 
-// Bit 0 of trace-flags (§3.2.2.5.1). It is a bit in a field, not the field's
-// value: reading `flags === 1` instead of `(flags & 1) === 1` is the single
-// most common trace-context bug, and it is why this is a named constant.
 const SAMPLED = 0x01;
 
-// A traceparent is exactly 55 characters: 2 version, 32 trace-id, 16 parent-id,
-// 2 trace-flags, and 3 dashes (§3.2.2.2).
 const MIN_HEADER_LEN = 55;
 
-// §3.3.1.5: "Vendors SHOULD propagate at least 512 characters of a combined
-// header." Bigger than this and we truncate whole entries.
 const TRACESTATE_LIMIT = 512;
 
-// §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
 const TRACESTATE_ENTRY_LIMIT = 128;
 
 const ZERO_TRACE_ID = "0".repeat(32);
@@ -53,33 +14,7 @@ const ZERO_SPAN_ID = "0".repeat(16);
 
 const LOWER_HEX = /^[0-9a-f]+$/;
 
-/**
- * A parsed `traceparent` header.
- *
- * @typedef {object} TraceParent
- * @property {number} version Raw version byte: zero for `00`, the only version we
- *   emit; a higher version is parsed (§3.2.4) and then downgraded.
- * @property {string} traceId 32 lowercase hex characters: the whole trace.
- * @property {string} parentId 16 lowercase hex characters: the caller's span.
- * @property {number} flags The full 8-bit field, as parsed.
- * @property {string} extra Everything after the flags field on a higher-version
- *   header, for logging only: §3.2.4 says vendors MUST NOT forward unknown
- *   fields, and `outboundHeaders` does not.
- */
 
-/**
- * One service's continuation of a trace.
- *
- * `continued` is not a debug field: a span exporter needs to know whether this is
- * a root span in order to label it correctly.
- *
- * @typedef {object} ServerHop
- * @property {string} traceId
- * @property {string} spanId This hop's span; becomes the next hop's parent-id.
- * @property {number} flags The sampled bit, and nothing else.
- * @property {string} tracestate
- * @property {boolean} continued
- */
 
 /**
  * Parse a `traceparent` header value.
@@ -95,40 +30,26 @@ const LOWER_HEX = /^[0-9a-f]+$/;
 export function parseTraceparent(value) {
   if (typeof value !== "string" || value === "") return null;
 
-  // A short header cannot hold the four fields, whatever the version (§3.2.4).
   if (value.length < MIN_HEADER_LEN) return null;
 
-  // §3.2.4: "When the version prefix cannot be parsed (it's not 2 hex characters
-  // followed by a dash), the implementation should restart the trace." Checked
-  // before anything else, so a malformed version is never mistaken for a valid
-  // one.
   if (value[2] !== "-" || !LOWER_HEX.test(value.slice(0, 2))) return null;
 
   const version = Number.parseInt(value.slice(0, 2), 16);
-  // §3.2.2.1: "Version ff is invalid."
   if (version === 0xff) return null;
 
   const traceId = value.slice(3, 35);
   const parentId = value.slice(36, 52);
   const flagsField = value.slice(53, 55);
 
-  // The three fixed positions, all three mandatory (§3.2.4).
   if (value[35] !== "-" || value[52] !== "-") return null;
   if (!LOWER_HEX.test(traceId) || !LOWER_HEX.test(parentId) || !LOWER_HEX.test(flagsField)) return null;
 
   if (version === 0) {
-    // §3.2.2.2 defines version 00 as exactly these four fields. Trailing data
-    // means the sender is not speaking version 00, and accepting it would be
-    // inventing a format the spec does not define.
     if (value.length !== MIN_HEADER_LEN) return null;
   } else if (value.length > MIN_HEADER_LEN) {
-    // §3.2.4: on a higher version the two flag characters are followed by either
-    // the end of the header or a dash introducing an unknown field.
     if (value[MIN_HEADER_LEN] !== "-") return null;
   }
 
-  // §3.2.2.3 and §3.2.2.4: all zeroes is an invalid value for both, and the
-  // required response is to ignore the header.
   if (traceId === ZERO_TRACE_ID || parentId === ZERO_SPAN_ID) return null;
 
   const parsed = {
@@ -139,9 +60,6 @@ export function parseTraceparent(value) {
     extra: value.slice(MIN_HEADER_LEN + 1),
   };
 
-  // The caller's recording decision (§3.2.2.5.1). We carry this rather than
-  // making our own: a service that re-decides sampling per hop produces traces
-  // with holes in them, which are worse than no traces.
   Object.defineProperty(parsed, "sampled", {
     get: () => (parsed.flags & SAMPLED) === SAMPLED,
     enumerable: true,
@@ -170,16 +88,10 @@ export function serverHop(headers, spanId) {
 
   return makeHop(
     parsed === null
-      ? // §3.3: "If the vendor failed to parse traceparent, it MUST NOT attempt
-        // to parse tracestate." §4.2 makes it explicit for the no-traceparent
-        // case: a tracestate alone "is invalid and MUST be discarded".
-        // Forwarding it would attach a vendor's state to an unrelated trace.
         { traceId: newTraceId(), spanId, flags: 0, tracestate: "", continued: false }
       : {
           traceId: parsed.traceId,
           spanId,
-          // §3.2.2.5: a bit field, so mask on read rather than carry the bytes
-          // through. §3.2.2.5.2 requires the reserved bits to be zero outbound.
           flags: parsed.flags & SAMPLED,
           tracestate: forwardTracestate(header(headers, "tracestate")) ?? "",
           continued: true,
@@ -187,31 +99,9 @@ export function serverHop(headers, spanId) {
   );
 }
 
-/**
- * Build the hop object.
- *
- * A factory rather than a bare literal because `sampled` and `outboundHeaders`
- * are derived, and deriving them in one place is the point: a hand-written
- * `flags: 1` somewhere in a caller is how the sampled bit gets lost.
- *
- * @param {ServerHop} hop
- * @returns {ServerHop}
- */
 function makeHop(hop) {
   Object.defineProperties(hop, {
-    /** Whether the outbound trace-flags carry the sampled bit (§3.2.2.5.1). */
     sampled: { get: () => isSampled(hop), enumerable: true },
-    /**
-     * This hop as headers for the next service.
-     *
-     * A getter rather than a method so it reads the same as the other five
-     * templates (`hop.outboundHeaders`), which is what keeps a cross-language
-     * suite maintainable: one shape, six languages.
-     *
-     * The shape is fixed by §3.4: parent-id becomes this hop's span id, and the
-     * version is downgraded to the one we implement. Those two mutations plus the
-     * sampled flag are the entire allowed set.
-     */
     outboundHeaders: { get: () => outboundHeaders(hop), enumerable: true },
   });
   return hop;
@@ -247,13 +137,11 @@ export function forwardTracestate(value) {
   const entries = [];
   for (const raw of value.split(",")) {
     const entry = raw.trim();
-    // §3.3.1.1: "Empty and whitespace-only list members are allowed."
     if (entry === "") continue;
     if (entry.length > TRACESTATE_ENTRY_LIMIT) continue;
     entries.push(entry);
   }
 
-  // Pop from the end until the combined value fits (§3.3.1.5).
   while (entries.length > 0 && entries.join(",").length > TRACESTATE_LIMIT) {
     entries.pop();
   }
@@ -336,8 +224,6 @@ export function isSampled(hop) {
  */
 export function outboundHeaders(hop) {
   const out = {
-    // §3.2.1: send lowercase. The name is part of the contract even though the
-    // receiving side is required to be case-insensitive.
     traceparent: formatTraceparent(hop.traceId, hop.spanId, hop.flags),
   };
   if (hop.tracestate) out.tracestate = hop.tracestate;

@@ -1,36 +1,4 @@
 ---
-# core's release gate: a semver tag per spec change, and the classifier decides
-# whether the bump is additive.
-#
-# THIS FILE IS A DELIVERABLE FOR `core`, NOT A KIT ARTIFACT. kit ships it here
-# because kit is where the standard is written down, and because a file that
-# lives only in a pull request description is a file nobody can `git grep` for.
-# Copy it to `core/ci/release.yml` in a pull request against core.
-#
-# WHY CORE NEEDS THIS AT ALL
-#
-# The whole fan-out design rests on one sentence: *consumers pin a semver tag
-# rather than a branch*. As of this writing `anywaye/core` has **zero tags**
-# (`git tag -l` is empty), and that was measured, not assumed. Until the first tag
-# exists, `ref: v0.3.0` fails — verified, by running vendir:
-#
-#   Git [-c advice.detachedHead=false checkout v0.3.0]: exit status 1
-#   (stderr: error: pathspec 'v0.3.0' did not match any file(s) known to git)
-#
-# So the tag mechanism is currently unexercisable end to end, and every vendir.yml
-# in `core/vendir/` says `ref: master` as a result. This workflow is what removes
-# that caveat. Until it has run once, the honest statement is that the tag half of
-# the design is UNPROVEN, and `core/README.md` says so in those words.
-#
-# WHY THE VERSION IS COMPUTED AND NOT TYPED
-#
-# A hand-typed version in a release pull request is a version somebody chose, and
-# somebody can choose wrong in the direction that matters: calling a removed enum
-# value `0.3.0` is an additive-looking bump that breaks every producer at once.
-# So the major/minor/patch decision is made by the same classifier the pull
-# request gate uses, and a human's only job is to review the number the classifier
-# produced. A tag is a claim about compatibility; it should be derived from the
-# change, not asserted alongside it.
 name: release
 on:
   push:
@@ -47,10 +15,6 @@ jobs:
     name: classify the spec change
     runs-on: ubuntu-latest
     outputs:
-      # `FILE` is the strictest tier and the fail-closed default. This workflow
-      # only ever emits a tag for a change that is NOT FILE, so the classifier's
-      # default is also the safe one: a change it cannot classify blocks the
-      # release rather than shipping as a patch.
       level: ${{ steps.classify.outputs.level }}
     steps:
       - uses: actions/checkout@v7
@@ -63,8 +27,6 @@ jobs:
           set -euo pipefail
           previous="$(git describe --tags --abbrev=0 2>/dev/null || true)"
           if [ -z "$previous" ]; then
-            # The first release. There is nothing to compare against, and a first
-            # release is `0.1.0` by definition rather than by measurement.
             echo "level=minor" >>"$GITHUB_OUTPUT"
             echo "no previous tag; first release is 0.1.0" >>"$GITHUB_STEP_SUMMARY"
             exit 0
@@ -75,14 +37,6 @@ jobs:
           cp -R "$previous/schemas/." "$RUNNER_TEMP/old/"
           cp -R schemas/. "$RUNNER_TEMP/new/"
 
-          # `python3`, and stdlib only: classify.py imports argparse, json, os,
-          # re and sys and nothing else. That is deliberate — a release gate
-          # that had to install a dependency before it could classify a change
-          # is a release gate with a supply chain.
-          #
-          # `--tier FILE` is the default and is stated anyway, because the
-          # default changing silently is the kind of thing that should never be
-          # load-bearing.
           curl -fsSL -o /tmp/classify \
             "https://raw.githubusercontent.com/anywaye/kit/master/tests/classify.py"
           curl -fsSL -o /tmp/rules.json \
@@ -92,9 +46,6 @@ jobs:
                --tier FILE --rules /tmp/rules.json --json >"$RUNNER_TEMP/report.json"; then
             level=patch
           else
-            # Anything the classifier could not place at WIRE_JSON or looser is a
-            # change consumers may need code for. `0.x` semantics: a minor bump IS
-            # breaking before 1.0.0, which is exactly the period this fleet is in.
             level=minor
           fi
           echo "level=$level" >>"$GITHUB_OUTPUT"
@@ -104,9 +55,6 @@ jobs:
     name: publish the tag
     needs: classify
     runs-on: ubuntu-latest
-    # A tag is the artefact. If this is red, no tag was published, and every
-    # consumer stays where it is — which is the safe direction, and the reason
-    # this job has no `continue-on-error` and no retry.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -129,9 +77,6 @@ jobs:
 
           case "${{ needs.classify.outputs.level }}" in
             minor)
-              # 0.x: a minor bump is the breaking one. After 1.0.0 this branch
-              # must become `major=$((major + 1)); minor=0; patch=0`, and the
-              # comment is the only thing that will remind anyone.
               minor=$((minor + 1)); patch=0 ;;
             patch)
               patch=$((patch + 1)) ;;
@@ -145,10 +90,6 @@ jobs:
           NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
-          # Refuse to move a tag. A tag that has been pushed and is then
-          # re-pointed is a tag every lockfile in thirteen repositories now
-          # names, and the sha256 guards in those repositories go red for a
-          # reason nobody can reconstruct from the tag itself.
           if git rev-parse "$NEXT" >/dev/null 2>&1; then
             echo "refusing to move an existing tag: $NEXT" >&2
             exit 1

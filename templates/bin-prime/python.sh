@@ -1,25 +1,4 @@
 #!/usr/bin/env bash
-#
-# kit template — prime a Python worktree. Copy to bin/prime in the service repo
-# and run it after `git clone`, `git worktree add`, or `git pull --rebase`.
-#
-#   bin/prime            # sync, lint, then the full suite
-#   bin/prime --fast     # sync only
-#   bin/prime --no-uv    # force the pip fallback even when uv is installed
-#
-# WHAT IT PROMISES
-#   Exit 0: dependencies resolve, the linter is clean, and every test passes.
-#   Anything else: nonzero, with the failing step named. `set -euo pipefail` is
-#   the whole mechanism — no error handling to forget.
-#
-# STRICTNESS NOTES
-#   - uv is the resolver of record; pip is the documented fallback so a laptop
-#     without uv is not a blocked laptop. Both paths run the same commands, so a
-#     green prime means the same thing either way.
-#   - `uv sync` (not `uv lock --upgrade`): a prime never moves uv.lock. If the
-#     lock is stale, fixing it is a deliberate commit.
-#   - We prefer `uv run` over a bare `pytest` so the suite runs in the project
-#     environment, not whatever happens to be in the caller's virtualenv.
 
 set -euo pipefail
 
@@ -46,7 +25,6 @@ else
   USE_UV=1
 fi
 
-# Run a command inside the project environment when uv owns it, else directly.
 py_run() {
   if [ "$USE_UV" -eq 1 ]; then
     uv run "$@"
@@ -66,8 +44,6 @@ step() {
   printf '\n== %s\n' "$1"
 }
 
-# Never fails the prime. The toolchain check below is the gate; a banner must
-# not be able to turn a green prime red.
 version_of() {
   "$@" --version 2>/dev/null | head -n 1 || true
 }

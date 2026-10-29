@@ -1,10 +1,3 @@
-"""A database test, declared.
-
-The marker is the declaration. `pytest --collect-only -q -m tier_db` reads it,
-and a test that reaches Postgres through a helper two modules away still carries
-it, because the author wrote it on the test rather than a sentinel appearing
-somewhere in a grep's path.
-"""
 
 import os
 
@@ -13,11 +6,6 @@ import pytest
 
 @pytest.mark.tier_db
 def test_tier_db_pool_round_trips():
-    """A database test.
-
-    REQUIRED_DB=1 turns a missing DSN from a skip into a failure. A skip here is
-    a green run that never opened a connection.
-    """
     dsn = os.environ.get("TEST_DATABASE_URL")
     if not dsn:
         if os.environ.get("REQUIRED_DB") == "1":
@@ -29,9 +17,6 @@ def test_tier_db_pool_round_trips():
 
     assert dsn.startswith("postgres"), dsn
 
-    # The part only an assertion inside the test can prove. Everything outside
-    # this function can prove "the db tier ran"; nothing outside it can prove
-    # "the db tier reached postgres".
     conn = _connect(dsn)
     try:
         assert conn.execute("SELECT 1").fetchone() == (1,)
@@ -40,10 +25,4 @@ def test_tier_db_pool_round_trips():
 
 
 def _connect(dsn):
-    """Stand-in for whatever your suite connects with.
-
-    A real service substitutes its own driver here. The template is about the
-    declaration, and a template that grew a driver dependency would make kit
-    something other than config-only.
-    """
     raise NotImplementedError("substitute your own driver; the tier contract is above")

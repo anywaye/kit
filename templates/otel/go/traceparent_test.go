@@ -1,22 +1,3 @@
-// kit template — W3C Trace Context propagation for a Go service.
-//
-// Copy traceparent.go and this file into your service (package kitotel, or
-// rename), then run `go test ./...`. The suite is the contract: it is what
-// proves the template still continues a trace instead of quietly restarting it.
-//
-// REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-// https://www.w3.org/TR/trace-context/ — every rule asserted below cites the
-// section that requires it.
-//
-// WHAT IT PROMISES
-//   - A valid inbound traceparent is continued: same trace-id, sampled flag
-//     preserved, parent-id replaced with this hop's span id (§3.4).
-//   - A missing or malformed traceparent starts a new trace and never returns
-//     an error to the caller. A request is not a 400 because its trace header
-//     was garbage (§4.2, §4.3 — the processing model is non-normative but this
-//     is the only sane reading of §3.2.2.3/§3.2.2.4 "MUST ignore").
-//   - tracestate travels with the trace, capped at 512 characters and truncated
-//     on whole-entry boundaries (§3.3.1.5).
 package kitotel
 
 import (
@@ -28,7 +9,6 @@ const (
 	knownHeader  = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	knownTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	knownParent  = "00f067aa0ba902b7"
-	// Fixed so every assertion below is an equality, not a shape check.
 	fixedSpanID = "1111111111111111"
 )
 
@@ -40,9 +20,6 @@ func headers(pairs ...string) map[string]string {
 	return h
 }
 
-// The headline promise: a known traceparent comes out the other side with its
-// trace identity intact and a fresh span id. §3.4 "Update parent-id" is the
-// most typical mutation and is the only one we perform.
 func TestKnownTraceparentIsContinued(t *testing.T) {
 	hop := ServerHopFrom(headers("traceparent", knownHeader), fixedSpanID)
 
@@ -81,8 +58,6 @@ func TestKnownTraceparentIsContinued(t *testing.T) {
 	}
 }
 
-// §3.2.2.5.1: sampled is a recommendation, not a rule, so it is carried and
-// never second-guessed here.
 func TestUnsampledFlagIsPreserved(t *testing.T) {
 	unsampled := "00-" + knownTraceID + "-" + knownParent + "-00"
 	hop := ServerHopFrom(headers("traceparent", unsampled), fixedSpanID)
@@ -99,7 +74,6 @@ func TestUnsampledFlagIsPreserved(t *testing.T) {
 	}
 }
 
-// Three services, one trace: hop N+1 must keep the trace-id hop N produced.
 func TestSecondHopKeepsTheSameTraceID(t *testing.T) {
 	first := ServerHopFrom(headers("traceparent", knownHeader), "2222222222222222")
 	secondHop := ServerHopFrom(first.OutboundHeaders(), "3333333333333333")
@@ -112,9 +86,6 @@ func TestSecondHopKeepsTheSameTraceID(t *testing.T) {
 	}
 }
 
-// Every one of these is garbage a proxy, a client library, or an attacker will
-// eventually send. The requirement is the same for all of them: start a new
-// trace, silently, without an error.
 func TestMalformedTraceparentStartsANewTrace(t *testing.T) {
 	bad := map[string]string{
 		"empty":                "",
@@ -146,7 +117,6 @@ func TestMalformedTraceparentStartsANewTrace(t *testing.T) {
 			if hop.TraceID == strings.Repeat("0", 32) {
 				t.Fatal("restarted trace-id must not be all zeroes (§3.2.2.3)")
 			}
-			// The request still succeeds: a new trace, not an error.
 			if _, ok := ParseTraceparent(hop.OutboundHeaders()["traceparent"]); !ok {
 				t.Fatal("the restarted trace must be valid on the way out")
 			}
@@ -163,14 +133,11 @@ func TestMissingTraceparentStartsANewTrace(t *testing.T) {
 	if len(hop.TraceID) != 32 || hop.TraceID == strings.Repeat("0", 32) {
 		t.Fatalf("new trace-id %q is not a usable 32-hex identifier", hop.TraceID)
 	}
-	// §3.2.2.5.1: "It should be set to 0 as the default option when the trace is
-	// initiated by this component."
 	if hop.Sampled() {
 		t.Fatal("a trace this service started must default to not-sampled")
 	}
 }
 
-// §3.3: tracestate is opaque to us and MUST travel with the trace.
 func TestTracestateIsForwarded(t *testing.T) {
 	hop := ServerHopFrom(headers(
 		"traceparent", knownHeader,
@@ -182,11 +149,7 @@ func TestTracestateIsForwarded(t *testing.T) {
 	}
 }
 
-// §3.3.1.5: propagate at least 512 characters, and when it does not fit,
-// truncate whole entries — never a half entry.
 func TestTracestateIsTruncatedAtWholeEntries(t *testing.T) {
-	// 26*26 distinct key names so no two entries collide and the joined header
-	// is comfortably past the 512-character budget.
 	var entries []string
 	for i := 0; i < 60; i++ {
 		key := "v" + string(rune('a'+i/26)) + string(rune('a'+i%26))
@@ -206,19 +169,16 @@ func TestTracestateIsTruncatedAtWholeEntries(t *testing.T) {
 	if out == "" {
 		t.Fatal("truncating dropped the whole header")
 	}
-	// Every surviving entry is a whole entry: it appears verbatim in the input.
 	for _, entry := range strings.Split(out, ",") {
 		if !strings.Contains(long, entry) {
 			t.Fatalf("entry %q was truncated mid-entry, which §3.3.1.5 forbids", entry)
 		}
 	}
-	// Entries are dropped from the end, so the first one always survives.
 	if !strings.HasPrefix(out, entries[0]) {
 		t.Fatalf("truncation removed the first entry %q; §3.3.1.5 drops from the end", entries[0])
 	}
 }
 
-// §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
 func TestOversizedTracestateEntriesAreRemovedFirst(t *testing.T) {
 	oversized := "huge=" + strings.Repeat("y", 200)
 	hop := ServerHopFrom(headers(
@@ -235,8 +195,6 @@ func TestOversizedTracestateEntriesAreRemovedFirst(t *testing.T) {
 	}
 }
 
-// §3.3 and §4.2: a tracestate without a valid traceparent is invalid and MUST
-// be discarded — forwarding it would attach vendor state to an unrelated trace.
 func TestTracestateWithoutAValidTraceparentIsDiscarded(t *testing.T) {
 	for name, tp := range map[string]string{
 		"no traceparent":  "",
@@ -255,9 +213,6 @@ func TestTracestateWithoutAValidTraceparentIsDiscarded(t *testing.T) {
 	}
 }
 
-// §3.2.1: vendors MUST expect the header name in any case and SHOULD send it
-// lowercase. Proxies and SDKs are inconsistent about this; being strict here
-// breaks traces in production for no reason.
 func TestHeaderNamesAreCaseInsensitiveAndSentLowercase(t *testing.T) {
 	for _, name := range []string{"traceparent", "TraceParent", "TRACEPARENT", "Traceparent"} {
 		hop := ServerHopFrom(headers(name, knownHeader), fixedSpanID)
@@ -274,8 +229,6 @@ func TestHeaderNamesAreCaseInsensitiveAndSentLowercase(t *testing.T) {
 	}
 }
 
-// §3.2.4: a higher version is parsed positionally, and unknown fields are
-// neither parsed nor forwarded — we re-emit at version 00.
 func TestHigherVersionIsDowngradedAndUnknownFieldsAreNotForwarded(t *testing.T) {
 	future := "cc-" + knownTraceID + "-" + knownParent + "-01-what-the-future-wants"
 
@@ -301,8 +254,6 @@ func TestHigherVersionIsDowngradedAndUnknownFieldsAreNotForwarded(t *testing.T) 
 	}
 }
 
-// §3.2.2.5: trace-flags is a bit field, so it must be masked on read and
-// rebuilt on write. §3.2.2.5.2: reserved bits MUST be set to zero.
 func TestTraceFlagsAreABitField(t *testing.T) {
 	both := "00-" + knownTraceID + "-" + knownParent + "-03"
 
@@ -316,7 +267,6 @@ func TestTraceFlagsAreABitField(t *testing.T) {
 	}
 }
 
-// §8: trace-id and span id must be 16 and 8 random bytes, never all zeroes.
 func TestNewIdentifiersAreRandomAndNeverAllZero(t *testing.T) {
 	seen := make(map[string]bool, 256)
 	for i := 0; i < 256; i++ {

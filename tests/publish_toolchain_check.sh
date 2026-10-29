@@ -1,76 +1,4 @@
 #!/usr/bin/env bash
-#
-# publish_toolchain_check.sh — the two publish steps that had never once
-# succeeded in the fleet: the helm pin's verification, and the provenance
-# stamper's home. Standalone.
-#
-#   bash tests/publish_toolchain_check.sh <workflows-dir>
-#
-# WHY THIS EXISTS. The publish path resolved for the first time (the previous
-# packet fixed the root-relative `uses:` and the image-tag seam), and two more
-# defects surfaced, each in a step that had therefore NEVER run to completion
-# anywhere:
-#
-#   1. `chart.reusable.yml`'s `install helm (pinned)` step ran
-#      `helm version --client` after pinning Helm v4. Helm 4 removed
-#      `--client`, so the step died with `Error: unknown flag: --client`,
-#      exit 1, before the chart was packaged. Helm 3 still has `--client`,
-#      so a developer's local helm could not see the bug.
-#   2. `image.reusable.yml`'s `stamp provenance` step ran
-#      `sh docker/provenance.sh --validate` in the CALLER's checkout. The
-#      script lives in kit; identity, gateway, courier and parlor carry no
-#      `docker/` directory, so the step died with
-#      `sh: 0: cannot open docker/provenance.sh: No such file` and no image
-#      in the fleet has ever been published.
-#
-# WHAT IT PROVES, on the PARSED workflow with comments stripped (a check a
-# comment can satisfy is not a check):
-#
-#   helm:
-#     H1. No `helm version` invocation anywhere carries a flag the pinned
-#         major does not have. The allowed set is Helm 4.3.0's own
-#         `helm version` options — `--template`, `--short`, `--help`/`-h` —
-#         read from its documentation; `--client` is the regression and the
-#         assertion is not narrowed to it alone.
-#     H2. The install step actually VERIFIES the pin: the installed version is
-#         compared against the pin in a test that can exit non-zero. A version
-#         printed for the log is a log line, not a check.
-#     H3. The pin is ONE value: it lives in the step's `env.HELM_PIN`, and the
-#         run body contains no `vN.N.N` literal, so install and verify cannot
-#         disagree by an edit to one of two numbers.
-#
-#   provenance:
-#     P1. No run body invokes the stamper through the caller's relative path
-#         (`docker/provenance.sh`, `./docker/provenance.sh`). The stamp step
-#         runs it through `$KIT_PROVENANCE_SCRIPT`.
-#     P2. Kit is fetched at the reusable workflow's OWN commit — an `env`
-#         value of `${{ job.workflow_sha }}` — not `master` and not a ref the
-#         caller supplies, and into `$RUNNER_TEMP` rather than the build
-#         context.
-#     P3. The fetch refuses by name when the script is absent: a `[ ! -f … ]`
-#         guard on docker/provenance.sh that exits non-zero. A stamp that
-#         silently skips when the script is missing ships an unstamped image
-#         and says nothing.
-#
-# THE FIVE RED CONTROLS. Each fixture copies the REAL workflows and violates
-# exactly ONE property; the SAME checker must answer RED:
-#   (a) `helm version --template` reverted to `helm version --client`;
-#   (b) the helm comparison disabled (`!=` rewritten to `==`);
-#   (c) the stamp step reverted to `sh docker/provenance.sh --validate`;
-#   (d) the fetch ref rewritten to the literal `master`;
-#   (e) the existence guard inverted (`[ ! -f ]` → `[ -f ]`, i.e. no guard).
-# A control that stays green is a failure of the proof itself, reported as
-# such rather than passed over.
-#
-# SINGLE SOURCE OF TRUTH. One checker program below; the real tree and all
-# five controls run the SAME code against fixture directories. A PASS in
-# tests/focused_publish.sh or in tests/validate.sh means exactly what this
-# standalone proof means — the rule chart_publish_check.sh states at length.
-#
-# Exit 0: the real tree passes and all five controls go red.
-# Exit 1: an assertion fails, or a control stays green.
-# Exit 2: usage error, or no YAML-capable python — the workflows cannot be
-#         read without a parser, and that is reported, never passed silently.
 
 set -euo pipefail
 
@@ -87,9 +15,6 @@ if [ ! -d "$workflows" ]; then
   exit 2
 fi
 
-# The gate's venv python when present, else a system python3 with PyYAML. No
-# parser is an explicit exit 2, never a silent pass — the same resolution and
-# the same discipline as publish_seam_check.sh and workflow_timeouts_check.sh.
 PY=""
 if [ -x "$ROOT/.venv/bin/python" ] && "$ROOT/.venv/bin/python" -c "import yaml" 2>/dev/null; then
   PY="$ROOT/.venv/bin/python"
@@ -126,8 +51,6 @@ def load(path):
 
 
 def code_of(text):
-    # Comments stripped BEFORE reading: a check a comment can satisfy is not a
-    # check, and these workflows explain themselves in prose.
     return "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
@@ -169,14 +92,6 @@ files = sorted(glob.glob(os.path.join(workflows, "*.yml"))) + sorted(
 if not files:
     problems.append(f"no *.yml or *.yaml in {workflows}")
 
-# ---------------------------------------------------------------------
-# Helm: the pinned major's flags, the pin's verification, one pin.
-#
-# Helm 4.3.0's `helm version` options, from its own documentation, are
-# `--short` and `--template` (plus `-h`/`--help`). `--client` was a Helm 3
-# option and was removed with the client/server split. Anything else on a
-# `helm version` line is a flag the pinned major may not have.
-# ---------------------------------------------------------------------
 HELM_VERSION_FLAGS = {"--template", "--short", "--help", "-h"}
 
 for path in files:
@@ -187,7 +102,6 @@ for path in files:
         for line in body.splitlines():
             if re.search(r"\bhelm\s+version\b", line):
                 helm_version_invocations += 1
-                # Every long/short flag on the invocation line, quotes removed.
                 for token in line.split():
                     token = token.strip("'\"")
                     if token.startswith("-") and re.fullmatch(
@@ -204,7 +118,6 @@ for path in files:
                                 f"Helm 3 client/server split"
                             )
 
-# The chart workflow must verify the pin, and the pin must be one value.
 chart_path = os.path.join(workflows, "chart.reusable.yml")
 if not os.path.isfile(chart_path):
     problems.append("chart.reusable.yml is missing — the helm install has no home")
@@ -216,7 +129,6 @@ else:
         helm_install_steps += 1
         env = env_of(step)
         pin = env.get("HELM_PIN")
-        # H3: the pin is the one literal, and the body holds no second copy.
         if not (isinstance(pin, str) and re.fullmatch(r"v\d+\.\d+\.\d+", pin)):
             problems.append(
                 f"chart.reusable.yml job {jid!r} step {i} does not carry the "
@@ -230,7 +142,6 @@ else:
                 f"install and the verification can drift by an edit to one of "
                 f"two numbers"
             )
-        # H2: a comparison against the pin that can exit non-zero.
         if not (
             re.search(r"\[.*!=.*\]", body)
             and re.search(r"\bexit\s+1\b", body)
@@ -254,17 +165,8 @@ if helm_install_steps == 0:
         "the pin's verification has no site to live at"
     )
 
-# ---------------------------------------------------------------------
-# Provenance: the stamper comes from kit's own commit, not the caller's tree.
-# ---------------------------------------------------------------------
 image_path = os.path.join(workflows, "image.reusable.yml")
 
-# P1: no INVOCATION of the stamper through the caller-relative path, in ANY
-# workflow — provenance.sh is a file in kit, so a run body that reaches it as
-# `docker/provenance.sh` reads the caller's checkout and has never worked.
-# Read the COMMAND, not every line: the fetch computes
-# `script="…/docker/provenance.sh"` and the guard echoes that path, and
-# neither is an invocation.
 for path in files:
     for jid, i, step in steps_of(path):
         body = run_body(step)
@@ -272,7 +174,6 @@ for path in files:
             continue
         for line in body.splitlines():
             tokens = line.split()
-            # Drop leading VAR=value env assignments to find the command word.
             j = 0
             while j < len(tokens) and re.fullmatch(
                 r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[j]
@@ -316,12 +217,10 @@ else:
                     f"exported by the fetch step is the only one known to hold "
                     f"kit's script rather than the caller's"
                 )
-        # P3: the fetch refuses by name when the script is absent.
         if re.search(r"\[\s*!\s*-f\b", body) and "provenance.sh" in body and re.search(
             r"\bexit\s+1\b", body
         ):
             guard_seen += 1
-        # P2: the fetch itself — kit, into $RUNNER_TEMP, at the ref from env.
         if (
             "fetch" in body
             and "anywaye/kit" in body
@@ -384,9 +283,6 @@ print(
 PY
 
 run_checker() {
-  # The `|| ec=$?` shape is load-bearing, the reason is stated in
-  # chart_publish_check.sh: a bare `out="$(cmd)"` that fails takes the shell
-  # down under set -e before the status is read.
   local ec=0
   CHECK_OUT=""
   CHECK_OUT="$("$PY" "$checker" "$@" 2>&1)" || ec=$?
@@ -401,16 +297,11 @@ if [ "$CHECK_EC" -ne 0 ]; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------
-# THE FIVE CONTROLS. A one-token edit inside a copy of the REAL files; the
-# same checker must answer RED for each.
-# ---------------------------------------------------------------------
 copy_workflows() {
   mkdir -p "$1"
   cp "$workflows"/*.yml "$1"/
 }
 
-# (a) The helm flag the pinned major removed, put back.
 ctl_a="$TMP/ctl-a-client"
 copy_workflows "$ctl_a"
 sed 's|helm version --template|helm version --client|' \
@@ -422,7 +313,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (b) The comparison disabled: a version check that cannot fail.
 ctl_b="$TMP/ctl-b-nofail"
 copy_workflows "$ctl_b"
 sed 's|if \[ "$helm_version" != "$HELM_PIN" \]; then|if [ "$helm_version" == "$HELM_PIN" ]; then|' \
@@ -434,7 +324,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (c) The stamper read from the caller's checkout again.
 ctl_c="$TMP/ctl-c-relative"
 copy_workflows "$ctl_c"
 sed 's|sh "$KIT_PROVENANCE_SCRIPT" --validate|sh docker/provenance.sh --validate|' \
@@ -446,7 +335,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (d) The kit ref rewritten to a moving branch.
 ctl_d="$TMP/ctl-d-master"
 copy_workflows "$ctl_d"
 sed 's|KIT_REF: ${{ job.workflow_sha }}|KIT_REF: master|' \
@@ -458,7 +346,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (e) The existence guard removed.
 ctl_e="$TMP/ctl-e-guard"
 copy_workflows "$ctl_e"
 sed 's|if \[ ! -f "$script" \]; then|if [ -f "$script" ]; then|' \
@@ -470,7 +357,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# The proof, on the way out: the real tree's own summary line.
 run_checker "$workflows"
 printf '%s\n' "$CHECK_OUT"
 printf 'publish toolchain: all five red controls went red (--client; check that cannot fail; caller-relative stamper; master ref; guard removed)\n'

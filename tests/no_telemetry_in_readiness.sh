@@ -66,11 +66,6 @@ fail() {
   failures=$((failures + 1))
 }
 
-# wait_for <label> <deadline-seconds> <command...>
-#
-# A poll, not a sleep. Prints the last output on failure, because a bare
-# "timed out" on a container that exited two seconds in is the least useful
-# message this script could print.
 wait_for() {
   local label="$1" deadline="$2"
   shift 2
@@ -82,15 +77,10 @@ wait_for() {
     fi
     now=$(date +%s)
     if [ $((now - start)) -ge "$deadline" ]; then
-      # The label is in the message because a bare "timed out" on a container
-      # that exited two seconds in is the least useful thing this script could
-      # print.
       printf 'timed out after %ss waiting for: %s\n' "$deadline" "$label"
       printf '%s\n' "$out" | tail -20 | sed 's/^/        /' || true
       return 1
     fi
-    # The poll interval, not a synchronisation sleep: it is how often we are
-    # allowed to ASK, not how long we are guessing something takes.
     sleep 1
   done
 }
@@ -101,9 +91,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ---------------------------------------------------------------------------
-# 1. STATIC — nothing in the shipped templates waits on the collector
-# ---------------------------------------------------------------------------
 printf -- '-- 1. static: nothing in the templates waits on the collector\n'
 
 collector_waits() {
@@ -147,15 +134,8 @@ else
 fi
 
 if docker info >/dev/null 2>&1; then
-  # -----------------------------------------------------------------------
-  # 2. LIVE — a collector whose three backends are all absent
-  # -----------------------------------------------------------------------
   printf -- '-- 2. live: collector healthy with tempo and loki both absent\n'
 
-  # An exporter pointed at a port on the loopback interface of a container that
-  # has nothing listening on it. `connection refused` is the honest failure, and
-  # it is the failure a developer hits the first time they stop one of the four
-  # services to free memory.
   cat >"$WORK/compose.yml" <<'YAML'
 name: kit-readiness
 services:
@@ -175,22 +155,8 @@ services:
       KIT_OTEL_BATCH_SIZE: 16
       KIT_OTEL_METRIC_NAMESPACE: anywaye
       KIT_OTEL_METRICS_FLUSH_INTERVAL: 5s
-      # A URL, with a scheme, for the `otlphttp` exporter — and that is not
-      # a style detail. The `otlphttp` component parses its endpoint as a URL
-      # and the collector refuses to BUILD the pipeline if it has no scheme, so
-      # this test's old bare `127.0.0.1:4317` for loki and the metrics store
-      # made the collector exit(1) with `endpoint must be a valid URL`. That
-      # looked exactly like the bug this file exists to detect — a collector
-      # that cannot start without its backends — and it was the test's own env.
-      #
-      # Port 9 (discard), not 4317: 4317 is the collector's own OTLP receiver,
-      # so "nothing is listening" would have been false, and the test would
-      # have been measuring a loopback to itself.
       KIT_TEMPO_OTLP_ENDPOINT: 127.0.0.1:9
       KIT_LOKI_OTLP_ENDPOINT: http://127.0.0.1:9/otlp
-      # ClickStack is the third backend the shipped config names, and this test
-      # is exactly the proof that a dead one is survivable: port 9 (discard),
-      # same reasoning as Tempo's above.
       KIT_CLICKSTACK_OTLP_ENDPOINT: 127.0.0.1:9
       KIT_OTEL_TLS_INSECURE: "true"
       KIT_OTEL_EXPORT_TIMEOUT: 1s
@@ -225,10 +191,6 @@ YAML
     compose logs --tail 20 collector 2>&1 | sed 's/^/        /' || true
   fi
 
-  # No retry loop. The exports are refused every second, so a retrying
-  # exporter produces a growing pile of log lines; a non-retrying one produces
-  # roughly one per batch. Counting them is the only way to see the difference,
-  # because "no retry" in a config file is a claim and this is the measurement.
   if wait_for "exports fail without a retry storm" 25 sh -c \
     "test \"\$(docker logs ${PROJECT}-collector-1 2>&1 | grep -ciE 'export|connection refused|failed' || echo 0)\" -lt 60"; then
     pass "refused exports produced a bounded number of log lines, not a retry storm"
@@ -237,37 +199,11 @@ YAML
     compose logs --tail 30 collector 2>&1 | sed 's/^/        /' || true
   fi
 
-  # -----------------------------------------------------------------------
-  # 3. LIVE — a service whose readiness really checks, with NO collector
-  # -----------------------------------------------------------------------
   printf -- '-- 3. live: a service serves with the collector killed\n'
 
-  # The shape core's probes.schema.json demands, built from a stock image so
-  # the test has no dependency of its own:
-  #
-  #   /healthz  consults NOTHING. A liveness probe that fails on a dependency
-  #             tells the orchestrator to restart a process that is fine, which
-  #             turns a database outage into a fleet-wide crash RESTART LOOP and
-  #             destroys the evidence needed to diagnose it.
-  #   /readyz   really checks. A readyz that checks nothing is invisible,
-  #             because it returns 200 and looks perfect in every dashboard.
-  #
-  # AND NOW IT IS PROVEN THAT readyz IS CAPABLE OF FAILING, which is the part
-  # that makes the rest of this section mean anything. An earlier version of this
-  # test stood up `traefik/whoami`, which answers every path with 200 — so its
-  # "/readyz" could not have failed no matter what was wrong, and a test that
-  # cannot fail is not a test. That image also ships no `wget`, so the probe
-  # never ran at all and the section failed for a reason unrelated to the claim.
-  #
-  # So the service is a real one: `dep` is a listener, `svc` TCP-connects to it
-  # from /readyz, and the test then STOPS `dep` and watches /readyz go 503. Only
-  # after that is proven does "and it kept serving" mean anything — it means it
-  # kept serving while a dependency it genuinely checks was down and an OTLP
-  # endpoint that does not exist was configured.
   mkdir -p "$WORK/probe"
 
   cat >"$WORK/probe/dep.py" <<'PY'
-# A listener that exists to be depended upon, and to be stopped.
 import socket
 
 srv = socket.socket()
@@ -280,11 +216,6 @@ while True:
 PY
 
   cat >"$WORK/probe/svc.py" <<'PY'
-# Stands in for a anywaye service: /healthz unconditional, /readyz a real check.
-#
-# The OTLP endpoint is read and deliberately never dialled. A service that
-# resolved it would be a service with a telemetry dependency; the whole claim is
-# that readiness cannot tell the difference, so the code has to not look.
 import http.server
 import os
 import socket
@@ -339,7 +270,6 @@ PY
   cat >"$WORK/compose.yml" <<'YAML'
 name: kit-readiness
 services:
-  # The dependency /readyz genuinely checks. Stopped mid-test.
   dep:
     image: python:3.12-alpine
     command: ["python", "/probe/dep.py"]
@@ -352,27 +282,11 @@ services:
     volumes:
       - ./probe:/probe:ro
     environment:
-      # The dead endpoint is set in the ENVIRONMENT and the collector is not
-      # running at all, which is the combination this test exists for: not
-      # "telemetry off" and not "telemetry misconfigured", but telemetry pointed
-      # somewhere that is not there.
       MUSE_OTEL_ENDPOINT: http://otel-collector:4318
       OTEL_SDK_DISABLED: "false"
       READY_DEP_HOST: dep
       READY_DEP_PORT: "9000"
     healthcheck:
-      # /healthz — unconditional liveness, nothing consulted.
-      # 127.0.0.1 and NOT `localhost`, everywhere in this section, and that is not
-      # pedantry. The service binds IPv4 (`0.0.0.0`) because that is what
-      # `socketserver` does by default; alpine's busybox `wget` resolves
-      # `localhost` to `::1` first and gets `connection refused` from an empty
-      # IPv6 stack, then does not fall back. The result is a service that is
-      # genuinely up and answering on 127.0.0.1, reported by this test as one
-      # that "stopped serving when the collector was absent" — the exact failure
-      # this file exists to rule out, asserted for a reason that has nothing to
-      # do with telemetry. A false negative in the proof of a safety property is
-      # worse than no proof, because the next run of it is a reason to believe
-      # something untrue.
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q 'liveness: ok'"]
       interval: 2s
       timeout: 5s
@@ -388,9 +302,6 @@ YAML
     sed 's/^/        /' "$WORK/service.log" | tail -20
   fi
 
-  # The baseline both halves below are read against: /readyz says YES while the
-  # dependency is up. Without this, a /readyz stuck at 503 would look like the
-  # same thing as a /readyz that ignores its dependency.
   if wait_for "readyz reports ready with the dependency up" 20 \
     docker exec "${PROJECT}-svc-1" wget -qO- http://127.0.0.1:8080/readyz; then
     pass "/readyz reports ready while its real dependency is up"
@@ -398,8 +309,6 @@ YAML
     fail "/readyz did not report ready with its dependency up"
   fi
 
-  # ...and that it is CAPABLE of saying no. Stop the dependency and wait for the
-  # 503. This is the assertion that gives the next one its meaning.
   compose stop dep >/dev/null 2>&1
   if wait_for "readyz reports NOT ready once its dependency is stopped" 30 \
     docker exec "${PROJECT}-svc-1" wget -qO- http://127.0.0.1:8080/readyz; then
@@ -408,11 +317,6 @@ YAML
     pass "/readyz went 503 when its real dependency stopped — it really checks"
   fi
 
-  # The claim itself. The dependency /readyz checks is down, the OTLP endpoint
-  # does not exist, and the service must still serve. A telemetry component that
-  # can flip either probe is in the readiness path; this is the run that says it
-  # cannot, with the readyz that is genuinely capable of failing already proven
-  # to fail.
   if wait_for "service keeps serving with its dependency down and no collector" 20 \
     docker exec "${PROJECT}-svc-1" wget -qO- http://127.0.0.1:8080/healthz; then
     pass "service kept answering requests with a dead dependency and no collector"
@@ -421,12 +325,6 @@ YAML
     compose logs --tail 20 svc 2>&1 | sed 's/^/        /' || true
   fi
 
-  # The container is still running, and has not been restarted — with a dead
-  # dependency AND a nonexistent OTLP endpoint. Same reason as above and for the
-  # collector: a restart is a failure wearing a healthcheck's clothes. This is
-  # the check that catches a liveness probe which fails on a dependency, because
-  # that turns one outage into a fleet-wide crash RESTART LOOP and destroys the
-  # evidence needed to diagnose it.
   if wait_for "service did not restart" 20 sh -c \
     "test \"\$(docker inspect -f '{{.RestartCount}}' ${PROJECT}-svc-1 2>/dev/null || echo 0)\" = 0"; then
     pass "service did not restart with a dead dependency and a dead OTLP endpoint"
@@ -434,11 +332,6 @@ YAML
     fail "service restarted with a dead dependency and a dead OTLP endpoint"
   fi
 
-  # THE INVERSE, which is the half that is easy to get wrong in the other
-  # direction: now kill the service's idea that telemetry exists by removing
-  # the network DNS entry too. A service that resolved the collector's name and
-  # then failed is one that had a hard dependency on it; a service that never
-  # resolved it at all has proved the endpoint is not consulted.
   if compose down --volumes --remove-orphans >/dev/null 2>&1; then
     pass "the throwaway stack came down cleanly"
   else

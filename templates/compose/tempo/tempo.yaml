@@ -37,28 +37,16 @@ stream_over_http_enabled: true
 server:
   http_listen_port: 3200
   log_level: warn
-  # 6 services, one laptop. The ingester's flush and idle timeouts are on the
-  # slow side of a production default on purpose: at 10s a query right after a
-  # request frequently misses the span, and "the trace is not there yet" reads
-  # as "tracing is broken" to somebody who has just been told tracing is on by
-  # default.
   grpc_server_max_recv_msg_size: 16777216
 
 distributor:
   receivers:
     otlp:
       protocols:
-        # The collector's `otlp/tempo` exporter talks to this. Plaintext because
-        # it never leaves the compose network; TLS is a self-hoster's decision
-        # and it belongs in the collector's ${env:} endpoint, not hardcoded
-        # here.
         grpc:
           endpoint: 0.0.0.0:4317
 
 ingester:
-  # Block after this, so the compactor has something to work on. 5m is short
-  # enough that a crash's block is compacted and aged out within the hour of
-  # retention above.
   max_block_duration: 5m
 
 compactor:
@@ -81,10 +69,6 @@ querier:
 
 query_frontend:
   search:
-    # 30 days of searchability, 1 hour of storage. Those are different things:
-    # storage retention deletes blocks, search retention bounds how far back a
-    # query will look. Point them at each other and you get a store that either
-    # cannot answer last week's question or cannot delete today's data.
     max_duration: 720h
   metrics:
     max_duration: 30m
@@ -92,34 +76,6 @@ query_frontend:
 usage_report:
   reporting_enabled: false
 
-# A dev stack, and a runaway service in a loop is the case this whole section
-# is about: it must not be able to fill a laptop disk before anybody notices the
-# service is broken. Bursts, not sustained rates, and bounded.
-#
-# Under `overrides.defaults`, and nowhere else. On grafana/tempo:2.7.2 both of
-# these are hard startup failures: a top-level `ingestion_rate_limit_bytes`, and
-# `overrides.per_tenant_overrides`. Neither is a warning — the container exits in
-# seconds with a message naming a Go TYPE rather than a config key, so a config
-# copied from documentation for a different Tempo major fails in a way that reads
-# like a bug in the image. Every key in this file was verified by loading it into
-# the pinned image and watching the container reach "Application started".
-#
-# `defaults`, and not a tenant name, because multitenancy is off and every
-# request lands on this one block. An override keyed to a tenant nobody sends is
-# a block Tempo parses, validates, and never applies — a limits section that
-# looks enforced and is not is worse than none, because it is a reader's reason
-# to stop looking.
-#
-# NO `read:` BLOCK, and its absence is worth recording because the error message
-# Tempo prints about it is wrong. `read.max_bytes_per_read` is not accepted
-# inside `overrides.defaults` on 2.7.2, and Tempo reports it as
-#
-#   field defaults not found in type overrides.legacyConfig
-#
-# naming the PARENT key, which is present and correct. Two different wrong
-# readings of that message — "use per_tenant_overrides" and "drop the overrides
-# block" — both produce a config that parses and enforces nothing. It was found
-# by bisecting the block one key at a time against the pinned image.
 overrides:
   defaults:
     ingestion:

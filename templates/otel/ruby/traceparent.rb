@@ -1,42 +1,5 @@
 # frozen_string_literal: true
 
-# kit template — W3C Trace Context propagation for a Rails service.
-#
-# Copy traceparent.rb and test_traceparent.rb into your service. For inbound
-# requests, rack_middleware.rb.snippet wires this into a Rails controller
-# around_action; keep the test suite either way.
-#
-# The upstream OTel SDK does this for you — see rack_middleware.rb.snippet for
-# the versioned wiring. Use this file when you need the header handling on its
-# own: a webhook signer, a Sidekiq job that talks to another service, or a test
-# that asserts propagation without standing up an SDK.
-#
-# REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-# https://www.w3.org/TR/trace-context/
-#
-# IMPLEMENTED SECTIONS (every one is asserted in test_traceparent.rb)
-#   3.2.1     header name: accept any case, send lowercase
-#   3.2.2.1   version is 2 hex chars; ff is forbidden
-#   3.2.2.2   version-format for version 00
-#   3.2.2.3   invalid trace-id -> ignore the traceparent (all zeroes forbidden)
-#   3.2.2.4   invalid parent-id -> ignore the traceparent (all zeroes forbidden)
-#   3.2.2.5   trace-flags is a bit field; mask on read
-#   3.2.2.5.1 the sampled flag is the only flag in version 00
-#   3.2.2.5.2 reserved flags MUST be set to zero on the wire
-#   3.2.4     higher version: parse positionally, re-emit at 00, drop unknowns
-#   3.3       a failed traceparent MUST NOT be rescued by a tracestate
-#   3.3.1.5   tracestate: propagate >=512 chars, truncate whole entries only
-#   4.2/4.3   no traceparent -> new trace; invalid -> restart, never an error
-#
-# NO DEPENDENCIES. Stdlib only, so this file drops into any Rails service and
-# the test suite runs without `bundle install`.
-#
-# "No dependencies" is not the same claim as "runs on any ruby", and the second
-# one needed saying out loud. This file needs ruby 2.7 or newer; see
-# KitOtel::RUBY_FLOOR below, which is why the number is a constant in the file
-# rather than a sentence in this header that nobody can check. It is far below
-# the pin kit hands a service (templates/mise.toml: 3.4), so a service on the
-# pin it was given is never near the edge.
 
 require 'securerandom'
 
@@ -50,51 +13,19 @@ require 'securerandom'
 # See the file header for the W3C Trace Context sections behind each rule, and
 # `test_traceparent.rb` for the suite that asserts them.
 module KitOtel
-  # The oldest interpreter this file runs on, as `major.minor`.
-  #
-  # It is a constant, and not a sentence in the header, because the failure it
-  # prevents does not read as a version problem. On ruby 2.6 the first call
-  # into `usable_tracestate_entries` raises NoMethodError, three of the
-  # suite's thirteen tests die, and the output says `filter_map` — which looks
-  # exactly like a bug in trace propagation, and was measured as one for three
-  # packets' worth of gate runs before anybody read a version number.
-  #
-  # 2.7 is `Enumerable#filter_map` and nothing else, so this is the file's real
-  # requirement rather than a guess: everything else here and in its suite is
-  # 2.4 or older (`casecmp?` 2.4, `allbits?` 2.5, `&.` 2.3).
-  #
-  # kit's gate READS this constant instead of keeping its own copy of the
-  # number. A version written in both the artifact and the runner is a version
-  # asserted in zero places the first time one of the two moves — the same
-  # reason the classifier's tier lives in rules.json and nowhere else.
   RUBY_FLOOR = '2.7'
 
-  # Bit 0 of trace-flags (3.2.2.5.1). It is a bit in a field, not the field's
-  # value: reading `flags == 1` instead of `flags & 1 == 1` is the single most
-  # common trace-context bug, and it is why this is a named constant.
   SAMPLED = 0x01
 
-  # A traceparent is exactly 55 characters: 2 version, 32 trace-id, 16
-  # parent-id, 2 trace-flags, and 3 dashes (3.2.2.2).
   MIN_HEADER_LEN = 55
 
-  # 3.3.1.5: "Vendors SHOULD propagate at least 512 characters of a combined
-  # header." Bigger than this and we truncate whole entries.
   TRACESTATE_LIMIT = 512
 
-  # 3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
   TRACESTATE_ENTRY_LIMIT = 128
 
   ZERO_TRACE_ID = '0' * 32
   ZERO_SPAN_ID = '0' * 16
 
-  # A parsed `traceparent` header.
-  #
-  # +version+ is the raw version byte. Zero for version "00", the only version
-  # we emit; a higher version is parsed (3.2.4) and then downgraded.
-  # +extra+ is everything after the flags field on a higher-version header.
-  # Retained for logging only: 3.2.4 says vendors MUST NOT forward unknown
-  # fields, and #outbound_headers does not.
   TraceParent = Struct.new(:version, :trace_id, :parent_id, :flags, :extra) do
     # The caller's recording decision (3.2.2.5.1). We carry this rather than
     # making our own: a service that re-decides sampling per hop produces traces
@@ -111,11 +42,6 @@ module KitOtel
     alias_method :sampled, :sampled?
   end
 
-  # One service's continuation of a trace: what we tell our caller about the
-  # request we handled, and what we put on the wire to the next hop.
-  #
-  # +continued+ is not a debug field: a span exporter needs to know whether this
-  # is a root span in order to label it correctly.
   ServerHop = Struct.new(:trace_id, :span_id, :flags, :tracestate, :continued) do
     def sampled?
       flags.allbits?(SAMPLED)
@@ -155,8 +81,6 @@ module KitOtel
 
       raw = value.to_s
       return nil unless well_formed?(raw)
-      # 3.2.2.3 and 3.2.2.4 are separate from the shape: a header can be
-      # perfectly well formed and still carry an identifier the spec forbids.
       return nil if all_zero_identifier?(raw)
 
       build_traceparent(raw)
@@ -181,11 +105,6 @@ module KitOtel
     # both at once.
     def build_traceparent(raw)
       TraceParent.new(
-        raw[0, 2].to_i(16),   # version
-        raw[3, 32],           # trace-id
-        raw[36, 16],          # parent-id
-        raw[53, 2].to_i(16),  # trace-flags
-        raw[(MIN_HEADER_LEN + 1)..].to_s # unknown fields, for logging only
       )
     end
 
@@ -249,18 +168,12 @@ module KitOtel
       tp = parse_traceparent(header(headers, 'traceparent'))
 
       if tp.nil?
-        # 3.3: "If the vendor failed to parse traceparent, it MUST NOT attempt to
-        # parse tracestate." 4.2 makes it explicit for the no-traceparent case:
-        # a tracestate alone "is invalid and MUST be discarded". Forwarding it
-        # would attach a vendor's state to an unrelated trace.
         return ServerHop.new(new_trace_id, span_id, 0, nil, false)
       end
 
       ServerHop.new(
         tp.trace_id,
         span_id,
-        # 3.2.2.5: a bit field, so mask on read rather than carry the bytes
-        # through. 3.2.2.5.2 requires the reserved bits to be zero outbound.
         tp.flags & SAMPLED,
         forward_tracestate(header(headers, 'tracestate')),
         true
@@ -274,9 +187,6 @@ module KitOtel
     # version, and a caller that could pass any version would eventually pass a
     # wrong one.
     def format_traceparent(trace_id, parent_id, flags)
-      # Annotated tokens rather than positional %s: three arguments in a row,
-      # where swapping two of them still produces a valid-looking string of the
-      # wrong length, is exactly the bug a named token makes impossible.
       format('00-%<trace>s-%<parent>s-%<flags>02x', trace: trace_id, parent: parent_id, flags: flags & 0xFF)
     end
 
@@ -291,7 +201,6 @@ module KitOtel
       return nil if value.nil? || value.empty?
 
       entries = usable_tracestate_entries(value)
-      # Pop from the end until the combined value fits (3.3.1.5).
       entries.pop while entries.length.positive? && entries.join(',').length > TRACESTATE_LIMIT
 
       entries.empty? ? nil : entries.join(',')
@@ -303,12 +212,8 @@ module KitOtel
     def usable_tracestate_entries(value)
       value.split(',', -1).filter_map do |raw|
         entry = raw.strip
-        # 3.3.1.1: "Empty and whitespace-only list members are allowed."
         next if entry.empty?
 
-        # 3.3.1.5: "Entries larger than 128 characters long SHOULD be removed
-        # first" — the expensive ones, and the least likely to be a well-known
-        # vendor key.
         entry.length > TRACESTATE_ENTRY_LIMIT ? nil : entry
       end
     end

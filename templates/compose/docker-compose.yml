@@ -179,224 +179,54 @@ name: ${KIT_STACK_NAME:-anywaye}
 
 networks:
   platform:
-    # `internal: true` would cut the stack off from the internet, which a
-    # container build or an apt install inside one would need. Not set: the
-    # stack is on the developer's machine, and every collector endpoint is a
-    # ${env:} substitution that resolves inside this network.
 
 volumes:
   postgres-data:
   nats-data:
   redis-data:
-  # The observability stores. Named volumes like the rest, so `bin/dev nuke`
-  # removes them and `bin/dev down` keeps them, with no special-casing.
   tempo-data:
   loki-data:
   grafana-data:
 
 services:
-  # ------------------------------------------------------------------ postgres
-  #
-  # ONE CLUSTER. ONE DATABASE PER SERVICE. ONE ROLE PER SERVICE.
-  #
-  # This is the whole of kit's data topology, and it is worth being explicit
-  # about what it is not: it is not one Postgres per service. There is ONE
-  # container here, shared by every service in the fleet, and the DATABASE is
-  # the isolation boundary rather than the machine. Two services cannot read
-  # each other's rows because `REVOKE ALL ON DATABASE ... FROM PUBLIC` in the
-  # init script below refuses role `courier` at the door of database `billing`
-  # before a query is parsed — not because they are on different hosts.
-  #
-  # WHY THE IMAGE IS BUILT AND NOT PULLED. `postgres:17-alpine` cannot carry
-  # pgvector: pglayers publishes glibc-linked layers, and the alpine base is
-  # musl, so the extension fails to load at run time on an image that builds
-  # cleanly. Measured, with the output, in
-  # templates/compose/postgres/Dockerfile. The base is therefore `postgres:17`
-  # (Debian), which is the official image with exactly one extension layer on it.
   postgres:
     build:
-      # `POSTGRES_TAG` and `PGVECTOR_TAG` are ARGs, so a service raises them in
-      # its own compose override rather than kit shipping one version for nine
-      # services. Nothing is `:latest` and nothing floats.
-      #
-      # `${KIT_COMPOSE_DIR:-.}`, NOT `./`. This line and the initdb mount below
-      # were the only two bare-relative paths in this file, and the only two
-      # that were wrong, for the reason the other five services already carry:
-      # `bin/dev` runs compose with `--project-directory .` (the SERVICE root),
-      # and Docker Compose resolves a relative build context and bind source
-      # against the PROJECT DIRECTORY, not against the directory holding the
-      # compose file. `./postgres` therefore meant `<service>/postgres`.
-      # Measured, on identity, before this was fixed: the image still built -
-      # Docker creates a missing bind source as an empty DIRECTORY rather than
-      # failing - so the cluster came up, reported itself HEALTHY, and had run
-      # NO init script at all. No role, no database, no `REVOKE CONNECT`. The
-      # whole provisioning contract, absent behind a green health check.
       context: ${KIT_COMPOSE_DIR:-.}/postgres
       dockerfile: Dockerfile
       args:
         POSTGRES_TAG: ${KIT_POSTGRES_TAG:-17}
         PGVECTOR_TAG: ${KIT_PGVECTOR_TAG:-17-0.8.6}
-    # `image:` names the BUILT artefact so `docker compose` can reuse it across
-    # the several checkouts a developer runs on one laptop. Without it every
-    # checkout builds its own copy of an identical image.
     image: kit-postgres:${KIT_POSTGRES_TAG:-17}
     environment:
       POSTGRES_USER: ${KIT_POSTGRES_USER:-anywaye}
       POSTGRES_PASSWORD: ${KIT_POSTGRES_PASSWORD:-anywaye}
-      # The cluster's OWN database. It is not a service's: it holds cluster
-      # administration state and nothing a service reads. A service that wants
-      # a database names itself in KIT_POSTGRES_DATABASES below.
       POSTGRES_DB: ${KIT_POSTGRES_DB:-anywaye_platform}
-      # THE DECLARATION. Comma-separated; each name becomes BOTH a role and a
-      # database owned by that role. This is the input the init script reads,
-      # and it is the single place a service's database and role come from.
-      #
-      # A service adds ITS OWN name here and nothing else. It does not get a
-      # container, a port, or a volume — the point of one cluster is that the
-      # nine services share all three.
-      #
-      # NO `:-` FALLBACK, AND THAT IS THE POINT. This was
-      # `${KIT_POSTGRES_DATABASES:-courier}`, and `courier` is one service in this
-      # fleet, not a property of Postgres. A shared-infrastructure template that
-      # hardcodes a specific tenant's name as its default does two wrong things
-      # at once: every service that adopts kit without overriding this silently
-      # provisions COURIER'S database, and the value is then copied into every
-      # service's `.env` by `bin/dev`, which outranks the service's own committed
-      # declaration. Measured on identity: it asked for `identity` by name, the
-      # cluster provisioned `courier`, and identity had no database.
-      #
-      # The obvious repair — an EMPTY default — is also wrong, and the init
-      # script says so. Measured, by bringing this template up with the list
-      # empty: `10-cluster.sh:48` refuses it and the container exits 1 with
-      #   KIT_POSTGRES_DATABASES: KIT_POSTGRES_DATABASES is unset. Name the
-      #   services, comma-separated.
-      # which is the CORRECT outcome, because the alternative is a service whose
-      # migrations run against a database nobody created. The list is required,
-      # so compose passes it through with no default and the script's own
-      # message - which names the fix - is what a service that forgot to declare
-      # itself sees.
-      #
-      # Between the two bad defaults, this is the one that fails loudly and names
-      # the thing to change, instead of failing silently and pointing at a
-      # database belonging to somebody else.
       KIT_POSTGRES_DATABASES: ${KIT_POSTGRES_DATABASES}
-      # Extensions, created by the admin role into EVERY database above. They
-      # are a CLUSTER decision rather than a per-service one because the
-      # extension's binaries are in the image, so they are available to every
-      # service on the cluster whether or not anybody creates one. The list
-      # decides who pays the disk cost, and that is an operator's call.
       KIT_POSTGRES_EXTENSIONS: ${KIT_POSTGRES_EXTENSIONS:-vector}
-      # BLAST RADIUS, PER ROLE. These are the settings that only matter once
-      # the cluster is shared, and they are what replaces the isolation a pooler
-      # would have provided:
-      #
-      #   CONNECT LIMIT   one service cannot consume the cluster's connections.
-      #   statement_timeout      one service's runaway query cannot occupy
-      #                          shared resources until the cluster is unusable.
-      #   idle_in_transaction    one service's forgotten BEGIN cannot hold a
-      #                          snapshot open and block VACUUM for the other
-      #                          eight. On one database per machine this is one
-      #                          service's problem; on one cluster it is nine.
       KIT_POSTGRES_ROLE_CONNECTIONS: ${KIT_POSTGRES_ROLE_CONNECTIONS:-10}
       KIT_POSTGRES_STATEMENT_TIMEOUT_MS: ${KIT_POSTGRES_STATEMENT_TIMEOUT_MS:-15000}
       KIT_POSTGRES_IDLE_IN_TRANSACTION_TIMEOUT_MS: ${KIT_POSTGRES_IDLE_IN_TRANSACTION_TIMEOUT_MS:-30000}
-    # THERE IS NO POOLER, AND THAT IS A DECISION.
-    #
-    # `max_connections` is raised from Postgres's 100 and `superuser_reserved_
-    # connections` is left alone, because the answer to "one cluster for nine
-    # services" is a connection budget with a per-service cap rather than a
-    # pooler. The reasoning, the PgBouncer measurements behind it, and the
-    # driver-level flags this decision makes unnecessary are in
-    # templates/database/README.md; the short version is that PgBouncer's own
-    # documentation says the remedy for its worst failure mode is `RECONNECT`
-    # on its admin console after a DDL migration, and that is a manual step
-    # after every schema change in nine repositories.
-    #
-    # N is a FLOOR for the cluster, and `KIT_POSTGRES_MAX_CONNECTIONS` is
-    # checked against it: with nine services at the per-role limit above, 100 is
-    # not enough and raising it is the decision, not an accident.
     command:
       - "postgres"
       - "-c"
       - "max_connections=${KIT_POSTGRES_MAX_CONNECTIONS:-200}"
     ports:
-      # Host side is parameterized AND in kit's block; the container side is
-      # not, because the image is what fixes it. Only the host side is ever a
-      # collision. See the port block note at the top of this file.
       - "${KIT_POSTGRES_PORT:-15500}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # THE INIT SCRIPT. `docker-entrypoint-initdb.d` runs once, on a FRESH
-      # volume, which is why the provisions below appear to vanish after a
-      # `bin/dev nuke` and reappear after a `bin/dev down`: adding a service to
-      # KIT_POSTGRES_DATABASES does not provision its database until the volume
-      # is recreated. `bin/dev`'s `db grant` prints the statements for a new
-      # database rather than telling anybody to nuke their data.
-      #
-      # `${KIT_COMPOSE_DIR:-.}`, NOT `./`, and this one line is the whole
-      # difference between a cluster with per-service roles and databases in it
-      # and a cluster that has none. Read the failure rather than assuming it:
-      # with `./`, `bin/dev`'s `--project-directory .` (the service root) made
-      # this resolve to `<service>/postgres/initdb`, Docker created that as an
-      # EMPTY directory because a missing bind source is not an error, and the
-      # entrypoint logged one unread line and moved on. Measured on identity,
-      # unfixed: `/docker-entrypoint-initdb.d` empty inside a healthy container,
-      # `pg_roles` holding only the superuser, `pg_database` holding only
-      # `anywaye_platform`, and `docker compose up --wait` exiting 0. The
-      # service asked for a database by name and the cluster agreed, and no
-      # role, no database and no boundary was ever created.
       - ${KIT_COMPOSE_DIR:-.}/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      # A REAL QUERY, against the database this container actually has.
-      #
-      # This line was wrong for a long time and the comment above it said so out
-      # loud: "`pg_isready` alone returns true before the init scripts finish …
-      # The -U/-d pair makes it check the real thing." Measured, inside the
-      # container, against a database and a role that DO NOT EXIST:
-      #
-      #   $ pg_isready -U identity -d nosuchdb -q ; echo $?
-      #   0
-      #   $ psql -U identity -d nosuchdb -tAc 'select 1' >/dev/null ; echo $?
-      #   2
-      #
-      # `pg_isready` reports whether the server is ACCEPTING CONNECTIONS. Its
-      # `-U` and `-d` do not authenticate and do not select — they are
-      # diagnostics, and the readiness answer is 0 either way. So the `-U/-d`
-      # pair bought nothing, and the claim that this probe "makes it check the
-      # real thing" was decoration: the stack reported postgres ready on a
-      # container whose named database did not exist, which is the exact
-      # "migrations failed against a database that was not ready" flake the
-      # comment says it exists to prevent.
-      #
-      # `psql … -tAc 'select 1'` is what actually connects, authenticates as the
-      # role, and opens the named database. Against a database that does not
-      # exist it exits 2; against the real one it exits 0. That is the difference
-      # between a probe and a decoration.
-      #
-      # `$$`, because compose interpolates `$VAR` in this file before YAML is
-      # parsed, so quoting does not protect it — `$POSTGRES_USER` rendered as
-      # `-U ""`. `$$` renders one literal `$` and the container's shell expands
-      # it against the MERGED environment, which is what makes the probe follow a
-      # service that renamed its own database instead of checking kit's default
-      # inside someone else's container.
       test:
         - CMD-SHELL
         - pg_isready -q -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" &&
           psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc 'select 1' >/dev/null
       interval: 5s
       timeout: 3s
-      # retries * interval is the readiness budget: 30s to accept connections,
-      # 10s to become visibly unhealthy. Long enough for a first-time initdb on a
-      # cold volume, short enough that a hung postgres fails the stack quickly.
       retries: 6
       start_period: 10s
     networks: [platform]
 
-  # ----------------------------------------------------------------- nats + js
   nats:
-    # JetStream is the `-js` flag. Without it a service that publishes and then
-    # crashes loses the message, and courier's at-least-once guarantee quietly
-    # becomes at-most-once.
     image: nats:${KIT_NATS_TAG:-2.10.24-alpine}
     command:
       - "-js"
@@ -410,8 +240,6 @@ services:
     volumes:
       - nats-data:/data
     healthcheck:
-      # The monitoring port answers 200 only once the server is up, which is a
-      # stronger signal than a TCP connect to the client port.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
       interval: 5s
       timeout: 3s
@@ -419,130 +247,19 @@ services:
       start_period: 5s
     networks: [platform]
 
-  # -------------------------------------------------------------- nats stream init
-  #
-  # THE STREAM THE FLEET PUBLISHES TO, DEFINED ONCE, BY THE STACK.
-  #
-  # WHY THIS SERVICE EXISTS. Every anywaye service with an outbox publishes each
-  # event to a subject equal to its event type — `identity.user.created`,
-  # `billing.subscription.started` — with no mapping table and no prefix
-  # rewriting (core/docs/event-outbox.md: "No mapping table, no prefix
-  # rewriting"). The type IS the subject. And a subject no stream claims is a
-  # publish the broker neither acks nor refuses: it goes silent. The publisher
-  # bounds its publish, so the failure is loud rather than a hang, but the
-  # outcome is unchanged — the row stays in outbox_events with `attempts`
-  # climbing and no event ever leaves the table. courier receives nothing; the
-  # confirmation email in the sellable loop never arrives. This stack ran NATS
-  # with `-js` and defined no streams, so on a fresh clone the bus was a black
-  # hole. This service is the one line that closes it.
-  #
-  # WHY THE STACK DEFINES IT AND THE PUBLISHER DOES NOT. Choosing a stream name,
-  # a retention policy and a replication factor for the fleet's bus is a
-  # deployment decision, not a service's — the same reason kit owns the
-  # database topology and not the services. identity's outbox publisher
-  # deliberately creates no stream ("THE STREAM IS THE STACK'S, NOT THIS
-  # PACKAGE'S"), and that decision is correct and unchanged: a publisher that
-  # created its own stream would make the stream's shape a property of one
-  # service's deploy rather than of the bus everyone shares.
-  #
-  # THE STREAM'S SHAPE, AND EACH CHOICE:
-  #   name       anywaye — the fleet's name, and this stack's own default.
-  #   subjects   identity.>, billing.>, courier.>, muse.>, darkroom.> — one
-  #              prefix per publishing service, enumerated rather than a bare
-  #              `>`: a bare `>` would also claim `$JS.>`-style JetStream
-  #              internals and `$SYS.>` system traffic, and an enumerated list
-  #              makes the coverage auditable in one line. These five are the
-  #              services that publish today: identity, billing, courier and
-  #              muse are core's catalog (core/docs/event-naming.md), and
-  #              darkroom's manifest declares darkroom.asset.ready,
-  #              darkroom.asset.deleted and darkroom.variant.created.
-  #              NOT COVERED, deliberately: pantry (its manifest states it
-  #              publishes nothing — a read model, not a bus participant), core
-  #              (the specification repository, not a service; it has no outbox
-  #              and no NATS) and gateway (fleet.yml: `events: []`). An event
-  #              whose prefix is not covered does not leave the publisher's
-  #              outbox table: the broker is silent on that subject, `attempts`
-  #              climbs, and no consumer ever sees it. Adding a publisher is a
-  #              one-line edit here, in the diff — not a silent gap.
-  #   storage    file — the nats-data volume already exists and already
-  #              survives `bin/dev down`; memory storage would lose every
-  #              event on a restart and turn at-least-once back into
-  #              at-most-once, which is the regression the `-js` flag exists
-  #              to prevent.
-  #   retention  limits — bounded. Interest retention would keep a message
-  #              until every consumer acks it, which no dev stack needs and
-  #              which grows without bound.
-  #   max-age    7d — the replay window, and the guarantee a consumer's replay
-  #              rests on: a consumer that is down for more than a week loses
-  #              the events it missed. Stated here rather than discovered.
-  #   discard    old — when a limit is hit, the oldest messages go first. On a
-  #              bus the newest events are the ones that matter.
-  #   replicas   1 — one broker in this stack; a replica count on a single
-  #              node is a number that means nothing.
-  #   ack        on (the default, and the point): the broker acks each publish,
-  #              which is what makes a row's `published_at` mean "acknowledged"
-  #              rather than "handed to a client".
-  #   max-msgs / max-bytes  unlimited, deliberately. An arbitrary size or count
-  #              cap is a silent event loss that is hard to debug; the 7d age
-  #              bound above is the retention story, and it is a generous one.
-  #
-  # IDEMPOTENT BY CONSTRUCTION, AND THE MECHANISM. `docker compose up` runs
-  # this service every time, so a second run must be a no-op that still exits
-  # 0. The command is a check-then-create: `nats stream info anywaye` exits 1
-  # when the stream is absent (and 0 when it is present), so the `add` runs
-  # only on a broker that does not have the stream yet. A plain
-  # `nats stream add` is NOT idempotent — measured, against this image:
-  # "stream name already in use with a different configuration (10058)",
-  # exit 1 — so an init that only added would make every second `bin/dev up`
-  # red. Check-then-create was chosen over `nats stream update` because
-  # `update` cannot create: it needs the stream to exist first, which is the
-  # same chicken-and-egg in the other direction.
-  #
-  # `--defaults` IS LOAD-BEARING. Without it the CLI asks for confirmation
-  # and, with no terminal in a container, exits 1: "cannot ask for
-  # confirmation without a terminal". Measured.
-  #
-  # WHY IT WAITS FOR THE BROKER. `depends_on: nats: condition:
-  # service_healthy` — the nats healthcheck probes /healthz on the monitoring
-  # port, which answers 200 only once JetStream is up. Without it the init
-  # would race the broker and fail on a cold start.
-  #
-  # THE HEALTHCHECK is the one thing `up --wait` can wait for on a one-shot
-  # service: that the stream exists. The container's exit status is the other
-  # half — a failed `add` exits non-zero and `up --wait` fails the stack, which
-  # is the correct outcome for a stream that did not get created.
-  #
-  # THE IMAGE TAG, AND A CORRECTION. The GitHub release is tagged `v0.20.0`;
-  # Docker Hub's tag for the same release is `0.20.0` — the `v` is a GitHub
-  # convention, not part of the image tag, and `natsio/nats-box:v0.20.0` does
-  # not resolve (measured: "manifest unknown"). The pin below is the Docker
-  # Hub spelling of the release the manager verified.
   nats-stream-init:
     image: natsio/nats-box:${KIT_NATS_BOX_TAG:-0.20.0}
     environment:
-      # The CLI's own connection variable. The compose network reaches the
-      # broker by service name; localhost inside this container is not the
-      # broker.
       NATS_URL: nats://nats:4222
     depends_on:
       nats:
         condition: service_healthy
-    # A one-shot. `restart: "no"` is the compose default and is written out
-    # because the alternatives are worse than the absence: `unless-stopped`
-    # would re-run the init every time it exits, which is a no-op loop, and
-    # `always` would hide a failed add behind a restart. The container exits
-    # 0 on success and `up --wait` treats that as done; a non-zero exit fails
-    # the stack, which is the point.
     restart: "no"
     command:
       - sh
       - -c
       - 'nats stream info anywaye >/dev/null 2>&1 || nats stream add anywaye --subjects "identity.>,billing.>,courier.>,muse.>,darkroom.>" --storage file --retention limits --max-age 7d --discard old --replicas 1 --defaults'
     healthcheck:
-      # The stream exists — the one thing worth waiting for. `nats stream
-      # info` exits 1 while it does not (and, without a terminal, refuses to
-      # prompt for a stream to select), so a failing probe means "not yet",
-      # not "broken".
       test: ["CMD", "nats", "stream", "info", "anywaye"]
       interval: 5s
       timeout: 3s
@@ -550,12 +267,8 @@ services:
       start_period: 5s
     networks: [platform]
 
-  # --------------------------------------------------------------------- redis
   redis:
     image: redis:${KIT_REDIS_TAG:-7.4.1-alpine}
-    # Appendonly on: a cache that loses its writes on restart is fine, but the
-    # rate limiter and the idempotency keys in billing are not, and one flag here
-    # is cheaper than debugging a duplicate charge.
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${KIT_REDIS_PORT:-15800}:6379"
@@ -569,37 +282,12 @@ services:
       start_period: 5s
     networks: [platform]
 
-  # -------------------------------------------------------- otel collector
   otel-collector:
     image: otel/opentelemetry-collector-contrib:${KIT_OTEL_COLLECTOR_TAG:-0.115.1}
-    # No `ports:` on purpose. OTLP receivers accept spans from anything that can
-    # reach them; keeping this one off the host loopback is the whole privacy
-    # posture of the local stack. Services use
-    # http://otel-collector:${KIT_OTEL_HTTP_PORT:-4318} instead.
     command: ["--config=/etc/otel/otel-collector.yml"]
-    # REQUIRED, and easy to miss. otel-collector.yml interpolates its values from
-    # the collector's OWN process environment, not from the compose file's.
-    # Docker Compose reads .env to expand the placeholders in the compose file
-    # itself; it does not inject those into containers. Without this block every
-    # placeholder in the collector config resolves to an empty string and the
-    # collector exits with:
-    #
-    #   invalid configuration: processors::memory_limiter: 'limit_mib' or
-    #   'limit_percentage' must be greater than zero
-    #
-    # which names a memory limiter and not the missing environment, so it reads
-    # like a config error rather than the wiring error it is.
-    #
-    # Each value is `${KIT_*:default}` for the same reason as everything else in
-    # this file: one place to change it, and .env.example documents it.
     environment:
       KIT_OTEL_GRPC_ENDPOINT: ${KIT_OTEL_GRPC_ENDPOINT:-0.0.0.0:4317}
       KIT_OTEL_HTTP_ENDPOINT: ${KIT_OTEL_HTTP_ENDPOINT:-0.0.0.0:4318}
-      # The crash layer's intake. NOT published to the host and not a
-      # `${KIT_*}` port: it is the endpoint Docker's syslog log driver
-      # delivers to over the compose network, which is why every service below
-      # sets `logging:`. A host port here would be an unauthenticated log
-      # injection point for anything else on the machine.
       KIT_OTEL_SYSLOG_ENDPOINT: ${KIT_OTEL_SYSLOG_ENDPOINT:-0.0.0.0:15514}
       KIT_OTEL_MEMORY_LIMIT_PERCENTAGE: ${KIT_OTEL_MEMORY_LIMIT_PERCENTAGE:-75}
       KIT_OTEL_MEMORY_SPIKE_PERCENTAGE: ${KIT_OTEL_MEMORY_SPIKE_PERCENTAGE:-15}
@@ -610,113 +298,16 @@ services:
       KIT_OTEL_METRICS_FLUSH_INTERVAL: ${KIT_OTEL_METRICS_FLUSH_INTERVAL:-15s}
       KIT_TEMPO_OTLP_ENDPOINT: ${KIT_TEMPO_OTLP_ENDPOINT:-tempo:4317}
       KIT_LOKI_OTLP_ENDPOINT: ${KIT_LOKI_OTLP_ENDPOINT:-http://loki:3100/otlp}
-      # THE SINGLE-PANE BACKEND (traces, logs AND the derived span metrics).
-      # `clickstack` is the compose service below, behind its own profile; with
-      # the profile off this is a dead hostname and the exporter's silence is
-      # the accepted kind — the same class of absence as Tempo's above, which is
-      # why the exporter disables its queue and its retries like every other
-      # exporter in the config.
       KIT_CLICKSTACK_OTLP_ENDPOINT: ${KIT_CLICKSTACK_OTLP_ENDPOINT:-clickstack:4317}
-      # TWO backends now, not three, and the one that left is worth a note.
-      #
-      # THERE IS NO METRICS ENDPOINT VARIABLE ANY MORE. The metrics store cost
-      # 130 seconds of readiness budget per cold start (its own healthcheck:
-      # retries 12 x interval 10s), against a 180s deadline for the whole stack,
-      # and 384m of memory — for a set of series this fleet does not have, on a
-      # machine that is also running a compiler and a browser. It is REMOVED,
-      # not disabled: no service, no volume, no port, no `mimir.yaml`, and — the
-      # part that matters — no collector exporter still dialling `mimir:8080`.
-      # An exporter pointed at a host with nothing behind it is a connection
-      # refused per flush, forever, in a log nobody reads.
-      #
-      # The metrics pipeline still DERIVES span metrics, still runs the full
-      # redaction allowlist and the ingest deny set over them, and — since
-      # ClickStack arrived (see the `clickstack` service below) — now HAS a
-      # store again, arriving through exactly the edits this note described:
-      # the `KIT_CLICKSTACK_OTLP_ENDPOINT` variable above, the
-      # `otlp/clickstack` exporter, and the pipeline's `exporters:` line.
-      #
-      # The two remaining backends speak plaintext OTLP to each other inside the
-      # compose network. A self-hoster who terminates TLS does it here, and a
-      # literal endpoint never appears in the collector config.
       KIT_OTEL_TLS_INSECURE: ${KIT_OTEL_TLS_INSECURE:-true}
       KIT_OTEL_EXPORT_TIMEOUT: ${KIT_OTEL_EXPORT_TIMEOUT:-5s}
       KIT_OTEL_DEBUG_VERBOSITY: ${KIT_OTEL_DEBUG_VERBOSITY:-normal}
       KIT_OTEL_HEALTH_ENDPOINT: ${KIT_OTEL_HEALTH_ENDPOINT:-0.0.0.0:13133}
       KIT_OTEL_LOG_LEVEL: ${KIT_OTEL_LOG_LEVEL:-info}
-      # Not a `ports:` entry and not a published port. The collector publishes
-      # nothing to the host; these are the endpoints it BINDS inside the
-      # compose network, which is why the compose port check ignores values in
-      # an `environment:` block.
     volumes:
-      # `${KIT_COMPOSE_DIR:-.}` and not `./`. This file is no longer copied into
-      # the service, so a bare `./` is no longer the service's root — it is
-      # whatever `bin/dev` was told to run compose from, and `bin/dev` runs it
-      # from the service root so the service's own `build: context: .` resolves.
-      # The collector's config would then be looked for in the service, where it
-      # no longer is, and Docker creates an empty DIRECTORY at a missing bind
-      # source. The collector then exits with
-      #   failed to read configFile /etc/tempo/tempo.yaml: is a directory
-      # which names a file type and not the thing that is wrong. Found by
-      # RUNNING the stack; `docker compose config` renders the same project and
-      # every check in kit's gate was green.
-      #
-      # The default `.` is the directory holding THIS file, which is what it has
-      # always meant, and is what keeps a hand-copied stack working unchanged.
-      # `bin/dev` sets it to the fetched tree's compose directory. It is the
-      # COMPOSE directory and not the kit root, deliberately: naming it after the
-      # thing it points at rather than after the repository it came from is what
-      # makes the default and the fetched case the same path with a different
-      # prefix, rather than two different shapes.
       - ${KIT_COMPOSE_DIR:-.}/otel-collector.yml:/etc/otel/otel-collector.yml:ro
-    # Bounded, and the number is one a laptop can spare. The collector is the
-    # one process every service's telemetry passes through, so an unbounded
-    # one is a process that takes the whole dev machine with it and gets
-    # blamed for whatever else was running.
     mem_limit: ${KIT_OTEL_MEMORY_LIMIT:-384m}
     healthcheck:
-      # WHAT THIS ACTUALLY PROVES, because the comment that stood here described
-      # a stronger check than the command performs: it said the check was "the
-      # health_check extension's real endpoint, not `components`", while the
-      # command was `validate`. In a repository whose stated rule is that prose is
-      # load-bearing, a comment naming a check the code does not run is a defect,
-      # and the gap is here rather than elsewhere.
-      #
-      # IT PROVES: the collector config is still READABLE THROUGH ITS BIND MOUNT,
-      # and it parses. Both halves are load-bearing and neither is decorative.
-      # The mount is the thing that breaks: this cache directory is bind-mounted
-      # into running containers, and deleting it leaves the collector serving off
-      # the config it already has open while every NEW read of the mounted path
-      # fails `no such file or directory`. A healthcheck that re-reads the file
-      # reports that as unhealthy, which is correct — the read IS broken. Measured
-      # on this machine with seven containers up for three hours, and the failing
-      # probe then failed `bin/dev up` with `stack did not become healthy`, so the
-      # recovery path reported the fault the cache had caused. `bin/dev` now
-      # retires a replaced cache instead of deleting it; see
-      # REPORT-kit-cachemount-01.
-      #
-      # IT DOES NOT PROVE: that the pipelines are WIRED. `up --wait` waiting on
-      # this waits for "the config reads and parses", which is weaker than
-      # "the collector is serving". Stated plainly here so the next reader does
-      # not have to rediscover it from a mismatch.
-      #
-      # WHY NOT THE `health_check` ENDPOINT, which really is configured
-      # (`health_check:` at `templates/compose/otel-collector.yml`, bound to
-      # `${KIT_OTEL_HEALTH_ENDPOINT:-0.0.0.0:13133}`): the image is distroless and
-      # has no HTTP client to call it with. Measured on
-      # `otel/opentelemetry-collector-contrib:0.115.1` — the entire rootfs is
-      # `/otelcol-contrib`, `/etc/ssl/certs/ca-certificates.crt` and the usual
-      # empty `/proc`, `/sys`, `/dev` mounts: no shell, no `curl`, no `wget`, no
-      # `nc`. A compose `test:` in `CMD` form execs one binary, so the only
-      # candidate is `/otelcol-contrib` itself, and its entire command set is
-      # `completion`, `components`, `help`, `validate`. None of them opens a
-      # socket. `CMD-SHELL` would need the shell that is not there.
-      #
-      # So this stays, and it is not deleted: a container that is up and
-      # misreporting readiness is worse than one that reports nothing, and this
-      # catches a whole class of real failure. If a future collector image gains
-      # a client, the endpoint becomes reachable and this line should become that
-      # request — and the comment above it should change with it.
       test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel/otel-collector.yml"]
       interval: 10s
       timeout: 10s
@@ -772,33 +363,24 @@ services:
   # spans, not one that is unhealthy, and gating `up --wait` on Tempo would
   # make an observability backend a precondition for starting a database.
 
-  # --------------------------------------------------------------------- tempo
   tempo:
     image: grafana/tempo:${KIT_TEMPO_TAG:-2.7.2}
-    # NOT in depends_on for anything, and never in anyone's readiness path.
     command: ["-config.file=/etc/tempo/tempo.yaml"]
     volumes:
       - ${KIT_COMPOSE_DIR:-.}/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      # The HTTP/OTLP port, so a developer can open Tempo directly and read a
-      # raw trace. Container-side 3200 is Tempo's own HTTP+OTLP port.
       - "${KIT_TEMPO_PORT:-15900}:3200"
     mem_limit: ${KIT_TEMPO_MEMORY_LIMIT:-256m}
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
       interval: 5s
       timeout: 5s
-      # 12 * 5s plus a 5s start period is a 65s budget. Tempo initialises its WAL
-      # and waits for the ingester ring before reporting ready, and on a cold
-      # volume that is tens of seconds on a loaded laptop. A tighter budget here
-      # does not make the stack start faster; it makes it fail to start.
       retries: 12
       start_period: 5s
     profiles: [observability]
     networks: [platform]
 
-  # ---------------------------------------------------------------------- loki
   loki:
     image: grafana/loki:${KIT_LOKI_TAG:-3.2.1}
     command: ["-config.file=/etc/loki/loki-config.yaml"]
@@ -812,37 +394,20 @@ services:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
       interval: 5s
       timeout: 5s
-      # 12 * 5s plus a 5s start period. MEASURED, not guessed: Loki 3.2.1 takes
-      # ~16s to report ready from cold because it waits for the ring to
-      # stabilise before starting the compactor, and that is on an idle laptop.
-      # kit-02's 6 retries at 10s looked more generous and was not.
       retries: 12
       start_period: 5s
     profiles: [observability]
     networks: [platform]
 
-  # ------------------------------------------------------------------- grafana
   grafana:
     image: grafana/grafana:${KIT_GRAFANA_TAG:-11.3.0}
     environment:
-      # Bring your own password in .env; the default is a dev credential for a
-      # port on the developer's own machine and nothing else. The gate asserts
-      # every ${KIT_*} the stack interpolates is documented in .env.example with
-      # a non-empty default, so a fresh clone runs with no hand-written .env.
       GF_SECURITY_ADMIN_USER: ${KIT_GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${KIT_GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      # The whole point of the packet: provisioning is FILES, so a dashboard
-      # works on first load without anyone clicking it together by hand. A
-      # dashboard a self-hoster has to rebuild is not a dashboard we shipped.
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
-      # Anonymous view is the default a developer expects from a local stack.
-      # Bound to the compose network and the published 15000-range port only.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      # A dev stack should not phone home to a Grafana Cloud account or prompt
-      # about an upgrade. Both are one setting, and both are a self-hoster's
-      # first complaint.
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_NEWS_NEWS_FEED_ENABLED: "false"
@@ -878,26 +443,6 @@ services:
       test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
       interval: 10s
       timeout: 5s
-      # 6 × 10s plus a 5s start period, and MEASURED rather than guessed — the
-      # same discipline as the Tempo and Loki budgets above. The number is
-      # defensible because the cause of the slowness was removed rather than
-      # budgeted for: see `GF_INSTALL_PLUGINS_PREINSTALL_DISABLED` above. Grafana's
-      # first boot was downloading a plugin over the network and holding the
-      # sqlite lock while it did, which made this service take anywhere from 20s
-      # to over 180s to answer `/api/health` on a cold volume.
-      #
-      # With that gone, measured cold on a cold volume with all eight containers
-      # starting together, the endpoint first answers at ~26s, and the whole stack
-      # is up and healthy in 76s. Comfortably inside this 65s budget, so the
-      # budget is left exactly as it was.
-      #
-      # Worth recording because the wrong fix was available and looked entirely
-      # reasonable. A cold start failing against a 65s budget reads exactly like a
-      # flake, and the obvious response is to raise the retries. That would have
-      # hidden a network call inside the dev loop and left the loop unusable
-      # offline — which is the one thing this packet exists to make true. Found by
-      # RUNNING the fetched stack (tests/stack_live_test.sh); `docker compose
-      # config` renders the same project and every static check was green.
       retries: 6
       start_period: 5s
     profiles: [observability]
@@ -942,27 +487,12 @@ services:
     environment:
       USAGE_STATS_ENABLED: "false"
     ports:
-      # The HyperDX UI only. OTLP arrives via the collector, not here: a
-      # published 4317 would be an unauthenticated telemetry intake on the
-      # host, which is the exact thing the collector's no-ports note exists
-      # to prevent.
       - "${KIT_CLICKSTACK_PORT:-15910}:8080"
-    # The vendor's own floor is 1GB ("at least"); the cap is 2g because the
-    # container runs ClickHouse AND Mongo AND the UI process, and an uncapped
-    # ClickHouse on a laptop is a kernel OOM-kill of whatever else was running.
     mem_limit: ${KIT_CLICKSTACK_MEMORY_LIMIT:-2g}
     healthcheck:
-      # The UI, not the OTLP intake — the gate forbids probing 4317/4318, and
-      # a UI that answers is the thing `up --wait` is waiting for anyway.
-      # 127.0.0.1, not localhost: the image is Alpine, whose busybox wget
-      # resolves localhost to ::1 first, and the UI inside this container
-      # listens on IPv4 — `localhost` here is a healthcheck that reports
-      # connection refused against a perfectly healthy service. Measured.
       test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:8080/ || exit 1"]
       interval: 5s
       timeout: 5s
-      # ClickHouse initialises its own store inside the container on first
-      # boot; on a cold pull that is tens of seconds, not milliseconds.
       retries: 24
       start_period: 10s
     profiles: [clickstack]

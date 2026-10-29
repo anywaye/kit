@@ -27,7 +27,6 @@ from traceparent import new_span_id, new_trace_id, parse_traceparent, server_hop
 KNOWN_HEADER = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 KNOWN_TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
 KNOWN_PARENT = "00f067aa0ba902b7"
-# Fixed so every assertion below is an equality, not a shape check.
 FIXED_SPAN = "1111111111111111"
 
 BAD_HEADERS = {
@@ -50,8 +49,6 @@ class TraceparentTest(unittest.TestCase):
     reads the same whichever language it came from."""
 
     def test_known_traceparent_is_continued(self) -> None:
-        """The headline promise: a known traceparent comes out the other side
-        with its trace identity intact and a fresh span id (§3.4)."""
         hop = server_hop({"traceparent": KNOWN_HEADER}, FIXED_SPAN)
 
         self.assertEqual(hop.trace_id, KNOWN_TRACE)
@@ -63,14 +60,12 @@ class TraceparentTest(unittest.TestCase):
         out = hop.outbound_headers
         parsed = parse_traceparent(out["traceparent"])
         self.assertIsNotNone(parsed, "outbound traceparent did not parse")
-        assert parsed is not None  # narrows the type; the assert above is the test
         self.assertEqual(parsed.trace_id, KNOWN_TRACE)
         self.assertEqual(parsed.parent_id, FIXED_SPAN, "outbound parent-id is this hop's span id")
         self.assertTrue(parsed.sampled, "outbound trace-flags lost the sampled bit")
         self.assertEqual(parsed.version, 0, "we emit the version we implement")
 
     def test_unsampled_flag_is_preserved(self) -> None:
-        """§3.2.2.5.1: sampled is a recommendation, not a rule."""
         unsampled = f"00-{KNOWN_TRACE}-{KNOWN_PARENT}-00"
         hop = server_hop({"traceparent": unsampled}, FIXED_SPAN)
 
@@ -79,7 +74,6 @@ class TraceparentTest(unittest.TestCase):
         self.assertTrue(hop.outbound_headers["traceparent"].endswith("-00"))
 
     def test_second_hop_keeps_the_same_trace_id(self) -> None:
-        """Three services, one trace: hop N+1 keeps the trace-id hop N produced."""
         first = server_hop({"traceparent": KNOWN_HEADER}, "2222222222222222")
         second = server_hop(first.outbound_headers, "3333333333333333")
 
@@ -87,8 +81,6 @@ class TraceparentTest(unittest.TestCase):
         self.assertTrue(second.continued, "a traceparent this service just emitted must parse")
 
     def test_malformed_traceparent_starts_a_new_trace(self) -> None:
-        """Every one of these is garbage a proxy, a client library, or an attacker
-        will eventually send: start a new trace, silently, without an error."""
         for name, value in BAD_HEADERS.items():
             with self.subTest(header=name):
                 hop = server_hop({"traceparent": value}, FIXED_SPAN)
@@ -103,7 +95,6 @@ class TraceparentTest(unittest.TestCase):
                 )
 
     def test_missing_traceparent_starts_a_new_trace(self) -> None:
-        """§4.2: no traceparent received means a new trace."""
         hop = server_hop({}, FIXED_SPAN)
 
         self.assertFalse(hop.continued)
@@ -112,12 +103,10 @@ class TraceparentTest(unittest.TestCase):
         self.assertFalse(hop.sampled, "a trace this service started defaults to not-sampled (§3.2.2.5.1)")
 
     def test_tracestate_is_forwarded(self) -> None:
-        """§3.3: tracestate is opaque to us and MUST travel with the trace."""
         hop = server_hop({"traceparent": KNOWN_HEADER, "tracestate": "congo=t61rcWkgMzE"}, FIXED_SPAN)
         self.assertEqual(hop.outbound_headers["tracestate"], "congo=t61rcWkgMzE")
 
     def test_tracestate_is_truncated_at_whole_entries(self) -> None:
-        """§3.3.1.5: propagate at least 512 characters, truncating whole entries."""
         entries = [f"v{i:02d}={'x' * 30}" for i in range(60)]
         long = ",".join(entries)
 
@@ -131,7 +120,6 @@ class TraceparentTest(unittest.TestCase):
         self.assertTrue(out.startswith(entries[0]), "§3.3.1.5 drops entries from the end")
 
     def test_oversized_tracestate_entries_are_removed_first(self) -> None:
-        """§3.3.1.5: entries larger than 128 characters are removed first."""
         oversized = f"huge={'y' * 200}"
         hop = server_hop({"traceparent": KNOWN_HEADER, "tracestate": f"{oversized},small=1"}, FIXED_SPAN)
 
@@ -140,7 +128,6 @@ class TraceparentTest(unittest.TestCase):
         self.assertEqual(out, "small=1")
 
     def test_tracestate_without_a_valid_traceparent_is_discarded(self) -> None:
-        """§3.3 and §4.2: a tracestate with no valid traceparent MUST be discarded."""
         for value in ("", "not-a-traceparent"):
             with self.subTest(traceparent=value):
                 hop = server_hop({"traceparent": value, "tracestate": "congo=t61rcWkgMzE"}, FIXED_SPAN)
@@ -151,7 +138,6 @@ class TraceparentTest(unittest.TestCase):
                 )
 
     def test_header_names_are_case_insensitive_and_sent_lowercase(self) -> None:
-        """§3.2.1: accept the header name in any case, send it lowercase."""
         for name in ("traceparent", "TraceParent", "TRACEPARENT", "Traceparent"):
             with self.subTest(name=name):
                 hop = server_hop({name: KNOWN_HEADER}, FIXED_SPAN)
@@ -162,8 +148,6 @@ class TraceparentTest(unittest.TestCase):
             self.assertEqual(name, name.lower(), "§3.2.1: send the header name lowercase")
 
     def test_higher_version_is_downgraded_and_unknown_fields_are_not_forwarded(self) -> None:
-        """§3.2.4: parse positionally, then re-emit at version 00 without the
-        unknown fields."""
         future = f"cc-{KNOWN_TRACE}-{KNOWN_PARENT}-01-what-the-future-wants"
 
         parsed = parse_traceparent(future)
@@ -178,7 +162,6 @@ class TraceparentTest(unittest.TestCase):
         self.assertNotIn("what-the-future-wants", out, "§3.2.4: MUST NOT forward unknown fields")
 
     def test_trace_flags_are_a_bit_field(self) -> None:
-        """§3.2.2.5: mask on read, rebuild on write; §3.2.2.5.2: reserved bits zero."""
         hop = server_hop({"traceparent": f"00-{KNOWN_TRACE}-{KNOWN_PARENT}-03"}, FIXED_SPAN)
 
         self.assertTrue(hop.sampled, "bit 0 set means sampled; reading flags as a number is the classic bug")
@@ -188,7 +171,6 @@ class TraceparentTest(unittest.TestCase):
         )
 
     def test_new_identifiers_are_random_and_never_all_zero(self) -> None:
-        """§8: 16 and 8 random bytes, never all zeroes, never repeated."""
         seen: set[str] = set()
         for _ in range(256):
             trace_id = new_trace_id()

@@ -1,29 +1,4 @@
-# kit template — W3C Trace Context propagation for a Phoenix service.
-#
-# Copy traceparent.ex and this file into your service (`lib/<app>/telemetry/`
-# and `test/`), then `mix test test/test_traceparent.exs`. The suite is the
-# contract: it proves the template still continues a trace instead of quietly
-# restarting it.
-#
-# REFERENCE: W3C Trace Context, W3C Recommendation 23 November 2021
-# https://www.w3.org/TR/trace-context/ — every rule asserted below cites the
-# section that requires it.
-#
-# WHAT IT PROMISES
-#   - A valid inbound traceparent is continued: same trace-id, sampled flag
-#     preserved, parent-id replaced with this hop's span id (§3.4).
-#   - A missing or malformed traceparent starts a new trace and never raises. A
-#     request is not a 500 because its trace header was garbage.
-#   - tracestate travels with the trace, capped at 512 characters and truncated
-#     on whole-entry boundaries (§3.3.1.5).
-#
-# No dependencies: `:crypto`, `:public_key`, and ExUnit. The `:opentelemetry`
-# and `:telemetry` hex deps are referenced by version in
-# phoenix_telemetry.ex.snippet, not required here — kit has no dependencies and
-# this module must not grow one.
 
-# mix test starts ExUnit; running this file with plain `elixir` does not, so the
-# call is here and is a no-op when ExUnit is already running.
 ExUnit.start()
 
 defmodule KitOtel.TraceparentTest do
@@ -32,7 +7,6 @@ defmodule KitOtel.TraceparentTest do
   @known_header "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
   @known_trace "4bf92f3577b34da6a3ce929d0e0e4736"
   @known_parent "00f067aa0ba902b7"
-  # Fixed so every assertion below is an equality, not a shape check.
   @fixed_span "1111111111111111"
 
   defp headers(pairs), do: Map.new(pairs)
@@ -41,16 +15,10 @@ defmodule KitOtel.TraceparentTest do
     KitOtel.Traceparent.server_hop(headers(pairs), span)
   end
 
-  # Elixir spells booleans `sampled?`, which is correct in isolation and wrong
-  # here: a six-language suite with six spellings for one concept is a suite
-  # nobody keeps in sync. Both accessors below read like the other five
-  # templates' `sampled(hop)` / `outbound(hop)`.
   defp sampled(%{flags: flags}), do: Bitwise.band(flags, 0x01) == 0x01
   defp outbound(%{} = hop), do: KitOtel.Traceparent.ServerHop.outbound_headers(hop)
 
   test "known traceparent is continued" do
-    # The headline promise: a known traceparent comes out the other side with its
-    # trace identity intact and a fresh span id (§3.4).
     hop = hop(%{"traceparent" => @known_header})
 
     assert hop.trace_id == @known_trace
@@ -69,7 +37,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "unsampled flag is preserved" do
-    # §3.2.2.5.1: sampled is a recommendation, not a rule.
     hop = hop(%{"traceparent" => "00-#{@known_trace}-#{@known_parent}-00"})
 
     refute sampled(hop), "sampled flag must not be invented on an unsampled trace"
@@ -78,7 +45,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "second hop keeps the same trace id" do
-    # Three services, one trace: hop N+1 keeps the trace-id hop N produced.
     first = hop(%{"traceparent" => @known_header}, "2222222222222222")
     second = KitOtel.Traceparent.server_hop(outbound(first), "3333333333333333")
 
@@ -87,8 +53,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "malformed traceparent starts a new trace" do
-    # Every one of these is garbage a proxy, a client library, or an attacker
-    # will eventually send: start a new trace, silently, without raising.
     bad = [
       empty: "",
       not_a_header: "garbage",
@@ -116,7 +80,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "missing traceparent starts a new trace" do
-    # §4.2
     hop = hop(%{})
 
     refute hop.continued
@@ -126,14 +89,12 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "tracestate is forwarded" do
-    # §3.3: tracestate is opaque to us and MUST travel with the trace.
     hop = hop(%{"traceparent" => @known_header, "tracestate" => "congo=t61rcWkgMzE"})
 
     assert outbound(hop)["tracestate"] == "congo=t61rcWkgMzE"
   end
 
   test "tracestate is truncated at whole entries" do
-    # §3.3.1.5: propagate at least 512 characters, truncating whole entries.
     entries =
       for i <- 0..59 do
         "v#{String.pad_leading(Integer.to_string(i), 2, "0")}=#{String.duplicate("x", 30)}"
@@ -154,7 +115,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "oversized tracestate entries are removed first" do
-    # §3.3.1.5: "Entries larger than 128 characters long SHOULD be removed first."
     oversized = "huge=#{String.duplicate("y", 200)}"
     hop = hop(%{"traceparent" => @known_header, "tracestate" => "#{oversized},small=1"})
     out = outbound(hop)["tracestate"]
@@ -164,8 +124,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "tracestate without a valid traceparent is discarded" do
-    # §3.3 and §4.2: forwarding it would attach vendor state to an unrelated
-    # trace.
     for value <- ["", "not-a-traceparent"] do
       hop = hop(%{"traceparent" => value, "tracestate" => "congo=t61rcWkgMzE"})
 
@@ -175,7 +133,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "header names are case insensitive and sent lowercase" do
-    # §3.2.1: accept the header name in any case, send it lowercase.
     for name <- ["traceparent", "TraceParent", "TRACEPARENT", "Traceparent"] do
       hop = hop(%{name => @known_header})
       assert hop.trace_id == @known_trace, "header #{name} was not recognised"
@@ -189,8 +146,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "higher version is downgraded and unknown fields are not forwarded" do
-    # §3.2.4: parse positionally, then re-emit at version 00 without the unknown
-    # fields.
     future = "cc-#{@known_trace}-#{@known_parent}-01-what-the-future-wants"
     assert {:ok, tp} = KitOtel.Traceparent.parse(future)
 
@@ -207,7 +162,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "trace flags are a bit field" do
-    # §3.2.2.5: mask on read, rebuild on write; §3.2.2.5.2: reserved bits zero.
     hop = hop(%{"traceparent" => "00-#{@known_trace}-#{@known_parent}-03"})
 
     assert sampled(hop), "bit 0 set means sampled; reading flags as a number is the classic bug"
@@ -216,14 +170,6 @@ defmodule KitOtel.TraceparentTest do
   end
 
   test "new identifiers are random and never all zero" do
-    # §8: 16 and 8 random bytes, never all zeroes, never repeated.
-    #
-    # `seen` is THREADED through the loop with Enum.reduce, not rebound inside
-    # it. A `for`/`Enum.map` opens its own scope, so `seen = MapSet.put(seen, ..)`
-    # in the body would shadow the outer binding and the uniqueness assertion
-    # below would compare every draw against an empty set — green forever,
-    # checking nothing. That was the state this test was in; it is worth
-    # saying out loud because the shape is common in all six templates.
     {_traces, spans} =
       Enum.reduce(1..256, {MapSet.new(), MapSet.new()}, fn _i, {traces, spans} ->
         trace_id = KitOtel.Traceparent.new_trace_id()
@@ -243,7 +189,6 @@ defmodule KitOtel.TraceparentTest do
         {MapSet.put(traces, trace_id), MapSet.put(spans, span_id)}
       end)
 
-    # The assertion above is only meaningful if the set actually grew.
     assert MapSet.size(_traces) == 256
     assert MapSet.size(spans) == 256
   end

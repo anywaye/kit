@@ -1,20 +1,4 @@
 ---
-# yamllint config for every anywaye repo that keeps YAML in the tree.
-#   yamllint -c .yamllint.yml .
-#
-# STRICTNESS NOTES
-#   - We extend `default` and then re-tune three rules, on purpose:
-#       truthy         Actions spells its trigger key `on:`, which YAML 1.1
-#                      reads as a boolean. We allow `on` so workflows are not
-#                      littered with quotes; every other truthy stays flagged.
-#       line-length    120, not the default 80: Actions expressions and long
-#                      description strings are not artificially wrapped.
-#       document-start Every config file opens with `---` so a stray `---`
-#                      mid-file is a visible mistake, not a silent document.
-#   - Everything else is default-strict: trailing spaces, missing start space
-#     after `#`, duplicate keys, and bracket/indentation spacing all fail.
-#   - `comments-indentation` is on because our comments sit above the key they
-#     describe; a comment indented deeper than its key is always a mistake here.
 extends: default
 rules:
   truthy:

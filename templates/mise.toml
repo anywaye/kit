@@ -1,81 +1,25 @@
-# kit template — toolchain pins for a worktree. Copy to mise.toml (or
-# .mise.toml) in the service repo, then `mise install`.
-#
-# WHY THIS FILE EXISTS
-#   The moon workspace is polyglot: Go, Ruby, Elixir, Python, Node, and Rust
-#   repos sit side by side and a worktree must be able to prime itself without
-#   a global toolchain. mise is the one file both a laptop and CI read, so
-#   `bin/prime` and the CI job cannot disagree about a version.
-#
-# EVERY REPO PINS ITS OWN VERSIONS
-#   The versions below are PLACEHOLDERS — the ones kit dogfoods against while
-#   developing. They are deliberately not an org-wide lockfile:
-#     - A service is pinned to the version it deploys on. If kit's placeholder
-#       drifts, a service does not move with it.
-#     - A bump is a one-line diff in the service repo, reviewable on its own.
-#   Copy this file, then raise the values to what you actually ship. Do not
-#   treat the numbers here as a standard.
-#
-# HOW TO PIN (what the managers accept, cheapest first)
-#   "1.24"      a minor series, floating patch  — go, python, node, ruby
-#   "1.24.1"    exact, when a patch release is a support decision
-#   "stable" / "latest"  a moving target; only for tools CI also floats
-#   "prefix:1.2.3"       npm-style, e.g. "node": "lts/22"
-#
-# A rule that applies to every entry below: a tool MUST be installable by name.
-# A registry:version pin kit cannot resolve is a broken worktree, not a
-# stricter one.
 
 [tools]
-# ---------------------------------------------------------------- go (caf)
-# Floor, not a pin: keep this at or below the `go` directive in go.mod, and
-# raise it in the same commit that raises go.mod. golangci.yml's `run.go`
-# tracks this number too — the three must agree.
 "go" = "1.24"
 "gotestsum" = "1.12.0"
 
-# ------------------------------------------------------------ ruby (billing)
-# TargetRubyVersion in .rubocop.yml is a floor and must not exceed this.
 "ruby" = "3.4"
 "bundler" = "2.6.2"
 
-# ---------------------------------------------------------- elixir (courier)
-# Elixir and OTP are pinned together: an Elixir release is only supported on
-# the OTP versions its own CI runs, so bump the pair in one commit.
 "erlang" = "27.3.4"
 "elixir" = "1.18.3"
 "hex" = "1.0.2"
 
-# ---------------------------------------------------------- python (muse)
-# `uv` is the resolver of record; bin-prime and the CI job both use it and
-# fall back to pip only when it is absent.
 "python" = "3.13"
 "uv" = "0.5.11"
 
-# ---------------------------------------------------------- node (gateway/parlor)
-# The major is the supported line (22 = LTS). Pin a point release if a native
-# module forces you to; otherwise a major is one bump, not a per-patch PR.
 "node" = "22"
-"pnpm" = "9.15.4" # only if the repo ships pnpm-lock.yaml; delete otherwise
 
-# ------------------------------------------------------------- bun (gateway/parlor)
-# An EXACT pin, not a series, and the reason is a lockfile: bun.lock is a text
-# format whose resolver output is tied to the bun that wrote it, and a worktree
-# on a different patch resolves differently for the same manifest. Keep the
-# number in step with docker/Dockerfile.bun (BUN_VERSION) and `engines.bun` in
-# package.json — three places, one value.
 "bun" = "1.3.12"
 
-# --------------------------------------------------------- rust (darkroom)
-# Keep the toolchain triple in sync with docker/Dockerfile.rust: a worktree on
-# a newer rustc than the image builds on produces a binary CI never produced.
 "rust" = "1.84"
 "cargo-llvm-cov" = "0.6.13"
 
-# ------------------------------------------------- linters kit ships configs for
-# Present so `bin/prime` and a local lint agree with the CI lint step. Delete
-# the line for a language the repo does not use; an unused tool is just a slow
-# `mise install`.
 "golangci-lint" = "2.1.6"
 "rubocop" = "1.69.2"
 "ruff" = "0.8.4"

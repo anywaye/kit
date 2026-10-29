@@ -1,44 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2317
-#
-# local-cycle.sh — the substrate, on a cluster that is already on this machine.
-#
-#   bash templates/substrate/local-cycle.sh              # create or reuse, then run
-#   KIT_LOCAL_CLUSTER=anywaye-local bash templates/substrate/local-cycle.sh
-#
-# WHY THIS EXISTS
-#   The substrate install is a customer-box command: it provisions the host it
-#   runs on. A cycle against a VPS is therefore a wipe, a setup and an install,
-#   over SSH, against a machine on another continent — minutes per iteration
-#   and a full pass for every defect found. A developer with a local k3d cluster
-#   has the same target one command away, and `KIT_SUBSTRATE_KUBECONFIG` is the
-#   installer's entry for it (see install.sh's declaration: no k3s is installed
-#   on the host, steps 1-3 ask the cluster, everything else is the same code).
-#
-#   THIS SCRIPT IS THE DEVELOPER'S ENTRY, AND k3d LIVES HERE AND NOWHERE ELSE.
-#   The installer has no k3d dependency — it needs a kubeconfig and nothing
-#   more, because a customer with their own Kubernetes has a kubeconfig and no
-#   k3d. A git repository nested in a checkout is also not how anybody gets a
-#   cluster, so the kubeconfig this writes is a FILE IN A SCRATCH DIRECTORY,
-#   keyed to this worktree, and is removed when the machine tidies /tmp.
-#
-# WHAT IT DOES, IN ORDER
-#   1. creates the cluster if it is not there (or reuses it — a warm cycle is
-#      the number worth measuring, so reuse is the default),
-#   2. writes that cluster's kubeconfig to a scratch file and prints the API
-#      server it points at, so "which cluster did I just install into" is a line
-#      of output rather than an assumption,
-#   3. runs the installer HEADLESS against it — the same script, the same steps,
-#      the same guards, the same refusals, the same JSONL,
-#   4. prints the per-step table read back out of that JSONL, the wall clock,
-#      the receipt, and `kubectl -n argocd get applications` on the cluster.
-#
-# NOTHING HERE ADDRESSES A REMOTE BOX. Every command names the local cluster:
-# k3d talks to docker, the kubeconfig is written from the local k3d cluster's
-# own API endpoint, and the installer reads only that file. The script carries
-# no IP literal and no SSH — which `tests/substrate_test.sh` asserts, so a
-# future edit that reaches for a box's address is a red gate rather than a
-# surprise.
 
 set -euo pipefail
 
@@ -46,8 +6,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALLER="$ROOT/templates/substrate/install.sh"
 CLUSTER="${KIT_LOCAL_CLUSTER:-anywaye-local}"
 
-# Scratch, keyed to the worktree: two developers (or two worktrees of the same
-# repo) must not share one kubeconfig or one JSONL.
 WORK="${TMPDIR:-/tmp}/kit-local-cycle-$(basename "$ROOT")"
 mkdir -p "$WORK"
 
@@ -61,21 +19,6 @@ command -v k3d >/dev/null 2>&1 ||
 command -v kubectl >/dev/null 2>&1 || die "kubectl is not on PATH"
 [ -r "$INSTALLER" ] || die "no installer at $INSTALLER"
 
-# --- 1. the cluster ---------------------------------------------------------
-# REUSE IS THE DEFAULT, because a warm cycle is the one a developer runs
-# twenty times a day and the one whose wall clock has to be small. `create` is
-# only reached when the cluster is absent, and `--wait` means the create
-# returns with a Ready node rather than a shell prompt and a race.
-#
-# THE PRESENCE PROBE IS NOT A PIPE. `k3d cluster list -o json | grep -q name`
-# is the broken-pipe shape this repository has already been bitten by: `grep -q`
-# exits on its first match, k3d is still writing a multi-kilobyte document into
-# the pipe, it dies of SIGPIPE, and under `set -o pipefail` the PIPELINE reports
-# 141 — so an existing cluster reads as absent. Measured here, five identical
-# probes over a cluster that was there the whole time: one said CREATE. The
-# verdict is therefore read off a variable already in memory, and the cluster is
-# named by k3d's own JSON key rather than by a substring that could match a
-# network or an image volume.
 CLUSTER_JSON="$(k3d cluster list -o json 2>/dev/null || true)"
 case "$CLUSTER_JSON" in
   *"\"name\":\"${CLUSTER}\""*)
@@ -87,43 +30,14 @@ case "$CLUSTER_JSON" in
     ;;
 esac
 
-# --- 2. the kubeconfig ------------------------------------------------------
-# `k3d kubeconfig get` prints that cluster's kubeconfig on stdout and touches
-# nothing: never the ambient ~/.kube/config, whose current context is the
-# developer's and whose mutation would be a side effect nobody asked for, and
-# never a second git repository nested in a checkout, which is not how anybody
-# gets a cluster either. The file this writes is scratch, keyed to this
-# worktree, and is removed when the machine tidies its temporary directory.
 KUBECONFIG_FILE="$WORK/kubeconfig.yaml"
 k3d kubeconfig get "$CLUSTER" >"$KUBECONFIG_FILE"
 SERVER="$(kubectl --kubeconfig="$KUBECONFIG_FILE" config view -o jsonpath='{.clusters[0].cluster.server}')"
 printf 'local-cycle: kubeconfig %s -> %s\n' "$KUBECONFIG_FILE" "$SERVER"
 
-# --- 3. the substrate, headless, against that cluster -----------------------
-# Every value below is an OVERRIDABLE DEFAULT, not a decision: the operator's
-# own environment wins, so a cycle can be pointed at a different database list,
-# a different ACME address or a different issuer without editing this file.
 export KIT_SUBSTRATE_KUBECONFIG="$KUBECONFIG_FILE"
-# THE MANIFEST'S SET, not a shorter one the operator has to fix. It was
-# `identity,gateway,courier,parlor` while the Cluster provisions
-# `courier,gateway,identity,parlor`, so the installer's own refusal —
-# `KIT_SUBSTRATE_DATABASES does not match the Cluster manifest` — was the first
-# thing a developer met. A local cycle's list must be the list the tree ships;
-# a caller with a real box overrides it, which the `:-` still allows.
 export KIT_SUBSTRATE_DATABASES="${KIT_SUBSTRATE_DATABASES:-courier,gateway,identity,parlor}"
 export KIT_SUBSTRATE_ACME_EMAIL="${KIT_SUBSTRATE_ACME_EMAIL:-dev@anywaye.test}"
-# THE OPERATOR-SOURCED VALUES AS PLACEHOLDERS, and the reason is the step that
-# would otherwise refuse before reaching anything interesting. Step 9 refuses
-# without `KIT_SUBSTRATE_SMTP_*` and `KIT_SUBSTRATE_COURIER_INBOUND_RESEND_SECRET`,
-# correctly — a real box must be given the provider's own credentials — and a
-# local cycle has no relay to send through and no webhook to receive. These are
-# INERT: courier's adapter points at a host that does not resolve, so nothing is
-# ever delivered, and the point of the local cycle is everything except
-# delivery. `bin/launch` and its mailpit are how a developer reads mail locally;
-# this script's job is the substrate.
-#
-# A caller who has real values exports them and wins — every line is `:-`, so
-# the environment overrides.
 export KIT_SUBSTRATE_SMTP_ADAPTER="${KIT_SUBSTRATE_SMTP_ADAPTER:-smtp}"
 export KIT_SUBSTRATE_SMTP_HOST="${KIT_SUBSTRATE_SMTP_HOST:-smtp.invalid}"
 export KIT_SUBSTRATE_SMTP_PORT="${KIT_SUBSTRATE_SMTP_PORT:-587}"
@@ -143,11 +57,6 @@ EXIT_CODE=$?
 set -e
 ELAPSED=$(( $(date +%s) - START_MS ))
 
-# --- 4. what the run said ---------------------------------------------------
-# The table is READ BACK OUT OF THE JSONL, the same events a box emits, so a
-# local cycle and a VPS cycle are compared on one shape. A run that refused
-# mid-way has no `install.done`, and printing the step events it did emit is
-# the useful answer — the number a developer acts on is the step it died on.
 printf '\nlocal-cycle: %d seconds, exit %d\n' "$ELAPSED" "$EXIT_CODE"
 if grep -q '"event":"install.done"' "$JSONL"; then
   printf 'local-cycle: the substrate reached install.done on this cluster\n'

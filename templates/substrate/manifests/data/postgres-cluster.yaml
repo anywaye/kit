@@ -1,116 +1,12 @@
 ---
-# The substrate's Postgres: one CNPG Cluster, one database and two roles per
-# service — the local contract in `templates/compose/postgres/initdb/10-cluster.sh`,
-# reproduced through CNPG's own bootstrap.
-#
-# WHY NO CUSTOM IMAGE. The local stack overlays pglayers' pgvector layer onto
-# `postgres:17` because the official image does not carry pgvector (measured:
-# `CREATE EXTENSION vector` -> `extension "vector" is not available`). CNPG's
-# standard image already carries pgvector (alongside PGAudit, failover slots,
-# locales and LLVM JIT), so `spec.imageName` is deliberately UNSET: the default
-# is the standard image, `CREATE EXTENSION vector` works, and the substrate
-# needs no build step and no published artifact.
-#
-# THE SHAPE, and why it is two halves. CNPG bootstrap SQL runs once, at cluster
-# creation, as the superuser; `spec.managed.roles` is reconciled continuously by
-# the operator. So each half holds what it is good at:
-#
-#   postInitSQL (this file, inline)   databases, REVOKE/GRANT CONNECT, ALTER
-#                                     ROLE limits and timeouts, CREATE EXTENSION.
-#                                     Runs once at bootstrap, which is why every
-#                                     statement is a separate list item: psql
-#                                     batches consecutive statements into one
-#                                     implicit transaction, and CREATE DATABASE
-#                                     refuses inside one (`10-cluster.sh:209-214`
-#                                     carries the measured error). CNPG runs each
-#                                     list item separately, so the batching never
-#                                     happens — and that is why `postInitSQL`
-#                                     with CREATE DATABASE is a supported pattern
-#                                     rather than the transaction error above.
-#     AND the roles themselves, created. postInitSQL runs at bootstrap as
-#       the superuser BEFORE the operator reconciles spec.managed.roles —
-#       measured on the live box, which crash-looped postgres-1-initdb with
-#       `role "identity" does not exist` while running exactly the GRANTs
-#       below. So each service block below creates its two roles FIRST and
-#       only then names them in CREATE DATABASE / GRANT / ALTER: the order
-#       is by construction of the list, not by luck of the operator's
-#       timing. managed.roles reconciles the same roles afterwards
-#       (password from the secret, LOGIN, the inRoles membership), adopting
-#       the bootstrap-created roles — declarative management covers
-#       existing roles as well as new ones, so the CREATE here and the
-#       `ensure: present` below are the same role, not two.
-#       The CREATEs carry WITH LOGIN and nothing else: no password (a
-#       literal here would put a secret in the tree; step 8's secrets set
-#       it on reconcile), no membership (inRoles below owns that).
-#   spec.managed.roles (below)        the roles themselves, their LOGIN flags,
-#                                     their passwords (via passwordSecret, made
-#                                     by install.sh step 8), and the membership
-#                                     `GRANT <svc>_app TO <svc>` in its
-#                                     declarative form (`inRoles`). Reconciled on
-#                                     every operator pass, so a hand-edited
-#                                     membership heals rather than persists.
-#
-# THE SERVICE SET IS THE CONTRACT. The five services below (identity,
-# gateway, courier, parlor, billing) are the same five `install.sh`
-# step 8 requires `KIT_SUBSTRATE_DATABASES` to name, in the same spelling,
-# and the gate refuses a mismatch: a database the manifest does not
-# provision is a DATABASE_URL pointing at nothing. pantry, box and
-# keyholder are deliberately NOT among them: all three are
-# Anywaye-operated services the box reaches over HTTPS (pantry at
-# https://pantry.anywaye.com, the registry exchange at
-# KIT_SUBSTRATE_REGISTRY_URL, the control plane at KIT_SUBSTRATE_BOX_URL),
-# and each carries the reason in its own licence — pantry "runs on Anywaye
-# infrastructure" and may never run "as a second, forked catalog", box is
-# "never part of … the Kit deployment substrate", and keyholder requires
-# the operated control plane it exchanges against. Adding a fifth service
-# means extending this file, the step-8 check, and the recorded list in
-# `tests/substrate_test.sh` in the same commit.
-#
-# WHAT THIS REPRODUCES, line by line from 10-cluster.sh:
-#   per service svc: login owner role `svc` owning database `svc`; login role
-#     `svc_app` owning nothing; `GRANT svc_app TO svc` (the direction is the
-#     point: the owner may weaken itself to the app role, never the reverse).
-#   `REVOKE ALL ON DATABASE svc FROM PUBLIC`, then `GRANT CONNECT, TEMPORARY`
-#     to both roles. PUBLIC holds CONNECT by default; the REVOKE is the
-#     isolation, and a fixture with it removed must fail the gate.
-#   `ALTER ROLE svc CONNECTION LIMIT 10`, `statement_timeout = 15000`,
-#     `idle_in_transaction_session_timeout = 30000` on both roles. The app role
-#     deliberately carries NO connection limit: the limit is a service's SHARE
-#     of the cluster budget, and the service connects as `<svc>_app`.
-#
-# WHAT THIS DELIBERATELY DOES NOT REPRODUCE: per-database CREATE EXTENSION.
-# 10-cluster.sh creates the extension list (compose default: vector) inside
-# every service database, running as the cluster admin over one psql session
-# per database. CNPG's bootstrap hooks execute in the SINGLE initdb database
-# (`app` here): postInitSQL runs there as the superuser and cannot reach into
-# `identity`, and postInitApplicationSQL runs there as the non-superuser app
-# owner — which is REFUSED for an untrusted extension like vector
-# ("permission denied … Must be superuser"), failing the whole bootstrap. So
-# a `CREATE EXTENSION vector` in either hook is either useless or fatal, and
-# neither is in this file. The extension LIST is still declared and validated
-# (KIT_SUBSTRATE_POSTGRES_EXTENSIONS, default `vector`, in install.sh step 8),
-# none of the four launch services reads vector, and a service that needs an
-# extension is a named follow-up with the box to prove it on — see README.
-# Claiming per-database extensions here would be the green suite hiding a red
-# box.
-#
-# No secret VALUE is a literal anywhere in this file: role passwords live in
-# `postgres-role-<svc>` secrets made on the box by install.sh step 8, named
-# here by `passwordSecret` and nowhere else.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: postgres
   namespace: data
 spec:
-  # One box, one instance. Failover across nodes is not a property a single
-  # disk can have; backups (the reason DEPLOYMENT.md chose CNPG) are.
   instances: 1
 
-  # Explicit, and the numbers are the BOX's, not Postgres's. DEPLOYMENT.md
-  # sizes the box at 8GB comfortable / 4GB no longer qualifying; this request
-  # is a share of that box on a node that also holds four services, Redis and
-  # the observability stack — a starting point, not a measurement.
   resources:
     requests:
       memory: 256Mi
@@ -119,29 +15,10 @@ spec:
       memory: 1Gi
       cpu: 1000m
 
-  # k3s's default provisioner. The cluster keeps its data on the box's own
-  # disk; 20Gi is the box's disk budget for Postgres, not a Postgres sizing
-  # rule. There is no second disk to point at on one box.
-  #
-  # THE NAME IS `storage`, NOT `storageConfiguration`, and the rename is why
-  # this file once failed its own apply. `storageConfiguration` is CNPG's
-  # pre-1.24 spelling; the pinned operator (CNPG_VERSION in install.sh, v1.30.1
-  # at this commit) declares `spec.storage`, and its CRD is structural, so the
-  # API server refuses the object rather than dropping the unknown key:
-  #   Cluster in version "v1" cannot be handled as a Cluster: strict decoding
-  #     error: unknown field "spec.storageConfiguration"
-  # The fields under it are unchanged — `size`, `storageClass`,
-  # `resizeInUseVolumes` — only the parent's name moved. `tests/substrate_test.sh`
-  # §9b now grades every field here against the pinned CRD's own schema, so a
-  # name that version does not declare cannot pass the gate again.
   storage:
     size: 20Gi
     storageClass: local-path
 
-  # The cluster-wide connection budget the per-role CONNECTION LIMITs below
-  # divide up. Agrees with the local stack's KIT_POSTGRES_MAX_CONNECTIONS
-  # default of 200: the budget is one fact, and this file and the compose
-  # stack state it separately, so a change to one must change the other.
   postgresql:
     parameters:
       max_connections: "200"
@@ -150,14 +27,7 @@ spec:
     initdb:
       database: app
       owner: app
-      # One item per statement (see the header: no implicit transaction may
-      # ever wrap a CREATE DATABASE). Each service block is FIVE statements:
-      # two role creations, then database, boundary, limits. The roles the
-      # later statements name are created by the block's own first two
-      # statements — postInitSQL runs before managed.roles reconciliation,
-      # so nothing here may name a role it did not create above itself.
       postInitSQL:
-        # --- identity ---
         - CREATE ROLE "identity" WITH LOGIN
         - CREATE ROLE "identity_app" WITH LOGIN
         - CREATE DATABASE "identity" OWNER "identity"
@@ -169,7 +39,6 @@ spec:
         - ALTER ROLE "identity" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "identity_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "identity_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # --- gateway ---
         - CREATE ROLE "gateway" WITH LOGIN
         - CREATE ROLE "gateway_app" WITH LOGIN
         - CREATE DATABASE "gateway" OWNER "gateway"
@@ -181,7 +50,6 @@ spec:
         - ALTER ROLE "gateway" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "gateway_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "gateway_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # --- courier ---
         - CREATE ROLE "courier" WITH LOGIN
         - CREATE ROLE "courier_app" WITH LOGIN
         - CREATE DATABASE "courier" OWNER "courier"
@@ -193,7 +61,6 @@ spec:
         - ALTER ROLE "courier" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "courier_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "courier_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # --- parlor ---
         - CREATE ROLE "parlor" WITH LOGIN
         - CREATE ROLE "parlor_app" WITH LOGIN
         - CREATE DATABASE "parlor" OWNER "parlor"
@@ -205,12 +72,6 @@ spec:
         - ALTER ROLE "parlor" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "parlor_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "parlor_app" SET idle_in_transaction_session_timeout = '30000ms'
-        # --- billing ---
-        # billing joined the set on 2026-10-16: its Application arrived with
-        # the freeze-lift (2026-10-15) and its database arrives here, because
-        # an Application whose service has no DATABASE_URL is a pod in
-        # CrashLoopBackOff. The migration for it is install.sh step 10's third
-        # schema.
         - CREATE ROLE "billing" WITH LOGIN
         - CREATE ROLE "billing_app" WITH LOGIN
         - CREATE DATABASE "billing" OWNER "billing"
@@ -222,12 +83,6 @@ spec:
         - ALTER ROLE "billing" SET idle_in_transaction_session_timeout = '30000ms'
         - ALTER ROLE "billing_app" SET statement_timeout = '15000ms'
         - ALTER ROLE "billing_app" SET idle_in_transaction_session_timeout = '30000ms'
-  # The declarative half: every role, its login flag, its password secret, and
-  # the one membership. `inRoles: [<svc>_app]` on role `<svc>` IS the
-  # `GRANT <svc>_app TO <svc>` the local contract carries — the owner may
-  # become the weaker role, never the reverse. No `inRoles` on any `_app`
-  # role: the reverse membership would hand the application every privilege
-  # the owner has.
   managed:
     roles:
       - name: identity

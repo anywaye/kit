@@ -4,11 +4,6 @@ metadata:
   name: prometheus
   namespace: argocd
   annotations:
-    # The cluster-scoped kinds this chart creates, rendered with the pinned
-    # version below (defaults, --include-crds): ClusterRole +
-    # ClusterRoleBinding x2 (kube-state-metrics, server), no CRDs. The
-    # AppProject whitelists exactly these; §28 fails the run when the two
-    # disagree.
     anywaye.io/cluster-resources: "rbac.authorization.k8s.io/ClusterRole, rbac.authorization.k8s.io/ClusterRoleBinding"
   finalizers:
     - resources-finalizer.argocd.argoproj.io

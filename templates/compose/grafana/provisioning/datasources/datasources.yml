@@ -1,54 +1,16 @@
 ---
-# kit template — Grafana datasources, provisioned on first load.
-#
-# WHY THIS IS A FILE AND NOT A CLICK
-#   "A dashboard a self-hoster has to rebuild is not a dashboard we shipped"
-#   (PLAN.md §7b). Provisioned as files means `bin/dev up` produces a working
-#   observability stack with nothing configured, and means the datasource UIDs
-#   are stable — the dashboards reference them by UID, so renaming a datasource
-#   in the UI cannot silently break a provisioned panel.
-#
-# THE TWO LAYERS OF §7b THAT HAVE A STORE, IN ORDER
-#   tempo  traces        the redaction boundary's first stop
-#   loki   logs          the crash layer: every container's stderr, no SDK
-#
-# THE THIRD LAYER — metrics — HAS NO DATASOURCE, AND ITS ABSENCE IS THE POINT.
-#   Mimir was 130 seconds of readiness budget per cold start (retries 12 x
-#   interval 10s) against a 180s deadline for the whole stack. It left the stack
-#   entirely rather than being half-removed: no service, no volume, no port, no
-#   collector exporter pointing at a host with nothing behind it. The eleven
-#   panels that queried it went with it, and so did the two PromQL alert groups
-#   — a dashboard whose panels are permanently red is worse than a dashboard with
-#   fewer panels, because it teaches a reader that red means nothing.
-#
-#   Span metrics are still DERIVED (the `spanmetrics` connector) and still pass
-#   the same redaction allowlist; they go to the collector's own stdout. Putting
-#   a store back is ONE datasource here, one exporter in `otel-collector.yml`,
-#   and one `exporters:` line on the metrics pipeline.
-#
-# `uid` is what makes the difference. The dashboards below name `uid: tempo`
-# etc., so provisioning order does not matter and a rename in the UI is not a
-# broken dashboard.
 
 apiVersion: 1
 
 datasources:
-  # ------------------------------------------------------------------- traces
   - name: Tempo
     uid: tempo
     type: tempo
     access: proxy
     url: http://tempo:3200
-    # `isDefault` used to be on the metrics datasource, and the reason that is
-    # worth a line: a store removal that leaves Grafana with no default datasource
-    # at all breaks Explore for whoever opens it first, with an error about
-    # something the removal did not mention. Traces is the layer the fleet
-    # dashboard opens on, so it inherits the flag.
     isDefault: true
     editable: false
     jsonData:
-      # The stream of every trace, on the default traces-to-logs time range, so
-      # clicking through from a trace to its logs needs no configuration.
       tracesToLogsV2:
         datasourceUid: loki
         spanStartTimeShift: '-5m'
@@ -56,31 +18,14 @@ datasources:
         filterByTraceID: true
         filterBySpanID: false
         tags:
-          # Only these become search tags. core's log schema allows three
-          # attributes; a log store where every attribute is a label is a log
-          # store that runs out of streams, which is the reason core's log
-          # schema caps the attribute count at twelve.
           - key: service.name
             value: service_name
           - key: error.type
             value: error_type
-      # The reverse direction, and the one that makes an error in a log
-      # traceable to the request that caused it.
       nodeGraph:
         enabled: true
       search:
         hide: false
-      # The documented error workflow: filter on span STATUS, then break the
-      # result down. `error.type` is the drill-down inside a service, never the
-      # predicate — see the dashboard's own header comment.
-      #
-      # `serviceMap`, `tracesToMetrics` and `metrics` are NOT here any more and
-      # that is load-bearing rather than tidy: each named `datasourceUid: mimir`,
-      # and a Grafana that is handed a datasource uid nothing provisions degrades
-      # those features silently — the panel renders, the number is absent, and
-      # the dashboard does not say why. Removing a datasource means every
-      # reference to it goes in the same commit.
-  # --------------------------------------------------------------------- logs
   - name: Loki
     uid: loki
     type: loki
@@ -89,7 +34,6 @@ datasources:
     isDefault: false
     editable: false
     jsonData:
-      # Lines, not traces: a crash is a log record, and `spanId` is on a span.
       derivedFields:
         - name: TraceID
           matcherRegex: '"traceId":"(\w+)"'

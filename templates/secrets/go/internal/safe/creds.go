@@ -1,59 +1,3 @@
-// Package safe is the reference credential-bearing package: what a service's own
-// credential types look like once this harness has been pointed at them and has
-// stopped complaining.
-//
-// WHY IT IS A SEPARATE PACKAGE
-//
-//	The harness needs a subject to sweep and a counter-example to prove the sweep
-//	bites. Both are here, and both are reachable only from inside this module —
-//	Go's `internal/` rule means a service that copies the template cannot import
-//	this by accident, and `leaky` in particular is not something anyone should be
-//	able to reach by accident.
-//
-// WHAT "SAFE" MEANS HERE, PRECISELY, AND WHY IT IS PRECISELY THAT
-//
-//	This package's shape is not a matter of taste. It is the answer to a question
-//	that was measured rather than argued, because vector 1 caught the first two
-//	plausible answers and print_shape_test.go pins the whole table:
-//
-//	    value field,  unexported     LEAKS under %v %+v %#v %s %q %d
-//	    pointer field, unexported    safe under %v, and LEAKS under %s and %q
-//	    value field,  EXPORTED       LEAKS under every verb
-//	    pointer field, EXPORTED      safe under every verb          <-- this one
-//
-//	Three things in that table are counter-intuitive and all three are worth
-//	knowing before writing a credential type:
-//
-//	1. AN UNEXPORTED FIELD IS NOT PROTECTION. `fmt` reaches unexported fields
-//	   through reflection and prints their values. The field being lowercase buys
-//	   nothing against `%v`, and `%v` is in every log line in every service.
-//	   `-race` will not stop it and `go vet` will not mention it.
-//
-//	2. A `String()` METHOD ON THE FIELD'S TYPE IS IGNORED WHEN THE FIELD IS
-//	   UNEXPORTED. `fmt` cannot call a method on a value obtained from an
-//	   unexported field, so it falls back to reflection and prints the struct. A
-//	   redacting `String()` is real protection in an EXPORTED field and worth
-//	   nothing in an unexported one.
-//
-//	3. THE POINTER SHAPE IS NOT A FREE LUNCH. An unexported pointer field prints
-//	   an address under `%v`, which looks like the answer, and then `%s` and `%q`
-//	   walk the pointer and print the value anyway. A shape that is safe under the
-//	   verb everyone uses and unsafe under two others is worse than one that is
-//	   obviously broken, because it passes review.
-//
-//	So `Session.Token` below is EXPORTED. That reads like a mistake — an exported
-//	credential field is the thing every security review looks for — and it is the
-//	correct shape only because the field is a POINTER to a type that redacts in
-//	both String and GoString.
-//
-//	The better option, where it is available, is not to hold the credential at
-//	all: pass the *Token to the code that authenticates with it, and keep only
-//	the subject and the scopes in a struct that gets logged. Session
-//	demonstrates the shape for the cases where the credential genuinely has to
-//	travel with the type, and the harness needs a holder for vector 5 to have
-//	something to check.
-//
-// NO DEPENDENCIES. Stdlib only, so the whole harness runs with GOPROXY=off.
 package safe
 
 // Token is a credential.
@@ -104,15 +48,6 @@ type Session struct {
 	Scopes    []string `json:"scopes"`
 	ExpiresAt int64    `json:"expires_at"`
 
-	// Token is the credential, and it is EXPORTED. Read the package comment
-	// before changing that: it is exported because an unexported field is not
-	// protectable in Go, and an exported VALUE field leaks under every verb. It
-	// is a pointer to a redacting type, and that is the only shape that is safe
-	// under all of them.
-	//
-	// `json:"-"` is not decoration. Without it this type marshals a `token` key
-	// holding the credential, which is vector 2's finding, and an always-present
-	// key is vector 4's.
 	Token *Token `json:"-"`
 }
 

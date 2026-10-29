@@ -1,69 +1,4 @@
 #!/usr/bin/env bash
-#
-# kit's proof that `bin/dev` can FETCH the stack it runs.
-#
-#   bash tests/fetch_test.sh
-#
-# WHY THIS IS A SCRIPT AND NOT A SECTION OF validate.sh
-#   The claim is about a *git fetch succeeding*, a *branch being refused*, and
-#   an *offline run not touching the network*. None of that is a static property
-#   of a file, and all of it is a property of a real subprocess talking to a
-#   real remote. So it is executed, the same way `classify_test.sh` and
-#   `fingerprint_test.sh` are, and for the same reason: a check that only parsed
-#   `bin/dev` would pass on a script that fetches nothing.
-#
-# THE REMOTE IS LOCAL
-#   Every case here builds a bare repository from kit's own tree and fetches
-#   over `file://`. That is not a shortcut around the mechanism — `git fetch
-#   --depth 1 <remote> <ref>` is the same command either way, and the ref
-#   resolution, the shallow checkout, the cache and the offline refusal are all
-#   exercised for real. What it buys is that the suite needs no network, so a
-#   CI runner and a laptop on a train get the same answer, and a flaky network
-#   can never be mistaken for a broken gate.
-#
-#   The network path itself (https://github.com/anywaye/kit) is NOT proven here
-#   and the report says so: it is one `git ls-remote` away from being, but a
-#   gate that depends on github.com is a gate that goes red when github is down.
-#
-# THE NINE CLAIMS
-#   1. A PINNED ref (a 40-hex commit, or a `v<semver>` tag) fetches, and the
-#      resolved tree is byte-identical to the checkout it was fetched from.
-#   2. A MOVING ref (`master`, a branch name, an empty value, a short sha) is
-#      REFUSED — loudly, before any network call, naming what was wrong. This is
-#      the "a moving reference is a gate that changes under you" rule, and the
-#      refusal has to happen before `git fetch`, because by the time fetch has
-#      run the gate has already changed under you.
-#   3. OFFLINE (`KIT_STACK_OFFLINE=1`) with the cache warm runs, and says it came
-#      from the cache rather than from the network.
-#   4. OFFLINE with a cold cache and no remote FAILS LOUDLY and names the one
-#      thing that fixes it. It does not silently fall back to whatever is in the
-#      working directory, because "the stack that came up" being a different
-#      stack than the one you pinned is the whole failure.
-#   5. A VENDORED copy (`.kit/stack`) that DECLARES the pinned ref is accepted
-#      offline — that is the documented offline story, and it has to work or
-#      "use a vendored copy" is a sentence in a README rather than a mode.
-#   6. A vendored copy at a DIFFERENT ref is REFUSED. This is the drift the
-#      packet exists to remove, in the shape it takes when the copy is vendored
-#      instead of fetched: a directory that looks like a stack and is somewhere
-#      else. Accepting it silently is how an offline loop stops matching what
-#      the team runs.
-#
-#   7. `bin/dev pin` — the DELIBERATE upgrade, from a cold cache, printing a real
-#      stack diff rather than a claim that one cannot be computed.
-#   8. REPLACING a populated cache RETIRES the old tree instead of deleting it.
-#      This is the one that is not about `bin/dev` at all: the cache directory is
-#      bind-mounted into running containers, so deleting it leaves every container
-#      serving off descriptors it already holds while every NEW open through the
-#      mount path fails. See `REPORT-kit-cachemount-01` for the measurement
-#      and `templates/bin/dev.sh`'s retired-generations header for the mechanism.
-#   9. `up` composes from a SERVICE-OWNED snapshot (`.kit/live/<ref>`), never
-#      from the cache — so deleting the whole cache with the network forbidden
-#      still brings the stack up byte-identical. This is the live-mount half
-#      section 8 does not cover: section 8 keeps the old tree's INODES, this
-#      keeps the old tree's PATH out of the cache entirely.
-#
-# NO SLEEPS. Every wait is a poll with a deadline, and the only thing polled for
-# is this script's own subprocesses.
 
 set -euo pipefail
 
@@ -80,30 +15,9 @@ fail() {
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
-# ---------------------------------------------------------------------------
-# Fixtures: a bare "kit remote" built from this tree, and a service sandbox.
-# ---------------------------------------------------------------------------
-# Built from the REAL tree rather than from a hand-written stub, so the test
-# proves the thing ships: a fetched ref has to contain `templates/compose/`
-# with the vendor config trees in it, because that is what `bin/dev` then runs.
-# A stub with three empty files would pass and prove nothing about the real
-# artifact.
 REMOTE="$WORK/kit-remote.git"
-# Built from the WORKING TREE, not from HEAD. A `git clone --bare "$ROOT"` of a
-# tree with uncommitted changes produces a remote holding the last COMMIT, so
-# every "the fetched bytes are the shipped bytes" assertion below would compare
-# this packet's new files against the ones before them and fail for a reason
-# that has nothing to do with the mechanism. Three extra lines make the remote
-# contain exactly what is on disk, which is the only thing that makes the
-# comparison mean anything.
 SEED="$WORK/seed"
 mkdir -p "$SEED"
-# `tar` over the tree and NOT `git ls-files`, because this has to work in a
-# directory that is not a git repository — which is exactly what
-# `self_test.sh`'s throwaway copies are. It was `git ls-files`, and the
-# consequence was the sharpest failure mode this file could have: the self-test
-# CONTROL went red, because a break of nothing at all was reported as a broken
-# gate. A control that is red is not a control.
 (cd "$ROOT" && tar -cf - --exclude=./.git --exclude=./.venv --exclude=./__pycache__ .) |
   (cd "$SEED" && tar -xf -)
 git -C "$SEED" init -q
@@ -118,32 +32,14 @@ PIN_TAG_RC="v1.0.0-rc.1"
 git -C "$REMOTE" tag -f "$PIN_TAG" "$PIN_SHA" >/dev/null 2>&1
 git -C "$REMOTE" tag -f "$PIN_TAG_RC" "$PIN_SHA" >/dev/null 2>&1
 
-# A branch in the remote, for the "moving reference" cases. It has to EXIST, or
-# a refusal could be "no such ref" rather than "that is a branch" — and only the
-# second one proves the rule.
 git -C "$REMOTE" branch -f kit13-test-branch "$PIN_SHA" >/dev/null 2>&1
 
-# The service sandbox: kit's `bin/dev`, a `.env` naming the ref, and NOTHING
-# else. No `docker-compose.yml` of kit's, no `otel-collector.yml`, no `tempo/` —
-# those are the copy this packet removes, and a sandbox that still had them
-# would pass against a `bin/dev` that never fetched anything.
-#
-# $2 is the ref and $3 is the cache home. The cache home is a PARAMETER and not a
-# constant because the cold-cache case needs a genuinely cold one: with every
-# sandbox sharing `$WORK/cache`, the case before it had already warmed the cache
-# and "offline with a cold cache" passed on a warm one — which is a test that
-# proves the opposite of what its name says.
 make_service() {
   local dir="$1"
   rm -rf "$dir"
   mkdir -p "$dir/bin"
   cp "$ROOT/templates/bin/dev.sh" "$dir/bin/dev"
   chmod +x "$dir/bin/dev"
-  # The pin goes in `kit.ref`, a COMMITTED one-liner at the repository root —
-  # not in `.env`, which is git-ignored and would make the pin a per-machine
-  # secret. A fixture that put it in `.env` would pass against a `bin/dev` that
-  # reads it from either, and the difference is the whole point of the file
-  # existing: two people on the same commit must run the same stack.
   printf '%s\n' "${2-$PIN_SHA}" >"$dir/kit.ref"
   cat >"$dir/.env" <<ENV
 KIT_STACK_URL=file://$REMOTE
@@ -151,13 +47,6 @@ KIT_STACK_HOME=${3-$WORK/cache}
 ENV
 }
 
-# run_dev <service-dir> [args...] — run bin/dev, capture output and status.
-#
-# Never a bare `out=$(...)`: on its own that is an ASSIGNMENT, so `set -e` kills
-# this script before the status can be read, and every case below would report
-# the same nothing. `|| ec=$?` makes the command part of a list, which `set -e`
-# does not apply to. This is the same trap self_test.sh documents, and it is
-# worth a comment in two files rather than a bug in one.
 run_dev() {
   local dir="$1"
   shift
@@ -167,19 +56,12 @@ run_dev() {
   DEV_EC="$ec"
 }
 
-# The resolved directory, read out of the `resolved:` line. Parsed rather than
-# guessed at a path, so the assertion is about the script REPORTING where it
-# resolved — which is the interface other tooling will read — and not about this
-# test's idea of where that should be.
 resolved_path() {
   printf '%s\n' "$1" | sed -n 's/^resolved: //p' | head -1
 }
 
 printf -- '-- fetch: bin/dev resolves a pinned kit ref, and refuses a moving one\n'
 
-# ---------------------------------------------------------------------------
-# 1. A pinned commit fetches, and what arrives is what was pinned
-# ---------------------------------------------------------------------------
 one="$WORK/svc-sha"
 make_service "$one" "$PIN_SHA"
 run_dev "$one" stack
@@ -201,8 +83,6 @@ else
 fi
 
 if [ -n "$RESOLVED" ] && [ -d "$RESOLVED" ]; then
-  # Assert the resolved BYTES, not that a path was printed. "It printed a path"
-  # is not "it is the right bytes", and the second is the claim.
   if diff -q "$RESOLVED/templates/compose/docker-compose.yml" \
     "$ROOT/templates/compose/docker-compose.yml" >/dev/null 2>&1; then
     pass "the fetched compose file is byte-identical to the tree it was pinned to"
@@ -218,8 +98,6 @@ if [ -n "$RESOLVED" ] && [ -d "$RESOLVED" ]; then
   fi
 fi
 
-# The same, pinned to a TAG. A tag is a deliberate act by a human and resolves
-# to an immutable commit, so it is a legitimate pin; `master` is not.
 two="$WORK/svc-tag"
 make_service "$two" "$PIN_TAG"
 run_dev "$two" stack
@@ -234,10 +112,6 @@ else
   fail "a tag resolved to different bytes than the commit it points at"
 fi
 
-# A pre-release tag. `v1.0.0-rc.1` is a real tag a real project cuts, and a pin
-# rule that refused it would simply be pushed around — a branch would be used
-# instead, which is the exact thing the pin exists to prevent. Semver's own
-# grammar admits the suffix, so the validator does too.
 tag_rc="$WORK/svc-tag-rc"
 make_service "$tag_rc" "$PIN_TAG_RC" "$WORK/cache-rc"
 run_dev "$tag_rc" stack
@@ -248,11 +122,6 @@ else
   printf '%s\n' "$DEV_OUT" | tail -6 | sed 's/^/        /'
 fi
 
-# ---------------------------------------------------------------------------
-# 2. A moving ref is refused, BEFORE any network call
-# ---------------------------------------------------------------------------
-# `master` is the ref every one of these repos' CI already uses, so it is the
-# one that would actually be written by someone in a hurry.
 for bad in master kit13-test-branch ""; do
   three="$WORK/svc-bad-${bad:-empty}"
   make_service "$three" "$bad"
@@ -268,8 +137,6 @@ for bad in master kit13-test-branch ""; do
   fi
 done
 
-# A short sha is a moving reference wearing a sha costume: `git fetch` will
-# happily resolve it, and it is ambiguous across remotes.
 four="$WORK/svc-short"
 make_service "$four" "${PIN_SHA:0:7}"
 run_dev "$four" stack
@@ -279,15 +146,9 @@ else
   pass "an abbreviated sha is refused: it is ambiguous across remotes"
 fi
 
-# ---------------------------------------------------------------------------
-# 3. Offline with a warm cache runs, and says where it came from
-# ---------------------------------------------------------------------------
 five="$WORK/svc-offline-warm"
 make_service "$five" "$PIN_SHA"
 run_dev "$five" stack >/dev/null 2>&1 || true
-# Now REMOVE the remote. If offline mode consults it at all this case fails, and
-# that is stronger than unsetting a variable: a URL that 404s is a different
-# failure from a URL that is not there, and only one of them is a network.
 mv "$REMOTE" "$REMOTE.moved"
 run_dev "$five" stack
 if [ "$DEV_EC" -ne 0 ]; then
@@ -301,9 +162,6 @@ else
 fi
 mv "$REMOTE.moved" "$REMOTE"
 
-# ---------------------------------------------------------------------------
-# 4. Offline with a cold cache fails LOUDLY, and names the fix
-# ---------------------------------------------------------------------------
 six="$WORK/svc-offline-cold"
 make_service "$six" "$PIN_SHA" "$WORK/cache-cold"
 mv "$REMOTE" "$REMOTE.moved"
@@ -318,9 +176,6 @@ else
   pass "offline mode with a cold cache fails loudly and names the fix"
 fi
 
-# ---------------------------------------------------------------------------
-# 5. The vendored copy that DECLARES the pinned ref is accepted
-# ---------------------------------------------------------------------------
 git clone --quiet --depth 1 "file://$REMOTE.moved" "$six/.kit/stack" 2>/dev/null || true
 printf '%s\n' "$PIN_SHA" >"$six/.kit/stack/.kit-stack-ref"
 rm -rf "$WORK/cache-vendored"
@@ -336,9 +191,6 @@ else
 fi
 mv "$REMOTE.moved" "$REMOTE"
 
-# ---------------------------------------------------------------------------
-# 6. The vendored copy that does not declare the pinned ref is refused
-# ---------------------------------------------------------------------------
 seven="$WORK/svc-vendored-stale"
 make_service "$seven" "$PIN_SHA"
 git clone --quiet --depth 1 --branch "$PIN_TAG" "file://$REMOTE" "$seven/.kit/stack" 2>/dev/null || true
@@ -352,27 +204,10 @@ else
   pass "a vendored copy at a different ref is refused, not silently used"
 fi
 
-# ---------------------------------------------------------------------------
-# 7. `bin/dev pin` — the DELIBERATE upgrade
-# ---------------------------------------------------------------------------
-# The command exists for one reason: to show what changes before it writes the
-# pin. It is the only place a developer sees the consequence of the move, and the
-# first `bin/dev pin` is the first use and the most likely to BE the upgrade.
-#
-# Both assertions below are for bugs this file found by running the command rather
-# than by reading it.
 pin_service="$WORK/svc-pin"
 make_service "$pin_service" "$PIN_SHA"
 rm -rf "$WORK/cache-pin"
 
-# A ref whose stack really does differ, so "the diff is empty" cannot be what a
-# broken implementation produces. A second commit changes one line of the compose
-# file, and a tag is cut on it.
-# A SECOND remote, carrying a second commit, because the first version of this
-# built the second seed by copying `$SEED` — which the fixture block deletes once
-# the bare remote exists, so the copy failed and the script aborted rather than
-# asserting anything. A test that dies in its own setup asserts nothing at all,
-# and it looks exactly like a passing run that stopped early.
 PIN_SEED2="$WORK/seed2"
 git clone --quiet "$REMOTE" "$PIN_SEED2"
 printf '\n# kit-13 fetch_test: a change the pin diff must notice\n' \
@@ -390,9 +225,6 @@ if [ "$DEV_EC" -ne 0 ]; then
   fail "bin/dev pin to a second commit failed (exit $DEV_EC)"
   printf '%s\n' "$DEV_OUT" | tail -8 | sed 's/^/        /'
 elif printf '%s' "$DEV_OUT" | grep -q 'cannot be computed'; then
-  # The bug this asserts: on a COLD cache — the first use, and the one that
-  # matters — the command said it could not compute the diff and wrote the pin
-  # anyway. The whole reason the command exists was absent on its first run.
   fail "bin/dev pin gave up on the diff from a cold cache, which is the FIRST use"
   printf '%s\n' "$DEV_OUT" | tail -8 | sed 's/^/        /'
 elif ! printf '%s' "$DEV_OUT" | grep -q 'docker-compose.yml'; then
@@ -408,10 +240,6 @@ else
   fail "kit.ref does not end with the new sha: $(cat "$pin_service/kit.ref" | tr '\n' '|')"
 fi
 
-# The header it writes. A `printf 'text\n'` inside single quotes emits a literal
-# backslash-n, and two such lines run together into `# ...commit# sha, or...` —
-# a comment block that reads as one garbled line. Asserted on the SHAPE (every
-# comment line starts with `# `, none contains a second `#`), not on the wording.
 if grep -v '^#' "$pin_service/kit.ref" | grep -q '#'; then
   fail "a comment line in kit.ref contains a second '#' — two comment lines were written as one"
   sed 's/^/        /' "$pin_service/kit.ref"
@@ -419,9 +247,6 @@ else
   pass "the comment header bin/dev pin writes is one '#' per line"
 fi
 
-# The same ref is a no-op, and says so. Pinning to the ref you are already on is
-# not a move; answering it by fetching two copies of one commit would be a lie
-# about what happened.
 run_dev "$pin_service" pin "$PIN_SHA2"
 if [ "$DEV_EC" -ne 0 ]; then
   fail "bin/dev pin to the CURRENT ref exited $DEV_EC"
@@ -432,34 +257,6 @@ else
   pass "bin/dev pin to the ref already pinned is a no-op, and says so"
 fi
 
-# ---------------------------------------------------------------------------
-# 8. REPLACING a populated cache RETIRES it rather than deleting it
-# ---------------------------------------------------------------------------
-# The claim is the whole point of `fetch_stack`'s retired-generation machinery:
-# the tree a running container may be bind-mounted to must survive the fetch that
-# replaces it.
-#
-# It has to be asserted on the FILESYSTEM rather than on docker, because the two
-# halves of this claim live at different times. A bind mount resolves its source
-# when the container is CREATED, so a container that is already up is unaffected
-# by whatever `fetch_stack` does afterwards — what breaks is the NEXT open through
-# the mount path, and that is a property of whether the inodes are still linked.
-# Renamed: they are. Unlinked: they are not, and the open fails ENOENT. So the
-# assertion below is "the retired tree's files still open", which is the
-# filesystem statement of the container one, and it needs no daemon — a machine
-# with no docker gets the same answer.
-#
-# THE FIXTURE PUTS THE CACHE IN THE ONLY STATE THAT REACHES `fetch_stack` WITH
-# SOMETHING ALREADY THERE. `resolve_stack` returns early on a usable cache, so a
-# fetch on top of a populated directory happens only when that directory FAILS
-# `stack_is_usable`. Deleting `.kit-stack-ref` is the smallest edit that produces
-# that state, and it leaves the rest of the tree exactly as a running container has
-# it open — which is why the assertion below is about `grafana/provisioning/` and
-# the collector config rather than about the marker.
-#
-# Both halves are asserted. "A retired generation survived" on its own is
-# satisfied by a `fetch_stack` that never replaces anything, and "the new tree is
-# correct" on its own is satisfied by the delete this section exists to catch.
 retire="$WORK/svc-retire"
 make_service "$retire" "$PIN_SHA" "$WORK/cache-retire"
 run_dev "$retire" stack
@@ -471,8 +268,6 @@ if [ "$DEV_EC" -ne 0 ] || [ ! -f "$LIVE/templates/compose/docker-compose.yml" ];
 else
   pass "the cache is warm, and holds a complete tree at the pinned ref"
 
-  # The one edit, and nothing else in the tree is touched — so a red assertion
-  # below can only be about what the fetch did to it.
   rm -f "$LIVE/.kit-stack-ref"
 
   run_dev "$retire" stack
@@ -491,9 +286,6 @@ else
     pass "re-fetching over a populated cache replaces it, and the new tree is correct"
   fi
 
-  # THE ASSERTION. `find` rather than a name this test chose, because a bind mount
-  # does not care what a generation is CALLED — only that the files it resolved to
-  # still resolve.
   if [ -z "$RETIRED" ] || [ ! -d "$RETIRED" ]; then
     fail "the previous generation was DESTROYED, not retired. A container bind-mounted to it keeps serving off descriptors it already holds while every NEW open through the mount path fails ENOENT — which is how a stack that is working reports itself broken."
   elif [ ! -d "$RETIRED/templates/compose/grafana/provisioning" ] ||
@@ -509,32 +301,6 @@ else
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# 9. `up` composes from a SERVICE-OWNED snapshot, never from the cache
-# ---------------------------------------------------------------------------
-# Section 8 proved a REPLACEMENT retires the old tree. What it did not prove
-# is the path the RUNNING stack was rendered from: every `-f` and every bind
-# source still points into `<cache>/<ref>`, so anything that removes that
-# directory — a retention sweep, a cleaner, a hand — invalidates the live
-# mount while the containers are still up. Measured on a protected local
-# stack: the collector's bind source
-# `<cache>/<sha>/templates/compose/otel-collector.yml` gone, healthcheck
-# `open /etc/otel/otel-collector.yml: no such file or directory`, recovery
-# (`up --wait`) reporting the fault the cache had caused.
-#
-# So `up` snapshots the fetched compose subtree into `.kit/live/<ref>` — a
-# directory the SERVICE owns — and composes from there. The cache can then be
-# replaced, pruned or deleted outright without moving a byte any live mount
-# resolves to. The snapshot is content-addressed (ref recorded inside, bytes
-# compared before any rewrite), bounded (one directory per deliberate pin,
-# never rewritten for a fixed ref), and deterministic (a re-sync from the
-# same ref is byte-identical).
-#
-# No daemon: a stub `docker` records the `-f` paths and KIT_COMPOSE_DIR the
-# real `compose()` computed, and a stub `bin/migrate` lets the real `up`
-# run to its end. Asserted on the FINDING (which tree compose was pointed
-# at), never on the exit status — a script that dies before asserting
-# anything exits nonzero too.
 live9="$WORK/svc-live"
 make_service "$live9" "$PIN_SHA" "$WORK/cache-live"
 printf 'KIT_POSTGRES_DATABASES=svc9\n' >>"$live9/.env"
@@ -579,9 +345,6 @@ elif [ -n "$LIVE9_F" ]; then
 else
   fail "the stubbed docker saw no compose invocation, so nothing about the compose source was proven"
 fi
-# The recorded path is RELATIVE (compose runs with --project-directory . from
-# the service root), so the anti-assertion matters as much as the match: the
-# cache home must appear NOWHERE in what compose was pointed at.
 if printf '%s' "$LIVE9_F" | grep -qF "$WORK/cache-live"; then
   fail "compose was pointed into the cache home: $LIVE9_F"
 else
@@ -609,9 +372,6 @@ else
 fi
 LIVE9_SUM="$(find "$live9/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
 
-# THE CLEANUP. The whole cache goes away — the retention-sweep shape — and the
-# remote with it; offline is set so nothing may reach the network. A stack
-# rendered from the cache would now compose from paths that do not exist.
 rm -rf "$WORK/cache-live"
 mv "$REMOTE" "$REMOTE.moved9"
 : >"$FAKE_DOCKER_LOG"
@@ -637,17 +397,6 @@ else
 fi
 unset FAKE_DOCKER_LOG
 
-# ---------------------------------------------------------------------------
-# 10. m157 — safe stale retention + ignored derived snapshots + prune scope
-# ---------------------------------------------------------------------------
-# Three manager risks that m154 left:
-#   a) sync_live_stack's `rm -rf "$dest.stale"` before `mv "$dest" "$dest.stale"`
-#      deletes a generation an older stack still bind-mounts on repeated corruption.
-#   b) section 9's derived `.kit/live` snapshots must be ignored as a whole
-#      (`git status --untracked-files=all` after the fixture) and must not leave
-#      tracked/dirty state.
-#   c) legacy cache-mounted stacks remain affected by prune_generations until
-#      re-rendered; new snapshots must not enter that matcher (bounded limitation).
 live10="$WORK/svc-live10"
 make_service "$live10" "$PIN_SHA" "$WORK/cache-live10"
 printf 'KIT_POSTGRES_DATABASES=svc10\n' >>"$live10/.env"
@@ -671,11 +420,9 @@ if [ "${1:-}" = "compose" ]; then
 fi
 if [ "${1:-}" = "info" ]; then exit 0; fi
 if [ "${1:-}" = "ps" ]; then
-  # Report no containers by default — caller may override FAKE_MOUNTS.
   if [ -n "${FAKE_MOUNTS:-}" ]; then
     printf '%s\n' "$FAKE_MOUNTS"
   fi
-  # ps -aq returns container ids; inspect below handles them.
   if [ "${2:-}" = "-aq" ]; then
     if [ -n "${FAKE_PS_IDS:-}" ]; then printf '%s\n' "$FAKE_PS_IDS"; else printf ''; fi
     exit 0
@@ -683,14 +430,12 @@ if [ "${1:-}" = "ps" ]; then
   exit 0
 fi
 if [ "${1:-}" = "inspect" ]; then
-  # docker inspect --format '{{range .Mounts}}{{println .Source}}{{end}}' <ids>
   if [ -n "${FAKE_MOUNTS:-}" ]; then printf '%s\n' "$FAKE_MOUNTS"; fi
   exit 0
 fi
 exit 0
 DOCK
 chmod +x "$WORK/fakebin10/docker"
-# Warm a live snapshot.
 run_dev "$live10" stack >/dev/null 2>&1 || true
 export FAKE_DOCKER_LOG="$WORK/docker10.log"; : >"$FAKE_DOCKER_LOG"
 export FAKE_PS_IDS=""; export FAKE_MOUNTS=""
@@ -703,13 +448,6 @@ else
   fail "m157: live snapshot was not created"
 fi
 
-# 10a — repeated corruption must not delete a mounted .stale.
-# Simulate: snapshot exists at DEST, .stale already holds a generation that a
-# container is still mounted from. Present a fake docker whose mount source is
-# DEST (the pre-rename path) — this is what inspect reports after a rename, so
-# the stale's bytes are still mounted even though the path changed. Then corrupt
-# DEST (rewrite a file) and run `up` again. The fix must keep the old stale
-# (as .stale or .stale.<n>) and not `rm -rf` it.
 mkdir -p "$LIVE10_DEST.stale/templates/compose"
 printf '%s\n' "$LIVE10_REF" >"$LIVE10_DEST.stale/.kit-stack-ref"
 printf '*\n!.gitignore\n' >"$LIVE10_DEST.stale/.gitignore"
@@ -719,13 +457,10 @@ mkdir -p "$LIVE10_DEST.stale/templates/compose/loki"
 mkdir -p "$LIVE10_DEST.stale/templates/compose/grafana/provisioning"
 STALE_MARKER="$LIVE10_DEST.stale/mounted_marker"
 printf 'still-mounted\n' >"$STALE_MARKER"
-# Fake mount: absolute path to the LIVE dest (pre-rename inspect value).
 LIVE10_ABS="$(cd "$live10" && pwd)/.kit/live/$LIVE10_REF/templates/compose/otel-collector.yml"
 export FAKE_MOUNTS="$LIVE10_ABS"
 export FAKE_PS_IDS="c1"
-# Corrupt the current live snapshot so next `up` must rotate it.
 printf 'collector CORRUPTED live\n' >"$LIVE10_DEST/templates/compose/otel-collector.yml"
-# Also need cache to resolve: keep it warm so up does not fetch.
 : >"$FAKE_DOCKER_LOG"
 PATH="$WORK/fakebin10:$PATH" run_dev "$live10" up >/dev/null 2>&1 || true
 if [ "$DEV_EC" -ne 0 ]; then
@@ -734,8 +469,6 @@ if [ "$DEV_EC" -ne 0 ]; then
 else
   pass "m157: second up after corruption still exits 0"
 fi
-# Old stale must survive — either at .stale (if dest was not considered mounted)
-# or at .stale.<n> if it was. Either way the marker must still be readable.
 if [ -f "$LIVE10_DEST.stale/mounted_marker" ]; then
   if [ "$(cat "$LIVE10_DEST.stale/mounted_marker")" = "still-mounted" ]; then
     pass "m157: old .stale kept in place when corruption recurs (not deleted)"
@@ -743,7 +476,6 @@ if [ -f "$LIVE10_DEST.stale/mounted_marker" ]; then
     fail "m157: old .stale marker changed"
   fi
 elif ls "$LIVE10_DEST.stale".* >/dev/null 2>&1; then
-  # numbered rotation kept
   FOUND=""; for p in "$LIVE10_DEST.stale".*; do [ -f "$p/mounted_marker" ] && FOUND="$p" && break; done
   if [ -n "$FOUND" ] && [ "$(cat "$FOUND/mounted_marker")" = "still-mounted" ]; then
     pass "m157: old .stale preserved as numbered generation when mounted (at $FOUND)"
@@ -760,28 +492,23 @@ else
   fail "m157: repeated corruption deleted the previous stale that was still mounted"
   ls -R "$live10/.kit/live" 2>/dev/null | head -40 | sed 's/^/        /'
 fi
-# Snapshot after second up must still be usable and referenced by compose.
 if [ -f "$LIVE10_DEST/templates/compose/otel-collector.yml" ] &&
    [ -f "$LIVE10_DEST/.kit-stack-ref" ]; then
   pass "m157: new live snapshot is usable after safe rotation"
 else
   fail "m157: new live snapshot not usable after rotation"
 fi
-# Also verify `compose` still points at .kit/live, not cache, even after rotation.
 if grep -qF ".kit/live/$LIVE10_REF" "$FAKE_DOCKER_LOG" 2>/dev/null; then
   pass "m157: compose still points at .kit/live after safe rotation"
 else
   fail "m157: compose no longer points at .kit/live after rotation"
   cat "$FAKE_DOCKER_LOG" 2>/dev/null | sed 's/^/        /'
 fi
-# Reset fake mounts for next cases.
 export FAKE_MOUNTS=""; export FAKE_PS_IDS=""
 
-# 10b — derived snapshots must be ignored by git status in a real service repo.
 git10="$WORK/svc-git10"
 rm -rf "$git10"; mkdir -p "$git10"
 cp "$ROOT/templates/bin/dev.sh" "$git10/dev.sh"
-# Service .gitignore must ignore .kit/live as the root now does.
 cat >"$git10/.gitignore" <<'GI'
 .kit/cache/
 .kit/live/
@@ -789,7 +516,6 @@ GI
 git -C "$git10" init -q
 git -C "$git10" config user.email "t@example.invalid"
 git -C "$git10" config user.name "kit-m157"
-# Simulate a snapshot as `up` would create it.
 REF10="$LIVE10_REF"
 mkdir -p "$git10/.kit/live/$REF10/templates/compose"
 printf '%s\n' "$REF10" >"$git10/.kit/live/$REF10/.kit-stack-ref"
@@ -802,7 +528,6 @@ mkdir -p "$git10/.kit/live/$REF10/templates/compose/grafana/provisioning"
 printf 'tracked\n' >"$git10/README.md"
 git -C "$git10" add README.md .gitignore >/dev/null 2>&1
 git -C "$git10" commit -qm "init" >/dev/null 2>&1
-# Untracked check — .kit/live must not appear.
 if git -C "$git10" status --untracked-files=all --porcelain 2>/dev/null | grep -q "kit/live"; then
   fail "m157: .kit/live snapshot appears in git status --untracked-files=all (should be ignored)"
   git -C "$git10" status --untracked-files=all --porcelain | sed 's/^/        /'
@@ -814,17 +539,9 @@ if git -C "$git10" status --porcelain 2>/dev/null | grep -q "kit/live"; then
 else
   pass "m157: no tracked/dirty state from derived snapshot"
 fi
-# Also check with the old faulty inner-only pattern the snapshot's own .gitignore
-# would not hide the snapshot from the root without the outer line — the outer
-# line is what makes this PASS on a service that never had it before.
 
-# 10c — new snapshots must not enter prune_generations' matcher (bounded limitation).
-# prune_generations only walks `$KIT_STACK_HOME/.retired/$ref.*`. Create a fake
-# retired generation and a live snapshot for the SAME ref, then prune and assert
-# the live snapshot is untouched.
 prune10_home="$WORK/cache-prune10"
 rm -rf "$prune10_home"; mkdir -p "$prune10_home/.retired"
-# Fake cache ref dir and a retired generation that would be pruned.
 mkdir -p "$prune10_home/$LIVE10_REF/templates/compose"
 mkdir -p "$prune10_home/.retired/$LIVE10_REF.0/templates/compose"
 printf 'old\n' >"$prune10_home/.retired/$LIVE10_REF.0/templates/compose/docker-compose.yml"
@@ -834,10 +551,8 @@ mkdir -p "$prune10_home/.retired/$LIVE10_REF.2/templates/compose"
 printf 'old\n' >"$prune10_home/.retired/$LIVE10_REF.2/templates/compose/docker-compose.yml"
 mkdir -p "$prune10_home/.retired/$LIVE10_REF.3/templates/compose"
 printf 'old\n' >"$prune10_home/.retired/$LIVE10_REF.3/templates/compose/docker-compose.yml"
-# Live snapshot under the service (not under cache).
 live_prune="$WORK/svc-prune10"
 make_service "$live_prune" "$LIVE10_REF" "$prune10_home"
-# Provide a stub docker that reports no mounts, so prune may delete unmounted generations.
 mkdir -p "$WORK/fakebin-prune"
 cat >"$WORK/fakebin-prune/docker" <<'DOCKP'
 #!/usr/bin/env bash
@@ -850,18 +565,10 @@ if [ "${1:-}" = "inspect" ]; then exit 0; fi
 exit 0
 DOCKP
 chmod +x "$WORK/fakebin-prune/docker"
-# Source dev.sh helpers to call prune_generations directly in this service's context.
 (
   cd "$live_prune"
-  # Directly exercise the real prune loop with the same stub docker the live
-  # stack uses, but pointed at the isolated prune home. We inline the loop
-  # rather than sourcing dev.sh (which would run `main`) — the glob is what
-  # proves the scope: it walks "$HOME/.retired/$ref.*" and never matches
-  # ".kit/live".
   KIT_STACK_HOME="$prune10_home" PATH="$WORK/fakebin-prune:$PATH" bash -c '
     set -euo pipefail
-    # Replicate generation_home / generation_keep / mount_sources / generation_is_mounted
-    # minimally for this assertion (same semantics as dev.sh, stdlib only).
     stack_setting() { local n="$1" f="${2:-}"; local v; v="$(eval "printf '\''%s'\'' \"\${$n:-}\"")"; [ -n "$v" ] && { printf "%s" "$v"; return 0; }; v="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$n=" .env 2>/dev/null | tail -1 | cut -d= -f2- | sed -e "s/^[[:space:]]*//" -e "s/[[:space:]]*\$//" -e "s/^\"\(.*\)\"$/\1/" -e "s/^\x27\(.*\)\x27$/\1/" || true)"; [ -n "$v" ] || v="$f"; printf "%s" "$v"; }
     stack_home() { stack_setting KIT_STACK_HOME "${XDG_CACHE_HOME:-$HOME/.cache}/anywaye/kit"; }
     generation_home() { printf "%s/.retired" "$(stack_home)"; }
@@ -881,43 +588,21 @@ chmod +x "$WORK/fakebin-prune/docker"
     prune_generations "'"$LIVE10_REF"'"
   ' 2>&1 | head -20 || true
 )
-# Simpler assertion: the live snapshot path under live10 must still exist, and
-# the claim is that prune's glob "$HOME/.retired/$ref.*" never matches ".kit/live".
 if [ -d "$LIVE10_DEST" ]; then
   pass "m157: prune_generations glob does not match .kit/live snapshots (still present)"
 else
   fail "m157: .kit/live snapshot was removed by prune_generations"
 fi
-# Legacy limitation: a stack still mounting from the CACHE is still reachable by
-# the matcher (and its blind spot remains). We assert the scope: legacy is the
-# CACHE path, not the live snapshot. Count that prune could have touched cache
-# generations (it keeps 3 of 4, oldest deleted) but left live alone — honest bound.
 if [ ! -d "$prune10_home/.retired/$LIVE10_REF.0" ] && [ -d "$prune10_home/.retired/$LIVE10_REF.3" ]; then
   pass "m157: legacy cache generations are still prunable (bounded limitation until re-render)"
 else
-  # Not a hard fail — just note; prune may have kept all due to mount check.
   pass "m157: prune_generations scope is cache/.retired only, live is not in matcher"
 fi
-# m162: prune_generations scope is cache/.retired only, live is not in matcher
-# fi
 unset FAKE_DOCKER_LOG
 
-# ---------------------------------------------------------------------------
-# 11. m162 — `bin/dev live` resolves, snapshots, and reports .kit/live/<ref>
-# ---------------------------------------------------------------------------
-# The Kit/Site integration seam: Site's staged `bin/launch` calls
-# `templates/bin/dev.sh stack` and then composes using the shared cache
-# directly, so a cache retirement, prune or deletion moves a byte a live
-# mount resolves to. `up` already snapshots into `.kit/live/<ref>`, but
-# `stack` is read-only and `up` also starts containers. `live` is the
-# smallest Kit-owned command between them: `resolve_stack` + `sync_live_stack`
-# (reused, not duplicated) and a machine-readable `resolved: <path>` line a
-# launcher parses with `^resolved: ` — the path always the service-owned
-# `.kit/live/<ref>`, never the cache. No docker, no compose config noise.
 liveapi="$WORK/svc-live-api"
 make_service "$liveapi" "$PIN_SHA" "$WORK/cache-live-api"
 
-# 11a. `stack` is read-only: it resolves and creates no .kit/live.
 run_dev "$liveapi" stack >/dev/null 2>&1 || true
 if [ -e "$liveapi/.kit/live" ]; then
   fail "m162: bin/dev stack created .kit/live — stack must stay read-only"
@@ -926,7 +611,6 @@ else
   pass "m162: bin/dev stack creates no .kit/live (read-only)"
 fi
 
-# 11b. `live` prints `resolved: .kit/live/<ref>` on its machine-readable line.
 run_dev "$liveapi" live
 LIVE_API_RESOLVED="$(resolved_path "$DEV_OUT")"
 if [ "$DEV_EC" -ne 0 ]; then
@@ -938,7 +622,6 @@ else
   pass "m162: bin/dev live prints resolved: .kit/live/<ref>"
 fi
 
-# 11c. The snapshot contents match the pinned source byte for byte.
 if [ -d "$liveapi/.kit/live/$PIN_SHA" ] && \
   diff -rq "$WORK/cache-live-api/$PIN_SHA/templates/compose" \
     "$liveapi/.kit/live/$PIN_SHA/templates/compose" >/dev/null 2>&1; then
@@ -952,7 +635,6 @@ else
   fail "m162: the live snapshot records no ref"
 fi
 
-# 11d. A repeated call is idempotent: same bytes, snapshot left untouched.
 LIVE_API_SUM_BEFORE="$(find "$liveapi/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
 run_dev "$liveapi" live >/dev/null 2>&1 || true
 LIVE_API_SUM_AFTER="$(find "$liveapi/.kit/live/$PIN_SHA/templates/compose" -type f -exec cksum {} + 2>/dev/null | sort | cksum)"
@@ -967,8 +649,6 @@ else
   printf '%s\n' "$DEV_OUT" | tail -6 | sed 's/^/        /'
 fi
 
-# 11e. The machine-readable line survives human output: exactly one
-# `resolved:` line, and nothing compose-shaped on it.
 LIVE_API_COUNT="$(printf '%s\n' "$DEV_OUT" | sed -n 's/^resolved: //p' | wc -l | tr -d ' ')"
 if [ "$LIVE_API_COUNT" = "1" ]; then
   pass "m162: exactly one machine-readable resolved: line for callers to parse"

@@ -38,8 +38,6 @@ module Anywaye
     # tier :db — declares that every test in this class needs a real database.
     def tier(name)
       @tier = name
-      # GATE_VARIABLE is the name the reusable workflow demands. It is derived
-      # rather than written so a tier and its gate variable cannot disagree.
       const_set(:TIER, name)
       const_set(:GATE_VARIABLE, :"REQUIRED_#{name.to_s.upcase}")
     end
@@ -61,8 +59,6 @@ class TierDbTest < Minitest::Test
   # format's <test-id> is in every language here: whatever the runner's collector
   # already calls the test, so there is no mapping table to keep in step.
   def test_tier_db_pool_round_trips
-    # REQUIRED_DB=1 turns a missing DSN from a skip into a failure. A skip is a
-    # green run that never opened a connection.
     dsn = ENV.fetch("TEST_DATABASE_URL", nil)
     if dsn.nil? || dsn.empty?
       if ENV["REQUIRED_DB"] == "1"
@@ -73,8 +69,5 @@ class TierDbTest < Minitest::Test
     end
 
     assert dsn.start_with?("postgres"), dsn
-    # The part only an assertion inside the test can prove: everything outside
-    # this method can prove "the db tier ran", nothing outside it can prove
-    # "the db tier reached postgres".
   end
 end

@@ -1,141 +1,4 @@
 #!/usr/bin/env python3
-"""Does an adopting service's copy of the substrate still match kit's?
-
-    python3 tests/substrate_copy_check.py ../identity ../darkroom
-    python3 tests/substrate_copy_check.py --fleet /Users/kaka/Code/any/anywaye
-
-WHY THIS EXISTS, AND WHAT IT WOULD HAVE CAUGHT
-
-  `templates/database/tenancy/substrate.sql` is COPIED into a service's
-  migrations, unlike everything under `templates/compose/` which is fetched at
-  a pinned ref. A copy can drift, and one measured copy did: identity's
-  `migrations/00016_account_isolation.sql` embedded a pre-kit-rls-advisor-02
-  `credential_tables()` whose deparsing query returned ZERO ROWS for the role
-  an operator audits credentials as — an empty result indistinguishable from a
-  correct one. Identity found it, wrote the correction into
-  `migrations/00017_credential_audit_dependencies.sql`, and then wrote down the
-  gap this file closes (`internal/platform/ci/substrate_copy_test.go`): the
-  property "this copy equals kit's bytes" needs kit's half of the comparison,
-  "a change in `caf` and `kit`, not one identity should fake with a sha256sum
-  somebody keeps by hand."
-
-  This is kit's half. It reads kit's template as the source of truth and each
-  given repository's adopted copy, and it fails BY NAME when the copy is
-  missing a function, or carries a function whose semantics differ.
-
-THE THREE SHAPES OF ADOPTER, measured rather than imagined
-
-  standalone  a file named `substrate.sql` (inbox keeps `db/tenancy/
-              substrate.sql` byte-identical and reads it from its migration).
-              A standalone file's whole point is that a shasum against kit's
-              template is a valid verdict, so it gets the STRONGEST verdict:
-              byte equality. Any difference is a FAIL, comment or not — but
-              "not identical" is not a diagnosis, so a drifted standalone copy
-              is ALSO compared function by function and the missing/changed
-              functions are NAMED. Measured on courier before this rule: the
-              byte verdict could only say "first difference at line 71" (a
-              comment word) while four functions were absent, so the strictest
-              verdict was telling its reader the least. The byte FAIL stays:
-              it is the shape's promise and the only verdict a shasum can
-              reproduce. The name-level pass is the diagnosis beside it.
-
-  embedded    `create or replace function anywaye.*` blocks living inside a
-              service's own migration files (identity, darkroom). Compared
-              function by function: semantics must match, comments need not.
-              The reason for the asymmetry with standalone is the promise the
-              shape makes — "this file IS the substrate" versus "the substrate
-              is embedded here, next to our own migrations and notes".
-
-  neither     no adopted copy found. Reported and not failed: a service that
-              has not adopted the substrate is not drifting from it. Adoption
-              is measured by two predicates and only two — a file named
-              `substrate.sql`, or a `anywaye.*` function definition in a
-              non-test SQL file. A bare `create schema if not exists anywaye`
-              is NOT one of them: earlier prose here claimed it was, and a
-              repository holding only that line was measured to report no
-              adopted copy. Treating the line as adoption would either report
-              agreement with nothing or fire twelve MISSING FAILs at a
-              repository that never carried the substrate; the `schema-only`
-              fixture in tests/substrate_copy_test.sh pins the measured answer.
-
-KIT'S OWN TEMPLATE DIRECTORY IS NOT A SHAPE OF ADOPTER, measured
-
-  A fleet run walks every checkout, kit's included, and kit's tree carries
-  `templates/database/tenancy/advisor.sql` — a SIBLING template that happens
-  to define `anywaye.*` functions too. Graded as an adopted copy it reported
-  all twelve substrate functions MISSING on every single run, and a FAIL that
-  always fires on the template's own repository is how a reader learns to
-  scroll past FAILs — which is exactly how courier's real drift stayed
-  unread. So a `.sql` file whose DIRECTORY is kit's template directory (by
-  path relative to the repository root, so a kit worktree running --fleet
-  still recognises the main checkout's template directory) is a template, not
-  a copy: not read, named in the output as not read, never silently counted
-  clean.
-
-  The rule is the directory rather than the whole repository on purpose — a
-  blanket "skip kit" would also skip a real adopted copy if kit ever carried
-  one, and this checker's failure mode must never be a blind spot that looks
-  like agreement.
-
-THE COMPARISON RULES, in the order they apply
-
-  1. Goose `-- +goose Up` sections only. A Down section in a migration
-     restores a PREVIOUS definition (identity's 00017 does exactly this), so a
-     scanner taking the last definition in the whole file reports a body drift
-     that the database never sees. Measured on identity before this rule
-     existed: false body drift in `credential_tables`.
-  2. Last definition wins, across files in sorted path order. Services add
-     functions in later migrations (identity: 00016 then 00017 then 00018),
-     and the numbered prefixes make lexicographic order the apply order.
-  3. Bodies are compared with SQL comments stripped and whitespace collapsed
-     OUTSIDE string literals — the same discipline `tests/validate.sh` applies
-     to the contract's required tokens, and the reason is measured: kit's own
-     comments inside these bodies quote the SQL around them, so a text compare
-     would pass on a body whose code was deleted. String literals are tracked
-     so that whitespace INSIDE a string (a GUC name, an error hint) is
-     preserved: those bytes are semantics.
-  4. A difference that is only comments (or formatting) is REPORTED by name and
-     does not fail. Measured on darkroom: it rewrote a comment inside
-     `protect_credential_table` to describe its own test suite, and the SQL is
-     identical. A check that fires on correct work teaches its reader to
-     ignore it, so this is a report. The limit is stated rather than hidden: a
-     comment CAN carry a false claim, and this checker cannot grade prose.
-  5. Extra `anywaye.*` functions in the repository are REPORTED, not failed.
-     Services legitimately add their own helpers, and this checker cannot tell
-     a helper from a substrate function kit has since renamed.
-
-  These five rules are ONE implementation shared by both shapes — the embedded
-  pass and the name-level pass over a drifted standalone copy — because a
-  second comparison would be a second thing to keep true, and the two shapes
-  disagreeing about what "the same function" means is worse than either one
-  being wrong alone.
-
-WHY `--fleet` IS A DOCUMENTED COMMAND AND NOT A GATE ROW
-
-  This repository had a `tests/fleet_check.py` that read sibling repositories,
-  and it was removed in commit 8ac8d41 ("kit grades kit: remove every check
-  that read another repository", DECISIONS.md MD36) for two measured reasons:
-  a clone of kit has no siblings, so every CI run took the fleet-absent branch
-  and reported SKIP; and a check whose subject is somebody else's repository is
-  not kit's to run. What MD36 kept is checks whose subject is THIS tree, which
-  is why kit's gate exercises this checker against fixtures
-  (`tests/substrate_copy_test.sh`) and the fleet run stays a deliberate command
-  a person types. Running it against the fleet is a report, never a gate row.
-
-WHAT THIS CHECKER CANNOT DO, named so a later reader does not have to discover
-  * It cannot see whether a service APPLIED its copy — only that the copy in
-    the tree is the substrate. Deployment state is not in the repository.
-  * It cannot compare a failed-to-parse copy: a file whose function blocks do
-    not close with the same dollar-quote tag is reported as unreadable, never
-    silently compared as empty. A check that reads nothing reports agreement
-    with nothing.
-  * It reads `.sql` files only. A service embedding the substrate in another
-    language's heredoc is a shape nobody has hit; if one appears, add it here
-    rather than letting the not-adopted branch explain it away.
-
-Exit status: 0 clean, 1 drift (the fleet's verdict), 2 usage or unreadable
-input (a path that does not exist is an error, not a clean repository).
-"""
 
 import hashlib
 import os
@@ -144,33 +7,14 @@ import sys
 
 KIT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(KIT_ROOT, "templates", "database", "tenancy", "substrate.sql")
-# Every `.sql` file in this directory is a template (advisor.sql and
-# isolation.sql are), never an adopting service's copy of one — see the
-# measured note in the docstring. The comparison is the directory's path
-# RELATIVE to the repository root, not an absolute one: a kit worktree running
-# `--fleet` grades the main checkout, whose realpath differs but whose
-# templates/database/tenancy/ is the same directory in the same tree layout.
 TEMPLATE_REL_DIR = os.path.relpath(os.path.dirname(TEMPLATE), KIT_ROOT)
 
-# Directories that are never the deployed copy: dependencies, build output and
-# the gate's own caches. Names, not paths, because services lay their trees out
-# differently and a path list is one more thing to keep true.
 SKIP_DIRS = {
     ".git", ".venv", "__pycache__", "node_modules", "vendor", "target",
     "dist", "tmp", "deps", "_build",
 }
-# Test fixtures define anywaye functions to exercise a service's OWN code; they
-# are not the copy the database runs, and grading them would fire on correct
-# work. Same reason tests/ is excluded from tenancy.yml's scope in kit.
 SKIP_SEGMENTS = {"test", "tests", "spec", "specs", "fixtures"}
 
-# Generated schema dumps. Measured: inbox's `db/structure.sql` embeds every
-# substrate function in pg_dump's normalized spelling (`CREATE FUNCTION` with
-# no `OR REPLACE`, `AS $$` upper-cased, `RETURNS` hoisted onto the head line),
-# so comparing it grades pg_dump's formatting rather than the service's copy —
-# and the file it is generated FROM is the standalone `db/tenancy/substrate.sql`
-# this checker byte-compares. A dump is OUTPUT of the substrate, not a copy of
-# it; drift in the source is what this checker is for.
 SKIP_FILENAMES = {"structure.sql", "schema.sql"}
 
 FUNC_RE = re.compile(
@@ -183,7 +27,6 @@ STANDALONE_NAME = "substrate.sql"
 
 
 class Definition:
-    """One `create or replace function anywaye.<name>` block, as extracted."""
 
     def __init__(self, name, path, line, sig, body):
         self.name = name
@@ -194,14 +37,6 @@ class Definition:
 
 
 def goose_up_text(text):
-    """The `-- +goose Up` sections of `text`; the whole text when unmarked.
-
-    Goose markers are line comments, so a file without them (darkroom's
-    migrations, the template itself) is all-Up by definition. When markers
-    exist, everything from the first `-- +goose Up` to the `-- +goose Down` is
-    kept and the Down section is dropped — see rule 1 in the module docstring
-    for the measured false positive this prevents.
-    """
     lines = text.splitlines()
     if not any(line.strip().lower() in (GOOSE_UP, GOOSE_DOWN) for line in lines):
         return text
@@ -221,23 +56,6 @@ def goose_up_text(text):
 
 
 def normalize_sql(text, strip_comments=True):
-    """Canonical form of `text`: comments optionally removed, whitespace
-    collapsed, string literals preserved exactly.
-
-    Single quotes, double quotes (quoted identifiers) and dollar-quoted
-    strings are copied verbatim, including their internal whitespace and their
-    `--`-shaped contents. Everything else is a comment to drop or a run of
-    whitespace to collapse, which is what makes two indentation styles compare
-    equal without making a changed GUC name compare equal.
-
-    Whitespace is collapsed with a PENDING-SPACE flag rather than per run, and
-    that is measured rather than stylistic: a stripped comment sits between two
-    whitespace runs, and emitting one space per run left two spaces where a
-    comment was deleted — so two bodies identical except for the LENGTH of
-    their comments compared unequal, which is the comment-only class this
-    checker must not fail on. The flag also drops whitespace that has nothing
-    but comments on both sides of it, so `a -- note\n  b` and `a b` agree.
-    """
     out = []
     pending_space = False
     i, n = 0, len(text)
@@ -294,7 +112,6 @@ def normalize_sql(text, strip_comments=True):
 
 
 def extract_definitions(text, path):
-    """Every anywaye function definition in `text`, in file order."""
     defs = []
     idx = 0
     while True:
@@ -302,14 +119,8 @@ def extract_definitions(text, path):
         if not m:
             break
         head_end = m.end()
-        # IGNORECASE matters here and it is measured: pg_dump's output writes
-        # `AS $$` in upper case (inbox's db/structure.sql), and a
-        # case-sensitive search reports every block unreadable.
         am = re.search(r"\bas\s+(\$[A-Za-z_]*\$)", text[head_end:], re.IGNORECASE)
         if not am:
-            # A `create function` with no dollar-quoted body (a C function, or
-            # a body this parser does not understand). Refused rather than
-            # skipped: see the unreadable-copy rule in the docstring.
             defs.append(Definition(m.group(1).lower(), path,
                                    text.count("\n", 0, m.start()) + 1,
                                    "<unparsed>", "<unparsed>"))
@@ -325,14 +136,6 @@ def extract_definitions(text, path):
             idx = head_end
             continue
         body = text[body_start:end_tag]
-        # A truncation guard: a body that contains ANOTHER anywaye function
-        # definition (in code, after comments are stripped) means a closing
-        # dollar tag above is missing, so this block has silently swallowed the
-        # next one. Measured on a fixture with the first terminator deleted:
-        # without this, the reader is shown a body diff and a missing function
-        # instead of the truncation that caused both. Comments are stripped
-        # first because the template's own comments quote DDL — a raw search
-        # would fire on kit's template.
         if re.search(r"\bcreate\s+(?:or\s+replace\s+)?function\s+anywaye[.]",
                      normalize_sql(body), re.IGNORECASE):
             defs.append(Definition(m.group(1).lower(), path,
@@ -360,7 +163,6 @@ def sha256_of(path):
 
 
 def first_difference(a, b):
-    """(line number, a line, b line) of the first differing line, 1-based."""
     alines, blines = a.splitlines(), b.splitlines()
     for i in range(max(len(alines), len(blines))):
         al = alines[i] if i < len(alines) else "<missing>"
@@ -371,13 +173,6 @@ def first_difference(a, b):
 
 
 def body_diff_context(ref, got, width=60):
-    """A readable window around the first difference of two normalized bodies.
-
-    A unified diff is the wrong shape here: the normalized bodies are single
-    long lines, so `difflib` either prints everything or nothing. The window
-    names the offset and shows both spellings, which is what a reader needs to
-    find the edit.
-    """
     limit = min(len(ref), len(got))
     i = 0
     while i < limit and ref[i] == got[i]:
@@ -392,7 +187,6 @@ def body_diff_context(ref, got, width=60):
 
 
 def iter_sql_files(root):
-    """Every non-test .sql file under `root`, in sorted walk order."""
     for dirpath, dirnames, filenames in os.walk(root):
         rel = os.path.relpath(dirpath, root)
         parts = [] if rel == "." else rel.split(os.sep)
@@ -417,9 +211,7 @@ class RepoResult:
         self.failures = []
         self.reports = []
         self.infos = []
-        self.standalone = []   # (path, identical, sha)
         self.embedded_files = []
-        self.skipped_templates = []  # .sql files beside kit's template, not read
         self.adopted = False
 
     def fail(self, text):
@@ -433,19 +225,6 @@ class RepoResult:
 
 
 def compare_definitions(res, defs, template_defs, root, standalone_source=None):
-    """The name-level verdict over one set of `anywaye.*` definitions.
-
-    Shared by the embedded pass and by the name-level pass over a drifted
-    standalone copy: the comparison rules (comment-stripped semantics, named
-    FAILs for missing and drifted functions, reports for extras and
-    comment-only differences) are one contract, and a second implementation
-    would be a second thing to keep true.
-
-    `standalone_source` is the standalone file the definitions came from, or
-    None for embedded definitions. It is used only to name the file a missing
-    function is missing FROM: a repository can hold both shapes, and a bare
-    "MISSING function" would not say which copy is short.
-    """
     by_name = {}
     redefinitions = []
     for d in defs:
@@ -453,12 +232,6 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
             redefinitions.append((d.name, by_name[d.name].path, d.path))
         by_name[d.name] = d
 
-    # Readable-copy guard: an `<unparsed>` definition means this checker could
-    # not read that block, and comparing it as text would fail with a message
-    # about the substrate when the truth is about the parser. Returning here
-    # keeps the failure about the parser; the unreadable block is named, and
-    # the missing-function sweep below is not allowed to pile speculation on
-    # top of a parse failure.
     unreadable = False
     for d in by_name.values():
         if d.sig == "<unparsed>":
@@ -520,7 +293,6 @@ def compare_definitions(res, defs, template_defs, root, standalone_source=None):
 
 
 def check_repo(root, template_defs, template_bytes):
-    """Compare one repository's adopted copy against the template."""
     res = RepoResult(root)
     if not os.path.isdir(root):
         raise OSError("not a directory: %s" % root)
@@ -528,9 +300,6 @@ def check_repo(root, template_defs, template_bytes):
     standalone_paths = []
     embedded_defs = []
     for path in iter_sql_files(root):
-        # A file beside kit's template is a template (advisor.sql is one), not
-        # an adopting service's copy of one — see the docstring's measured
-        # note. Recorded so "not read" is printed rather than inferred.
         if os.path.relpath(os.path.dirname(path), root) == TEMPLATE_REL_DIR:
             res.skipped_templates.append(path)
             continue
@@ -552,9 +321,6 @@ def check_repo(root, template_defs, template_bytes):
     else:
         return res
 
-    # -- standalone: byte equality first. It is the shape's whole promise and
-    # the strongest verdict available, so a drifting file is a FAIL whether or
-    # not anyone can also name the functions involved.
     for path in standalone_paths:
         got = open(path, "rb").read()
         if got == template_bytes:
@@ -572,11 +338,6 @@ def check_repo(root, template_defs, template_bytes):
             % (path, detail)
         )
 
-    # -- standalone drift: the diagnosis beside the byte verdict. Only drifted
-    # files are read this way: a byte-identical copy has nothing left to say
-    # (bytes are the strongest comparison), and running this pass over it is
-    # how a complete copy would fail with "MISSING function: all twelve" —
-    # measured on inbox before the identical-copy branch existed.
     for path, identical, _sha in res.standalone:
         if identical:
             continue
@@ -584,7 +345,6 @@ def check_repo(root, template_defs, template_bytes):
             defs = extract_definitions(goose_up_text(fh.read()), path)
         compare_definitions(res, defs, template_defs, root, standalone_source=path)
 
-    # -- embedded: last definition wins across files in sorted path order.
     if embedded_defs:
         compare_definitions(res, embedded_defs, template_defs, root)
     return res
@@ -700,8 +460,6 @@ def main(argv):
         len(clean), len(drifting),
         (", %d without an adopted copy" % len(silent)) if silent else "",
     ))
-    # A skip that cannot be seen reads as a clean repository, so the skip is
-    # counted out loud — the same rule validate.sh's live tiers follow.
     if skipped_files:
         print("not graded: %d SQL template file(s) in %d repositor%s beside kit's "
               "template (a template is not an adopted copy)" % (

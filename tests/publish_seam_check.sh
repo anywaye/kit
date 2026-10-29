@@ -1,77 +1,4 @@
 #!/usr/bin/env bash
-#
-# publish_seam_check.sh — the PUBLISH path proof: the run that had no jobs,
-# and the tag the chart pinned that nothing published. Standalone.
-#
-#   bash tests/publish_seam_check.sh <workflows-dir> <applications-dir> <fleet-root> <caller-template.yml>
-#
-# WHY THIS EXISTS. Two defects measured on the four services' publish runs,
-# both silent:
-#
-#   1. publish.reusable.yml called its siblings with `uses: ./image.reusable.yml`
-#      and `uses: ./chart.reusable.yml`. GitHub resolves a local reusable
-#      workflow from the repository ROOT as `./ci/<file>`; a
-#      path that omits the directory cannot be resolved and GitHub rejects
-#      the run at workflow-resolution time — `referenced_workflows: []`, no
-#      jobs, no check-runs, no log line. The services' publish workflows
-#      failed on every push since they were created and the failure said
-#      nothing about why.
-#   2. image.reusable.yml published only sha-<40>, <branch> and latest, while
-#      every chart's values.yaml pins `image.tag` to its own appVersion. A
-#      box pulling the published chart asked the registry for a tag nothing
-#      ever created: ImagePullBackOff, with nothing in the symptom naming the
-#      publish path.
-#
-# WHAT IT PROVES.
-#   1. Every local `uses:` in the composer is root-relative
-#      (`./ci/<file>`) and resolves to a file that exists.
-#   2. Caller/callee agreement, in BOTH directions: a job passes no input the
-#      callee does not declare (a refusal at run time), and every REQUIRED
-#      input of the callee is passed. Asserted for the composer's own two
-#      calls and for the caller template in templates/publish/publish.yml.
-#   3. The image tag a chart's values.yaml pins is derived from Chart.yaml's
-#      appVersion by the composer (a needs- hand-off, never a literal) and
-#      lands as a tag in the image workflow — and `sha-<40>` is still there.
-#   4. Where a sibling checkout beside the repo carries a service's chart:
-#      the chart's `version` is the Application's `targetRevision`, the
-#      chart's `values.yaml` pins `image.tag` to the SAME string as
-#      appVersion and not `latest`, and that service's own publish.yml passes
-#      only declared inputs at a chart-dir that contains a Chart.yaml.
-#   5. The IMAGE DIGEST, which is the name that reaches the pod and the one
-#      the tag alone could not carry: the image workflow exposes a `digest`
-#      workflow_call output, the composer hands it to the chart job as
-#      `needs.image.outputs.digest`, and chart.reusable.yml writes it into
-#      values.yaml BEFORE `helm package`, refusing a value that is not
-#      `sha256:<64 hex>` and skipping on an empty input. The tag is
-#      overwritten on every push, so a chart pinned by tag rendered an
-#      identical Deployment and Argo rolled nothing; a digest cannot move.
-#
-# THE FLEET ROOT IS ONE LEVEL UP, AND NEVER FURTHER — the AGENTS.md rule. A
-# sibling that is absent is NAMED in a note and not asserted, which is the
-# kit discipline for data this tree cannot see: a skip that cannot be read is
-# a silent pass, and a check that goes red for want of a neighbour is a
-# check nobody keeps. On a fresh clone every service is a note; the four
-# in-repo assertions above still run.
-#
-# THE NINE RED CONTROLS. Each fixture violates exactly one property and the
-# same program must answer RED: (a) a `uses:` path reverted to the unresolved
-# spelling, (b) the image's tag input rewritten to a literal, (c) a chart
-# whose values pin a tag the publish never produces, (d) the immutable sha
-# tag deleted, (e) the chart job's `image-digest` hand-off removed, (f) the
-# step that writes `image.digest` deleted, (g) that step moved after `helm
-# package`, (h) its `sha256:<64 hex>` refusal weakened, and (i) the image
-# workflow's `digest` output deleted. A control that stays green is a failure
-# of the proof itself, reported as such rather than passed over.
-#
-# SINGLE SOURCE OF TRUTH. One checker program below; the real tree and all
-# nine controls run the SAME code against fixture trees. A second copy of an
-# assertion is one assertion that can drift — the rule chart_publish_check.sh
-# states at length.
-#
-# Exit 0: the real tree passes and all nine controls go red.
-# Exit 1: an assertion fails, or a control stays green.
-# Exit 2: usage error, or no YAML-capable python — the seam cannot be
-# measured without a parser, and that is reported, never passed silently.
 
 set -euo pipefail
 
@@ -86,9 +13,6 @@ caller_template="$4"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# The gate's venv python when present, else a system python3 with PyYAML.
-# No parser is an explicit exit 2, never a silent pass — the same resolution
-# and the same discipline as chart_publish_check.sh.
 PY=""
 if [ -x "$ROOT/.venv/bin/python" ] && "$ROOT/.venv/bin/python" -c "import yaml" 2>/dev/null; then
   PY="$ROOT/.venv/bin/python"
@@ -114,9 +38,6 @@ import yaml
 
 workflows, apps_dir, fleet, caller_template = sys.argv[1:5]
 
-# The four service Applications: the same set chart_publish_check.sh
-# asserts, for the same reason — the observability four are somebody
-# else's seam (upstream charts, pinned by check_obs_chart_sources).
 SERVICE_APPS = ("identity", "gateway", "courier", "parlor")
 
 problems = []
@@ -129,14 +50,11 @@ def load(path):
 
 
 def on_block(doc):
-    # PyYAML reads the bare `on:` key as boolean True (YAML 1.1).
     on = doc.get("on") or doc.get(True)
     return on if isinstance(on, dict) else {}
 
 
 def code_of(path):
-    # Comments stripped BEFORE reading: a check a comment can satisfy is
-    # not a check — this file's own workflows explain themselves in prose.
     with open(path, encoding="utf-8") as fh:
         return "\n".join(
             line for line in fh.read().splitlines() if not line.lstrip().startswith("#")
@@ -177,9 +95,6 @@ composer_inputs = ((on_block(composer_doc).get("workflow_call") or {}).get("inpu
 image_inputs = ((on_block(image_doc).get("workflow_call") or {}).get("inputs")) or {}
 jobs = composer_doc.get("jobs") or {}
 
-# ---------------------------------------------------------------------
-# 1 + 2. The local `uses:` paths, and caller/callee agreement both ways.
-# ---------------------------------------------------------------------
 LOCAL_PREFIX = "./ci/"
 for job_id in sorted(jobs):
     job = jobs[job_id] if isinstance(jobs[job_id], dict) else {}
@@ -223,9 +138,6 @@ for job_id in sorted(jobs):
                 f"which {os.path.basename(callee_path)} declares REQUIRED"
             )
 
-# ---------------------------------------------------------------------
-# 3. The appVersion seam: derived, never typed; added, never replacing sha.
-# ---------------------------------------------------------------------
 image_job = None
 image_job_id = None
 for job_id in sorted(jobs):
@@ -283,19 +195,6 @@ if "type=sha,format=long" not in image_code:
         "was added beside it, never instead of it"
     )
 
-# ---------------------------------------------------------------------
-# 3b. The image-digest seam: the chart names the image by DIGEST, and the
-#     digest is DERIVED from the image job's build output and written into
-#     values.yaml BEFORE the chart is packaged. The tag in seam 3 is
-#     overwritten on every push (it is this file's own appVersion hand-off),
-#     so a chart pinned by tag rendered a textually identical Deployment
-#     after every build and Argo rolled nothing — measured on the box
-#     (roll-c5-image-digest): the registry's ghcr.io/anywaye/gateway:0.1.0
-#     held the merged Redis AUTH fix while the node served an image six
-#     hours older, a refresh reported `Synced`, and imagePullPolicy:
-#     IfNotPresent re-served the stale copy on every restart. A digest
-#     cannot move, so the rendered Deployment changes when the image does.
-# ---------------------------------------------------------------------
 image_outputs = (on_block(image_doc).get("workflow_call") or {}).get("outputs") or {}
 if not isinstance(image_outputs, dict) or "digest" not in image_outputs:
     problems.append(
@@ -342,9 +241,6 @@ else:
             f"exists and the chart names nothing, or a stale digest"
         )
 
-# The pin step, located by WHAT IT DOES (writes values.yaml's image.digest)
-# rather than by its name, and ORDERED against `helm package`: a package is a
-# tarball of the directory, so a digest written after packaging pins nothing.
 try:
     chart_doc = load(chart_path)
 except Exception as exc:
@@ -400,9 +296,6 @@ if pin_index is not None:
             f"the digest values.yaml commits rather than a blank one"
         )
 
-# ---------------------------------------------------------------------
-# 2b. The caller template in this tree agrees with the composer.
-# ---------------------------------------------------------------------
 try:
     template_doc = load(caller_template)
 except Exception as exc:
@@ -430,9 +323,6 @@ if not called:
     problems.append(f"{caller_template} does not call publish.reusable.yml")
 
 
-# ---------------------------------------------------------------------
-# 4. Applications against the sibling checkouts, where they exist.
-# ---------------------------------------------------------------------
 def find_charts(by_name):
     """Every sibling dir holding Chart.yaml for the chart called `by_name`.
 
@@ -463,7 +353,6 @@ def find_charts(by_name):
 
 
 def repo_root_of(chart_dir):
-    # chart/ → the repo is its parent; charts/<name>/ → two up.
     if os.path.basename(os.path.dirname(chart_dir)) == "charts":
         return os.path.dirname(os.path.dirname(chart_dir))
     return os.path.dirname(chart_dir)
@@ -588,9 +477,6 @@ print(
 PY
 
 run_checker() {
-  # The `|| ec=$?` shape is load-bearing, the reason is stated at the same
-  # place in chart_publish_check.sh: a bare `out="$(cmd)"` that fails takes
-  # the shell down under set -e before the status is read.
   local ec=0
   local out=""
   out="$("$PY" "$checker" "$@" 2>&1)" || ec=$?
@@ -606,14 +492,7 @@ if [ "$CHECK_EC" -ne 0 ]; then
   exit 1
 fi
 
-# ---------------------------------------------------------------------
-# THE FOUR CONTROLS. Each fixture violates exactly ONE property and the
-# SAME checker must answer RED. A control that stays green means the check
-# is not measuring what it claims — a failure of the proof itself.
-# ---------------------------------------------------------------------
 
-# (a) The path control: `uses:` reverted to the unresolved spelling that
-# produced a run with no jobs and no logs.
 ctl_a="$TMP/ctl-a-workflows"
 mkdir -p "$ctl_a"
 cp "$workflows"/*.yml "$ctl_a"/
@@ -626,8 +505,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (b) The derived-tag control: the image job's tag rewritten to a literal
-# a human would have to remember in two places.
 ctl_b="$TMP/ctl-b-workflows"
 mkdir -p "$ctl_b"
 cp "$workflows"/*.yml "$ctl_b"/
@@ -640,9 +517,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (c) The chart control: a chart whose values pin a tag the publish never
-# produces. The REAL chart beside it, one field changed, in a fixture fleet
-# root — the exact state the whole packet exists to close.
 ctl_c="$TMP/ctl-c-fleet"
 identity_chart="$(python3 - "$fleet" <<'FIND'
 import glob
@@ -658,12 +532,6 @@ for candidate in sorted(glob.glob(os.path.join(fleet, "*", "chart", "Chart.yaml"
 FIND
 )"
 if [ -z "$identity_chart" ]; then
-  # No sibling identity chart on this machine: build the minimal chart the
-  # control needs from scratch rather than skipping it. The control's
-  # assertion is about the chart's OWN internal agreement, so a synthesized
-  # chart exercises exactly the same code path — and a control that only
-  # exists when a sibling happens to be checked out is a control that
-  # silently disappears in CI.
   identity_chart="$ctl_c/identity/chart"
   mkdir -p "$identity_chart"
   {
@@ -690,9 +558,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (d) The sha control: the immutable tag deleted from the tag set. The
-# appVersion tag was ADDED; the sha tag was never replaced, and this proves
-# the check can tell the difference.
 ctl_d="$TMP/ctl-d-workflows"
 mkdir -p "$ctl_d"
 cp "$workflows"/*.yml "$ctl_d"/
@@ -705,10 +570,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (e) The digest hand-off control: the chart job's `image-digest` deleted, so
-# the chart names the image by the mutable tag alone — the measured defect.
-# A check that cannot tell the derived digest from its absence is not
-# measuring the seam this packet exists to close.
 ctl_e="$TMP/ctl-e-workflows"
 mkdir -p "$ctl_e"
 cp "$workflows"/*.yml "$ctl_e"/
@@ -721,10 +582,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# pin_mutate <workflow> <dst> <delete|reorder> — remove the step that writes
-# image.digest, or move it after `helm package`. The mutation is a STEP
-# removed/reordered through the parser, so a control cannot be satisfied by a
-# comment or a re-worded line.
 pin_mutate() {
   "$PY" - "$1" "$2" "$3" <<'PY'
 import sys
@@ -760,8 +617,6 @@ with open(dst, "w", encoding="utf-8") as fh:
 PY
 }
 
-# (f) The pin-step control: the step that writes image.digest deleted. The
-# chart then ships naming the image by tag, which is the defect.
 ctl_f="$TMP/ctl-f-workflows"
 mkdir -p "$ctl_f"
 cp "$workflows"/*.yml "$ctl_f"/
@@ -773,10 +628,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (g) The ordering control: the pin step moved AFTER `helm package`. The step
-# is still present, so only the ordering assertion can see it — and a digest
-# written after packaging pins nothing, because a package is a tarball of the
-# directory. This is why the ordering assertion is not decoration.
 ctl_g="$TMP/ctl-g-workflows"
 mkdir -p "$ctl_g"
 cp "$workflows"/*.yml "$ctl_g"/
@@ -788,9 +639,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (h) The grammar control: the sha256:<64 hex> refusal weakened to `sha256:`,
-# so a malformed digest would be written and rendered `repository@nonsense`.
-# A refusal that cannot fail is the defect, not the control.
 ctl_h="$TMP/ctl-h-workflows"
 mkdir -p "$ctl_h"
 cp "$workflows"/*.yml "$ctl_h"/
@@ -803,11 +651,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# (i) The output control: the `digest` workflow_call output deleted from the
-# image workflow, so the composer's `needs.image.outputs.digest` resolves to
-# empty — GitHub does not fail on a reference to an undeclared output, it
-# hands the caller nothing — and the chart packages its committed digest
-# forever. That silence is why the output is asserted rather than assumed.
 ctl_i="$TMP/ctl-i-workflows"
 mkdir -p "$ctl_i"
 cp "$workflows"/*.yml "$ctl_i"/
@@ -820,9 +663,6 @@ if [ "$CHECK_EC" -eq 0 ]; then
   exit 1
 fi
 
-# The proof, on the way out: the real tree's own summary line — how many
-# service Applications a sibling chart was found for, by name, rather than a
-# number asserted in a comment.
 run_checker "$workflows" "$apps_dir" "$fleet" "$caller_template"
 printf '%s\n' "$CHECK_OUT"
 printf 'publish seam: all nine red controls went red (unresolved path; literal tag; values pinning an unpublished tag; sha tag deleted; digest hand-off removed; pin step deleted; pin step reordered after pack; digest grammar weakened; digest output deleted)\n'

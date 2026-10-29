@@ -1,49 +1,9 @@
 ---
-# kit template — Grafana alert rules, provisioned on first load.
-#
-# WHY ALERT RULES AND NOT LOKI'S `ruler`
-#   Two alerting engines evaluating the same fleet is how a self-hoster ends up
-#   with two different answers to "is it broken". Grafana is where the
-#   dashboard already is, so the rules are here.
-#
-# NO CONTACT POINT IS PROVISIONED, ON PURPOSE.
-#   A contact point that posts to a webhook, a Slack channel or an email
-#   address is a place a self-hoster's first `bin/dev up` sends a test alert to
-#   a stranger, and a compose file that phones home by default is exactly the
-#   behaviour the rest of this stack is built to avoid. A rule with no contact
-#   point evaluates and shows up as Pending/Firing in the Grafana UI, which is
-#   what a dev stack wants: the rule is real and visible, and nothing is sent.
-#   A self-hoster who wants notifications adds a contact point in their own
-#   provisioning; that is their decision and their address book.
-#
-# THE PREDICATE, AGAIN. Every rule below filters on span STATUS or on the
-# `status_code` label the spanmetrics connector emits, never on
-# `error.type` alone. `error.type` is the drill-down under a service filter;
-# alerting on it globally is the mistake PLAN.md §7b calls out by name.
 
 apiVersion: 1
 
 groups:
-  # ------------------------------------------------------------ fleet health
-  # The PROMETHEUS ALERT GROUP IS GONE WITH THE METRICS STORE, deliberately,
-  # and an empty group is not what shipped: a group with no rules is a group
-  # Grafana rejects or silently discards, and one that survived with two dead
-  # rules would be worse than either — an alert that can never fire is a
-  # folder that looks like coverage.
-  #
-  # `anywaye_calls_total` is still DERIVED by the collector's spanmetrics
-  # connector and still passes the same redaction allowlist. It has nowhere
-  # to be QUERIED because Mimir cost 130s of readiness budget per cold start
-  # and was removed rather than left half-wired. Restoring these two rules is
-  # one `datasourceUid`, one exporter and one pipeline line.
-  #
-  # The group below reads loki and is unaffected.
 
-  # ------------------------------------------------------ the redaction check
-  # Not an error-rate rule. A rule that fires when prompt-shaped ATTRIBUTES
-  # appear in telemetry is the only way to find out that a well-meaning change
-  # six months from now added `muse.prompt` to an allowlist — because the leak
-  # is invisible by construction, which is the point of the boundary.
   - orgId: 1
     name: anywaye-boundary
     folder: anywaye

@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""Re-derive schemas.json from the CRDs the installer pins.
-
-NOT RUN BY THE GATE. `tests/substrate_test.sh` reads the committed
-`schemas.json`; this program is how that file is produced, and it needs the
-network. It exists so that a pin bump is a reproducible edit rather than a
-hand-typed field list that nobody can defend.
-
-    python3 tests/substrate-crd/regen.py
-
-It reads the three operator pins out of `templates/substrate/install.sh`,
-fetches each operator's release manifest from the *same* pinned URL the
-installer uses, and writes the property-name graph of each CRD's `spec` — see
-`schemas.json`'s own `note` for the encoding.
-
-Why the model is derived and not hand-written: a hand-typed list of "known
-fields" is a statement about what the manifest already says, and it therefore
-contains every field the manifest has — including a wrong one. Deriving it from
-the CRD is what makes `storageConfiguration` (a name CNPG retired before
-1.24) fail a check instead of satisfying it.
-"""
 
 from __future__ import annotations
 
@@ -34,13 +14,6 @@ HERE = Path(__file__).resolve().parent
 INSTALL = HERE.parent.parent / "templates/substrate/install.sh"
 OUT = HERE / "schemas.json"
 
-# pin name -> (CRD metadata.name, release-manifest URL template)
-# ARGOCD_VERSION appears twice because core-install ships two CRDs the substrate
-# uses — Application and AppProject — and the AppProject is what the packet's
-# defect is about: core-install's CRD but no object, so the Applications'
-# `spec.project: default` never syncs. Both CRDs come from the same pinned
-# manifest, so the pin is one fact with two models; the sources dict keeps the
-# pin's version beside each key so a bump without re-deriving still goes red.
 TARGETS = {
     "CNPG_VERSION": (
         "clusters.postgresql.cnpg.io",
@@ -55,9 +28,6 @@ TARGETS = {
         "https://github.com/cert-manager/cert-manager/releases/download/{v}/cert-manager.yaml",
     ),
 }
-# A second CRD from the same pinned Argo CD manifest — not a second pin.
-# Kept separate so a hand-edit that adds a field to schemas.json without
-# re-deriving is visible as a second source the gate checks.
 EXTRA_TARGETS = {
     "argoproj.io/v1alpha1/AppProject": (
         "ARGOCD_VERSION",
@@ -99,10 +69,6 @@ def spec_props(crd: dict) -> dict:
 
 
 def model(node: dict) -> object:
-    """A property-name graph: object -> {key: model}, array -> {"[]": model},
-    a primitive -> True, and `*` for a node whose keys the CRD leaves open. A
-    `"*"` KEY inside an object means the same for the keys it does not name
-    (`additionalProperties` beside `properties`)."""
     if not isinstance(node, dict):
         return True
     if node.get("x-kubernetes-preserve-unknown-fields"):
@@ -110,8 +76,6 @@ def model(node: dict) -> object:
     if node.get("type") == "array":
         return {"[]": model(node.get("items", {}))}
     props = node.get("properties")
-    # `additionalProperties: false` CLOSES the object; only a truthy schema (or
-    # a schema mapping) opens it. `is not None` would read `false` as open.
     open_keys = node.get("additionalProperties") not in (None, False)
     if props is None:
         return "*"
@@ -138,7 +102,6 @@ def main() -> int:
         version = versions[pin]
         url = url_tpl.format(v=version, bare=version.lstrip("v"))
         crd = crd_doc(fetch(url), crd_name)
-        # key is already the canonical API/version/kind for this CRD
         schemas[key] = model({"type": "object", "properties": spec_props(crd)})
         sources[key] = {"pin": pin, "version": version, "crdName": crd_name, "url": url}
         print(f"{key}: {len(schemas[key])} top-level fields from {version} (extra)")

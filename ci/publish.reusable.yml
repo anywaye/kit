@@ -1,121 +1,4 @@
-# THIS FILE IS NOT A GITHUB ACTIONS WORKFLOW ANY MORE, AND NOTHING RUNS IT.
-#
-# The fleet's CI runs in dev sandboxes: the same sandbox the work happens in,
-# on the machine the developer chose. This file is the SPECIFICATION those
-# checks read — the steps, the floors, the exemptions — kept where the
-# repository can hold it and read it.
-#
-# What executes is `ci/the pipeline` (named in this repository's `gate.yml`, under
-# `ci.workflow`), and the CI service reads that declaration and runs it.
-#
-# The GitHub Actions spelling is retired, not deleted, because the checks in
-# this repository read this file to hold the specification still: a gate that
-# checks a specification nobody executes is a gate checking a fiction, and a
-# gate that checks nothing is worse. The steps below are the specification
-# the executable CI is measured against, and the day this file stops being
-# that, the checks move with it.
 ---
-# kit — the publish path every anywaye service repo runs, both halves in one call.
-#
-# Consumers do not copy this file; they call it, exactly as they call
-# `ci/ci.reusable.yml`:
-#
-#   # ci/publish.yml
-#   name: publish
-#   on:
-#     push:
-#       branches: [master]
-#   permissions:
-#     contents: read
-#     packages: write          # REQUIRED, and the caller's to grant — see below
-#   concurrency:
-#     group: ${{ github.workflow }}-${{ github.ref }}
-#     cancel-in-progress: true
-#   jobs:
-#     publish:
-#       uses: anywaye/kit/ci/publish.reusable.yml@master
-#       with:
-#         push: true
-#
-# WHY ONE CALLER FOR TWO ARTIFACTS. A service publishes two things — the image
-# `config/deploy.yml` deploys and the chart the Argo CD `Application` pulls —
-# and two separate caller files would be two places to remember, two
-# concurrency groups to keep apart, and two `packages: write` grants to forget.
-# The composition lives here so a service's `publish.yml` is one `uses:` and the
-# decision "what does a push publish" is made once, in kit.
-#
-# A REUSABLE WORKFLOW CALLING A REUSABLE WORKFLOW. GitHub allows a
-# `workflow_call` workflow to call another, and that is what makes "one caller,
-# two artifacts" possible: each half keeps its own file, its own header and its
-# own pin, and this file only threads `push` through. The alternative — one
-# workflow with the image steps and the chart steps inlined — would be a second
-# copy of both, which is the drift kit exists to prevent.
-#
-# PERMISSIONS, AND THE CEILING THAT IS NOT A GRANT. This file declares
-# `contents: read` + `packages: write` at the top level, and each called
-# workflow declares its own job-level ceiling. A reusable workflow can request a
-# permission but cannot grant itself one, and GitHub's rule for a chain of
-# reusable workflows is that permissions can only be maintained or reduced,
-# never elevated: the effective permission at each level is the caller's grant
-# intersected with that level's declaration. This file therefore declares the
-# FULL set it needs — not a subset — so the nested image and chart jobs keep
-# `packages: write` all the way down. A caller that omits `packages: write`
-# gets read-only and a 401 at the push that reads like a wrong password rather
-# than like a missing grant — which is why the example above shows the
-# permission on the caller.
-#
-# THE THREE SEAMS, AND WHY EVERY END LIVES IN KIT.
-#   1. The registry path. `chart.reusable.yml` pushes to the registry root and
-#      `helm push` appends the chart's name; every Argo CD Application in
-#      `templates/substrate/manifests/applications/` carries that path
-#      (`oci://ghcr.io/anywaye/charts/<chart>`) as its `source.repoURL`. Argo
-#      resolves an OCI source's revision against `repoURL` itself, so the bare
-#      root is not an artifact. Both files are in kit, which is what makes this
-#      provable in this repository's own gate — the check asserts
-#      `repoURL == registry + "/" + chart` for every service Application and
-#      fails on a disagreement.
-#   2. The chart version. Each Application pins `targetRevision: 0.1.0`, and a
-#      generated chart's `Chart.yaml` carries `version: 0.1.0`. The OCI tag of a
-#      Helm chart is its `version`, so the push tag and the pull
-#      `targetRevision` must be the chart's version — not a git sha, not
-#      `latest`. A chart pushed as `0.1.1` while the Application says `0.1.0`
-#      is a service that never deploys, and Argo reports no error: it just
-#      never finds the artifact.
-#   3. The image tag. The chart's `values.yaml` pins `image.tag` to the chart's
-#      own `appVersion` — a value a release commits, never `latest` — so the
-#      publish that serves that chart must produce an image tag by that exact
-#      name, or the box asks the registry for a tag nothing published and sits
-#      in `ImagePullBackOff` with nothing in the failure naming this workflow.
-#      `image.reusable.yml` publishes that tag when this file gives it the
-#      value, and this file is the place that reads it: the composer is the
-#      only party that knows `chart-dir`, so it reads `Chart.yaml`'s
-#      `appVersion` in a resolved job below and passes it down. No second
-#      place holds the number, and a service with no chart still composes —
-#      the read resolves to empty and the image keeps its sha/branch/latest
-#      three. `sha-<40>` is untouched.
-#
-#   3b. THE IMAGE DIGEST — THE OTHER HALF OF THE SAME NAME, AND THE HALF THAT
-#      REACHES THE POD. The tag in seam 3 is overwritten on EVERY push (it is
-#      this file's own appVersion hand-off, re-published per master push), and
-#      charts pinned the image by that tag: the rendered Deployment was
-#      textually identical before and after a build, Argo's diff reported
-#      `Synced` with no rollout, and the box sat on the old image. MEASURED
-#      (roll-c5-image-digest): the registry's `ghcr.io/anywaye/gateway:0.1.0`
-#      held `sha256:c264…37165` while the node ran `sha256:8e60…e79b`, six
-#      hours after the fix was merged and published — a refresh reported
-#      `Synced` with no diff and `imagePullPolicy: IfNotPresent` re-served
-#      the stale copy on every pod restart. So the chart names the image by
-#      DIGEST, which cannot move, and THIS COMPOSER is the party that knows
-#      both ends: it takes the image job's build output and hands it to the
-#      chart job, which writes it into `values.yaml`'s `image.digest` before
-#      `helm push`. The pushed chart therefore names the bytes the registry
-#      holds beside it, a new build is a textual diff Argo rolls, and the
-#      chart VERSION still does not move — seam 2's targetRevision agreement
-#      is untouched, which is what lets the chart's content change under a
-#      fixed tag. The tag stays as well: it is the human-readable half of the
-#      name, every service chart keeps `image.tag` equal to `appVersion` (the
-#      publish seam asserts it), and `bin/chart-test` renders it beside the
-#      digest.
 name: publish
 
 on:
@@ -153,40 +36,14 @@ permissions:
   contents: read
   packages: write
 
-# THE CONCURRENCY GROUP, AND WHY IT BEGINS WITH `kit-`. A reusable workflow's
-# group is namespaced so it can never collide with a CALLER's: the caller
-# declares `group: ${{ github.workflow }}-${{ github.ref }}` and this file
-# declares the same string prefixed, which is the rule `ci.reusable.yml` states
-# at length — a caller and callee sharing one group is a job that is refused
-# before it starts, producing no check-run and no log line. `cancel-in-progress`
-# is on because a second push makes the first run's artifacts irrelevant: the
-# image and the chart it would publish are superseded by the newer commit.
 concurrency:
   group: kit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # THE READ, AND WHY IT IS A JOB OF ITS OWN. A job whose whole body is
-  # `uses:` cannot carry steps — GitHub permits only `name/uses/with/
-  # secrets/strategy/needs/if/concurrency/permissions/cache-mode` on it —
-  # so the Chart.yaml read is a small runner job whose OUTPUT feeds the
-  # composed image call. `needs:` is one of the few keywords a `uses:` job
-  # may carry, which is what makes the hand-off legal.
-  #
-  # IT REFUSES A CHART WITH NO appVersion, AND ONLY THAT. A chart whose
-  # Chart.yaml carries no appVersion is a chart whose values pin a tag
-  # nobody can produce — the exact defect this file exists to close — so
-  # the read fails and names the field. A MISSING chart is different and
-  # is not a failure: there is nothing to publish a chart for, the image
-  # half still runs (this job succeeded, output empty), and the chart job
-  # below still refuses loudly on its own, exactly as it did before this
-  # job existed. An image-only service therefore does not break, and a
-  # mis-located chart does not pass silently.
   resolve:
     name: resolve (read the chart's appVersion)
     runs-on: ubuntu-latest
-    # A checkout and one `grep` of Chart.yaml. 10 seconds of real work; the
-    # bound exists only to stop a wedged runner from billing.
     timeout-minutes: 10
     outputs:
       app-version: ${{ steps.read.outputs.app-version }}
@@ -214,9 +71,6 @@ jobs:
             echo "app-version=" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          # `|| true`: a grep with no match exits 1, and under set -e that
-          # would take the step down before the empty check can say which
-          # field is missing. The empty check is the real refusal.
           app="$(grep -m1 '^appVersion:' "$chart" | sed 's/^appVersion:[[:space:]]*//' | tr -d "\"'" || true)"
           if [ -z "$app" ]; then
             echo "publish: $chart has no appVersion — its values.yaml pins an image tag this workflow" >&2
@@ -226,56 +80,13 @@ jobs:
           echo "publish: chart appVersion $app — the image gets that tag so the chart's values.yaml resolves"
           echo "app-version=$app" >>"$GITHUB_OUTPUT"
 
-  # THE PATHS ARE ROOT-RELATIVE, AND THAT IS GITHUB'S GRAMMAR, NOT A STYLE
-  # CHOICE. GitHub resolves a local reusable workflow relative to the
-  # repository root as `./ci/<file>`; anything else — a
-  # repo-relative path that omits `.github/workflows`, or a subdirectory —
-  # cannot be resolved, and GitHub rejects the run at workflow-resolution
-  # time. That rejection is the silent failure this file once shipped: the
-  # four services' publish runs failed on EVERY push since they were
-  # created with `referenced_workflows: []` — no jobs, no check-runs, no
-  # log line, because nothing ever started. Verified against GitHub's
-  # "Reuse workflows" how-to, whose local syntax is exactly
-  # `./ci/{filename}` (and `$/...` for GHEC), and measured
-  # on this tree with `actionlint`, which resolves the same path and
-  # reports `could not read reusable workflow file` on any other spelling.
-  # NEITHER `uses:` JOB CARRIES `timeout-minutes`, AND GITHUB WILL NOT LET IT.
-  # A job whose body is `uses:` may carry only name/uses/with/secrets/needs/if/
-  # permissions (actionlint reports the key as unavailable here), so a caller
-  # — even a reusable workflow calling a reusable workflow — cannot bound the
-  # waiting job. The bound lives where the work does: image.reusable.yml's
-  # `build` is 60 minutes and chart.reusable.yml's `chart` is 15, and a waiting
-  # `uses:` job ends when its bounded callee does. Adding a number here would
-  # not add a ceiling; GitHub would reject the whole file. The gate's
-  # `workflow timeouts` check enforces both facts.
   image:
     name: image
     needs: resolve
     uses: ./ci/image.reusable.yml
     with:
       push: ${{ inputs.push }}
-      # Derived above, never a knob. A caller that could pass this would
-      # be a caller that could publish a chart pinning a tag nothing made.
       app-version: ${{ needs.resolve.outputs.app-version }}
-  # Same rule as `image` above: a `uses:` job cannot carry `timeout-minutes`;
-  # the chart job's ceiling is chart.reusable.yml's own 15 minutes.
-  #
-  # AND WHY THE CHART JOB WAITS FOR THE IMAGE JOB (`needs:` is one of the few
-  # keywords a `uses:` job may carry, which is what makes the hand-off legal).
-  # The chart names the image by DIGEST, and chart.reusable.yml writes that
-  # digest into values.yaml from the image job's build output — so the chart
-  # cannot be packaged until the image job has produced it. A compose run
-  # therefore serializes image-then-chart, which is the correct order for a
-  # publish anyway: the artifact that names an image is made after the image.
-  #
-  # THE COST, NAMED, BECAUSE IT IS NOT ZERO: on a `push: false` run the image
-  # job still builds first and its digest output is empty (nothing was
-  # pushed), so the chart job waits for a build whose digest it will not use
-  # and packages the chart with the digest values.yaml COMMITS. That is the
-  # honest price of one derivation: the alternative — a chart job that reads
-  # the digest from the registry with `crane` — is a second source for one
-  # fact and a race against the image job's push. The committed digest is
-  # what a fresh clone renders too, which is why every service keeps one.
   chart:
     name: chart
     needs: [resolve, image]
@@ -284,8 +95,4 @@ jobs:
       push: ${{ inputs.push }}
       registry: ${{ inputs.registry }}
       chart-dir: ${{ inputs.chart-dir }}
-      # Derived, never typed — the same rule as `app-version` above. A
-      # literal here would be a digest a human pasted, and the chart would
-      # name an image nobody built, which is the defect in a new spelling.
-      # Empty when nothing was pushed: the chart then packages as committed.
       image-digest: ${{ needs.image.outputs.digest }}
