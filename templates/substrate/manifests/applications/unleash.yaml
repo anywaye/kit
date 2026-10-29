@@ -1,0 +1,77 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: unleash
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://docs.getunleash.io/helm-charts/
+    chart: unleash
+    targetRevision: 5.6.9
+    helm:
+      values: |
+        replicaCount: 1
+
+        ingress:
+          enabled: true
+          className: traefik
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          hosts:
+            - host: flags.anywaye.com
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: unleash-tls
+              hosts:
+                - flags.anywaye.com
+
+        postgresql:
+          enabled: true
+          fullnameOverride: unleash-postgresql
+          auth:
+            username: unleash
+            database: unleash
+            # Founder: create secret unleash-db-secret (see notes) and switch
+            # postgresql.auth to existingSecret instead of committing a password.
+            password: "CHANGE_ME"
+
+        dbConfig:
+          host: unleash-postgresql
+          port: 5432
+          database: unleash
+          user: unleash
+          pass: "CHANGE_ME"
+
+        env:
+          - name: INIT_ADMIN_API_TOKENS
+            valueFrom:
+              secretKeyRef:
+                name: unleash-secrets
+                key: admin-token
+          - name: INIT_CLIENT_API_TOKENS
+            valueFrom:
+              secretKeyRef:
+                name: unleash-secrets
+                key: client-token
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: unleash
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
