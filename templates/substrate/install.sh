@@ -1728,6 +1728,7 @@ validate_oidc_login_ui_url() {
   fi
   if [ -z "$why" ]; then
     case "$url" in
+      *\#*)
         why="it carries a fragment, which is not sent to a server"
         ;;
     esac
@@ -2289,6 +2290,7 @@ validate_app_base_url() {
       ;;
   esac
   case "${KIT_SUBSTRATE_APP_BASE_URL#*://}" in
+      "" | "/"* | "?"* | "#"* | "@"*)
       kit_substrate_refuse "KIT_SUBSTRATE_APP_BASE_URL" \
         "export KIT_SUBSTRATE_APP_BASE_URL='https://app.example.com' — scheme, host and nothing with a query or a fragment (identity appends each link's own path) — and re-run" \
         "KIT_SUBSTRATE_APP_BASE_URL must be an origin: a host, and no query or fragment"
@@ -2310,6 +2312,7 @@ converge_identity_courier_block() {
       esac
     fi
   done
+  if [ -n "$base_present" ] && [ -n "$token_present" ] && [ -z "${KIT_SUBSTRATE_APP_BASE_URL:-}" ]; then
     kit_substrate_out "      identity carries a working mail path (COURIER_BASE_URL and COURIER_TOKEN are both present): this run has no KIT_SUBSTRATE_APP_BASE_URL to rewrite it with, so the mail path stays, nothing removed, and every recovery route keeps answering — set KIT_SUBSTRATE_APP_BASE_URL to rewrite the pair and its link templates on a later run"
     IDENTITY_MAIL_PATH_KEPT=1
     return 0
@@ -2561,7 +2564,6 @@ main() {
         exit 1
         ;;
     esac
-  done
 
   if [ "$HEADLESS" -eq 1 ]; then
     kit_substrate_open_jsonl_channel
