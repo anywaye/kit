@@ -576,11 +576,11 @@ kit_substrate_url_host() {
 }
 
 kit_substrate_is_checkable_host() {
-  case "$1" in
+  case "${1:-}" in
     "") return 1 ;;
     localhost | *.svc.cluster.local | *.svc | *.local | 127.*) return 1 ;;
   esac
-  case "$1" in
+  case "${1:-}" in
     *.*) return 0 ;;
     *) return 1 ;;
   esac
@@ -2081,14 +2081,14 @@ install_service_secrets() {
 KIT_SUBSTRATE_MIGRATE_MARKER="${KIT_SUBSTRATE_MIGRATE_MARKER:-substrate-migrations}"
 
 migration_service_has_schema() {
-  case "$1" in
+  case "${1:-}" in
     identity | courier | billing) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 migration_command_for() {
-  case "$1" in
+  case "${1:-}" in
     identity) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_identity:-/app/bin/migrate}" ;;
     courier) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_courier:-/app/bin/migrate}" ;;
     billing) printf '%s' "${KIT_SUBSTRATE_MIGRATE_CMD_billing:-/rails/bin/migrate}" ;;
@@ -2097,7 +2097,7 @@ migration_command_for() {
 }
 
 migration_env_args_for() {
-  case "$1" in
+  case "${1:-}" in
     identity)
       printf '%s\n' "--env=DATABASE_URL=$(owner_database_url_for identity)"
       ;;
@@ -2555,10 +2555,11 @@ EOF
 }
 
 main() {
-    case "$1" in
+    case "${1:-}" in
       --headless) HEADLESS=1; shift ;;
+      "") ;;
       *)
-        printf 'error: unknown argument "%s"\n' "$1" >&2
+        printf "error: unknown argument %s\n" "${1:-}" >&2
         printf '  usage: install.sh [--headless]\n' >&2
         printf '  note: the cluster this installs into is chosen by the KIT_SUBSTRATE_KUBECONFIG environment variable\n' >&2
         exit 1
